@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import sqlite3
+import os
 from dataclasses import dataclass
 
 import rss_monitor
-from source_health import record_source_failure, record_source_success
+from source_health import record_source_failure, record_source_success, should_alert_failure
 
 
 @dataclass
@@ -120,11 +121,22 @@ def test_source_health_failure_and_recovery() -> None:
     assert row[1]
 
 
+def test_source_health_alert_threshold() -> None:
+    original = os.environ.pop("SOURCE_HEALTH_ALERT_FAILURES", None)
+    try:
+        assert should_alert_failure(1, None) is False
+        assert should_alert_failure(3, None) is True
+    finally:
+        if original is not None:
+            os.environ["SOURCE_HEALTH_ALERT_FAILURES"] = original
+
+
 def main() -> int:
     test_feedparser_parses_rss_atom_and_rdf()
     test_feed_state_roundtrip()
     test_fetch_feed_uses_conditionals_and_skips_304()
     test_source_health_failure_and_recovery()
+    test_source_health_alert_threshold()
     print("rss monitor fetch/state checks passed")
     return 0
 

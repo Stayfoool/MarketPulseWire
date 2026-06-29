@@ -22,6 +22,7 @@ from llm_analysis import call_chat_completion_with_prompts
 from market_db import DEFAULT_DB_PATH, init_db
 from portfolio_import import import_holdings
 from sina_zy_client import client_from_env, result_data
+from time_utils import parse_datetime_to_utc_iso, timestamp_to_utc_iso
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -634,11 +635,8 @@ def format_published_at(value: Any) -> str:
     if value in (None, ""):
         return ""
     if isinstance(value, (int, float)) or (isinstance(value, str) and re.fullmatch(r"\d{10,13}", value.strip())):
-        timestamp = float(value)
-        if timestamp > 10_000_000_000:
-            timestamp = timestamp / 1000
-        return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
-    return str(value).strip()
+        return timestamp_to_utc_iso(value)
+    return parse_datetime_to_utc_iso(value)
 
 
 def normalize_api_news_item(row: dict[str, Any]) -> dict[str, str] | None:

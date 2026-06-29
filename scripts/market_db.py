@@ -31,6 +31,30 @@ CREATE TABLE IF NOT EXISTS source_health (
     PRIMARY KEY (monitor, source)
 );
 
+CREATE TABLE IF NOT EXISTS seen_items (
+    source TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT,
+    published_at TEXT,
+    first_seen_at TEXT NOT NULL,
+    PRIMARY KEY (source, item_id)
+);
+
+CREATE TABLE IF NOT EXISTS seen_sources (
+    source TEXT PRIMARY KEY,
+    first_seen_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS trendforce_page_seen_items (
+    item_id TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    title TEXT NOT NULL,
+    first_source TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS stocks (
     symbol TEXT PRIMARY KEY,
     name TEXT NOT NULL,

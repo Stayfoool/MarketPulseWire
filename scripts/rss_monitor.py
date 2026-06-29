@@ -30,7 +30,7 @@ from article_gate import (
     save_review as save_article_review,
 )
 from cards import build_article_card
-from db_utils import connect_sqlite, retry_on_locked
+from db_utils import connect_sqlite, ensure_seen_tables, ensure_source_state_table, retry_on_locked
 from feishu import send_card
 from http_utils import http_get
 from llm_analysis import llm_config
@@ -70,37 +70,8 @@ CORE_COMPANY_FEEDS = {
 
 def connect_db() -> sqlite3.Connection:
     conn = connect_sqlite(DB_PATH)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS seen_items (
-            source TEXT NOT NULL,
-            item_id TEXT NOT NULL,
-            url TEXT NOT NULL,
-            title TEXT NOT NULL,
-            summary TEXT,
-            published_at TEXT,
-            first_seen_at TEXT NOT NULL,
-            PRIMARY KEY (source, item_id)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS seen_sources (
-            source TEXT PRIMARY KEY,
-            first_seen_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS source_state (
-            source TEXT PRIMARY KEY,
-            state_json TEXT,
-            updated_at TEXT NOT NULL
-        )
-        """
-    )
+    ensure_seen_tables(conn)
+    ensure_source_state_table(conn)
     conn.execute(
         """
         INSERT OR IGNORE INTO seen_sources (source, first_seen_at)

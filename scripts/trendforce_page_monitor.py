@@ -10,7 +10,6 @@ import re
 import sqlite3
 import time
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,10 +24,12 @@ from article_gate import (
     save_review as save_article_review,
 )
 from cards import build_article_card
-from db_utils import retry_on_locked
+from db_utils import ensure_trendforce_page_seen_table, retry_on_locked
 from feishu import send_card
+from http_utils import http_get
 from llm_analysis import llm_config
 from rss_monitor import connect_db, fetch_article_body, parse_date, strip_tags
+from source_health import record_source_failure, record_source_success
 from trendforce_sources import PageSource, TREND_FORCE_PAGE_SOURCES, is_focus_item
 from x_check import load_env
 
@@ -39,22 +40,13 @@ PAGE_SOURCE_KEY = "trendforce_page"
 
 
 def fetch_html(url: str) -> str:
-    request = urllib.request.Request(
+    response = http_get(
         url,
-        headers={
-            "User-Agent": "surveil-trendforce-page-monitor/0.1",
-            "Accept": "text/html,application/xhtml+xml",
-        },
+        headers={"Accept": "text/html,application/xhtml+xml"},
+        timeout=int(os.getenv("TRENDFORCE_PAGE_TIMEOUT_SECONDS", "35")),
+        retries=int(os.getenv("TRENDFORCE_PAGE_RETRY_COUNT", os.getenv("SURVEIL_HTTP_RETRY_COUNT", "2"))),
     )
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(request, timeout=35) as response:
-                return response.read().decode("utf-8", errors="replace")
-        except Exception:
-            if attempt == 2:
-                raise
-            time.sleep(2 + attempt * 3)
-    raise RuntimeError("TrendForce 页面抓取失败")
+    return response.content.decode("utf-8", errors="replace")
 
 
 def clean_text(value: str) -> str:
@@ -234,17 +226,7 @@ def extract_items(source: PageSource) -> list[dict]:
 
 
 def ensure_page_seen_table(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS trendforce_page_seen_items (
-            item_id TEXT PRIMARY KEY,
-            url TEXT NOT NULL,
-            title TEXT NOT NULL,
-            first_source TEXT NOT NULL,
-            first_seen_at TEXT NOT NULL
-        )
-        """
-    )
+    ensure_trendforce_page_seen_table(conn)
 
 
 def source_initialized(conn: sqlite3.Connection, source_name: str) -> bool:
@@ -392,8 +374,12 @@ def run_once(sources: list[PageSource], notify_baseline: bool = False) -> int:
     for source in sources:
         try:
             items = extract_items(source)
+            with connect_db() as conn:
+                record_source_success(conn, "trendforce_page", source.name)
             new_items = save_new_page_items_with_retry(source, items, notify_baseline=notify_baseline)
         except Exception as exc:
+            with connect_db() as conn:
+                record_source_failure(conn, "trendforce_page", source.name, exc)
             print(f"{source.name} 页面监控失败：{exc}")
             continue
 

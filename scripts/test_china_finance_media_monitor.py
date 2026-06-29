@@ -24,9 +24,14 @@ def test_parse_cls_time_accepts_seconds_and_milliseconds() -> None:
     assert parse_cls_time("1719806400000") == "2024-07-01T04:00:00+00:00"
 
 
+def test_parse_cls_time_keeps_timezone_aware_iso() -> None:
+    assert parse_cls_time("2026-06-29T08:00:00+08:00") == "2026-06-29T00:00:00+00:00"
+
+
 def main() -> int:
     test_cls_sign_includes_empty_values_and_sorts_keys()
     test_parse_cls_time_accepts_seconds_and_milliseconds()
+    test_parse_cls_time_keeps_timezone_aware_iso()
     print("china_finance_media_monitor helper tests OK")
     return 0
 

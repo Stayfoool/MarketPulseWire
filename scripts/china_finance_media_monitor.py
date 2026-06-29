@@ -10,13 +10,12 @@ import os
 import re
 import sqlite3
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
-from xml.etree import ElementTree as ET
+
+import feedparser
 
 from article_gate import (
     article_gate_enabled,
@@ -37,12 +36,15 @@ from china_media_sources import (
     china_media_module,
     is_china_media_source,
 )
-from db_utils import connect_sqlite, retry_on_locked
+from db_utils import connect_sqlite, ensure_seen_tables, retry_on_locked
 from env_utils import load_env
 from feishu import send_card
+from http_utils import http_get
 from llm_analysis import llm_config
 from media_keyword_config import is_media_focus_item
 from rss_monitor import DB_PATH, fetch_article_body, parse_date, strip_tags
+from source_health import record_source_failure, record_source_success
+from time_utils import parse_datetime_to_utc_iso, timestamp_to_utc_iso
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,28 +64,7 @@ def connect_db() -> sqlite3.Connection:
 
 
 def ensure_seen_table(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS seen_items (
-            source TEXT NOT NULL,
-            item_id TEXT NOT NULL,
-            url TEXT NOT NULL,
-            title TEXT NOT NULL,
-            summary TEXT,
-            published_at TEXT,
-            first_seen_at TEXT NOT NULL,
-            PRIMARY KEY (source, item_id)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS seen_sources (
-            source TEXT PRIMARY KEY,
-            first_seen_at TEXT NOT NULL
-        )
-        """
-    )
+    ensure_seen_tables(conn)
     conn.commit()
 
 
@@ -137,15 +118,14 @@ def balanced_json_prefix(raw: str) -> str | None:
 
 
 def fetch_json(url: str) -> list[dict[str, Any]]:
-    request = urllib.request.Request(
+    response = http_get(
         url,
         headers={
-            "User-Agent": "surveil-china-finance-media/0.1",
             "Accept": "application/json,text/plain,*/*",
         },
+        timeout=int(os.getenv("CHINA_MEDIA_FETCH_TIMEOUT_SECONDS", "20")),
     )
-    with urllib.request.urlopen(request, timeout=20) as response:
-        body = response.read().decode("utf-8", errors="replace")
+    body = response.content.decode("utf-8", errors="replace")
     data = json.loads(body)
     if isinstance(data, list):
         return data
@@ -175,11 +155,8 @@ def parse_cls_time(value: Any) -> str:
     if not raw:
         return ""
     if raw.isdigit():
-        timestamp = int(raw)
-        if timestamp > 10_000_000_000:
-            timestamp = timestamp // 1000
-        return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
-    return parse_date(raw)
+        return timestamp_to_utc_iso(raw)
+    return parse_datetime_to_utc_iso(raw)
 
 
 def parse_first_finance_items() -> list[dict[str, Any]]:
@@ -229,32 +206,26 @@ def parse_cls_items() -> list[dict[str, Any]]:
     signed_params = dict(params)
     signed_params["sign"] = cls_sign(params)
     url = f"{DOMESTIC_FEED_SOURCES['cls_telegraph_api']}?{urllib.parse.urlencode(signed_params)}"
-    request = urllib.request.Request(
-        url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
-            ),
-            "Accept": "application/json, text/plain, */*",
-            "Referer": "https://m.cls.cn/telegraph",
-        },
-    )
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            data = json.loads(response.read().decode("utf-8", errors="replace"))
+        response = http_get(
+            url,
+            headers={
+                "Accept": "application/json, text/plain, */*",
+                "Referer": "https://m.cls.cn/telegraph",
+            },
+            timeout=int(os.getenv("CLS_FETCH_TIMEOUT_SECONDS", os.getenv("CHINA_MEDIA_FETCH_TIMEOUT_SECONDS", "20"))),
+        )
+        data = json.loads(response.content.decode("utf-8", errors="replace"))
     except Exception as exc:
         print(f"财联社公开前端 API 读取失败：{exc}", flush=True)
-        return []
+        raise
 
     if not isinstance(data, dict):
-        print("财联社公开前端 API 响应格式异常：root 不是 JSON object", flush=True)
-        return []
+        raise RuntimeError("财联社公开前端 API 响应格式异常：root 不是 JSON object")
     errno = data.get("errno", data.get("errNo", data.get("code", 0)))
     if errno not in (0, "0", None):
         message = data.get("msg") or data.get("message") or data.get("error") or ""
-        print(f"财联社公开前端 API 返回错误：errno={errno} message={message}", flush=True)
-        return []
+        raise RuntimeError(f"财联社公开前端 API 返回错误：errno={errno} message={message}")
 
     payload = data.get("data")
     rows = payload.get("roll_data") if isinstance(payload, dict) else []
@@ -290,27 +261,23 @@ def parse_cls_items() -> list[dict[str, Any]]:
 def parse_jin10_items() -> list[dict[str, Any]]:
     feed = CHINA_MEDIA_FEEDS["jin10_rsshub_important"]
     try:
-        request = urllib.request.Request(
+        response = http_get(
             feed,
-            headers={"User-Agent": "surveil-china-finance-media/0.1", "Accept": "application/rss+xml, application/xml, text/xml"},
+            headers={"Accept": "application/rss+xml, application/xml, text/xml"},
+            timeout=int(os.getenv("CHINA_MEDIA_FETCH_TIMEOUT_SECONDS", "20")),
         )
-        with urllib.request.urlopen(request, timeout=20) as response:
-            xml_text = response.read()
-        root = ET.fromstring(xml_text)
+        parsed = feedparser.parse(response.content)
     except Exception as exc:
         print(f"金十 RSSHub 读取失败：{exc}", flush=True)
-        return []
+        raise
 
     items: list[dict[str, Any]] = []
-    channel = root.find("channel")
-    if channel is None:
-        return items
-    for item in channel.findall("item"):
-        title = (item.findtext("title") or "").strip()
-        url = (item.findtext("link") or "").strip()
-        summary = (item.findtext("description") or "").strip()
-        guid = (item.findtext("guid") or url or title).strip()
-        published_at = parse_date((item.findtext("pubDate") or "").strip())
+    for item in parsed.entries:
+        title = str(item.get("title") or "").strip()
+        url = str(item.get("link") or "").strip()
+        summary = str(item.get("summary") or item.get("description") or "").strip()
+        guid = str(item.get("id") or item.get("guid") or url or title).strip()
+        published_at = parse_date(str(item.get("published") or item.get("updated") or "").strip())
         items.append(
             {
                 "id": guid,
@@ -474,8 +441,12 @@ def run_once(sources: list[str], notify_baseline: bool = False) -> int:
     for source in sources:
         try:
             items = source_items(source)
+            with connect_db() as conn:
+                record_source_success(conn, "china_finance_media", source)
             new_items = save_new_items_with_retry(source, items, notify_baseline=notify_baseline)
         except Exception as exc:
+            with connect_db() as conn:
+                record_source_failure(conn, "china_finance_media", source, exc)
             print(f"{china_media_module(source)} 抓取失败：{exc}", flush=True)
             continue
         if not new_items:

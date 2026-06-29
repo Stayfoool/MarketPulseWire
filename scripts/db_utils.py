@@ -52,3 +52,54 @@ def retry_on_locked(operation: Callable[[], T], attempts: int = 6) -> T:
                 break
             time.sleep(0.5 * (attempt + 1))
     raise RuntimeError(f"SQLite 数据库繁忙，重试后仍失败：{last_error}")
+
+
+def ensure_seen_tables(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS seen_items (
+            source TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT,
+            published_at TEXT,
+            first_seen_at TEXT NOT NULL,
+            PRIMARY KEY (source, item_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS seen_sources (
+            source TEXT PRIMARY KEY,
+            first_seen_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def ensure_source_state_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS source_state (
+            source TEXT PRIMARY KEY,
+            state_json TEXT,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+def ensure_trendforce_page_seen_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trendforce_page_seen_items (
+            item_id TEXT PRIMARY KEY,
+            url TEXT NOT NULL,
+            title TEXT NOT NULL,
+            first_source TEXT NOT NULL,
+            first_seen_at TEXT NOT NULL
+        )
+        """
+    )
