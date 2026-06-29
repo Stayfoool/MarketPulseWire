@@ -9,6 +9,7 @@ from sina_stock_news import (
     is_ai_generated_content,
     is_relevant_to_holding,
     legacy_source_event_id_for_item,
+    parse_news_items,
     similar_news_title,
     source_event_id_for_item,
 )
@@ -70,6 +71,15 @@ def main() -> int:
         "两天上涨30% 华特气体提示氦气产品价格已有明显下降趋势",
     ):
         raise AssertionError("opposite helium price headlines should not be merged")
+
+    html_text = """
+    <div class="datelist"><ul>
+      <li>2026-06-29&nbsp;14:30&nbsp;&nbsp;<a target="_blank" href="/stock/s/example.shtml">测试新闻</a></li>
+    </ul></div>
+    """
+    parsed = parse_news_items(html_text)
+    if parsed[0]["published_at"] != "2026-06-29T06:30:00+00:00":
+        raise AssertionError(f"Sina HTML list time should normalize to UTC ISO: {parsed[0]}")
 
     print("sina stock news relevance checks passed")
     return 0

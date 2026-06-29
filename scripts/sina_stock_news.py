@@ -10,7 +10,6 @@ import os
 import re
 import time
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,10 +17,12 @@ from typing import Any
 from db_utils import connect_sqlite
 from env_utils import load_env
 from event_pipeline import analyze_event, content_hash, load_enabled_holdings, maybe_deliver_event, upsert_event
+from http_utils import http_get
 from llm_analysis import call_chat_completion_with_prompts
 from market_db import DEFAULT_DB_PATH, init_db
 from portfolio_import import import_holdings
 from sina_zy_client import client_from_env, result_data
+from source_health import record_source_failure, record_source_success
 from time_utils import parse_datetime_to_utc_iso, timestamp_to_utc_iso
 
 
@@ -359,15 +360,15 @@ def is_ai_generated_content(value: str) -> bool:
 def fetch_article_text(url: str, timeout: int = 15) -> str:
     if not url.startswith(("http://", "https://")):
         return ""
-    request = urllib.request.Request(
+    response = http_get(
         url,
         headers={
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "User-Agent": "surveil-sina-stock-news/article-fetch/0.1",
         },
+        timeout=timeout,
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        body = response.read()
+    body = response.content
     head = body[:1000].decode("ascii", errors="ignore").lower()
     encoding = "utf-8" if "utf-8" in head else "gb18030"
     html_text = body.decode(encoding, errors="replace")
@@ -594,16 +595,15 @@ def check_relevance(
 
 def fetch_html(symbol: str, timeout: int = 15) -> str:
     url = BASE_URL.format(symbol=urllib.parse.quote(symbol))
-    request = urllib.request.Request(
+    response = http_get(
         url,
         headers={
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "User-Agent": "surveil-sina-stock-news/0.1",
         },
+        timeout=timeout,
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        body = response.read()
-    return body.decode("gb18030", errors="replace")
+    return response.content.decode("gb18030", errors="replace")
 
 
 def parse_news_items(html_text: str) -> list[dict[str, str]]:
@@ -623,7 +623,7 @@ def parse_news_items(html_text: str) -> list[dict[str, str]]:
             continue
         items.append(
             {
-                "published_at": f"{date_text} {time_text}",
+                "published_at": parse_datetime_to_utc_iso(f"{date_text} {time_text}"),
                 "url": absolute_url(html.unescape(url.strip())),
                 "title": title,
             }
@@ -1035,13 +1035,19 @@ def run_once(
         symbol = str(holding.get("symbol") or "").upper()
         if not symbol:
             continue
+        provider = news_provider()
+        source_key = f"{provider}:{symbol}"
         try:
-            if news_provider() in {"zy_api", "api", "openapi", "official_api", "zy_mcp", "mcp"}:
+            if provider in {"zy_api", "api", "openapi", "official_api", "zy_mcp", "mcp"}:
                 items = fetch_sina_zy_stock_news(symbol, per_stock_limit)
             else:
                 html_text = fetch_html(sina_symbol(symbol), timeout=timeout)
                 items = parse_news_items(html_text)[:per_stock_limit]
+            with connect_sqlite(DEFAULT_DB_PATH) as conn:
+                record_source_success(conn, "sina_stock_news", source_key)
         except Exception as exc:  # noqa: BLE001 - isolate a single stock failure
+            with connect_sqlite(DEFAULT_DB_PATH) as conn:
+                record_source_failure(conn, "sina_stock_news", source_key, exc)
             print(f"Sina stock news fetch failed {symbol}: {exc}", flush=True)
             continue
         for item in reversed(items):

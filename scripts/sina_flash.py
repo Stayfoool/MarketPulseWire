@@ -11,7 +11,6 @@ import re
 import sys
 import time
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,9 +18,11 @@ from typing import Any
 from db_utils import connect_sqlite
 from env_utils import load_env
 from event_pipeline import analyze_event, content_hash, load_enabled_holdings, maybe_deliver_event, upsert_event
+from http_utils import http_get
 from market_db import DEFAULT_DB_PATH, init_db
 from portfolio_import import import_holdings
 from sina_zy_client import client_from_env, result_data
+from source_health import record_source_failure, record_source_success
 from time_utils import parse_datetime_to_utc_iso, timestamp_to_utc_iso
 
 
@@ -122,16 +123,16 @@ def match_holdings(text: str, ext_symbols: set[str], holdings: list[dict[str, An
 
 def fetch_sina_feed(tag: str, size: int) -> list[dict[str, Any]]:
     query = urllib.parse.urlencode({"page": 1, "size": size, "tag": tag})
-    request = urllib.request.Request(
+    response = http_get(
         f"{SINA_API_URL}?{query}",
         headers={
             "Accept": "application/json,text/plain,*/*",
             "Referer": SINA_REFERER,
             "User-Agent": "surveil-sina-flash/0.1",
         },
+        timeout=15,
     )
-    with urllib.request.urlopen(request, timeout=15) as response:
-        body = response.read().decode("utf-8", errors="replace")
+    body = response.content.decode("utf-8", errors="replace")
     parsed = json.loads(body)
     status = (((parsed.get("result") or {}).get("status") or {}) if isinstance(parsed, dict) else {})
     if str(status.get("code", "0")) not in {"0", ""}:
@@ -262,15 +263,35 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
     verbose = is_verbose()
     size = env_int("SINA_FLASH_PAGE_SIZE", 20, minimum=1)
     events: dict[str, dict[str, Any]] = {}
-    if news_provider() in {"zy_api", "api", "openapi", "official_api", "zy_mcp", "mcp"}:
-        provider_rows = [(news_provider(), fetch_sina_zy_feed(size=size))]
+    provider = news_provider()
+    provider_rows: list[tuple[str, list[dict[str, Any]]]] = []
+    if provider in {"zy_api", "api", "openapi", "official_api", "zy_mcp", "mcp"}:
+        source_key = f"provider:{provider}"
+        try:
+            provider_rows.append((provider, fetch_sina_zy_feed(size=size)))
+            with connect_sqlite(DEFAULT_DB_PATH) as conn:
+                record_source_success(conn, "sina_flash", source_key)
+        except Exception as exc:
+            with connect_sqlite(DEFAULT_DB_PATH) as conn:
+                record_source_failure(conn, "sina_flash", source_key, exc)
+            raise
     else:
-        provider_rows = [(tag, fetch_sina_feed(tag=tag, size=size)) for tag in tags_from_env()]
+        for tag in tags_from_env():
+            source_key = f"tag:{tag}"
+            try:
+                provider_rows.append((tag, fetch_sina_feed(tag=tag, size=size)))
+                with connect_sqlite(DEFAULT_DB_PATH) as conn:
+                    record_source_success(conn, "sina_flash", source_key)
+            except Exception as exc:
+                with connect_sqlite(DEFAULT_DB_PATH) as conn:
+                    record_source_failure(conn, "sina_flash", source_key, exc)
+                print(f"Sina flash fetch failed {source_key}: {exc}", file=sys.stderr, flush=True)
+                continue
     for tag, rows in provider_rows:
         for row in rows:
             event = event_from_row(row, holdings)
             if event:
-                event["raw"]["provider"] = news_provider()
+                event["raw"]["provider"] = provider
                 event["raw"]["tag"] = tag
                 events[event["source_event_id"]] = event
 
