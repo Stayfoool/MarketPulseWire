@@ -12,7 +12,8 @@ from article_gate import gate_lines
 from market_db import init_db
 from official_news_gate import review_exists as official_review_exists
 from official_news_gate import save_review as save_official_review
-from skeptic_evaluator import apply_skeptic_review
+import skeptic_evaluator
+from skeptic_evaluator import apply_skeptic_review, history_candidates
 
 
 def iso_days_ago(days: int) -> str:
@@ -88,13 +89,84 @@ def test_official_review_preserves_skeptic_metadata() -> None:
         assert loaded is not None
         assert loaded["should_push_now"] is False
         assert loaded["skeptic"]["skeptic_verdict"] == "downgrade"
-        assert loaded["analysis"]["_skeptic"]["old_news_risk"] == "high"
+        assert loaded["skeptic"]["old_news_risk"] == "high"
+        row = conn.execute(
+            """
+            SELECT skeptic_json, pre_skeptic_importance
+            FROM official_news_reviews
+            WHERE source = 'nvidia_blog' AND item_id = 'nvidia-rubin'
+            """
+        ).fetchone()
+        assert row[0] and "old_news_risk" in row[0]
+        assert row[1] == "high"
+        conn.close()
+
+
+def test_history_candidates_respects_cutoff() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "surveil.sqlite3"
+        conn = init_db(path)
+        seed_seen_item(conn, title="旧闻测试标题", days_ago=30)
+        rows = history_candidates(
+            conn,
+            source="new_source",
+            item={
+                "id": "new-cutoff",
+                "url": "https://example.com/new-cutoff",
+                "title": "旧闻测试标题",
+                "published_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        assert rows == []
+        conn.close()
+
+
+def test_skeptic_llm_failure_records_health_without_blocking() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "surveil.sqlite3"
+        conn = init_db(path)
+        original_llm = skeptic_evaluator.llm_skeptic_review
+
+        def fake_llm(**_kwargs):
+            raise RuntimeError("synthetic skeptic failure")
+
+        review = {
+            "importance": "high",
+            "push_now": True,
+            "reason": "新增重大事件。",
+        }
+        item = {
+            "id": "fresh-1",
+            "url": "https://example.com/fresh",
+            "title": "全新事件 无历史重复",
+            "published_at": datetime.now(timezone.utc).isoformat(),
+            "full_text": "全新事件，无本地历史重复。",
+        }
+        try:
+            skeptic_evaluator.llm_skeptic_review = fake_llm
+            updated = apply_skeptic_review(conn, source="fresh_source", item=item, review=review, push_key="push_now")
+        finally:
+            skeptic_evaluator.llm_skeptic_review = original_llm
+
+        assert updated["push_now"] is True
+        assert updated["skeptic"]["mode"] == "llm_error"
+        row = conn.execute(
+            """
+            SELECT consecutive_failures, last_error
+            FROM source_health
+            WHERE monitor = 'signal_pipeline' AND source = 'skeptic_evaluator'
+            """
+        ).fetchone()
+        assert row[0] == 1
+        assert "synthetic skeptic failure" in row[1]
         conn.close()
 
 
 def main() -> int:
     test_skeptic_downgrades_duplicate_article()
     test_official_review_preserves_skeptic_metadata()
+    test_history_candidates_respects_cutoff()
+    test_skeptic_llm_failure_records_health_without_blocking()
     print("skeptic evaluator tests OK")
     return 0
 

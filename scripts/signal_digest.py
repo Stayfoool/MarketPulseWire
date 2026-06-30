@@ -14,6 +14,7 @@ from cards import div_markdown, md_escape
 from env_utils import load_env
 from feishu import send_card
 from market_db import DEFAULT_DB_PATH, init_db
+from pipeline_health import record_pipeline_failure, record_pipeline_success
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -219,22 +220,29 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    start_utc, end_utc, display_day = day_window(args.date)
-    if args.mode == "weekly":
-        start_utc = window_start(7)
-    conn = init_db(Path(args.db))
-    conn.row_factory = sqlite3.Row
-    with conn:
-        new_signals = fetch_new_signals(conn, start_utc, end_utc)
-        reviews = fetch_reviews(conn, start_utc, end_utc)
-        scores = fetch_source_scores(conn, 30)
-    card = build_card(new_signals=new_signals, reviews=reviews, scores=scores, display_day=display_day, mode=args.mode)
-    if args.dry_run:
-        print(json.dumps(card, ensure_ascii=False, indent=2))
+    db_path = Path(args.db)
+    try:
+        start_utc, end_utc, display_day = day_window(args.date)
+        if args.mode == "weekly":
+            start_utc = window_start(7)
+        conn = init_db(db_path)
+        conn.row_factory = sqlite3.Row
+        with conn:
+            new_signals = fetch_new_signals(conn, start_utc, end_utc)
+            reviews = fetch_reviews(conn, start_utc, end_utc)
+            scores = fetch_source_scores(conn, 30)
+        card = build_card(new_signals=new_signals, reviews=reviews, scores=scores, display_day=display_day, mode=args.mode)
+        if args.dry_run:
+            print(json.dumps(card, ensure_ascii=False, indent=2))
+            return 0
+        send_card(card)
+        print(f"已发送{args.mode}信号复盘报告：signals={len(new_signals)} reviews={len(reviews)}", flush=True)
+        record_pipeline_success(f"signal_digest_{args.mode}", db_path=db_path)
         return 0
-    send_card(card)
-    print(f"已发送{args.mode}信号复盘报告：signals={len(new_signals)} reviews={len(reviews)}", flush=True)
-    return 0
+    except Exception as exc:  # noqa: BLE001
+        if not args.dry_run:
+            record_pipeline_failure(f"signal_digest_{args.mode}", exc, db_path=db_path)
+        raise
 
 
 if __name__ == "__main__":

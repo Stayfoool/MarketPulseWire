@@ -77,6 +77,7 @@ def ensure_seen_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_seen_items_first_seen ON seen_items(first_seen_at)")
 
 
 def ensure_source_state_table(conn: sqlite3.Connection) -> None:

@@ -8,6 +8,7 @@ import os
 from dataclasses import dataclass
 
 import rss_monitor
+from pipeline_health import record_pipeline_failure, record_pipeline_success
 from source_health import record_source_failure, record_source_success, should_alert_failure
 
 
@@ -131,12 +132,45 @@ def test_source_health_alert_threshold() -> None:
             os.environ["SOURCE_HEALTH_ALERT_FAILURES"] = original
 
 
+def test_pipeline_health_helpers() -> None:
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        record_pipeline_failure("signals_extract", RuntimeError("boom"), db_path=db_path)
+        conn = sqlite3.connect(db_path)
+        row = conn.execute(
+            """
+            SELECT consecutive_failures, last_error
+            FROM source_health
+            WHERE monitor = 'signal_pipeline' AND source = 'signals_extract'
+            """
+        ).fetchone()
+        assert row[0] == 1
+        assert "boom" in row[1]
+        conn.close()
+        record_pipeline_success("signals_extract", db_path=db_path)
+        conn = sqlite3.connect(db_path)
+        row = conn.execute(
+            """
+            SELECT consecutive_failures, last_success_at
+            FROM source_health
+            WHERE monitor = 'signal_pipeline' AND source = 'signals_extract'
+            """
+        ).fetchone()
+        assert row[0] == 0
+        assert row[1]
+        conn.close()
+
+
 def main() -> int:
     test_feedparser_parses_rss_atom_and_rdf()
     test_feed_state_roundtrip()
     test_fetch_feed_uses_conditionals_and_skips_304()
     test_source_health_failure_and_recovery()
     test_source_health_alert_threshold()
+    test_pipeline_health_helpers()
     print("rss monitor fetch/state checks passed")
     return 0
 

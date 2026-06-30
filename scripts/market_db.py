@@ -42,6 +42,8 @@ CREATE TABLE IF NOT EXISTS seen_items (
     PRIMARY KEY (source, item_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_seen_items_first_seen ON seen_items(first_seen_at);
+
 CREATE TABLE IF NOT EXISTS seen_sources (
     source TEXT PRIMARY KEY,
     first_seen_at TEXT NOT NULL
@@ -371,6 +373,11 @@ def add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, def
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
+def db_table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (table,)).fetchone()
+    return row is not None
+
+
 def migrate_schema(conn: sqlite3.Connection) -> None:
     """Apply additive migrations for existing personal SQLite databases."""
     stock_relation_columns = {
@@ -389,8 +396,27 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     }
     for column, definition in stock_relation_columns.items():
         add_column_if_missing(conn, "stock_relations", column, definition)
+    article_review_columns = {
+        "skeptic_json": "TEXT",
+        "pre_skeptic_importance": "TEXT",
+    }
+    if db_table_exists(conn, "article_reviews"):
+        for column, definition in article_review_columns.items():
+            add_column_if_missing(conn, "article_reviews", column, definition)
+    official_review_columns = {
+        "skeptic_json": "TEXT",
+        "pre_skeptic_importance": "TEXT",
+    }
+    if db_table_exists(conn, "official_news_reviews"):
+        for column, definition in official_review_columns.items():
+            add_column_if_missing(conn, "official_news_reviews", column, definition)
     add_column_if_missing(conn, "signal_reviews", "target_id", "INTEGER")
     add_column_if_missing(conn, "signal_reviews", "symbol", "TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_seen_items_first_seen ON seen_items(first_seen_at)")
+    if db_table_exists(conn, "article_reviews"):
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_article_reviews_created ON article_reviews(created_at)")
+    if db_table_exists(conn, "official_news_reviews"):
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_official_news_created ON official_news_reviews(created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_relations_symbol ON stock_relations(symbol, enabled)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_relations_related ON stock_relations(related_symbol, enabled)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_relation_suggestions_status ON relation_suggestions(status, updated_at)")

@@ -14,6 +14,7 @@ from typing import Any
 from db_utils import connect_sqlite
 from env_utils import load_env
 from market_db import DEFAULT_DB_PATH, init_db
+from pipeline_health import record_pipeline_failure, record_pipeline_success
 from signal_store import (
     PROMPT_VERSION,
     json_loads,
@@ -799,9 +800,17 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     load_env()
     args = parse_args()
-    counts = extract_signals(db_path=Path(args.db), days=args.days, dry_run=args.dry_run)
-    print(json.dumps(counts, ensure_ascii=False, sort_keys=True), flush=True)
-    return 0
+    db_path = Path(args.db)
+    try:
+        counts = extract_signals(db_path=db_path, days=args.days, dry_run=args.dry_run)
+        print(json.dumps(counts, ensure_ascii=False, sort_keys=True), flush=True)
+        if not args.dry_run:
+            record_pipeline_success("signals_extract", db_path=db_path)
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        if not args.dry_run:
+            record_pipeline_failure("signals_extract", exc, db_path=db_path)
+        raise
 
 
 if __name__ == "__main__":

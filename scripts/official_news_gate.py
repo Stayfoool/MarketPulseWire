@@ -94,12 +94,20 @@ def ensure_official_news_table(conn: sqlite3.Connection) -> None:
             reason TEXT,
             daily_summary TEXT,
             analysis_json TEXT NOT NULL,
+            skeptic_json TEXT,
+            pre_skeptic_importance TEXT,
             pushed_at TEXT,
             created_at TEXT NOT NULL,
             PRIMARY KEY (source, item_id)
         )
         """
     )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(official_news_reviews)").fetchall()}
+    if "skeptic_json" not in columns:
+        conn.execute("ALTER TABLE official_news_reviews ADD COLUMN skeptic_json TEXT")
+    if "pre_skeptic_importance" not in columns:
+        conn.execute("ALTER TABLE official_news_reviews ADD COLUMN pre_skeptic_importance TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_official_news_created ON official_news_reviews(created_at)")
     conn.commit()
 
 
@@ -115,7 +123,8 @@ def review_exists(conn: sqlite3.Connection, source: str, item_id: str) -> dict[s
     ensure_official_news_table(conn)
     row = conn.execute(
         """
-        SELECT importance, should_push_now, reason, daily_summary, analysis_json, pushed_at
+        SELECT importance, should_push_now, reason, daily_summary, analysis_json,
+               skeptic_json, pre_skeptic_importance, pushed_at
         FROM official_news_reviews
         WHERE source = ? AND item_id = ?
         """,
@@ -123,7 +132,7 @@ def review_exists(conn: sqlite3.Connection, source: str, item_id: str) -> dict[s
     ).fetchone()
     if not row:
         return None
-    importance, should_push_now, reason, daily_summary, analysis_json, pushed_at = row
+    importance, should_push_now, reason, daily_summary, analysis_json, skeptic_json, pre_skeptic_importance, pushed_at = row
     parsed = json.loads(analysis_json)
     review = {
         "importance": importance,
@@ -133,7 +142,14 @@ def review_exists(conn: sqlite3.Connection, source: str, item_id: str) -> dict[s
         "analysis": parsed,
         "pushed_at": pushed_at or "",
     }
-    if isinstance(parsed, dict) and isinstance(parsed.get("_skeptic"), dict):
+    try:
+        skeptic = json.loads(skeptic_json or "{}")
+    except json.JSONDecodeError:
+        skeptic = {}
+    if isinstance(skeptic, dict) and skeptic:
+        review["skeptic"] = skeptic
+        review["pre_skeptic_importance"] = pre_skeptic_importance or ""
+    elif isinstance(parsed, dict) and isinstance(parsed.get("_skeptic"), dict):
         review["skeptic"] = parsed["_skeptic"]
         review["pre_skeptic_importance"] = parsed.get("_pre_skeptic_importance", "")
     return review
@@ -151,14 +167,17 @@ def save_review(conn: sqlite3.Connection, source: str, item: dict[str, Any], rev
         """
         INSERT INTO official_news_reviews (
             source, item_id, url, title, published_at, importance, should_push_now,
-            reason, daily_summary, analysis_json, pushed_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            reason, daily_summary, analysis_json, skeptic_json,
+            pre_skeptic_importance, pushed_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source, item_id) DO UPDATE SET
             importance = excluded.importance,
             should_push_now = excluded.should_push_now,
             reason = excluded.reason,
             daily_summary = excluded.daily_summary,
-            analysis_json = excluded.analysis_json
+            analysis_json = excluded.analysis_json,
+            skeptic_json = excluded.skeptic_json,
+            pre_skeptic_importance = excluded.pre_skeptic_importance
         """,
         (
             source,
@@ -171,6 +190,8 @@ def save_review(conn: sqlite3.Connection, source: str, item: dict[str, Any], rev
             str(review.get("reason") or ""),
             str(review.get("daily_summary") or ""),
             json.dumps(analysis_payload, ensure_ascii=False),
+            json.dumps(review.get("skeptic") or {}, ensure_ascii=False),
+            str(review.get("pre_skeptic_importance") or ""),
             "",
             now,
         ),

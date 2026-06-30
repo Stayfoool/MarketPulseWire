@@ -16,6 +16,7 @@ from db_utils import connect_sqlite
 from env_utils import load_env
 from ifind_client import IfindClient, IfindError, IfindNoDataError
 from market_db import DEFAULT_DB_PATH, init_db
+from pipeline_health import record_pipeline_failure, record_pipeline_success
 from signal_store import normalize_direction, normalize_symbol, upsert_outcome
 
 
@@ -306,9 +307,17 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    counts = update_outcomes(db_path=Path(args.db), days=args.days, limit=args.limit, dry_run=args.dry_run)
-    print(json.dumps(counts, ensure_ascii=False, sort_keys=True), flush=True)
-    return 0
+    db_path = Path(args.db)
+    try:
+        counts = update_outcomes(db_path=db_path, days=args.days, limit=args.limit, dry_run=args.dry_run)
+        print(json.dumps(counts, ensure_ascii=False, sort_keys=True), flush=True)
+        if not args.dry_run:
+            record_pipeline_success("signal_outcome_update", db_path=db_path)
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        if not args.dry_run:
+            record_pipeline_failure("signal_outcome_update", exc, db_path=db_path)
+        raise
 
 
 if __name__ == "__main__":
