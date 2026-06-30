@@ -74,13 +74,31 @@ def ensure_article_reviews_table(conn: sqlite3.Connection) -> None:
             daily_summary TEXT,
             confidence TEXT,
             gate_json TEXT NOT NULL,
+            skeptic_json TEXT,
+            pre_skeptic_importance TEXT,
             pushed_at TEXT,
             created_at TEXT NOT NULL,
             PRIMARY KEY (source, item_id)
         )
         """
     )
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(article_reviews)").fetchall()}
+    if "skeptic_json" not in columns:
+        conn.execute("ALTER TABLE article_reviews ADD COLUMN skeptic_json TEXT")
+    if "pre_skeptic_importance" not in columns:
+        conn.execute("ALTER TABLE article_reviews ADD COLUMN pre_skeptic_importance TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_article_reviews_created ON article_reviews(created_at)")
     conn.commit()
+
+
+def json_loads_dict(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def article_gate_enabled() -> bool:
@@ -164,8 +182,8 @@ def save_review(conn: sqlite3.Connection, source: str, item: dict[str, Any], rev
             source, item_id, url, title, source_module, published_at,
             importance, push_now, market_impact, incremental_classification,
             affected_targets_json, reason, daily_summary, confidence,
-            gate_json, pushed_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            gate_json, skeptic_json, pre_skeptic_importance, pushed_at, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source, item_id) DO UPDATE SET
             source_module = excluded.source_module,
             published_at = excluded.published_at,
@@ -177,7 +195,9 @@ def save_review(conn: sqlite3.Connection, source: str, item: dict[str, Any], rev
             reason = excluded.reason,
             daily_summary = excluded.daily_summary,
             confidence = excluded.confidence,
-            gate_json = excluded.gate_json
+            gate_json = excluded.gate_json,
+            skeptic_json = excluded.skeptic_json,
+            pre_skeptic_importance = excluded.pre_skeptic_importance
         """,
         (
             source,
@@ -195,6 +215,8 @@ def save_review(conn: sqlite3.Connection, source: str, item: dict[str, Any], rev
             str(review.get("daily_summary") or ""),
             str(review.get("confidence") or ""),
             json.dumps(review, ensure_ascii=False),
+            json.dumps(review.get("skeptic") or {}, ensure_ascii=False),
+            str(review.get("pre_skeptic_importance") or ""),
             "",
             now,
         ),
@@ -207,7 +229,8 @@ def review_exists(conn: sqlite3.Connection, source: str, item_id: str) -> dict[s
     row = conn.execute(
         """
         SELECT importance, push_now, market_impact, incremental_classification,
-               affected_targets_json, reason, daily_summary, confidence, gate_json, pushed_at
+               affected_targets_json, reason, daily_summary, confidence, gate_json,
+               skeptic_json, pre_skeptic_importance, pushed_at
         FROM article_reviews
         WHERE source = ? AND item_id = ?
         """,
@@ -225,12 +248,11 @@ def review_exists(conn: sqlite3.Connection, source: str, item_id: str) -> dict[s
         daily_summary,
         confidence,
         gate_json,
+        skeptic_json,
+        pre_skeptic_importance,
         pushed_at,
     ) = row
-    try:
-        raw = json.loads(gate_json or "{}")
-    except json.JSONDecodeError:
-        raw = {}
+    raw = json_loads_dict(gate_json)
     try:
         targets = json.loads(targets_json or "[]")
     except json.JSONDecodeError:
@@ -245,6 +267,8 @@ def review_exists(conn: sqlite3.Connection, source: str, item_id: str) -> dict[s
         "daily_summary": daily_summary or "",
         "confidence": confidence or "",
         "raw": raw,
+        "skeptic": json_loads_dict(skeptic_json) if skeptic_json else raw.get("skeptic", {}),
+        "pre_skeptic_importance": pre_skeptic_importance or raw.get("pre_skeptic_importance", ""),
         "pushed_at": pushed_at or "",
     }
 

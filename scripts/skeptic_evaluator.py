@@ -6,11 +6,12 @@ import json
 import os
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from typing import Any
 
 from llm_analysis import call_chat_completion_with_prompts, llm_config
+from source_health import record_source_failure, record_source_success
 
 
 SKEPTIC_SYSTEM_PROMPT = """你是投资情报系统里的 Skeptic Evaluator。
@@ -105,6 +106,11 @@ def history_candidates(conn: sqlite3.Connection, *, source: str, item: dict[str,
     title = str(item.get("title") or "")
     current_url = str(item.get("url") or "")
     current_id = str(item.get("id") or item.get("url") or item.get("title") or "")
+    lookback_days = max(
+        int(os.getenv("SKEPTIC_DUPLICATE_LOOKBACK_DAYS", "14") or "14"),
+        int(os.getenv("SKEPTIC_STALE_NEWS_DAYS", "7") or "7"),
+    )
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
     candidates: list[dict[str, Any]] = []
 
     def add_candidate(table: str, row_source: str, row_id: str, row_title: str, row_url: str, seen_at: str, published_at: str) -> None:
@@ -134,9 +140,11 @@ def history_candidates(conn: sqlite3.Connection, *, source: str, item: dict[str,
             """
             SELECT source, item_id, url, title, published_at, first_seen_at
             FROM seen_items
+            WHERE first_seen_at >= ?
             ORDER BY first_seen_at DESC
             LIMIT 800
-            """
+            """,
+            (cutoff,),
         ).fetchall():
             add_candidate("seen_items", row[0] or "", row[1] or "", row[3] or "", row[2] or "", row[5] or "", row[4] or "")
 
@@ -145,9 +153,11 @@ def history_candidates(conn: sqlite3.Connection, *, source: str, item: dict[str,
             """
             SELECT source, item_id, url, title, published_at, created_at
             FROM article_reviews
+            WHERE created_at >= ?
             ORDER BY created_at DESC
             LIMIT 600
-            """
+            """,
+            (cutoff,),
         ).fetchall():
             add_candidate("article_reviews", row[0] or "", row[1] or "", row[3] or "", row[2] or "", row[5] or "", row[4] or "")
 
@@ -156,9 +166,11 @@ def history_candidates(conn: sqlite3.Connection, *, source: str, item: dict[str,
             """
             SELECT source, item_id, url, title, published_at, created_at
             FROM official_news_reviews
+            WHERE created_at >= ?
             ORDER BY created_at DESC
             LIMIT 300
-            """
+            """,
+            (cutoff,),
         ).fetchall():
             add_candidate("official_news_reviews", row[0] or "", row[1] or "", row[3] or "", row[2] or "", row[5] or "", row[4] or "")
 
@@ -329,7 +341,9 @@ def apply_skeptic_review(
     if deterministic["skeptic_verdict"] == "pass":
         try:
             skeptic = llm_skeptic_review(source=source, item=item, gate_review=review, fallback=deterministic)
+            record_source_success(conn, "signal_pipeline", "skeptic_evaluator")
         except Exception as exc:  # noqa: BLE001 - skepticism must not break ingestion
+            record_source_failure(conn, "signal_pipeline", "skeptic_evaluator", exc)
             skeptic = dict(deterministic)
             skeptic["mode"] = "llm_error"
             skeptic["error"] = str(exc)

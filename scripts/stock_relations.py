@@ -12,6 +12,7 @@ from typing import Any
 
 from db_utils import connect_sqlite
 from market_db import DEFAULT_DB_PATH, init_db
+from pipeline_health import record_pipeline_failure, record_pipeline_success
 from signal_store import json_dumps, normalize_direction, normalize_symbol, symbol_market
 
 
@@ -626,9 +627,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    counts = import_relations(db_path=Path(args.db), config_path=Path(args.config))
-    print(json.dumps(counts, ensure_ascii=False, sort_keys=True), flush=True)
-    return 0
+    db_path = Path(args.db)
+    try:
+        counts = import_relations(db_path=db_path, config_path=Path(args.config))
+        print(json.dumps(counts, ensure_ascii=False, sort_keys=True), flush=True)
+        record_pipeline_success("stock_relations_import", db_path=db_path)
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        record_pipeline_failure("stock_relations_import", exc, db_path=db_path)
+        raise
 
 
 if __name__ == "__main__":
