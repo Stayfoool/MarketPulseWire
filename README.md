@@ -162,10 +162,24 @@ Deploy and install services:
 Open the Web workbench through an SSH tunnel:
 
 ```bash
-ssh -L 8787:127.0.0.1:8787 -i "$REMOTE_SSH_KEY" -o IdentitiesOnly=yes "$REMOTE_USER@$REMOTE_HOST"
+ssh -L 8787:127.0.0.1:8787 \
+  -i ~/.ssh/<your_deploy_key> \
+  -o IdentitiesOnly=yes \
+  <remote_user>@<remote_host>
 ```
 
 Then open `http://127.0.0.1:8787`.
+
+If local port `8787` is already in use, bind a different local port while keeping the remote port as `8787`:
+
+```bash
+ssh -L 8788:127.0.0.1:8787 \
+  -i ~/.ssh/<your_deploy_key> \
+  -o IdentitiesOnly=yes \
+  <remote_user>@<remote_host>
+```
+
+Then open `http://127.0.0.1:8788`.
 
 ## GitHub Actions Deployment
 
