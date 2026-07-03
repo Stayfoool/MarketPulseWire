@@ -1519,7 +1519,7 @@ function openSignalFeedback(index) {{
   let lessons = '';
   try {{
     const parsed = item.lessons_json ? JSON.parse(item.lessons_json) : {{}};
-    if (Array.isArray(parsed.lessons)) lessons = parsed.lessons.join('\n');
+    if (Array.isArray(parsed.lessons)) lessons = parsed.lessons.join('\\n');
   }} catch (err) {{}}
   document.getElementById('signalFeedbackLessons').value = lessons;
   document.getElementById('signalFeedbackMeta').textContent = `${{item.symbol || '-'}} / ${{item.title || ''}}`;
