@@ -815,6 +815,14 @@ def html_page(token_required: bool) -> str:
     td.symbol {{ width: 112px; }}
     td.enabled {{ width: 70px; text-align: center; }}
     td.actions {{ width: 82px; text-align: center; }}
+    td.sort-cell {{ width: 54px; text-align: center; white-space: nowrap; }}
+    td.sort-cell .drag-handle {{ cursor: grab; font-size: 18px; line-height: 1; color: #9fb0c3; user-select: none; }}
+    td.sort-cell .drag-handle:active {{ cursor: grabbing; }}
+    td.sort-cell .move-btn {{ width: 26px; height: 26px; padding: 0; line-height: 1; border-color: var(--line); background: white; color: #5a6b80; border-radius: 4px; cursor: pointer; font-size: 13px; margin: 0 1px; }}
+    td.sort-cell .move-btn:hover {{ background: #eef2f6; }}
+    #rows tr.dragging {{ opacity: 0.4; background: #f0f5fa !important; }}
+    #rows tr.drag-over-above {{ box-shadow: inset 0 3px 0 0 var(--accent); }}
+    #rows tr.drag-over-below {{ box-shadow: inset 0 -3px 0 0 var(--accent); }}
     td.name {{ width: 110px; }}
     td.full {{ width: 170px; }}
     td textarea {{ min-height: 38px; resize: vertical; }}
@@ -1157,6 +1165,7 @@ def html_page(token_required: bool) -> str:
           <table>
             <thead>
               <tr>
+                <th style="width:54px">排序</th>
                 <th style="width:70px">启用</th>
                 <th style="width:118px">代码</th>
                 <th style="width:120px">简称</th>
@@ -1296,6 +1305,8 @@ let token = localStorage.getItem('surveil_holdings_token') || '';
 let holdings = [];
 let pendingPayload = null;
 let loadedHoldings = false;
+// 拖拽排序时记录被拖动行的原始下标，null 表示当前未拖动。
+let dragIndex = null;
 let codeDefaultKeywords = [];
 let managedRelations = [];
 let editingRelationId = null;
@@ -1992,13 +2003,21 @@ function renderTable(sync=true) {{
   const body = document.getElementById('rows');
   body.innerHTML = '';
   let visible = 0;
+  const hasFilter = !!q;
   holdings.forEach((item, index) => {{
     const hay = JSON.stringify(item).toLowerCase();
     if (q && !hay.includes(q)) return;
     visible += 1;
     const tr = document.createElement('tr');
     tr.dataset.index = index;
+    // 仅在未过滤时允许拖拽排序，避免过滤状态下拖拽打乱隐藏行的语义。
+    tr.draggable = !hasFilter;
     tr.innerHTML = `
+      <td class="sort-cell">
+        <span class="drag-handle" title="拖动调整顺序"${{hasFilter ? ' style="opacity:0.3"' : ''}}>⠿</span>
+        <button class="move-btn" onclick="moveRow(${{index}}, -1)" title="上移">↑</button>
+        <button class="move-btn" onclick="moveRow(${{index}}, 1)" title="下移">↓</button>
+      </td>
       <td class="enabled"><input data-field="enabled" type="checkbox" ${{item.enabled !== false ? 'checked' : ''}}></td>
       <td class="symbol"><input data-field="symbol" value="${{escapeHtml(item.symbol || '')}}"></td>
       <td class="name"><input data-field="name" value="${{escapeHtml(item.name || '')}}"></td>
@@ -2009,6 +2028,37 @@ function renderTable(sync=true) {{
       <td><textarea data-field="news_exclude_keywords">${{escapeHtml(joinList(item.news_exclude_keywords))}}</textarea></td>
       <td class="actions"><button class="danger" onclick="removeRow(${{index}})">删除</button></td>
     `;
+    if (!hasFilter) {{
+      tr.addEventListener('dragstart', (ev) => {{
+        dragIndex = index;
+        tr.classList.add('dragging');
+        ev.dataTransfer.effectAllowed = 'move';
+      }});
+      tr.addEventListener('dragend', () => {{
+        tr.classList.remove('dragging');
+        clearDragMarkers();
+      }});
+      tr.addEventListener('dragover', (ev) => {{
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = 'move';
+        if (dragIndex === null || dragIndex === index) return;
+        const rect = tr.getBoundingClientRect();
+        const after = (ev.clientY - rect.top) > rect.height / 2;
+        clearDragMarkers();
+        tr.classList.add(after ? 'drag-over-below' : 'drag-over-above');
+      }});
+      tr.addEventListener('dragleave', () => {{
+        tr.classList.remove('drag-over-above', 'drag-over-below');
+      }});
+      tr.addEventListener('drop', (ev) => {{
+        ev.preventDefault();
+        if (dragIndex === null || dragIndex === index) return;
+        const rect = tr.getBoundingClientRect();
+        const after = (ev.clientY - rect.top) > rect.height / 2;
+        reorderHoldings(dragIndex, after ? index + 1 : index);
+        clearDragMarkers();
+      }});
+    }}
     tr.addEventListener('input', () => {{
       holdings[index] = readRow(tr, holdings[index] || {{}});
     }});
@@ -2018,6 +2068,34 @@ function renderTable(sync=true) {{
     body.appendChild(tr);
   }});
   document.getElementById('summary').textContent = `共 ${{holdings.length}} 只，显示 ${{visible}} 只`;
+}}
+
+function clearDragMarkers() {{
+  document.querySelectorAll('#rows tr').forEach(tr => {{
+    tr.classList.remove('drag-over-above', 'drag-over-below');
+  }});
+}}
+
+// 把 from 位置的持仓移动到 to 位置（to 是目标插入点的数组下标）。
+function reorderHoldings(from, to) {{
+  if (from < 0 || from >= holdings.length) return;
+  if (to < 0) to = 0;
+  if (to > holdings.length) to = holdings.length;
+  if (from === to || from + 1 === to) return;
+  const moved = holdings.splice(from, 1)[0];
+  const insertAt = to > from ? to - 1 : to;
+  holdings.splice(insertAt, 0, moved);
+  renderTable(false);
+}}
+
+function moveRow(index, delta) {{
+  syncRowsFromDom();
+  const target = index + delta;
+  if (target < 0 || target >= holdings.length) return;
+  const tmp = holdings[index];
+  holdings[index] = holdings[target];
+  holdings[target] = tmp;
+  renderTable(false);
 }}
 
 async function reloadData() {{
@@ -2077,6 +2155,13 @@ async function previewSave() {{
   try {{
     pendingPayload = currentRows();
     const data = await api('/api/preview', {{method: 'POST', body: JSON.stringify({{holdings: pendingPayload}})}});
+    // 后端 normalize_holdings_for_save 会通过新浪接口补全缺失的股票代码，
+    // 这里用补全后的 holdings 回写数据和表格，让用户在预览阶段就能看到补全结果。
+    if (Array.isArray(data.holdings) && data.holdings.length) {{
+      holdings = data.holdings;
+      pendingPayload = data.holdings;
+      renderTable(false);
+    }}
     const warnings = (data.warnings || []).map(item => `! ${{item.message || item}}`).join('\\n');
     document.getElementById('diffText').textContent = [warnings ? `校验提醒：\\n${{warnings}}` : '', data.diff_text || '没有变化。'].filter(Boolean).join('\\n\\n');
     document.getElementById('diffModal').style.display = 'flex';
