@@ -19,6 +19,7 @@ Market-moving semiconductor and AI infrastructure signals are scattered across X
 - Sina Finance news adapters for holdings-related news
 - iFinD notice ingestion and PDF text extraction
 - X account monitoring through official API credentials
+- Optional Xquik export loading for local backfills and parser checks
 - RSS/Atom/RDF monitoring for official company and industry sources
 - DIGITIMES, Nikkei xTECH, The Elec, TrendForce-style media adapters
 - LLM importance gate, freshness checks, and structured research summaries
