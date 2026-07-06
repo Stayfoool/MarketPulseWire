@@ -215,12 +215,66 @@ def test_hbm_hard_variable_override_keeps_push_now() -> None:
         conn.close()
 
 
+def test_nvidia_ai_platform_delay_override_keeps_push_now() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "surveil.sqlite3"
+        conn = init_db(path)
+        original_llm = skeptic_evaluator.llm_skeptic_review
+
+        def fake_llm(**_kwargs):
+            return {
+                "skeptic_verdict": "downgrade",
+                "old_news_risk": "low",
+                "price_in_risk": "medium",
+                "over_linking_risk": "high",
+                "hard_variable_score": 20,
+                "relation_strength_score": 20,
+                "reason": "SemiAnalysis 单一研究机构爆料，缺乏 NVIDIA 官方确认。",
+                "what_would_change_mind": "需要 NVIDIA 官方确认。",
+                "final_push_suggestion": "daily",
+                "mode": "fake",
+            }
+
+        review = {
+            "importance": "high",
+            "push_now": True,
+            "market_impact": "可能利空英伟达 AI 服务器供应链，并影响高端 PCB 预期。",
+            "incremental_classification": "增量利空",
+            "affected_targets": ["英伟达", "沪电股份", "鹏鼎控股"],
+            "reason": "SemiAnalysis 爆料英伟达 Kyber NVL144 机架因 PCB 中板制造工艺挑战延迟超过12个月。",
+            "daily_summary": "英伟达 Kyber NVL144 机架或因 PCB 中板制造工艺挑战延迟至2028年。",
+            "confidence": "中",
+        }
+        item = {
+            "id": "kyber-delay",
+            "url": "https://example.com/kyber-delay",
+            "title": "PCB成关键瓶颈？机构爆料：制造工艺面临挑战 英伟达Kyber机架或遇延迟",
+            "published_at": datetime.now(timezone.utc).isoformat(),
+            "summary": "SemiAnalysis称英伟达Kyber NVL144机架架构或延迟超过12个月，原因是PCB中板制造工艺仍面临重大挑战。",
+            "full_text": "半导体行业研究机构SemiAnalysis指出，英伟达Kyber NVL144机架架构或将遭遇延迟超过12个月，推迟至2028年。延迟原因是PCB中板制造工艺仍面临重大挑战。",
+        }
+        try:
+            skeptic_evaluator.llm_skeptic_review = fake_llm
+            updated = apply_skeptic_review(conn, source="cls_telegraph_api", item=item, review=review, push_key="push_now")
+        finally:
+            skeptic_evaluator.llm_skeptic_review = original_llm
+
+        assert updated["push_now"] is True
+        assert updated["importance"] == "high"
+        assert updated["industry_hard_variable_override"] is True
+        assert updated["skeptic"]["industry_hard_variable_override_type"] == "ai_platform_delay"
+        assert "PCB中板/高多层板" in updated["affected_targets"]
+        assert "待确认" in updated["reason"]
+        conn.close()
+
+
 def main() -> int:
     test_skeptic_downgrades_duplicate_article()
     test_official_review_preserves_skeptic_metadata()
     test_history_candidates_respects_cutoff()
     test_skeptic_llm_failure_records_health_without_blocking()
     test_hbm_hard_variable_override_keeps_push_now()
+    test_nvidia_ai_platform_delay_override_keeps_push_now()
     print("skeptic evaluator tests OK")
     return 0
 
