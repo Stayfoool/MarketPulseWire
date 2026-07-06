@@ -35,6 +35,7 @@ from cards import build_article_card
 from db_utils import connect_sqlite, ensure_seen_tables, ensure_source_state_table, retry_on_locked
 from feishu import send_card
 from http_utils import http_get
+from industry_hardline import apply_source_priority_override
 from llm_analysis import llm_config
 from media_sources import is_overseas_media_source, overseas_media_access_note, overseas_media_module
 from media_keyword_config import is_media_focus_item
@@ -382,8 +383,10 @@ def notify_item(source: str, item: dict) -> None:
                 print(f"{source} 文章门控失败：{exc}", flush=True)
                 review = failed_review(item, exc)
             with connect_db() as conn:
+                review = apply_source_priority_override(source, item, review)
                 review = apply_article_hardline_override(source, item, review)
                 review = apply_skeptic_review(conn, source=source, item=item, review=review, push_key="push_now")
+                review = apply_source_priority_override(source, item, review)
                 save_article_review(conn, source, item, review)
         print(
             f"{source} 文章门控：importance={review.get('importance')} "
