@@ -56,6 +56,14 @@ SERVICE_UNITS = [
     "surveil-rss-monitor.service",
     "surveil-trendforce-page-monitor.service",
     "surveil-sina-flash.service",
+    "surveil-overseas-media.service",
+    "surveil-china-media.service",
+    "surveil-sina-stock-news.service",
+    "surveil-article-daily.service",
+    "surveil-signals-extract.service",
+    "surveil-signal-outcome.service",
+    "surveil-signal-review.service",
+    "surveil-signal-digest.service",
     "surveil-holdings-web.service",
     "surveil-proxy.service",
 ]
@@ -63,7 +71,10 @@ SERVICE_UNITS = [
 TIMER_UNITS = [
     "surveil-sina-stock-news.timer",
     "surveil-overseas-media.timer",
+    "surveil-china-media.timer",
     "surveil-article-daily.timer",
+    "surveil-signals-extract.timer",
+    "surveil-signal-outcome.timer",
     "surveil-signal-review.timer",
     "surveil-signal-digest.timer",
     "surveil-ifind-notice.timer",
@@ -71,11 +82,28 @@ TIMER_UNITS = [
     "surveil-jygs-actions.timer",
 ]
 
+RUN_ONCE_TARGETS = {
+    "surveil-sina-stock-news.timer": "surveil-sina-stock-news.service",
+    "surveil-overseas-media.timer": "surveil-overseas-media.service",
+    "surveil-china-media.timer": "surveil-china-media.service",
+    "surveil-article-daily.timer": "surveil-article-daily.service",
+    "surveil-signals-extract.timer": "surveil-signals-extract.service",
+    "surveil-signal-outcome.timer": "surveil-signal-outcome.service",
+    "surveil-signal-review.timer": "surveil-signal-review.service",
+    "surveil-signal-digest.timer": "surveil-signal-digest.service",
+    "surveil-ifind-notice.timer": "surveil-ifind-notice.service",
+    "surveil-ifind-report.timer": "surveil-ifind-report.service",
+    "surveil-jygs-actions.timer": "surveil-jygs-actions.service",
+}
+
+ALLOWED_SYSTEMD_UNITS = set(SERVICE_UNITS) | set(TIMER_UNITS) | set(RUN_ONCE_TARGETS.values())
+
 LOG_FILES = [
     "x-stream.err.log",
     "rss-monitor.err.log",
     "trendforce-page-monitor.err.log",
     "overseas-media.err.log",
+    "china-media.err.log",
     "sina-flash.err.log",
     "sina-stock-news.err.log",
     "ifind-notice.err.log",
@@ -651,7 +679,7 @@ def overview_payload(day: str = "") -> dict[str, Any]:
     }
 
 
-def systemctl_show(unit: str) -> dict[str, str]:
+def systemctl_show(unit: str) -> dict[str, Any]:
     try:
         result = subprocess.run(
             ["systemctl", "show", unit, "--no-pager"],
@@ -662,7 +690,7 @@ def systemctl_show(unit: str) -> dict[str, str]:
         )
     except Exception as exc:  # noqa: BLE001
         return {"Id": unit, "error": str(exc)}
-    values: dict[str, str] = {"Id": unit}
+    values: dict[str, Any] = {"Id": unit}
     for line in result.stdout.splitlines():
         if "=" not in line:
             continue
@@ -685,6 +713,78 @@ def systemctl_show(unit: str) -> dict[str, str]:
     return values
 
 
+def unit_actions(unit: str) -> list[str]:
+    if unit not in ALLOWED_SYSTEMD_UNITS:
+        return []
+    if unit == "surveil-holdings-web.service":
+        return ["status"]
+    if unit.endswith(".timer"):
+        actions = ["restart_timer"]
+        if unit in RUN_ONCE_TARGETS:
+            actions.append("run_once")
+        return actions
+    if unit.endswith(".service"):
+        return ["restart"]
+    return []
+
+
+def systemctl_action_command(command: str, target: str) -> list[str]:
+    mode = os.getenv("HOLDINGS_WEB_SYSTEMCTL_MODE", "auto").strip().lower()
+    if mode == "direct" or (mode == "auto" and hasattr(os, "geteuid") and os.geteuid() == 0):
+        return ["systemctl", "--no-block", command, target]
+    return ["sudo", "-n", "systemctl", "--no-block", command, target]
+
+
+def service_action_payload(unit: str, action: str) -> dict[str, Any]:
+    unit = str(unit or "").strip()
+    action = str(action or "").strip()
+    allowed_actions = unit_actions(unit)
+    if unit not in ALLOWED_SYSTEMD_UNITS or not allowed_actions:
+        raise HoldingsError("不允许操作该 systemd 单元")
+    if action not in allowed_actions:
+        raise HoldingsError("不允许执行该操作")
+
+    target = unit
+    command = ""
+    if action == "restart":
+        command = "restart"
+    elif action == "restart_timer":
+        command = "restart"
+    elif action == "run_once":
+        target = RUN_ONCE_TARGETS.get(unit, "")
+        if target not in ALLOWED_SYSTEMD_UNITS:
+            raise HoldingsError("没有找到该 timer 对应的 service")
+        command = "start"
+    elif action == "status":
+        return {"unit": unit, "action": action, "state": systemctl_show(unit)}
+    else:
+        raise HoldingsError("未知操作")
+
+    try:
+        args = systemctl_action_command(command, target)
+        result = subprocess.run(
+            args,
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=12,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HoldingsError(f"systemctl 执行失败：{exc}") from exc
+
+    return {
+        "unit": unit,
+        "target": target,
+        "action": action,
+        "command": " ".join(args),
+        "returncode": result.returncode,
+        "stdout": result.stdout.strip()[-2000:],
+        "stderr": result.stderr.strip()[-2000:],
+        "state": systemctl_show(unit),
+        "target_state": systemctl_show(target) if target != unit else {},
+    }
+
+
 def tail_file(path: Path, max_lines: int = 8) -> str:
     if not path.exists():
         return ""
@@ -697,6 +797,10 @@ def tail_file(path: Path, max_lines: int = 8) -> str:
 
 def health_payload() -> dict[str, Any]:
     units = [systemctl_show(unit) for unit in [*SERVICE_UNITS, *TIMER_UNITS]]
+    for unit in units:
+        unit["actions"] = unit_actions(unit.get("Id", ""))
+        if unit.get("Id") in RUN_ONCE_TARGETS:
+            unit["run_once_target"] = RUN_ONCE_TARGETS[unit["Id"]]
     sources: list[dict[str, Any]] = []
     with connect_sqlite(DEFAULT_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
@@ -1058,6 +1162,9 @@ def html_page(token_required: bool) -> str:
         <h2>任务健康</h2>
         <button onclick="loadHealth()">刷新</button>
       </div>
+      <div class="status ok" style="display:block">
+只允许操作 MarketPulseWire 白名单内的 systemd 单元。常驻服务可重启；定时器可重启调度或立即运行一次对应任务。
+      </div>
       <section class="panel">
         <div class="table-wrap">
           <table>
@@ -1069,6 +1176,7 @@ def html_page(token_required: bool) -> str:
                 <th style="width:120px">Result</th>
                 <th style="width:110px">Restarts</th>
                 <th style="width:220px">最近启动/触发</th>
+                <th style="width:220px">操作</th>
               </tr>
             </thead>
             <tbody id="healthRows"></tbody>
@@ -1355,6 +1463,24 @@ function badge(value) {{
   const lower = raw.toLowerCase();
   const cls = ['high', 'medium', 'low'].includes(lower) ? lower : '';
   return `<span class="badge ${{cls}}">${{escapeHtml(raw)}}</span>`;
+}}
+
+function serviceActionLabel(action) {{
+  const labels = {{
+    restart: '重启服务',
+    restart_timer: '重启定时器',
+    run_once: '立即运行',
+    status: '仅查看'
+  }};
+  return labels[action] || action;
+}}
+
+function serviceActionButtons(unit) {{
+  const actions = (unit.actions || []).filter(action => action !== 'status');
+  if (!actions.length) return '<span class="hint">只读</span>';
+  return actions.map(action => `
+    <button onclick="runServiceAction('${{escapeHtml(unit.Id || '')}}', '${{escapeHtml(action)}}')">${{escapeHtml(serviceActionLabel(action))}}</button>
+  `).join(' ');
 }}
 
 function shortText(value, limit=160) {{
@@ -1820,6 +1946,20 @@ async function rejectSuggestion(id) {{
   }}
 }}
 
+async function runServiceAction(unit, action) {{
+  const label = serviceActionLabel(action);
+  if (!confirm(`确认对 ${{unit}} 执行“${{label}}”？`)) return;
+  try {{
+    const data = await api('/api/service-action', {{method: 'POST', body: JSON.stringify({{unit, action}})}});
+    const targetText = data.target && data.target !== unit ? `，目标 ${{data.target}}` : '';
+    showStatus(`${{unit}} 已提交“${{label}}”${{targetText}}。`);
+    await loadHealth();
+  }} catch (err) {{
+    showStatus(err.message, 'err');
+    await loadHealth();
+  }}
+}}
+
 async function loadHealth() {{
   try {{
     const data = await api('/api/health');
@@ -1831,8 +1971,9 @@ async function loadHealth() {{
         <td>${{escapeHtml(unit.Result || unit.error || '')}}</td>
         <td>${{escapeHtml(unit.NRestarts || '')}}</td>
         <td>${{escapeHtml(unit.ExecMainStartTimestamp || unit.LastTriggerUSec || unit.NextElapseUSecRealtime || '')}}</td>
+        <td>${{serviceActionButtons(unit)}}</td>
       </tr>
-    `).join('');
+    `).join('') || '<tr><td colspan="7">暂无 systemd 单元状态。</td></tr>';
     document.getElementById('sourceHealthRows').innerHTML = (data.sources || []).map(source => `
       <tr>
         <td>${{escapeHtml(source.monitor || '')}}</td>
@@ -2467,6 +2608,19 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 saved = save_settings(values)
                 saved["ok"] = True
                 self.send_json(saved)
+                return
+            if parsed.path == "/api/service-action":
+                unit = str(payload.get("unit") or "").strip()
+                action = str(payload.get("action") or "").strip()
+                response = service_action_payload(unit, action)
+                response["ok"] = True
+                if int(response.get("returncode") or 0) != 0:
+                    error_text = response.get("stderr") or response.get("stdout") or "systemctl 返回非 0"
+                    response["ok"] = False
+                    response["error"] = str(error_text)
+                    self.send_json(response, HTTPStatus.BAD_REQUEST)
+                else:
+                    self.send_json(response)
                 return
             if parsed.path == "/api/signal-feedback":
                 saved = save_signal_feedback(payload)

@@ -39,6 +39,49 @@ echo "==> install units"
 cp /tmp/surveil-systemd/*.service /etc/systemd/system/
 cp /tmp/surveil-systemd/*.timer /etc/systemd/system/
 systemctl daemon-reload
+SYSTEMCTL_BIN=\"\$(command -v systemctl)\"
+SUDOERS_PATH=/etc/sudoers.d/surveil-web-systemctl
+cat > \"\$SUDOERS_PATH\" <<SUDOERS
+Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-x-stream.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-rss-monitor.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-trendforce-page-monitor.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-sina-flash.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-overseas-media.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-china-media.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-sina-stock-news.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-article-daily.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-signals-extract.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-signal-outcome.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-signal-review.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-signal-digest.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-proxy.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-sina-stock-news.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-overseas-media.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-china-media.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-article-daily.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-signals-extract.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-signal-outcome.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-signal-review.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-signal-digest.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-ifind-notice.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-ifind-report.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-jygs-actions.timer, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-sina-stock-news.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-overseas-media.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-china-media.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-article-daily.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-signals-extract.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-signal-outcome.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-signal-review.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-signal-digest.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-ifind-notice.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-ifind-report.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-jygs-actions.service
+$REMOTE_SERVICE_USER ALL=(root) NOPASSWD: SURVEIL_WEB_SYSTEMCTL
+SUDOERS
+chmod 0440 \"\$SUDOERS_PATH\"
+visudo -cf \"\$SUDOERS_PATH\" >/dev/null
 systemctl enable surveil-db-init.service
 systemctl start surveil-db-init.service
 systemctl is-enabled surveil-db-init.service
