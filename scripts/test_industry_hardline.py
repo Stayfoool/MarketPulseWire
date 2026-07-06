@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from industry_hardline import (
     apply_hardline_review_override,
+    apply_source_priority_override,
     explain_hardline,
     is_quantified_hardline_item,
 )
@@ -52,10 +53,44 @@ def test_prompt_note_identifies_source_family() -> None:
     assert "硬变量" in note
 
 
+def test_semianalysis_source_priority_forces_immediate_push() -> None:
+    item = {
+        "title": "SemiAnalysis weekly AI infrastructure report",
+        "summary": "Research note on AI accelerator supply chains.",
+    }
+    review = {
+        "importance": "medium",
+        "push_now": False,
+        "affected_targets": [],
+        "reason": "模型认为进入日报即可。",
+        "daily_summary": "AI infrastructure research note.",
+        "raw": {},
+    }
+    updated = apply_source_priority_override("semianalysis", item, review)
+    assert updated["importance"] == "high"
+    assert updated["push_now"] is True
+    assert updated["source_priority_override"] is True
+    assert "SemiAnalysis" in updated["affected_targets"]
+    assert "来源优先级覆盖" in updated["reason"]
+    assert updated["raw"]["source_priority_override"] == "semianalysis"
+
+
+def test_semianalysis_source_priority_respects_skeptic_block() -> None:
+    review = {
+        "importance": "low",
+        "push_now": False,
+        "skeptic_blocked": True,
+        "skeptic": {"skeptic_verdict": "block"},
+    }
+    assert apply_source_priority_override("semianalysis", {}, review) == review
+
+
 def main() -> int:
     test_quantified_hardline_applies_to_allowed_sources()
     test_domestic_finance_sources_do_not_use_hardline_override()
     test_prompt_note_identifies_source_family()
+    test_semianalysis_source_priority_forces_immediate_push()
+    test_semianalysis_source_priority_respects_skeptic_block()
     print("industry hardline checks passed")
     return 0
 

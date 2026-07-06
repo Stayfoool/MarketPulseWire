@@ -1,9 +1,11 @@
 """Rules for semiconductor/AI industry hard-variable sources.
 
-This module keeps the narrow "industry hardline" source set separate from
-broader portfolio news sources. It is intentionally limited to the five
-sources requested by the user:
+This module keeps narrow source-level overrides separate from broader
+portfolio news sources. The quantified industry hardline set is intentionally
+limited to the five sources requested by the user:
 SEMI, TrendForce, DIGITIMES, The Elec, and Nikkei xTECH.
+SemiAnalysis is handled as a source-priority override because the user wants
+all reports from this source to be treated as important real-time alerts.
 """
 
 from __future__ import annotations
@@ -34,6 +36,11 @@ HARDLINE_SOURCE_NAMES = (
     "thelec_kr_semiconductor",
     "thelec_kr_all",
 )
+
+
+SOURCE_PRIORITY_IMMEDIATE_SOURCES = {
+    "semianalysis",
+}
 
 
 HARDLINE_KEYWORDS = (
@@ -197,6 +204,42 @@ def apply_hardline_review_override(source: str, item: dict, review: dict) -> dic
         updated["reason"] = f"{reason}\n{note}".strip()
     raw = dict(updated.get("raw") or {})
     raw["industry_hardline_override"] = True
+    updated["raw"] = raw
+    return updated
+
+
+def is_source_priority_immediate(source: str) -> bool:
+    return str(source or "").strip().lower() in SOURCE_PRIORITY_IMMEDIATE_SOURCES
+
+
+def apply_source_priority_override(source: str, item: dict, review: dict) -> dict:
+    """Force selected high-trust sources into immediate push review flow."""
+    if not is_source_priority_immediate(source):
+        return review
+    skeptic = review.get("skeptic") if isinstance(review.get("skeptic"), dict) else {}
+    if review.get("skeptic_blocked") or str(skeptic.get("skeptic_verdict") or "").lower() == "block":
+        return review
+    updated = dict(review)
+    updated["importance"] = "high"
+    updated["push_now"] = True
+    updated["source_priority_override"] = True
+    targets = list(updated.get("affected_targets") or [])
+    for target in ("SemiAnalysis", "产业链影响待确认"):
+        if target not in targets:
+            targets.append(target)
+    updated["affected_targets"] = targets[:5]
+    note = (
+        "来源优先级覆盖：SemiAnalysis 属于高价值半导体/AI 产业研究源，"
+        "按当前策略其报告默认视为重要并即时推送；具体受益/受损标的和官方确认情况在正文中标注待验证。"
+    )
+    reason = str(updated.get("reason") or "").strip()
+    if note not in reason:
+        updated["reason"] = f"{reason}\n{note}".strip()
+    summary = str(updated.get("daily_summary") or "").strip()
+    if summary and "待验证" not in summary and "待确认" not in summary:
+        updated["daily_summary"] = f"{summary}（SemiAnalysis 来源优先级覆盖，标的映射待验证。）"
+    raw = dict(updated.get("raw") or {})
+    raw["source_priority_override"] = "semianalysis"
     updated["raw"] = raw
     return updated
 
