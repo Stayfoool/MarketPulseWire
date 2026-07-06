@@ -12,6 +12,7 @@ from typing import Any
 
 from llm_analysis import call_chat_completion_with_prompts, llm_config
 from source_health import record_source_failure, record_source_success
+from web_evidence import collect_web_evidence, prompt_pack
 
 
 SKEPTIC_SYSTEM_PROMPT = """你是投资情报系统里的 Skeptic Evaluator。
@@ -51,6 +52,15 @@ SKEPTIC_USER_PROMPT = """请复核这条准备即时推送的资讯，输出 JSO
 
 系统历史证据：
 {history_evidence}
+
+受控联网证据：
+{web_evidence}
+
+联网证据使用规则：
+- 联网证据只是证据包，不是结论；必须结合原文、发布时间、来源可信度和市场定价状态判断。
+- 若发现更早报道、重复转载、股价已提前大涨、券商/媒体已密集讨论，应提高 old_news_risk 或 price_in_risk。
+- 若发现扩产、投产、产能释放、价格回落、库存上升、交期缩短、替代供应等反向变量，应明确写入 reason，并可建议 downgrade。
+- 若只找到二手报道而找不到一手来源，避免过度确信。
 """
 
 
@@ -287,6 +297,8 @@ def normalize_skeptic(parsed: dict[str, Any], *, fallback: dict[str, Any]) -> di
         "what_would_change_mind": str(parsed.get("what_would_change_mind") or fallback.get("what_would_change_mind") or "").strip(),
         "final_push_suggestion": final_push,
         "history_evidence": fallback.get("history_evidence") or [],
+        "web_evidence": fallback.get("web_evidence"),
+        "web_evidence_error": fallback.get("web_evidence_error") or "",
     }
 
 
@@ -416,6 +428,7 @@ def llm_skeptic_review(
         .replace("{content}", text[:5000])
         .replace("{gate_review}", json.dumps(gate_review, ensure_ascii=False)[:5000])
         .replace("{history_evidence}", json.dumps(fallback.get("history_evidence") or [], ensure_ascii=False)[:4000])
+        .replace("{web_evidence}", prompt_pack(fallback.get("web_evidence")) if fallback.get("web_evidence") else str(fallback.get("web_evidence_error") or "未启用或未获得联网证据。"))
     )
     parsed, model = call_chat_completion_with_prompts(
         SKEPTIC_SYSTEM_PROMPT,
@@ -445,6 +458,20 @@ def apply_skeptic_review(
     history = history_candidates(conn, source=source, item=item)
     deterministic = deterministic_skeptic(item=item, history=history)
     if deterministic["skeptic_verdict"] == "pass":
+        try:
+            web_pack = collect_web_evidence(
+                conn,
+                trigger_module="skeptic_evaluator",
+                source=source,
+                item=item,
+                review=review,
+                trigger_reason="skeptic_pass_before_llm",
+                mode=os.getenv("WEB_EVIDENCE_MODE", "realtime").strip() or "realtime",
+            )
+            if web_pack:
+                deterministic["web_evidence"] = web_pack
+        except Exception as exc:  # noqa: BLE001 - web evidence must not block skeptic
+            deterministic["web_evidence_error"] = f"联网证据检索失败：{exc}"
         try:
             skeptic = llm_skeptic_review(source=source, item=item, gate_review=review, fallback=deterministic)
             record_source_success(conn, "signal_pipeline", "skeptic_evaluator")
