@@ -374,8 +374,37 @@ def is_hbm_industry_hard_variable(item: dict[str, Any], review: dict[str, Any]) 
     return has_quantified_hard_variable(text)
 
 
+def is_ai_platform_delay_hard_variable(item: dict[str, Any], review: dict[str, Any]) -> bool:
+    """Protect major AI rack/platform delay reports from being buried as mere rumor."""
+    original_importance = str(review.get("pre_skeptic_importance") or review.get("importance") or "").lower()
+    if original_importance != "high":
+        return False
+    text = text_blob(
+        item.get("title"),
+        item.get("summary"),
+        item.get("content"),
+        item.get("full_text"),
+        review.get("market_impact"),
+        review.get("reason"),
+        review.get("daily_summary"),
+    )
+    if not contains_any(text, ("英伟达", "nvidia")):
+        return False
+    if not contains_any(text, ("kyber", "nvl144", "rubin ultra", "rubin", "机架", "rack", "scale-up")):
+        return False
+    if not contains_any(text, ("延迟", "延期", "推迟", "delay", "delayed", "postpone", "推遲")):
+        return False
+    if not contains_any(text, ("pcb", "中板", "背板", "midplane", "backplane", "高多层板", "多层电路", "制造工艺")):
+        return False
+    if not contains_any(text, ("semianalysis", "semi analysis", "研究机构", "机构爆料", "报告指出")):
+        return False
+    return True
+
+
 def apply_industry_hard_variable_override(updated: dict[str, Any], *, item: dict[str, Any], push_key: str) -> dict[str, Any]:
-    if not is_hbm_industry_hard_variable(item, updated):
+    hbm_override = is_hbm_industry_hard_variable(item, updated)
+    platform_delay_override = is_ai_platform_delay_hard_variable(item, updated)
+    if not hbm_override and not platform_delay_override:
         return updated
     skeptic = updated.get("skeptic") if isinstance(updated.get("skeptic"), dict) else {}
     if not skeptic or str(skeptic.get("skeptic_verdict") or "pass") == "block":
@@ -384,24 +413,39 @@ def apply_industry_hard_variable_override(updated: dict[str, Any], *, item: dict
     restored[push_key] = True
     restored["importance"] = "high"
     restored["industry_hard_variable_override"] = True
-    restored["daily_summary"] = (
-        str(restored.get("daily_summary") or "").strip()
-        or "HBM/HBM4 产业链出现带金额或数量的设备、测试、封装或扩产硬变量，供应商待确认。"
-    )
-    note = (
-        "产业硬变量覆盖：HBM/HBM4 相关存储龙头出现明确金额或数量的设备、测试、封装或扩产信息，"
-        "即使供应商或 A 股映射待确认，也保留即时推送，并标注“受益标的待确认”。"
-    )
+    if platform_delay_override:
+        restored["daily_summary"] = (
+            str(restored.get("daily_summary") or "").strip()
+            or "英伟达 AI 机架平台出现待确认延期线索，原因指向 PCB/中板制造瓶颈，影响标的待确认。"
+        )
+        note = (
+            "产业硬变量覆盖：英伟达 Rubin/Kyber/NVL144 等 AI 机架平台若因 PCB/中板制造瓶颈延期，"
+            "即使来自研究机构爆料且待官方确认，也可能重估 PCB、AI 服务器和竞争格局预期，应保留即时推送并标注“待确认”。"
+        )
+        extra_targets = ("英伟达AI机架延期", "PCB中板/高多层板", "竞争格局影响待确认")
+        override_type = "ai_platform_delay"
+    else:
+        restored["daily_summary"] = (
+            str(restored.get("daily_summary") or "").strip()
+            or "HBM/HBM4 产业链出现带金额或数量的设备、测试、封装或扩产硬变量，供应商待确认。"
+        )
+        note = (
+            "产业硬变量覆盖：HBM/HBM4 相关存储龙头出现明确金额或数量的设备、测试、封装或扩产信息，"
+            "即使供应商或 A 股映射待确认，也保留即时推送，并标注“受益标的待确认”。"
+        )
+        extra_targets = ("HBM/HBM4 测试设备", "半导体后道测试", "受益标的待确认")
+        override_type = "hbm_hard_variable"
     reason = str(restored.get("reason") or "").strip()
     if note not in reason:
         restored["reason"] = f"{reason}\n{note}".strip()
     targets = list(restored.get("affected_targets") or [])
-    for target in ("HBM/HBM4 测试设备", "半导体后道测试", "受益标的待确认"):
+    for target in extra_targets:
         if target not in targets:
             targets.append(target)
     restored["affected_targets"] = targets[:5]
     skeptic = dict(skeptic)
     skeptic["industry_hard_variable_override"] = True
+    skeptic["industry_hard_variable_override_type"] = override_type
     skeptic["final_push_suggestion_before_override"] = skeptic.get("final_push_suggestion")
     skeptic["final_push_suggestion"] = "push_now"
     restored["skeptic"] = skeptic
