@@ -28,6 +28,7 @@ from cards import build_article_card
 from db_utils import ensure_trendforce_page_seen_table, retry_on_locked
 from feishu import send_card
 from http_utils import http_get
+from industry_hardline import event_first_hardline_review
 from llm_analysis import llm_config
 from rss_monitor import connect_db, fetch_article_body, parse_date, strip_tags
 from source_health import record_source_failure, record_source_success
@@ -408,11 +409,19 @@ def notify_item(item: dict) -> None:
         if existing:
             review = existing
         else:
-            try:
-                review = review_article(PAGE_SOURCE_KEY, enriched)
-            except Exception as exc:  # noqa: BLE001 - keep item in daily digest
-                print(f"{enriched.get('page_source') or PAGE_SOURCE_KEY} 文章门控失败：{exc}", flush=True)
-                review = failed_review(enriched, exc)
+            review = event_first_hardline_review(PAGE_SOURCE_KEY, enriched)
+            if review:
+                print(
+                    f"{enriched.get('page_source') or PAGE_SOURCE_KEY} event-first 硬变量门控："
+                    f"title={enriched.get('title', '')}",
+                    flush=True,
+                )
+            else:
+                try:
+                    review = review_article(PAGE_SOURCE_KEY, enriched)
+                except Exception as exc:  # noqa: BLE001 - keep item in daily digest
+                    print(f"{enriched.get('page_source') or PAGE_SOURCE_KEY} 文章门控失败：{exc}", flush=True)
+                    review = failed_review(enriched, exc)
             with connect_db() as conn:
                 review = apply_article_hardline_override(PAGE_SOURCE_KEY, enriched, review)
                 review = apply_skeptic_review(

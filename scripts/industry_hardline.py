@@ -10,6 +10,7 @@ all reports from this source to be treated as important real-time alerts.
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Iterable
 
@@ -41,6 +42,8 @@ HARDLINE_SOURCE_NAMES = (
 SOURCE_PRIORITY_IMMEDIATE_SOURCES = {
     "semianalysis",
 }
+
+EVENT_FIRST_DEFAULT_MAX_CHARS = 300
 
 
 HARDLINE_KEYWORDS = (
@@ -242,6 +245,92 @@ def apply_source_priority_override(source: str, item: dict, review: dict) -> dic
     raw["source_priority_override"] = "semianalysis"
     updated["raw"] = raw
     return updated
+
+
+def event_first_max_chars() -> int:
+    raw = os.getenv("RESEARCH_MEDIA_EVENT_FIRST_MAX_CHARS", str(EVENT_FIRST_DEFAULT_MAX_CHARS)).strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return EVENT_FIRST_DEFAULT_MAX_CHARS
+
+
+def normalize_visible_text(*values: object) -> str:
+    text = collect_hardline_text(*values)
+    text = re.sub(r"(?is)<script.*?</script>|<style.*?</style>", " ", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def is_research_industry_source(source: str, item: dict | None = None) -> bool:
+    effective = effective_source(source, item)
+    return is_hardline_source(effective) or is_source_priority_immediate(source)
+
+
+def should_event_first_hardline_item(source: str, item: dict, *, max_chars: int | None = None) -> bool:
+    """Return whether a research/industry-media item should use fast event-first gating.
+
+    The fast path is intentionally narrow: short title/summary-level items only,
+    and only for source-priority reports or quantified hard-variable items from
+    the research/industry-media source family.
+    """
+    if os.getenv("RESEARCH_MEDIA_EVENT_FIRST_ENABLED", "1").strip() == "0":
+        return False
+    limit = event_first_max_chars() if max_chars is None else max_chars
+    if limit <= 0:
+        return False
+    if not is_research_industry_source(source, item):
+        return False
+    text = normalize_visible_text(
+        item.get("title"),
+        item.get("summary"),
+        item.get("content"),
+        item.get("full_text"),
+        item.get("source_module"),
+        item.get("source_display"),
+    )
+    if not text or len(text) > limit:
+        return False
+    if is_source_priority_immediate(source):
+        return True
+    return is_quantified_hardline_item(source, item)
+
+
+def event_first_hardline_review(source: str, item: dict) -> dict | None:
+    """Build a high-importance article review for short hard-variable items.
+
+    This keeps storage/daily/signal extraction on the existing article review
+    path while applying an event-first decision policy for short hard variables.
+    """
+    if not should_event_first_hardline_item(source, item):
+        return None
+    effective = effective_source(source, item)
+    family = "SemiAnalysis" if is_source_priority_immediate(source) else source_family(effective)
+    title = str(item.get("title") or "").strip()
+    summary = str(item.get("summary") or item.get("content") or item.get("full_text") or "").strip()
+    reason = (
+        f"event-first 快速门控：{family} 属于研究机构/行业媒体高价值来源，"
+        "且本条为短文本硬变量/标题级信号；先按事件流即时推送，后续可在日报或二次校验中补充完整文章分析。"
+    )
+    review = {
+        "importance": "high",
+        "push_now": True,
+        "market_impact": "研究机构/行业媒体短硬变量可能迅速改变半导体/AI 产业链预期，需即时关注。",
+        "incremental_classification": "无法判断",
+        "affected_targets": [family, "产业硬变量", "受益/受损标的待确认"],
+        "daily_summary": title or summary[:120],
+        "reason": reason,
+        "confidence": "中",
+        "model": "event_first_hardline",
+        "event_first": True,
+        "raw": {
+            "event_first_hardline": True,
+            "event_first_source_family": family,
+            "event_first_policy": "research_industry_media_short_hard_variable",
+            "event_first_max_chars": event_first_max_chars(),
+        },
+    }
+    return review
 
 
 def collect_hardline_text(*values: object) -> str:

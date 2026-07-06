@@ -6,8 +6,10 @@ from __future__ import annotations
 from industry_hardline import (
     apply_hardline_review_override,
     apply_source_priority_override,
+    event_first_hardline_review,
     explain_hardline,
     is_quantified_hardline_item,
+    should_event_first_hardline_item,
 )
 
 
@@ -85,12 +87,39 @@ def test_semianalysis_source_priority_respects_skeptic_block() -> None:
     assert apply_source_priority_override("semianalysis", {}, review) == review
 
 
+def test_short_research_media_hardline_uses_event_first() -> None:
+    item = {
+        "page_source": "semi_prnewswire_semiconductors",
+        "title": "SEMI Raises 2026 Front-End Equipment Forecast to $152.2 Billion",
+        "summary": "SEMI raised growth from 16.5% to 23.5%.",
+    }
+    assert should_event_first_hardline_item("trendforce_page", item, max_chars=300) is True
+    review = event_first_hardline_review("trendforce_page", item)
+    assert review is not None
+    assert review["importance"] == "high"
+    assert review["push_now"] is True
+    assert review["model"] == "event_first_hardline"
+    assert review["raw"]["event_first_policy"] == "research_industry_media_short_hard_variable"
+
+
+def test_long_research_media_article_stays_on_article_flow() -> None:
+    item = {
+        "page_source": "semi_prnewswire_semiconductors",
+        "title": "SEMI Raises Equipment Forecast",
+        "summary": "SEMI raised semiconductor equipment growth from 16.5% to 23.5%. " * 20,
+    }
+    assert should_event_first_hardline_item("trendforce_page", item, max_chars=300) is False
+    assert event_first_hardline_review("trendforce_page", item) is None
+
+
 def main() -> int:
     test_quantified_hardline_applies_to_allowed_sources()
     test_domestic_finance_sources_do_not_use_hardline_override()
     test_prompt_note_identifies_source_family()
     test_semianalysis_source_priority_forces_immediate_push()
     test_semianalysis_source_priority_respects_skeptic_block()
+    test_short_research_media_hardline_uses_event_first()
+    test_long_research_media_article_stays_on_article_flow()
     print("industry hardline checks passed")
     return 0
 
