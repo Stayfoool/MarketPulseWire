@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import rss_monitor
 from pipeline_health import record_pipeline_failure, record_pipeline_success
 from source_backoff import backoff_state_after_failure, clear_backoff_state, should_skip_by_backoff
-from source_health import record_source_failure, record_source_success, should_alert_failure, should_alert_recovery
+from source_health import format_error, record_source_failure, record_source_success, should_alert_failure, should_alert_recovery
 
 
 @dataclass
@@ -121,6 +121,15 @@ def test_source_health_failure_and_recovery() -> None:
     ).fetchone()
     assert row[0] == 0
     assert row[1]
+    row = conn.execute(
+        "SELECT last_error FROM source_health WHERE monitor = ? AND source = ?",
+        ("test", "source_a"),
+    ).fetchone()
+    assert row[0] == ""
+
+
+def test_source_health_formats_empty_exception() -> None:
+    assert format_error(TimeoutError()) == "TimeoutError: TimeoutError()"
 
 
 def test_source_health_alert_threshold() -> None:

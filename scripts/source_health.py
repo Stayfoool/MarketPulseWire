@@ -79,8 +79,14 @@ def should_alert_failure(failure_count: int, last_alerted_at: str | None) -> boo
     return datetime.now(timezone.utc) - last_alert >= alert_cooldown()
 
 
-def truncate_error(error: str) -> str:
-    return " ".join(str(error).split())[:500]
+def format_error(error: Exception | str) -> str:
+    if isinstance(error, BaseException):
+        text = " ".join(str(error).split())
+        if not text:
+            text = repr(error)
+        return f"{type(error).__name__}: {text}"[:500]
+    text = " ".join(str(error).split())
+    return (text or "<empty error>")[:500]
 
 
 def record_source_failure(conn: sqlite3.Connection, monitor: str, source: str, error: Exception | str) -> None:
@@ -97,7 +103,7 @@ def record_source_failure(conn: sqlite3.Connection, monitor: str, source: str, e
     previous_failures = int(row[0]) if row else 0
     last_alerted_at = str(row[1]) if row and row[1] else None
     failure_count = previous_failures + 1
-    error_text = truncate_error(str(error))
+    error_text = format_error(error)
     conn.execute(
         """
         INSERT INTO source_health (
@@ -154,6 +160,7 @@ def record_source_success(conn: sqlite3.Connection, monitor: str, source: str) -
         ON CONFLICT(monitor, source) DO UPDATE SET
             consecutive_failures = 0,
             last_success_at = excluded.last_success_at,
+            last_error = '',
             updated_at = excluded.updated_at
         """,
         (monitor, source, now, now),
