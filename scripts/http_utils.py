@@ -66,6 +66,15 @@ def get_http_client(timeout: float | None = None) -> httpx.Client:
         return _CLIENT
 
 
+def reset_http_client() -> None:
+    global _CLIENT, _CLIENT_KEY
+    with _CLIENT_LOCK:
+        if _CLIENT is not None:
+            _CLIENT.close()
+        _CLIENT = None
+        _CLIENT_KEY = None
+
+
 def retry_count(default: int = 2) -> int:
     raw = os.getenv("SURVEIL_HTTP_RETRY_COUNT", "").strip()
     try:
@@ -95,10 +104,10 @@ def http_get(
     retries: int | None = None,
 ) -> HttpResponse:
     attempts = (retry_count() if retries is None else max(0, retries)) + 1
-    client = get_http_client(timeout)
     request_headers = dict(headers or {})
     last_error: Exception | None = None
     for attempt in range(attempts):
+        client = get_http_client(timeout)
         try:
             response = client.get(url, headers=request_headers)
             if should_retry_status(response.status_code) and attempt < attempts - 1:
@@ -114,6 +123,7 @@ def http_get(
             )
         except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
             last_error = exc
+            reset_http_client()
             if attempt >= attempts - 1:
                 raise
             time.sleep(retry_sleep(attempt))
@@ -132,10 +142,10 @@ def http_post(
     retries: int | None = None,
 ) -> HttpResponse:
     attempts = (retry_count() if retries is None else max(0, retries)) + 1
-    client = get_http_client(timeout)
     request_headers = dict(headers or {})
     last_error: Exception | None = None
     for attempt in range(attempts):
+        client = get_http_client(timeout)
         try:
             response = client.post(url, headers=request_headers, content=content, json=json_data)
             if should_retry_status(response.status_code) and attempt < attempts - 1:
@@ -150,6 +160,7 @@ def http_post(
             )
         except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
             last_error = exc
+            reset_http_client()
             if attempt >= attempts - 1:
                 raise
             time.sleep(retry_sleep(attempt))
