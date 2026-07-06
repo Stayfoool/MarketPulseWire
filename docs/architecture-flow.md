@@ -122,6 +122,7 @@ flowchart LR
         Domestic["First Yicai / CLS / Star Market Daily / Jin10"]
         Sina["Sina flash and stock news"]
         IfindSource["iFinD notices and reports"]
+        JYGSSource["JYGS action feed<br/>currently low priority"]
         EvidenceAPI["Tavily search API"]
     end
 
@@ -134,6 +135,7 @@ flowchart LR
         SinaFlashSvc["surveil-sina-flash<br/>simple / high-frequency loop<br/>sina_flash.py"]
         SinaStockSvc["surveil-sina-stock-news<br/>oneshot timer / 30 min<br/>sina_stock_news.py"]
         IfindSvc["surveil-ifind-notice/report<br/>oneshot timer<br/>ifind_batch.py"]
+        JYGSSvc["surveil-jygs-actions<br/>oneshot timer<br/>jygs_actions.py"]
     end
 
     subgraph ProcessingServices["Non-Fetching Processing and Infrastructure"]
@@ -157,6 +159,7 @@ flowchart LR
     Sina --> SinaFlashSvc
     Sina --> SinaStockSvc
     IfindSource --> IfindSvc
+    JYGSSource --> JYGSSvc
     EvidenceAPI --> EvidenceMod
     RSSSvc --> SignalExtractSvc
     TrendSvc --> SignalExtractSvc
@@ -165,27 +168,24 @@ flowchart LR
     SignalExtractSvc --> OutcomeSvc --> ReviewSvc --> DigestSvc
 ```
 
-## Runtime Service Matrix
+## Fetching Service Analysis Matrix
 
-The health page uses the same grouping: fetching services are separated from non-fetching processing and infrastructure. `simple` services stay alive and generally need a restart after environment changes. `oneshot` services are started by timers, run one batch, and exit; `inactive/dead/success` means the previous batch completed successfully.
+The health page uses the same high-level grouping: fetching services are separated from non-fetching processing and infrastructure. `simple` services stay alive and generally need a restart after environment changes. `oneshot` services are started by timers, run one batch, and exit; `inactive/dead/success` means the previous batch completed successfully.
 
-| Unit | Group | Shape | Frequency / trigger | Main role | Skeptic / Tavily |
-|---|---|---|---|---|---|
-| `surveil-x-stream.service` | Fetching | `simple` persistent | X filtered stream long connection | X / Serenity public posts | No |
-| `surveil-rss-monitor.service` | Fetching | `simple` persistent | Internal 300s loop | SemiAnalysis, core company feeds, TrendForce RSS | Yes |
-| `surveil-trendforce-page-monitor.service` | Fetching | `simple` persistent | Internal 900s loop | TrendForce Research / Selected Topics / Press Centre pages | Yes |
-| `surveil-sina-flash.service` | Fetching | `simple` persistent | Script-level high-frequency loop | Sina flash / holdings-related flashes | No |
-| `surveil-overseas-media.timer` -> `.service` | Fetching | `oneshot` batch | Every 5 minutes | DIGITIMES / Nikkei xTECH / The Elec | Yes |
-| `surveil-china-media.timer` -> `.service` | Fetching | `oneshot` batch | Every 2 minutes | First Yicai / CLS / Jin10 / Star Market Daily | Yes |
-| `surveil-sina-stock-news.timer` -> `.service` | Fetching | `oneshot` batch | Every 30 minutes | Sina per-stock holdings news | No; relevance LLM only |
-| `surveil-ifind-notice.timer` -> `.service` | Fetching | `oneshot` batch | 08:00 / 20:00 | Holdings notices and filings | No |
-| `surveil-signals-extract.timer` -> `.service` | Non-fetching processing | `oneshot` batch | Every 10 minutes | Convert high-importance / pushed items into investment signals | No |
-| `surveil-signal-outcome.timer` -> `.service` | Non-fetching processing | `oneshot` batch | Trading days 16:20 | Backfill A-share signal returns | No |
-| `surveil-signal-review.timer` -> `.service` | Non-fetching processing | `oneshot` batch | Trading days 16:35 | Automatic hit/miss review and lessons | No |
-| `surveil-signal-digest.timer` -> `.service` | Non-fetching processing | `oneshot` batch | 20:35 | Signal review digest | No |
-| `surveil-article-daily.timer` -> `.service` | Non-fetching processing | `oneshot` batch | 20:50 | Article daily digest | No |
-| `surveil-holdings-web.service` | Infrastructure | `simple` persistent | Local Web UI | Settings, holdings, health, service actions | No |
-| `surveil-proxy.service` | Infrastructure | `simple` persistent | Local proxy | mihomo outbound proxy | No |
+| Unit | Information source | Fetch range | Main filters / routing | Runtime shape | Frequency / trigger | Pipeline | Skeptic Evaluator | Tavily / Web Evidence |
+|---|---|---|---|---|---|---|---|---|
+| `surveil-x-stream.service` | X API filtered stream, currently focused on Serenity and configured X rules | Public X posts received from the stream; link/card enrichment is best-effort | X stream rules, account/list configuration, local delivery status retry; no article keyword prefilter | `simple` persistent | Long connection, reconnect on failure | X post pipeline (`seen_posts`, X card/report path), not `event_pipeline` / `article_gate` | No | No |
+| `surveil-rss-monitor.service` | SemiAnalysis RSS; core company feeds from OpenAI, NVIDIA, Samsung, SK hynix, Micron; TrendForce RSS categories | RSS/Atom feed entries plus optional article body extraction | SemiAnalysis is source-priority immediate; TrendForce/core company feeds pass media keyword filters; official company feeds route to official gate | `simple` persistent | Internal 300s loop | `article_gate` for SemiAnalysis/TrendForce RSS; `official_news_gate` for core company feeds | Yes, after article/official gate; explicit `block` can still stop | Yes, only when Skeptic runs and `WEB_EVIDENCE_ENABLED=1` |
+| `surveil-trendforce-page-monitor.service` | TrendForce public list pages and PRNewswire semiconductor list for SEMI releases | TrendForce Research / Selected Topics / Press Centre pages; PRNewswire semiconductor release list | Page-source extractors, TrendForce focus categories, industry hardline override for quantified hard variables | `simple` persistent | Internal 900s loop | `article_gate` with source `trendforce_page` | Yes | Yes, only through Skeptic |
+| `surveil-overseas-media.timer` -> `.service` | DIGITIMES Taiwan/English, Nikkei xTECH RDF, The Elec Korean/English feeds | Official RSS/RDF feed titles, summaries, and article bodies when accessible | Media keyword include/exclude filters; source access notes; no paywall bypass | `oneshot` batch | Every 5 minutes | Reuses `rss_monitor.run_once`; routes to `article_gate` | Yes | Yes, only through Skeptic |
+| `surveil-china-media.timer` -> `.service` | First Yicai, CLS public front-end roll API, Jin10 public/RSSHub important feed, Star Market Daily | Public flash/news/list entries from configured domestic sources | Source-specific parsers; macro policy override for CPI/PCE/NFP/Fed-relevant items; mandatory Yicai morning brief rule | `oneshot` batch | Every 2 minutes | `article_gate` | Yes | Yes, only through Skeptic |
+| `surveil-sina-flash.service` | Sina Finance 7x24 flash API or optional Sina ZY provider | All fetched flash rows for configured tags/provider page | Match enabled holdings by code/name/aliases or macro policy line; dedupe into `events` | `simple` persistent | Script loop, default `SINA_FLASH_POLL_SECONDS=15` seconds | `event_pipeline` (`analyze_event` / `maybe_deliver_event`) | No | No |
+| `surveil-sina-stock-news.timer` -> `.service` | Sina per-stock public news page or optional Sina ZY stock news provider | For each enabled holding, latest `SINA_STOCK_NEWS_PER_STOCK_LIMIT` items, default 12 | Filter announcement-like items, AI-generated pages, holding exclude keywords; direct mention/business keyword pass; ambiguous items use relevance LLM | `oneshot` batch | Every 30 minutes | `event_pipeline` after relevance filter and optional article-body fetch | No; current guard is relevance LLM + freshness hint | No |
+| `surveil-ifind-notice.timer` -> `.service` | iFinD notices/filings for enabled holdings | Recent notices over the configured lookback window | Holdings universe, iFinD notice kind, event dedupe; PDF text extraction when available | `oneshot` batch | 08:00 and 20:00 | `event_pipeline` | No | No |
+| `surveil-ifind-report.timer` -> `.service` | iFinD research/report data pool, if account permissions allow | Recent configured report formulas/report names | Disabled unless report env config is present; current deployment keeps it off when iFinD permission has no report data | `oneshot` batch | 08:00 and 20:00 when enabled | `event_pipeline` / report adapter path | No | No |
+| `surveil-jygs-actions.timer` -> `.service` | JYGS action/limit-up feed, currently low priority | Intraday action pool entries when enabled | Requires valid login cookie/API state; `ENABLE_JYGS_TIMER=1` gates the timer; LLM prediction path for selected events | `oneshot` batch | 12:30 and 16:00 when enabled | JYGS-specific event/prediction path, not article gate | No | No |
+
+Non-fetching runtime units are intentionally omitted from this table: `surveil-signals-extract`, `surveil-signal-outcome`, `surveil-signal-review`, `surveil-signal-digest`, `surveil-article-daily`, `surveil-holdings-web`, and `surveil-proxy` operate on existing state, UI, logs, proxying, or post-processing rather than fetching new market information.
 
 ## Decision and Delivery Pipeline
 
