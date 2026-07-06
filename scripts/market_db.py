@@ -387,6 +387,55 @@ CREATE TABLE IF NOT EXISTS source_scores (
     updated_at TEXT NOT NULL,
     UNIQUE(source, window_days)
 );
+
+CREATE TABLE IF NOT EXISTS web_evidence_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trigger_module TEXT NOT NULL,
+    trigger_source TEXT,
+    trigger_item_id TEXT,
+    trigger_reason TEXT,
+    mode TEXT NOT NULL DEFAULT 'realtime',
+    provider TEXT NOT NULL,
+    query_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    error TEXT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_web_evidence_runs_trigger
+    ON web_evidence_runs(trigger_module, trigger_source, trigger_item_id);
+CREATE INDEX IF NOT EXISTS idx_web_evidence_runs_created ON web_evidence_runs(created_at);
+
+CREATE TABLE IF NOT EXISTS web_evidence_docs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    query_type TEXT NOT NULL,
+    query TEXT NOT NULL,
+    result_rank INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    canonical_url TEXT NOT NULL,
+    title TEXT,
+    source TEXT,
+    published_at TEXT,
+    retrieved_at TEXT NOT NULL,
+    snippet TEXT,
+    extracted_text TEXT,
+    claim TEXT,
+    evidence_type TEXT NOT NULL,
+    stance TEXT NOT NULL,
+    source_quality TEXT,
+    score REAL,
+    content_hash TEXT NOT NULL,
+    raw_json TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(run_id, canonical_url, query_type),
+    FOREIGN KEY(run_id) REFERENCES web_evidence_runs(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_web_evidence_docs_run ON web_evidence_docs(run_id);
+CREATE INDEX IF NOT EXISTS idx_web_evidence_docs_url ON web_evidence_docs(canonical_url);
 """
 
 
@@ -451,6 +500,13 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_reviews_signal ON signal_reviews(signal_id, review_type)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_reviews_symbol ON signal_reviews(symbol, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_reviews_created ON signal_reviews(created_at)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_web_evidence_runs_trigger "
+        "ON web_evidence_runs(trigger_module, trigger_source, trigger_item_id)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_web_evidence_runs_created ON web_evidence_runs(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_web_evidence_docs_run ON web_evidence_docs(run_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_web_evidence_docs_url ON web_evidence_docs(canonical_url)")
 
 
 def init_db(path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:

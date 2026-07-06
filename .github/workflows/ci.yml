@@ -45,6 +45,7 @@ jobs:
           python scripts/test_time_utils.py
           python scripts/test_x_stream_health.py
           python scripts/test_skeptic_evaluator.py
+          python scripts/test_web_evidence.py
           python scripts/test_signals_extract.py
 
       - name: Secret pattern scan

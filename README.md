@@ -266,6 +266,8 @@ python scripts/market_skills.py --skill-dir /path/to/market_skill --match "Rubin
 
 High-importance article and official-news candidates pass through a second-stage skeptic before immediate Feishu delivery. The skeptic checks local history and, when LLM credentials are available, asks a dedicated evaluator to look for stale news, repeated coverage, priced-in risk, weak hard variables, or over-extended stock linkage. `downgrade` candidates go to the daily digest instead of immediate push; `block` candidates are marked low importance.
 
+Optionally, the skeptic can use controlled Web Evidence Retrieval. MarketPulseWire performs the search and stores the evidence itself; the LLM only receives a compact evidence pack, not direct web-search access. The first provider is Tavily, while the provider abstraction leaves room for Brave or other search APIs later. This helps check old news, earlier coverage, primary sources, priced-in risk, counter evidence such as capacity expansion or price declines, and macro context.
+
 Useful settings:
 
 ```bash
@@ -274,6 +276,19 @@ SKEPTIC_STALE_NEWS_DAYS=7
 SKEPTIC_DUPLICATE_LOOKBACK_DAYS=14
 LLM_SKEPTIC_THINKING_TYPE=enabled
 LLM_SKEPTIC_MAX_OUTPUT_TOKENS=1200
+
+# Optional; can also be configured in the Web workbench.
+WEB_EVIDENCE_ENABLED=0
+WEB_EVIDENCE_PROVIDER=tavily
+WEB_EVIDENCE_API_KEY=<your_search_api_key>
+WEB_EVIDENCE_MODE=realtime
+WEB_EVIDENCE_MAX_QUERIES=5
+WEB_EVIDENCE_MAX_RESULTS=4
+WEB_EVIDENCE_LOOKBACK_DAYS=30
+WEB_EVIDENCE_TIMEOUT_SECONDS=12
+WEB_EVIDENCE_FETCH_BODY=0
+WEB_EVIDENCE_TAVILY_SEARCH_DEPTH=basic
+WEB_EVIDENCE_TAVILY_TOPIC=news
 ```
 
 ### Source Health Noise
@@ -315,6 +330,18 @@ python scripts/test_llm_analysis.py
 python scripts/test_trendforce_page_monitor.py
 python scripts/test_link_enrichment.py
 python scripts/test_sina_stock_news.py
+python scripts/test_china_finance_media_monitor.py
+python scripts/test_rss_monitor_fetch.py
+python scripts/test_gate_prompts.py
+python scripts/test_sina_zy_client.py
+python scripts/test_industry_hardline.py
+python scripts/test_macro_policy.py
+python scripts/test_holdings_web.py
+python scripts/test_time_utils.py
+python scripts/test_x_stream_health.py
+python scripts/test_skeptic_evaluator.py
+python scripts/test_web_evidence.py
+python scripts/test_signals_extract.py
 python scripts/scan_secrets.py
 ```
 
