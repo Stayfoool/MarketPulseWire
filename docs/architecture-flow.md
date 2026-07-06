@@ -125,15 +125,24 @@ flowchart LR
         EvidenceAPI["Tavily search API"]
     end
 
-    subgraph Services["Systemd Services and Scripts"]
-        XSvc["surveil-x-stream<br/>x_stream.py"]
-        RSSSvc["surveil-rss-monitor<br/>rss_monitor.py"]
-        TrendSvc["surveil-trendforce-page-monitor<br/>trendforce_page_monitor.py"]
-        OverseasSvc["surveil-overseas-media<br/>overseas_media_monitor.py"]
-        ChinaSvc["surveil-china-media<br/>china_finance_media_monitor.py"]
-        SinaFlashSvc["surveil-sina-flash<br/>sina_flash.py"]
-        SinaStockSvc["surveil-sina-stock-news<br/>sina_stock_news.py"]
-        IfindSvc["surveil-ifind-notice/report<br/>ifind_batch.py"]
+    subgraph FetchingServices["Fetching Services"]
+        XSvc["surveil-x-stream<br/>simple / long connection<br/>x_stream.py"]
+        RSSSvc["surveil-rss-monitor<br/>simple / 300s loop<br/>rss_monitor.py"]
+        TrendSvc["surveil-trendforce-page-monitor<br/>simple / 900s loop<br/>trendforce_page_monitor.py"]
+        OverseasSvc["surveil-overseas-media<br/>oneshot timer / 5 min<br/>overseas_media_monitor.py"]
+        ChinaSvc["surveil-china-media<br/>oneshot timer / 2 min<br/>china_finance_media_monitor.py"]
+        SinaFlashSvc["surveil-sina-flash<br/>simple / high-frequency loop<br/>sina_flash.py"]
+        SinaStockSvc["surveil-sina-stock-news<br/>oneshot timer / 30 min<br/>sina_stock_news.py"]
+        IfindSvc["surveil-ifind-notice/report<br/>oneshot timer<br/>ifind_batch.py"]
+    end
+
+    subgraph ProcessingServices["Non-Fetching Processing and Infrastructure"]
+        SignalExtractSvc["surveil-signals-extract<br/>oneshot timer / 10 min"]
+        OutcomeSvc["surveil-signal-outcome<br/>oneshot timer / 16:20"]
+        ReviewSvc["surveil-signal-review<br/>oneshot timer / 16:35"]
+        DigestSvc["surveil-signal-digest / article-daily<br/>oneshot timers"]
+        WebSvc["surveil-holdings-web<br/>simple / local Web UI"]
+        ProxySvc["surveil-proxy<br/>simple / mihomo"]
         EvidenceMod["web_evidence.py<br/>called by Skeptic"]
     end
 
@@ -149,7 +158,34 @@ flowchart LR
     Sina --> SinaStockSvc
     IfindSource --> IfindSvc
     EvidenceAPI --> EvidenceMod
+    RSSSvc --> SignalExtractSvc
+    TrendSvc --> SignalExtractSvc
+    OverseasSvc --> SignalExtractSvc
+    ChinaSvc --> SignalExtractSvc
+    SignalExtractSvc --> OutcomeSvc --> ReviewSvc --> DigestSvc
 ```
+
+## Runtime Service Matrix
+
+The health page uses the same grouping: fetching services are separated from non-fetching processing and infrastructure. `simple` services stay alive and generally need a restart after environment changes. `oneshot` services are started by timers, run one batch, and exit; `inactive/dead/success` means the previous batch completed successfully.
+
+| Unit | Group | Shape | Frequency / trigger | Main role | Skeptic / Tavily |
+|---|---|---|---|---|---|
+| `surveil-x-stream.service` | Fetching | `simple` persistent | X filtered stream long connection | X / Serenity public posts | No |
+| `surveil-rss-monitor.service` | Fetching | `simple` persistent | Internal 300s loop | SemiAnalysis, core company feeds, TrendForce RSS | Yes |
+| `surveil-trendforce-page-monitor.service` | Fetching | `simple` persistent | Internal 900s loop | TrendForce Research / Selected Topics / Press Centre pages | Yes |
+| `surveil-sina-flash.service` | Fetching | `simple` persistent | Script-level high-frequency loop | Sina flash / holdings-related flashes | No |
+| `surveil-overseas-media.timer` -> `.service` | Fetching | `oneshot` batch | Every 5 minutes | DIGITIMES / Nikkei xTECH / The Elec | Yes |
+| `surveil-china-media.timer` -> `.service` | Fetching | `oneshot` batch | Every 2 minutes | First Yicai / CLS / Jin10 / Star Market Daily | Yes |
+| `surveil-sina-stock-news.timer` -> `.service` | Fetching | `oneshot` batch | Every 30 minutes | Sina per-stock holdings news | No; relevance LLM only |
+| `surveil-ifind-notice.timer` -> `.service` | Fetching | `oneshot` batch | 08:00 / 20:00 | Holdings notices and filings | No |
+| `surveil-signals-extract.timer` -> `.service` | Non-fetching processing | `oneshot` batch | Every 10 minutes | Convert high-importance / pushed items into investment signals | No |
+| `surveil-signal-outcome.timer` -> `.service` | Non-fetching processing | `oneshot` batch | Trading days 16:20 | Backfill A-share signal returns | No |
+| `surveil-signal-review.timer` -> `.service` | Non-fetching processing | `oneshot` batch | Trading days 16:35 | Automatic hit/miss review and lessons | No |
+| `surveil-signal-digest.timer` -> `.service` | Non-fetching processing | `oneshot` batch | 20:35 | Signal review digest | No |
+| `surveil-article-daily.timer` -> `.service` | Non-fetching processing | `oneshot` batch | 20:50 | Article daily digest | No |
+| `surveil-holdings-web.service` | Infrastructure | `simple` persistent | Local Web UI | Settings, holdings, health, service actions | No |
+| `surveil-proxy.service` | Infrastructure | `simple` persistent | Local proxy | mihomo outbound proxy | No |
 
 ## Decision and Delivery Pipeline
 
@@ -238,4 +274,3 @@ erDiagram
 - Web Evidence Retrieval is controlled by the project: the search API returns evidence, MarketPulseWire stores and compresses it, and the configured LLM receives only the evidence pack.
 - SQLite is the live runtime state. Private JSON files remain backup/migration snapshots for user-specific settings such as stock relations.
 - GitHub is the code source of truth; server `.env`, SQLite, logs, proxy config, and personal holdings remain private runtime state.
-

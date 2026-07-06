@@ -98,6 +98,45 @@ RUN_ONCE_TARGETS = {
 
 ALLOWED_SYSTEMD_UNITS = set(SERVICE_UNITS) | set(TIMER_UNITS) | set(RUN_ONCE_TARGETS.values())
 
+UNIT_METADATA = {
+    "surveil-x-stream.service": {"group": "fetching_persistent", "type": "常驻采集", "schedule": "X 长连接"},
+    "surveil-rss-monitor.service": {"group": "fetching_persistent", "type": "常驻采集", "schedule": "进程内每 300 秒"},
+    "surveil-trendforce-page-monitor.service": {"group": "fetching_persistent", "type": "常驻采集", "schedule": "进程内每 900 秒"},
+    "surveil-sina-flash.service": {"group": "fetching_persistent", "type": "常驻采集", "schedule": "脚本内高频轮询"},
+    "surveil-overseas-media.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 5 分钟"},
+    "surveil-china-media.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 2 分钟"},
+    "surveil-sina-stock-news.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 30 分钟"},
+    "surveil-ifind-notice.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 08:00 / 20:00"},
+    "surveil-ifind-report.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 08:00 / 20:00"},
+    "surveil-jygs-actions.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 12:30 / 16:00"},
+    "surveil-article-daily.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 20:50"},
+    "surveil-signals-extract.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 每 10 分钟"},
+    "surveil-signal-outcome.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 交易日 16:20"},
+    "surveil-signal-review.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 交易日 16:35"},
+    "surveil-signal-digest.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 20:35"},
+    "surveil-holdings-web.service": {"group": "infrastructure", "type": "基础设施", "schedule": "Web 工作台"},
+    "surveil-proxy.service": {"group": "infrastructure", "type": "基础设施", "schedule": "本地代理"},
+    "surveil-sina-stock-news.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 30 分钟"},
+    "surveil-overseas-media.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 5 分钟"},
+    "surveil-china-media.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 2 分钟"},
+    "surveil-ifind-notice.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "08:00 / 20:00"},
+    "surveil-ifind-report.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "08:00 / 20:00"},
+    "surveil-jygs-actions.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "12:30 / 16:00"},
+    "surveil-article-daily.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "20:50"},
+    "surveil-signals-extract.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "每 10 分钟"},
+    "surveil-signal-outcome.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "交易日 16:20"},
+    "surveil-signal-review.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "交易日 16:35"},
+    "surveil-signal-digest.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "20:35"},
+}
+
+UNIT_GROUP_LABELS = {
+    "fetching_persistent": "常驻采集服务",
+    "fetching_scheduled": "定时采集任务",
+    "processing_scheduled": "非抓取处理/日报任务",
+    "infrastructure": "基础设施",
+    "other": "其他",
+}
+
 LOG_FILES = [
     "x-stream.err.log",
     "rss-monitor.err.log",
@@ -728,6 +767,39 @@ def unit_actions(unit: str) -> list[str]:
     return []
 
 
+def unit_display_metadata(unit: str, values: dict[str, Any]) -> dict[str, str]:
+    meta = dict(UNIT_METADATA.get(unit) or {})
+    group = str(meta.get("group") or "other")
+    unit_type = str(meta.get("type") or ("定时器" if unit.endswith(".timer") else "服务"))
+    active = str(values.get("ActiveState") or "")
+    sub = str(values.get("SubState") or "")
+    result = str(values.get("Result") or "")
+    error = str(values.get("error") or "")
+    if error:
+        status_text = "状态读取异常"
+    elif unit.endswith(".timer") and active == "active" and sub == "waiting":
+        status_text = "等待下次触发"
+    elif unit.endswith(".timer") and active == "inactive":
+        status_text = "定时器未启用"
+    elif active == "active" and sub == "running":
+        status_text = "运行中"
+    elif active == "inactive" and sub == "dead" and result == "success":
+        status_text = "上次运行成功"
+    elif result == "failed" or active == "failed":
+        status_text = "运行失败"
+    elif active:
+        status_text = f"{active}/{sub}".strip("/")
+    else:
+        status_text = "未知"
+    return {
+        "group": group,
+        "group_label": UNIT_GROUP_LABELS.get(group, UNIT_GROUP_LABELS["other"]),
+        "unit_type": unit_type,
+        "schedule": str(meta.get("schedule") or ""),
+        "status_text": status_text,
+    }
+
+
 def systemctl_action_command(command: str, target: str) -> list[str]:
     mode = os.getenv("HOLDINGS_WEB_SYSTEMCTL_MODE", "auto").strip().lower()
     if mode == "direct" or (mode == "auto" and hasattr(os, "geteuid") and os.geteuid() == 0):
@@ -798,9 +870,11 @@ def tail_file(path: Path, max_lines: int = 8) -> str:
 def health_payload() -> dict[str, Any]:
     units = [systemctl_show(unit) for unit in [*SERVICE_UNITS, *TIMER_UNITS]]
     for unit in units:
-        unit["actions"] = unit_actions(unit.get("Id", ""))
-        if unit.get("Id") in RUN_ONCE_TARGETS:
-            unit["run_once_target"] = RUN_ONCE_TARGETS[unit["Id"]]
+        unit_id = str(unit.get("Id", ""))
+        unit.update(unit_display_metadata(unit_id, unit))
+        unit["actions"] = unit_actions(unit_id)
+        if unit_id in RUN_ONCE_TARGETS:
+            unit["run_once_target"] = RUN_ONCE_TARGETS[unit_id]
     sources: list[dict[str, Any]] = []
     with connect_sqlite(DEFAULT_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
@@ -856,7 +930,7 @@ def health_payload() -> dict[str, Any]:
         tail = tail_file(logs_dir / name)
         if tail:
             logs.append({"name": name, "tail": tail})
-    return {"ok": True, "units": units, "sources": sources, "logs": logs}
+    return {"ok": True, "unit_groups": UNIT_GROUP_LABELS, "units": units, "sources": sources, "logs": logs}
 
 
 def html_page(token_required: bool) -> str:
@@ -1171,10 +1245,11 @@ def html_page(token_required: bool) -> str:
             <thead>
               <tr>
                 <th>Unit</th>
-                <th style="width:120px">Active</th>
-                <th style="width:120px">Sub</th>
-                <th style="width:120px">Result</th>
-                <th style="width:110px">Restarts</th>
+                <th style="width:110px">类型</th>
+                <th style="width:130px">状态</th>
+                <th style="width:180px">频率/触发</th>
+                <th style="width:140px">systemd</th>
+                <th style="width:90px">Restarts</th>
                 <th style="width:220px">最近启动/触发</th>
                 <th style="width:220px">操作</th>
               </tr>
@@ -1481,6 +1556,45 @@ function serviceActionButtons(unit) {{
   return actions.map(action => `
     <button onclick="runServiceAction('${{escapeHtml(unit.Id || '')}}', '${{escapeHtml(action)}}')">${{escapeHtml(serviceActionLabel(action))}}</button>
   `).join(' ');
+}}
+
+function renderHealthUnits(units, groupLabels) {{
+  const order = ['fetching_persistent', 'fetching_scheduled', 'processing_scheduled', 'infrastructure', 'other'];
+  const byGroup = {{}};
+  (units || []).forEach(unit => {{
+    const group = unit.group || 'other';
+    if (!byGroup[group]) byGroup[group] = [];
+    byGroup[group].push(unit);
+  }});
+  const rows = [];
+  order.forEach(group => {{
+    const groupUnits = byGroup[group] || [];
+    if (!groupUnits.length) return;
+    rows.push(`
+      <tr>
+        <td colspan="8" style="background:#f8fafc; color:#334e68; font-weight:650">
+          ${{escapeHtml((groupLabels || {{}})[group] || group)}} <span class="hint">${{groupUnits.length}} 个单元</span>
+        </td>
+      </tr>
+    `);
+    groupUnits.forEach(unit => {{
+      const rawStatus = [unit.ActiveState || unit.LoadState || '', unit.SubState || '', unit.Result || unit.error || '']
+        .filter(Boolean).join(' / ');
+      rows.push(`
+        <tr>
+          <td>${{escapeHtml(unit.Id || '')}}</td>
+          <td>${{escapeHtml(unit.unit_type || '')}}</td>
+          <td>${{badge(unit.status_text || unit.ActiveState || unit.LoadState || '')}}</td>
+          <td>${{escapeHtml(unit.schedule || '')}}</td>
+          <td>${{escapeHtml(rawStatus)}}</td>
+          <td>${{escapeHtml(unit.NRestarts || '')}}</td>
+          <td>${{escapeHtml(unit.ExecMainStartTimestamp || unit.LastTriggerUSec || unit.NextElapseUSecRealtime || '')}}</td>
+          <td>${{serviceActionButtons(unit)}}</td>
+        </tr>
+      `);
+    }});
+  }});
+  return rows.join('') || '<tr><td colspan="8">暂无 systemd 单元状态。</td></tr>';
 }}
 
 function shortText(value, limit=160) {{
@@ -1963,17 +2077,7 @@ async function runServiceAction(unit, action) {{
 async function loadHealth() {{
   try {{
     const data = await api('/api/health');
-    document.getElementById('healthRows').innerHTML = (data.units || []).map(unit => `
-      <tr>
-        <td>${{escapeHtml(unit.Id || '')}}</td>
-        <td>${{badge(unit.ActiveState || unit.LoadState || '')}}</td>
-        <td>${{escapeHtml(unit.SubState || '')}}</td>
-        <td>${{escapeHtml(unit.Result || unit.error || '')}}</td>
-        <td>${{escapeHtml(unit.NRestarts || '')}}</td>
-        <td>${{escapeHtml(unit.ExecMainStartTimestamp || unit.LastTriggerUSec || unit.NextElapseUSecRealtime || '')}}</td>
-        <td>${{serviceActionButtons(unit)}}</td>
-      </tr>
-    `).join('') || '<tr><td colspan="7">暂无 systemd 单元状态。</td></tr>';
+    document.getElementById('healthRows').innerHTML = renderHealthUnits(data.units || [], data.unit_groups || {{}});
     document.getElementById('sourceHealthRows').innerHTML = (data.sources || []).map(source => `
       <tr>
         <td>${{escapeHtml(source.monitor || '')}}</td>
@@ -2081,6 +2185,32 @@ async function loadSettings() {{
   }}
 }}
 
+function settingsRestartAdvice(changedItems) {{
+  const keys = (changedItems || []).map(item => item.key || '');
+  const hasPrefix = prefix => keys.some(key => key.startsWith(prefix));
+  const hasAny = names => keys.some(key => names.includes(key));
+  const lines = [];
+  if (hasPrefix('WEB_EVIDENCE_') || hasAny(['TAVILY_API_KEY', 'BRAVE_SEARCH_API_KEY'])) {{
+    lines.push('Tavily/Web Evidence：重启 surveil-rss-monitor.service、surveil-trendforce-page-monitor.service；可选对 overseas-media/china-media timer 点“立即运行”。');
+  }}
+  if (hasPrefix('LLM_') || hasPrefix('OPENAI_')) {{
+    lines.push('大模型配置：重启 RSS、TrendForce、X stream、Sina flash 等常驻分析服务；定时批处理等下一轮或点“立即运行”。');
+  }}
+  if (hasPrefix('X_')) {{
+    lines.push('X 配置：重启 surveil-x-stream.service。');
+  }}
+  if (hasPrefix('SINA_')) {{
+    lines.push('新浪配置：重启 surveil-sina-flash.service；可选立即运行 surveil-sina-stock-news.timer。');
+  }}
+  if (hasPrefix('IFIND_')) {{
+    lines.push('iFinD 配置：公告/研报 timer 下一轮自动读取；如需马上验证，立即运行对应 timer 或 smoke service。');
+  }}
+  if (hasAny(['SURVEIL_HTTP_PROXY', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'])) {{
+    lines.push('代理环境：重启使用代理的常驻服务；定时批处理下一轮自动读取。若修改 mihomo 配置，重启 surveil-proxy.service。');
+  }}
+  return lines;
+}}
+
 async function saveSettings() {{
   try {{
     const values = {{}};
@@ -2093,9 +2223,11 @@ async function saveSettings() {{
       values[key] = value;
     }});
     const data = await api('/api/settings', {{method: 'POST', body: JSON.stringify({{values}})}});
-    const changed = (data.changed || []).map(item => `${{item.key}}: ${{item.old || '<空>'}} -> ${{item.new || '<空>'}}`).join('\\n');
+    const changedItems = data.changed || [];
+    const changed = changedItems.map(item => `${{item.key}}: ${{item.old || '<空>'}} -> ${{item.new || '<空>'}}`).join('\\n');
+    const advice = settingsRestartAdvice(changedItems);
     await loadSettings();
-    showStatus(changed ? `配置已保存：\\n${{changed}}\\n\\n如需立即生效，请重启对应服务。` : '没有配置变化。');
+    showStatus(changed ? `配置已保存：\\n${{changed}}${{advice.length ? '\\n\\n生效建议：\\n- ' + advice.join('\\n- ') : '\\n\\n如需立即生效，请重启对应服务。'}}` : '没有配置变化。');
   }} catch (err) {{
     showStatus(err.message, 'err');
   }}
