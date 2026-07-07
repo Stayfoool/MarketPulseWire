@@ -31,7 +31,7 @@ from market_db import DEFAULT_DB_PATH
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
 from settings_store import save_settings, settings_payload
 from signals_extract import extract_signals
-from source_profiles import source_profiles_payload
+from source_profiles import save_source_profile_config, source_profiles_payload
 from stock_relations import (
     DEFAULT_CONFIG_PATH as STOCK_RELATIONS_CONFIG_PATH,
     accept_relation_suggestion,
@@ -988,6 +988,10 @@ def html_page(token_required: bool) -> str:
     button:disabled {{ opacity: .5; cursor: not-allowed; }}
     input, textarea, select {{ width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; background: white; }}
     input[type="checkbox"] {{ width: auto; }}
+    .source-control {{ height: 30px; padding: 5px 7px; font-size: 12px; }}
+    .source-notes {{ min-height: 44px; max-height: 120px; resize: vertical; padding: 6px 7px; font-size: 12px; }}
+    .source-checks label {{ display: block; line-height: 1.7; white-space: nowrap; }}
+    .source-dirty {{ color: #92400e; font-weight: 650; }}
     table {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
     th, td {{ border-bottom: 1px solid var(--line); padding: 8px; vertical-align: top; font-size: 13px; }}
     th {{ text-align: left; background: #eef2f6; color: #334e68; position: sticky; top: 0; z-index: 1; }}
@@ -1236,10 +1240,13 @@ def html_page(token_required: bool) -> str:
     <section id="view-sources" class="view">
       <div class="section-title">
         <h2>信息源</h2>
-        <button onclick="loadSourceProfiles()">刷新</button>
+        <div>
+          <button onclick="loadSourceProfiles()">刷新</button>
+          <button id="sourceProfileSaveButton" class="primary" onclick="saveSourceProfiles()" disabled>保存配置</button>
+        </div>
       </div>
-      <div class="status ok" style="display:block">
-按 6 类信息抓取模型展示来源。当前为只读视图：用于统一认知、排查状态和后续重构，不会改动实际抓取配置。
+      <div id="sourceProfileConfigHint" class="status ok" style="display:block">
+按 6 类信息抓取模型展示来源。当前支持保存本地覆盖配置，但实际采集服务尚未读取这些覆盖项。
       </div>
       <div id="sourceProfileMetrics" class="metric-grid"></div>
       <div class="toolbar">
@@ -1254,12 +1261,13 @@ def html_page(token_required: bool) -> str:
             <thead>
               <tr>
                 <th style="width:150px">类别</th>
+                <th style="width:58px">启用</th>
                 <th style="width:210px">来源</th>
                 <th style="width:110px">状态</th>
-                <th style="width:140px">频率/形态</th>
+                <th style="width:155px">频率/形态</th>
                 <th style="width:170px">管道</th>
-                <th style="width:120px">Skeptic/Tavily</th>
-                <th>范围/筛选/服务</th>
+                <th style="width:150px">Skeptic/Tavily</th>
+                <th>范围/筛选/代理/备注</th>
               </tr>
             </thead>
             <tbody id="sourceProfileRows"></tbody>
@@ -2119,7 +2127,7 @@ function renderSourceProfileMetrics(categories) {{
     <div class="metric">
       <div class="label">${{escapeHtml(item.label || item.id || '')}}</div>
       <div class="value">${{escapeHtml(item.count || 0)}}</div>
-      <div class="hint">${{Number(item.failing || 0) ? '异常 ' + escapeHtml(item.failing) : '运行记录正常/待记录'}}</div>
+      <div class="hint">${{Number(item.failing || 0) ? '异常 ' + escapeHtml(item.failing) : '运行记录正常/待记录'}}${{Number(item.disabled || 0) ? '；停用 ' + escapeHtml(item.disabled) : ''}}</div>
     </div>
   `).join('');
 }}
@@ -2138,8 +2146,36 @@ function sourceProfileSearchText(item) {{
     item.category_label, item.name, item.id, item.source_type, item.fetch_range,
     item.filter_policy, item.frequency, item.runtime_shape, item.pipeline,
     item.fetcher, item.tavily_policy, item.proxy_profile, item.text_length_policy,
-    (item.service_units || []).join(' '), item.notes
+    (item.service_units || []).join(' '), item.notes, item.enabled ? 'enabled' : 'disabled'
   ].join(' ').toLowerCase();
+}}
+
+function setSourceProfileDirty(isDirty) {{
+  sourceProfileCache.dirty = Boolean(isDirty);
+  const button = document.getElementById('sourceProfileSaveButton');
+  if (button) button.disabled = !sourceProfileCache.dirty;
+}}
+
+function updateSourceProfileDraft(el) {{
+  const sourceId = el.dataset.sourceId || '';
+  const field = el.dataset.field || '';
+  const item = (sourceProfileCache.profiles || []).find(profile => profile.id === sourceId);
+  if (!item || !field) return;
+  item[field] = el.type === 'checkbox' ? Boolean(el.checked) : el.value;
+  item._draft_modified = true;
+  setSourceProfileDirty(true);
+}}
+
+function sourceProfilesForSave() {{
+  return (sourceProfileCache.profiles || []).map(item => ({{
+    id: item.id,
+    enabled: item.enabled !== false,
+    frequency: item.frequency || '',
+    skeptic_enabled: Boolean(item.skeptic_enabled),
+    web_evidence_enabled: Boolean(item.web_evidence_enabled),
+    proxy_profile: item.proxy_profile || '',
+    notes: item.notes || ''
+  }}));
 }}
 
 function renderSourceProfiles() {{
@@ -2158,36 +2194,100 @@ function renderSourceProfiles() {{
       item.web_evidence_enabled ? 'Tavily 可触发' : '无 Tavily'
     ].join('<br>');
     const services = (item.service_units || []).map(unit => `<span class="badge">${{escapeHtml(unit)}}</span>`).join(' ');
+    const modified = item.config_modified ? '<div class="hint source-dirty">本地覆盖</div>' : '';
+    const enabledChecked = item.enabled !== false ? 'checked' : '';
+    const skepticChecked = item.skeptic_enabled ? 'checked' : '';
+    const evidenceChecked = item.web_evidence_enabled ? 'checked' : '';
     return `
       <tr>
         <td>${{escapeHtml(item.category_label || item.category || '')}}</td>
         <td>
+          <input type="checkbox" data-source-id="${{escapeHtml(item.id || '')}}" data-field="enabled" onchange="updateSourceProfileDraft(this)" ${{enabledChecked}}>
+          ${{modified}}
+        </td>
+        <td>
           <strong>${{item.url ? `<a href="${{escapeHtml(item.url)}}" target="_blank" rel="noreferrer">${{escapeHtml(item.name || '')}}</a>` : escapeHtml(item.name || '')}}</strong>
           <div class="hint">${{escapeHtml(item.id || '')}} / ${{escapeHtml(item.source_type || '')}}</div>
+          <div class="hint">${{escapeHtml(item.runtime_note || '')}}</div>
         </td>
         <td>${{badge(health)}}<div class="hint">失败 ${{escapeHtml(item.consecutive_failures || 0)}}</div>${{healthDetail}}</td>
-        <td>${{escapeHtml(item.frequency || '')}}<div class="hint">${{escapeHtml(item.runtime_shape || '')}}</div></td>
+        <td>
+          <input class="source-control" data-source-id="${{escapeHtml(item.id || '')}}" data-field="frequency" value="${{escapeHtml(item.frequency || '')}}" oninput="updateSourceProfileDraft(this)">
+          <div class="hint">${{escapeHtml(item.runtime_shape || '')}}</div>
+        </td>
         <td>${{escapeHtml(item.pipeline || '')}}<div class="hint">${{escapeHtml(item.text_length_policy || '')}}</div></td>
-        <td>${{gates}}<div class="hint">${{escapeHtml(item.tavily_policy || '')}}</div></td>
+        <td>
+          <div class="source-checks">
+            <label><input type="checkbox" data-source-id="${{escapeHtml(item.id || '')}}" data-field="skeptic_enabled" onchange="updateSourceProfileDraft(this)" ${{skepticChecked}}> Skeptic</label>
+            <label><input type="checkbox" data-source-id="${{escapeHtml(item.id || '')}}" data-field="web_evidence_enabled" onchange="updateSourceProfileDraft(this)" ${{evidenceChecked}}> Tavily</label>
+          </div>
+          <div class="hint">${{gates}}</div>
+          <div class="hint">${{escapeHtml(item.tavily_policy || '')}}</div>
+        </td>
         <td class="summary-cell">
           <div>${{escapeHtml(item.fetch_range || '')}}</div>
           <div class="hint">${{escapeHtml(item.filter_policy || '')}}</div>
           <div class="hint">${{escapeHtml(item.fetcher || '')}}</div>
           <div class="hint">${{services}}</div>
-          ${{item.notes ? `<div class="hint">${{escapeHtml(shortText(item.notes, 220))}}</div>` : ''}}
+          <div style="margin-top:6px">
+            <input class="source-control" data-source-id="${{escapeHtml(item.id || '')}}" data-field="proxy_profile" value="${{escapeHtml(item.proxy_profile || '')}}" oninput="updateSourceProfileDraft(this)">
+          </div>
+          <textarea class="source-notes" data-source-id="${{escapeHtml(item.id || '')}}" data-field="notes" oninput="updateSourceProfileDraft(this)">${{escapeHtml(item.notes || '')}}</textarea>
         </td>
       </tr>
     `;
-  }}).join('') || '<tr><td colspan="7">没有匹配信息源。</td></tr>';
+  }}).join('') || '<tr><td colspan="8">没有匹配信息源。</td></tr>';
 }}
 
 async function loadSourceProfiles() {{
   try {{
     const data = await api('/api/source-profiles');
-    sourceProfileCache = {{categories: data.categories || [], profiles: data.profiles || []}};
+    sourceProfileCache = {{
+      categories: data.categories || [],
+      profiles: data.profiles || [],
+      config_path: data.config_path || '',
+      config_exists: Boolean(data.config_exists),
+      runtime_note: data.runtime_note || '',
+      dirty: false
+    }};
     renderSourceProfileMetrics(sourceProfileCache.categories);
     renderSourceCategoryOptions(sourceProfileCache.categories);
     renderSourceProfiles();
+    setSourceProfileDirty(false);
+    const hint = document.getElementById('sourceProfileConfigHint');
+    if (hint) {{
+      const suffix = sourceProfileCache.config_exists ? '已存在本地覆盖配置' : '尚未保存本地覆盖配置';
+      hint.textContent = `${{data.runtime_note || '覆盖配置当前尚未接入实际采集服务。'}} 配置文件：${{sourceProfileCache.config_path || '-'}}；${{suffix}}。`;
+    }}
+  }} catch (err) {{
+    showStatus(err.message, 'err');
+  }}
+}}
+
+async function saveSourceProfiles() {{
+  try {{
+    const data = await api('/api/source-profiles', {{
+      method: 'POST',
+      body: JSON.stringify({{profiles: sourceProfilesForSave()}})
+    }});
+    sourceProfileCache = {{
+      categories: data.categories || [],
+      profiles: data.profiles || [],
+      config_path: data.config_path || '',
+      config_exists: Boolean(data.config_exists),
+      runtime_note: data.runtime_note || '',
+      dirty: false
+    }};
+    renderSourceProfileMetrics(sourceProfileCache.categories);
+    renderSourceCategoryOptions(sourceProfileCache.categories);
+    renderSourceProfiles();
+    setSourceProfileDirty(false);
+    const hint = document.getElementById('sourceProfileConfigHint');
+    if (hint) {{
+      hint.textContent = `${{data.runtime_note || '覆盖配置当前尚未接入实际采集服务。'}} 配置文件：${{sourceProfileCache.config_path || '-'}}；已存在本地覆盖配置。`;
+    }}
+    const saved = data.save_result || {{}};
+    showStatus(`信息源配置已保存：停用 ${{saved.disabled_count || 0}} 个，覆盖 ${{saved.override_count || 0}} 个。当前仍是配置层，不改变实际抓取。`);
   }} catch (err) {{
     showStatus(err.message, 'err');
   }}
@@ -2867,6 +2967,13 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 saved = save_settings(values)
                 saved["ok"] = True
                 self.send_json(saved)
+                return
+            if parsed.path == "/api/source-profiles":
+                saved = save_source_profile_config(payload)
+                response = source_profiles_payload(DEFAULT_DB_PATH)
+                response["save_result"] = saved
+                response["ok"] = True
+                self.send_json(response)
                 return
             if parsed.path == "/api/service-action":
                 unit = str(payload.get("unit") or "").strip()

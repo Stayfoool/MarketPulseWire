@@ -1,0 +1,19 @@
+{
+  "disabled_sources": [
+    "ifind_report"
+  ],
+  "overrides": {
+    "semianalysis": {
+      "frequency": "进程内每 300 秒",
+      "notes": "示例：高价值研究源，保持即时推送。",
+      "proxy_profile": "SURVEIL_HTTP_PROXY / mihomo",
+      "skeptic_enabled": true,
+      "web_evidence_enabled": true
+    },
+    "sina_stock_news": {
+      "notes": "示例：按持仓逐只补漏，运行时接入覆盖配置前仅用于 Web 记录。",
+      "skeptic_enabled": false,
+      "web_evidence_enabled": false
+    }
+  }
+}
