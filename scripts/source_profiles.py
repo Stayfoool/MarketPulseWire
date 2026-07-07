@@ -1,11 +1,14 @@
-"""Read-only source profile registry for the Web workbench.
+"""Source profile registry for the Web workbench.
 
-The first version deliberately keeps profiles in code. It gives the UI a
-stable six-category view without changing the running collectors yet.
+Profiles are defined in code and can be overlaid by a private local config.
+The override layer is intentionally UI-only for now; collectors do not read it
+until the source-profile migration is explicitly wired into runtime code.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -34,6 +37,16 @@ CATEGORY_LABELS = {
     "news_media": "3. 新闻媒体",
     "portfolio_stock_news": "4. 新浪个股新闻",
     "company_disclosures": "5. iFinD 公司公告",
+}
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE_PROFILE_CONFIG_PATH = ROOT / "config/source_profiles.local.json"
+EDITABLE_OVERRIDE_FIELDS = {
+    "frequency",
+    "skeptic_enabled",
+    "web_evidence_enabled",
+    "proxy_profile",
+    "notes",
 }
 
 
@@ -325,6 +338,145 @@ def build_profiles() -> list[SourceProfile]:
     return profiles
 
 
+def default_profile_map() -> dict[str, dict[str, Any]]:
+    return {profile.id: profile.to_dict() for profile in build_profiles()}
+
+
+def normalize_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if raw in {"1", "true", "yes", "y", "on", "是", "启用"}:
+            return True
+        if raw in {"0", "false", "no", "n", "off", "否", "停用"}:
+            return False
+    if value is None:
+        return default
+    return bool(value)
+
+
+def normalize_source_profile_config(raw: Any, valid_ids: set[str] | None = None) -> dict[str, Any]:
+    data = raw if isinstance(raw, dict) else {}
+    valid_ids = valid_ids or set(default_profile_map())
+    disabled_sources = []
+    for source_id in data.get("disabled_sources") or []:
+        source_id = str(source_id or "").strip()
+        if source_id and source_id in valid_ids and source_id not in disabled_sources:
+            disabled_sources.append(source_id)
+
+    overrides: dict[str, dict[str, Any]] = {}
+    raw_overrides = data.get("overrides")
+    if isinstance(raw_overrides, dict):
+        for source_id, item in raw_overrides.items():
+            source_id = str(source_id or "").strip()
+            if source_id not in valid_ids or not isinstance(item, dict):
+                continue
+            normalized: dict[str, Any] = {}
+            for field in EDITABLE_OVERRIDE_FIELDS:
+                if field not in item:
+                    continue
+                if field in {"skeptic_enabled", "web_evidence_enabled"}:
+                    normalized[field] = normalize_bool(item.get(field), False)
+                else:
+                    normalized[field] = str(item.get(field) or "").strip()
+            if normalized:
+                overrides[source_id] = normalized
+    return {"disabled_sources": disabled_sources, "overrides": overrides}
+
+
+def load_source_profile_config(path: Path = SOURCE_PROFILE_CONFIG_PATH) -> dict[str, Any]:
+    if not path.exists():
+        return {"disabled_sources": [], "overrides": {}}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"disabled_sources": [], "overrides": {}}
+    return normalize_source_profile_config(raw)
+
+
+def config_exists(path: Path = SOURCE_PROFILE_CONFIG_PATH) -> bool:
+    return path.exists()
+
+
+def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
+def source_profile_local_rows_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = payload.get("profiles")
+    if isinstance(rows, list):
+        return [row for row in rows if isinstance(row, dict)]
+    rows = payload.get("sources")
+    if isinstance(rows, list):
+        return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
+def save_source_profile_config(
+    payload: dict[str, Any],
+    path: Path = SOURCE_PROFILE_CONFIG_PATH,
+) -> dict[str, Any]:
+    defaults = default_profile_map()
+    valid_ids = set(defaults)
+    disabled_sources: list[str] = []
+    overrides: dict[str, dict[str, Any]] = {}
+
+    for row in source_profile_local_rows_from_payload(payload):
+        source_id = str(row.get("id") or "").strip()
+        if source_id not in valid_ids:
+            continue
+        default = defaults[source_id]
+        enabled = normalize_bool(row.get("enabled"), True)
+        if not enabled:
+            disabled_sources.append(source_id)
+
+        item: dict[str, Any] = {}
+        for field in ("frequency", "proxy_profile", "notes"):
+            value = str(row.get(field) or "").strip()
+            if value and value != str(default.get(field) or ""):
+                item[field] = value
+        for field in ("skeptic_enabled", "web_evidence_enabled"):
+            value = normalize_bool(row.get(field), bool(default.get(field)))
+            if value != bool(default.get(field)):
+                item[field] = value
+        if item:
+            overrides[source_id] = item
+
+    config = normalize_source_profile_config(
+        {"disabled_sources": disabled_sources, "overrides": overrides},
+        valid_ids=valid_ids,
+    )
+    atomic_write_json(path, config)
+    return {
+        "path": str(path),
+        "disabled_count": len(config["disabled_sources"]),
+        "override_count": len(config["overrides"]),
+        "config": config,
+    }
+
+
+def apply_local_config(profile: SourceProfile, config: dict[str, Any]) -> dict[str, Any]:
+    payload = profile.to_dict()
+    overrides = dict(config.get("overrides", {}).get(profile.id, {}))
+    disabled = set(config.get("disabled_sources") or [])
+    for field in EDITABLE_OVERRIDE_FIELDS:
+        payload[f"default_{field}"] = payload.get(field)
+    payload["enabled"] = profile.id not in disabled
+    for field, value in overrides.items():
+        if field in EDITABLE_OVERRIDE_FIELDS:
+            payload[field] = value
+    payload["override_fields"] = sorted(overrides)
+    payload["overrides"] = overrides
+    payload["config_modified"] = (not payload["enabled"]) or bool(overrides)
+    payload["runtime_effective"] = False
+    payload["runtime_note"] = "当前覆盖配置仅用于 Web 配置层；collector 尚未读取。"
+    return payload
+
+
 CORE_COMPANY_FEEDS = {
     "openai_news",
     "nvidia_blog",
@@ -389,8 +541,7 @@ def matching_health_rows(
     return rows
 
 
-def attach_health(profile: SourceProfile, health: dict[tuple[str, str], dict[str, Any]]) -> dict[str, Any]:
-    payload = profile.to_dict()
+def attach_health(payload: dict[str, Any], profile: SourceProfile, health: dict[tuple[str, str], dict[str, Any]]) -> dict[str, Any]:
     rows = matching_health_rows(profile, health)
     payload["health_records"] = rows
     if not rows:
@@ -410,14 +561,21 @@ def attach_health(profile: SourceProfile, health: dict[tuple[str, str], dict[str
     return payload
 
 
-def source_profiles_payload(db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
+def source_profiles_payload(
+    db_path: Path = DEFAULT_DB_PATH,
+    config_path: Path = SOURCE_PROFILE_CONFIG_PATH,
+) -> dict[str, Any]:
     health = source_health_lookup(db_path)
-    profiles = [attach_health(profile, health) for profile in build_profiles()]
+    config = load_source_profile_config(config_path)
+    profiles = [attach_health(apply_local_config(profile, config), profile, health) for profile in build_profiles()]
     counts = {category: 0 for category in CATEGORY_ORDER}
+    disabled = {category: 0 for category in CATEGORY_ORDER}
     failing = {category: 0 for category in CATEGORY_ORDER}
     for profile in profiles:
         category = str(profile.get("category") or "")
         counts[category] = counts.get(category, 0) + 1
+        if not profile.get("enabled", True):
+            disabled[category] = disabled.get(category, 0) + 1
         if profile.get("health_status") == "failing":
             failing[category] = failing.get(category, 0) + 1
     categories = [
@@ -425,8 +583,18 @@ def source_profiles_payload(db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
             "id": category,
             "label": CATEGORY_LABELS.get(category, category),
             "count": counts.get(category, 0),
+            "disabled": disabled.get(category, 0),
             "failing": failing.get(category, 0),
         }
         for category in CATEGORY_ORDER
     ]
-    return {"ok": True, "categories": categories, "profiles": profiles}
+    return {
+        "ok": True,
+        "categories": categories,
+        "profiles": profiles,
+        "config_path": str(config_path),
+        "config_exists": config_exists(config_path),
+        "override_config": config,
+        "runtime_effective": False,
+        "runtime_note": "信息源覆盖配置当前只在 Web 工作台保存和回显，尚未接入实际采集服务。",
+    }

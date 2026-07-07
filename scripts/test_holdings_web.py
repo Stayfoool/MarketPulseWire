@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from holdings_web import RUN_ONCE_TARGETS, html_page, unit_actions, unit_display_metadata
-from source_profiles import source_profiles_payload
+from source_profiles import load_source_profile_config, save_source_profile_config, source_profiles_payload
 
 
 def test_embedded_script_keeps_newline_escapes() -> None:
@@ -36,6 +36,8 @@ def test_source_profile_view_is_exposed() -> None:
     assert "showView('sources')" in html
     assert "/api/source-profiles" in html
     assert "renderSourceProfiles" in html
+    assert "saveSourceProfiles" in html
+    assert "保存配置" in html
     assert "信息源" in html
 
 
@@ -101,6 +103,54 @@ def test_source_profiles_aggregate_wildcard_health() -> None:
     assert profile["last_error"] == "boom"
 
 
+def test_source_profile_local_config_roundtrip() -> None:
+    with TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        config_path = tmp_path / "source_profiles.local.json"
+        saved = save_source_profile_config(
+            {
+                "profiles": [
+                    {
+                        "id": "semianalysis",
+                        "enabled": False,
+                        "frequency": "每 60 秒",
+                        "skeptic_enabled": False,
+                        "web_evidence_enabled": True,
+                        "proxy_profile": "测试代理",
+                        "notes": "测试覆盖",
+                    },
+                    {
+                        "id": "unknown_source",
+                        "enabled": False,
+                        "frequency": "不会写入",
+                    },
+                ]
+            },
+            path=config_path,
+        )
+        assert saved["disabled_count"] == 1
+        assert saved["override_count"] == 1
+        raw = load_source_profile_config(config_path)
+        assert raw["disabled_sources"] == ["semianalysis"]
+        assert set(raw["overrides"]["semianalysis"]) == {
+            "frequency",
+            "skeptic_enabled",
+            "proxy_profile",
+            "notes",
+        }
+        payload = source_profiles_payload(tmp_path / "surveil.sqlite3", config_path=config_path)
+    profile = next(item for item in payload["profiles"] if item["id"] == "semianalysis")
+    assert profile["enabled"] is False
+    assert profile["frequency"] == "每 60 秒"
+    assert profile["skeptic_enabled"] is False
+    assert profile["web_evidence_enabled"] is True
+    assert profile["proxy_profile"] == "测试代理"
+    assert profile["notes"] == "测试覆盖"
+    assert profile["config_modified"] is True
+    assert profile["runtime_effective"] is False
+    assert payload["config_exists"] is True
+
+
 def test_systemd_actions_are_whitelisted() -> None:
     assert "restart" in unit_actions("surveil-rss-monitor.service")
     assert "restart" in unit_actions("surveil-trendforce-page-monitor.service")
@@ -137,6 +187,7 @@ def main() -> int:
     test_source_profile_view_is_exposed()
     test_source_profiles_group_six_categories()
     test_source_profiles_aggregate_wildcard_health()
+    test_source_profile_local_config_roundtrip()
     test_systemd_actions_are_whitelisted()
     test_unit_display_metadata_translates_oneshot_success()
     test_unit_display_metadata_translates_waiting_timer()
