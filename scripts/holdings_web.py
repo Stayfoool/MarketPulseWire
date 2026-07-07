@@ -31,6 +31,7 @@ from market_db import DEFAULT_DB_PATH
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
 from settings_store import save_settings, settings_payload
 from signals_extract import extract_signals
+from source_profiles import source_profiles_payload
 from stock_relations import (
     DEFAULT_CONFIG_PATH as STOCK_RELATIONS_CONFIG_PATH,
     accept_relation_suggestion,
@@ -1043,6 +1044,7 @@ def html_page(token_required: bool) -> str:
     <button id="tab-events" onclick="showView('events')">事件中心</button>
     <button id="tab-signals" onclick="showView('signals')">信号复盘</button>
     <button id="tab-relations" onclick="showView('relations')">关系映射</button>
+    <button id="tab-sources" onclick="showView('sources')">信息源</button>
     <button id="tab-health" onclick="showView('health')">任务健康</button>
     <button id="tab-keywords" onclick="showView('keywords')">媒体关键词</button>
     <button id="tab-settings" onclick="showView('settings')">配置中心</button>
@@ -1226,6 +1228,41 @@ def html_page(token_required: bool) -> str:
               </tr>
             </thead>
             <tbody id="relationSuggestionRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="view-sources" class="view">
+      <div class="section-title">
+        <h2>信息源</h2>
+        <button onclick="loadSourceProfiles()">刷新</button>
+      </div>
+      <div class="status ok" style="display:block">
+按 6 类信息抓取模型展示来源。当前为只读视图：用于统一认知、排查状态和后续重构，不会改动实际抓取配置。
+      </div>
+      <div id="sourceProfileMetrics" class="metric-grid"></div>
+      <div class="toolbar">
+        <select id="sourceProfileCategory" style="width:210px" onchange="renderSourceProfiles()">
+          <option value="">全部来源</option>
+        </select>
+        <input id="sourceProfileQuery" placeholder="搜索来源、管道、服务、说明" style="width:320px" oninput="renderSourceProfiles()">
+      </div>
+      <section class="panel">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:150px">类别</th>
+                <th style="width:210px">来源</th>
+                <th style="width:110px">状态</th>
+                <th style="width:140px">频率/形态</th>
+                <th style="width:170px">管道</th>
+                <th style="width:120px">Skeptic/Tavily</th>
+                <th>范围/筛选/服务</th>
+              </tr>
+            </thead>
+            <tbody id="sourceProfileRows"></tbody>
           </table>
         </div>
       </section>
@@ -1495,6 +1532,7 @@ let managedRelations = [];
 let editingRelationId = null;
 let signalRowsCache = [];
 let editingSignalFeedback = null;
+let sourceProfileCache = {{categories: [], profiles: []}};
 
 function headers() {{
   const h = {{'Content-Type': 'application/json'}};
@@ -1627,6 +1665,7 @@ function showView(name) {{
   if (name === 'events') loadEvents();
   if (name === 'signals') loadSignals();
   if (name === 'relations') loadRelationManager();
+  if (name === 'sources') loadSourceProfiles();
   if (name === 'health') loadHealth();
   if (name === 'keywords') loadKeywords();
   if (name === 'settings') loadSettings();
@@ -2071,6 +2110,86 @@ async function runServiceAction(unit, action) {{
   }} catch (err) {{
     showStatus(err.message, 'err');
     await loadHealth();
+  }}
+}}
+
+function renderSourceProfileMetrics(categories) {{
+  const metrics = document.getElementById('sourceProfileMetrics');
+  metrics.innerHTML = (categories || []).map(item => `
+    <div class="metric">
+      <div class="label">${{escapeHtml(item.label || item.id || '')}}</div>
+      <div class="value">${{escapeHtml(item.count || 0)}}</div>
+      <div class="hint">${{Number(item.failing || 0) ? '异常 ' + escapeHtml(item.failing) : '运行记录正常/待记录'}}</div>
+    </div>
+  `).join('');
+}}
+
+function renderSourceCategoryOptions(categories) {{
+  const select = document.getElementById('sourceProfileCategory');
+  const current = select.value;
+  select.innerHTML = '<option value="">全部来源</option>' + (categories || []).map(item => `
+    <option value="${{escapeHtml(item.id || '')}}">${{escapeHtml(item.label || item.id || '')}}（${{escapeHtml(item.count || 0)}}）</option>
+  `).join('');
+  select.value = current;
+}}
+
+function sourceProfileSearchText(item) {{
+  return [
+    item.category_label, item.name, item.id, item.source_type, item.fetch_range,
+    item.filter_policy, item.frequency, item.runtime_shape, item.pipeline,
+    item.fetcher, item.tavily_policy, item.proxy_profile, item.text_length_policy,
+    (item.service_units || []).join(' '), item.notes
+  ].join(' ').toLowerCase();
+}}
+
+function renderSourceProfiles() {{
+  const category = document.getElementById('sourceProfileCategory').value;
+  const q = document.getElementById('sourceProfileQuery').value.trim().toLowerCase();
+  const rows = (sourceProfileCache.profiles || []).filter(item => {{
+    if (category && item.category !== category) return false;
+    if (q && !sourceProfileSearchText(item).includes(q)) return false;
+    return true;
+  }});
+  document.getElementById('sourceProfileRows').innerHTML = rows.map(item => {{
+    const health = item.health_status === 'unknown' ? '未记录' : item.health_status;
+    const healthDetail = item.last_error ? `<div class="hint">${{escapeHtml(shortText(item.last_error, 120))}}</div>` : '';
+    const gates = [
+      item.skeptic_enabled ? 'Skeptic' : '无 Skeptic',
+      item.web_evidence_enabled ? 'Tavily 可触发' : '无 Tavily'
+    ].join('<br>');
+    const services = (item.service_units || []).map(unit => `<span class="badge">${{escapeHtml(unit)}}</span>`).join(' ');
+    return `
+      <tr>
+        <td>${{escapeHtml(item.category_label || item.category || '')}}</td>
+        <td>
+          <strong>${{item.url ? `<a href="${{escapeHtml(item.url)}}" target="_blank" rel="noreferrer">${{escapeHtml(item.name || '')}}</a>` : escapeHtml(item.name || '')}}</strong>
+          <div class="hint">${{escapeHtml(item.id || '')}} / ${{escapeHtml(item.source_type || '')}}</div>
+        </td>
+        <td>${{badge(health)}}<div class="hint">失败 ${{escapeHtml(item.consecutive_failures || 0)}}</div>${{healthDetail}}</td>
+        <td>${{escapeHtml(item.frequency || '')}}<div class="hint">${{escapeHtml(item.runtime_shape || '')}}</div></td>
+        <td>${{escapeHtml(item.pipeline || '')}}<div class="hint">${{escapeHtml(item.text_length_policy || '')}}</div></td>
+        <td>${{gates}}<div class="hint">${{escapeHtml(item.tavily_policy || '')}}</div></td>
+        <td class="summary-cell">
+          <div>${{escapeHtml(item.fetch_range || '')}}</div>
+          <div class="hint">${{escapeHtml(item.filter_policy || '')}}</div>
+          <div class="hint">${{escapeHtml(item.fetcher || '')}}</div>
+          <div class="hint">${{services}}</div>
+          ${{item.notes ? `<div class="hint">${{escapeHtml(shortText(item.notes, 220))}}</div>` : ''}}
+        </td>
+      </tr>
+    `;
+  }}).join('') || '<tr><td colspan="7">没有匹配信息源。</td></tr>';
+}}
+
+async function loadSourceProfiles() {{
+  try {{
+    const data = await api('/api/source-profiles');
+    sourceProfileCache = {{categories: data.categories || [], profiles: data.profiles || []}};
+    renderSourceProfileMetrics(sourceProfileCache.categories);
+    renderSourceCategoryOptions(sourceProfileCache.categories);
+    renderSourceProfiles();
+  }} catch (err) {{
+    showStatus(err.message, 'err');
   }}
 }}
 
@@ -2683,6 +2802,14 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 return
             try:
                 self.send_json(health_payload())
+            except Exception as exc:  # noqa: BLE001
+                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path == "/api/source-profiles":
+            if not self.require_auth():
+                return
+            try:
+                self.send_json(source_profiles_payload(DEFAULT_DB_PATH))
             except Exception as exc:  # noqa: BLE001
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return

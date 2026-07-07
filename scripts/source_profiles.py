@@ -1,0 +1,432 @@
+"""Read-only source profile registry for the Web workbench.
+
+The first version deliberately keeps profiles in code. It gives the UI a
+stable six-category view without changing the running collectors yet.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+from china_media_sources import CHINA_MEDIA_FEEDS, CHINA_MEDIA_LABELS
+from db_utils import connect_sqlite
+from market_db import DEFAULT_DB_PATH
+from media_sources import OVERSEAS_MEDIA_FEEDS, OVERSEAS_MEDIA_LABELS
+from trendforce_sources import DEFAULT_RSS_FEEDS, TREND_FORCE_PAGE_SOURCES
+
+
+CATEGORY_ORDER = [
+    "x_serenity",
+    "research_industry_media",
+    "official_company",
+    "news_media",
+    "portfolio_stock_news",
+    "company_disclosures",
+]
+
+CATEGORY_LABELS = {
+    "x_serenity": "0. X / Serenity",
+    "research_industry_media": "1. 研究机构/行业媒体",
+    "official_company": "2. 公司官网",
+    "news_media": "3. 新闻媒体",
+    "portfolio_stock_news": "4. 新浪个股新闻",
+    "company_disclosures": "5. iFinD 公司公告",
+}
+
+
+@dataclass(frozen=True)
+class SourceProfile:
+    id: str
+    category: str
+    name: str
+    source_type: str
+    fetch_range: str
+    filter_policy: str
+    frequency: str
+    runtime_shape: str
+    pipeline: str
+    service_units: tuple[str, ...]
+    health_keys: tuple[tuple[str, str], ...]
+    fetcher: str = ""
+    skeptic_enabled: bool = False
+    web_evidence_enabled: bool = False
+    tavily_policy: str = "不触发"
+    proxy_profile: str = "默认直连"
+    text_length_policy: str = ""
+    source_priority: str = ""
+    url: str = ""
+    notes: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["service_units"] = list(self.service_units)
+        data["health_keys"] = [{"monitor": monitor, "source": source} for monitor, source in self.health_keys]
+        data["category_label"] = CATEGORY_LABELS.get(self.category, self.category)
+        return data
+
+
+def rss_profile(
+    source_id: str,
+    name: str,
+    category: str,
+    url: str,
+    *,
+    source_priority: str = "",
+    pipeline: str = "article_gate",
+    skeptic_enabled: bool = True,
+    filter_policy: str = "媒体关键词粗筛；短硬变量可 event-first；其余进入文章门控",
+    notes: str = "",
+) -> SourceProfile:
+    return SourceProfile(
+        id=source_id,
+        category=category,
+        name=name,
+        source_type="RSS/Atom",
+        fetch_range="官方 RSS/Atom 条目，必要时抓取公开正文",
+        filter_policy=filter_policy,
+        frequency="进程内每 300 秒",
+        runtime_shape="常驻 simple",
+        pipeline=pipeline,
+        service_units=("surveil-rss-monitor.service",),
+        health_keys=(("rss_monitor", source_id),),
+        fetcher="scripts/rss_monitor.py",
+        skeptic_enabled=skeptic_enabled,
+        web_evidence_enabled=skeptic_enabled,
+        tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key" if skeptic_enabled else "不触发",
+        proxy_profile="可通过 SURVEIL_HTTP_PROXY / mihomo",
+        text_length_policy="默认文章流；研究机构/行业媒体短硬变量可 event-first",
+        source_priority=source_priority,
+        url=url,
+        notes=notes,
+    )
+
+
+def build_profiles() -> list[SourceProfile]:
+    profiles: list[SourceProfile] = [
+        SourceProfile(
+            id="x_serenity",
+            category="x_serenity",
+            name="X / Serenity",
+            source_type="X filtered stream",
+            fetch_range="X API filtered stream 收到的公开帖；外链和内部引用尽量富化",
+            filter_policy="X 规则和账号配置；发送状态 pending/failed 会重试",
+            frequency="长连接，异常后重连",
+            runtime_shape="常驻 simple",
+            pipeline="X 专用帖子解读链路；后续可对高争议长帖接 Skeptic",
+            service_units=("surveil-x-stream.service",),
+            health_keys=(("x_stream", "stream"), ("x_stream", "link_enrichment")),
+            fetcher="scripts/x_stream.py",
+            skeptic_enabled=False,
+            web_evidence_enabled=False,
+            proxy_profile="通常走服务器本机 mihomo 代理",
+            notes="订阅内容仍取决于 X API 和账号权限，不绕过访问控制。",
+        )
+    ]
+
+    research_names = {
+        "semianalysis": "SemiAnalysis / RSS",
+        "trendforce_semiconductors": "TrendForce / Semiconductors RSS",
+        "trendforce_emerging": "TrendForce / Emerging Technology RSS",
+        "trendforce_consumer": "TrendForce / Consumer Electronics RSS",
+        "trendforce_energy": "TrendForce / Energy RSS",
+        "trendforce_display": "TrendForce / Display RSS",
+        "trendforce_led": "TrendForce / LED RSS",
+        "trendforce_communication": "TrendForce / Communication RSS",
+    }
+    for source_id, url in DEFAULT_RSS_FEEDS.items():
+        if source_id in CORE_COMPANY_FEEDS:
+            continue
+        if source_id not in research_names:
+            continue
+        profiles.append(
+            rss_profile(
+                source_id,
+                research_names[source_id],
+                "research_industry_media",
+                url,
+                source_priority="来源优先级：默认即时推送" if source_id == "semianalysis" else "",
+                notes="SemiAnalysis 默认视为高价值研究源；TrendForce RSS 属于研究机构/行业媒体线。",
+            )
+        )
+
+    for page_source in TREND_FORCE_PAGE_SOURCES:
+        profiles.append(
+            SourceProfile(
+                id=page_source.name,
+                category="research_industry_media",
+                name=page_source.module,
+                source_type="公开列表页",
+                fetch_range="官方列表页标题、摘要和链接；不绕过付费墙或访问控制",
+                filter_policy="页面抽取 + 趋势/半导体硬变量规则；短量化硬变量 event-first",
+                frequency="进程内每 900 秒",
+                runtime_shape="常驻 simple",
+                pipeline="短硬变量 event-first；其余 article_gate",
+                service_units=("surveil-trendforce-page-monitor.service",),
+                health_keys=(("trendforce_page", page_source.name),),
+                fetcher="scripts/trendforce_page_monitor.py",
+                skeptic_enabled=True,
+                web_evidence_enabled=True,
+                tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key",
+                proxy_profile="默认直连；必要时可走 SURVEIL_HTTP_PROXY",
+                text_length_policy="默认文章流；短硬变量 event-first",
+                url=page_source.url,
+                notes=page_source.access_note,
+            )
+        )
+
+    for source_id, url in OVERSEAS_MEDIA_FEEDS.items():
+        profiles.append(
+            SourceProfile(
+                id=source_id,
+                category="research_industry_media",
+                name=OVERSEAS_MEDIA_LABELS.get(source_id, source_id),
+                source_type="RSS/RDF",
+                fetch_range="官方 RSS/RDF 标题、摘要；可访问时抓取公开正文",
+                filter_policy="媒体关键词粗筛；短量化硬变量 event-first；不绕过会员权限",
+                frequency="每 5 分钟 timer",
+                runtime_shape="timer one-shot",
+                pipeline="复用 rss_monitor；短硬变量 event-first；其余 article_gate",
+                service_units=("surveil-overseas-media.timer", "surveil-overseas-media.service"),
+                health_keys=(("rss_monitor", source_id),),
+                fetcher="scripts/overseas_media_monitor.py -> scripts/rss_monitor.py",
+                skeptic_enabled=True,
+                web_evidence_enabled=True,
+                tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key",
+                proxy_profile="通常走服务器本机 mihomo 代理",
+                text_length_policy="默认文章流；短硬变量 event-first",
+                url=url,
+            )
+        )
+
+    official_names = {
+        "openai_news": "OpenAI News",
+        "nvidia_blog": "NVIDIA Blog",
+        "nvidia_developer_blog": "NVIDIA Developer Blog",
+        "samsung_semiconductor_news": "Samsung Semiconductor News",
+        "samsung_global_semiconductor": "Samsung Global Newsroom / Semiconductor",
+        "skhynix_newsroom": "SK hynix Newsroom",
+        "micron_news_releases": "Micron News Releases",
+    }
+    for source_id in CORE_COMPANY_FEEDS:
+        url = DEFAULT_RSS_FEEDS[source_id]
+        profiles.append(
+            rss_profile(
+                source_id,
+                official_names.get(source_id, source_id),
+                "official_company",
+                url,
+                pipeline="official_news_gate",
+                filter_policy="公司官网一手消息；普通营销/活动降级，产业链重大变量即时推送",
+                notes="公司官网源属于一手信息，默认进入 official_news_reviews。",
+            )
+        )
+
+    for source_id, url in CHINA_MEDIA_FEEDS.items():
+        if source_id in {"yicai_brief_rsshub", "cls_telegraph_page"}:
+            continue
+        profiles.append(
+            SourceProfile(
+                id=source_id,
+                category="news_media",
+                name=CHINA_MEDIA_LABELS.get(source_id, source_id),
+                source_type="公开 API/页面/RSSHub",
+                fetch_range="公开快讯、短新闻、专题列表；不绕过登录或付费墙",
+                filter_policy="新闻媒体 event-first；宏观关键事件和产业硬变量优先；长内容后续升级文章流",
+                frequency="每 2 分钟 timer",
+                runtime_shape="timer one-shot",
+                pipeline="当前为 article_gate；目标形态为 event-first + 长文升级 article",
+                service_units=("surveil-china-media.timer", "surveil-china-media.service"),
+                health_keys=(("china_finance_media", source_id),),
+                fetcher="scripts/china_finance_media_monitor.py",
+                skeptic_enabled=True,
+                web_evidence_enabled=True,
+                tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key",
+                text_length_policy="规划：<=300 字快讯流，300-1200 字条件升级，>1200 字文章流",
+                url=url,
+            )
+        )
+
+    profiles.extend(
+        [
+            SourceProfile(
+                id="sina_flash",
+                category="news_media",
+                name="新浪财经 7x24 快讯",
+                source_type="公开快讯 API / 可选新浪智研 provider",
+                fetch_range="配置 tags/provider 下的全部快讯行",
+                filter_policy="命中持仓代码/简称/别名或宏观政策线后入库",
+                frequency="脚本内高频轮询，默认 15 秒",
+                runtime_shape="常驻 simple",
+                pipeline="event_pipeline",
+                service_units=("surveil-sina-flash.service",),
+                health_keys=(("sina_flash", "*"),),
+                fetcher="scripts/sina_flash.py",
+                skeptic_enabled=False,
+                web_evidence_enabled=False,
+                proxy_profile="默认直连",
+                text_length_policy="短快讯事件流；重大宏观/硬变量不受字数限制",
+            ),
+            SourceProfile(
+                id="sina_stock_news",
+                category="portfolio_stock_news",
+                name="新浪个股新闻 / 持仓股",
+                source_type="按持仓逐只抓取公开个股新闻页 / 可选新浪智研 provider",
+                fetch_range="每只启用持仓最新若干条新闻，默认每股 12 条",
+                filter_policy="过滤公告转载、AI 生成页、排除词；模糊项用相关性 LLM 复核",
+                frequency="每 30 分钟 timer",
+                runtime_shape="timer one-shot",
+                pipeline="event_pipeline + 持仓相关性判断",
+                service_units=("surveil-sina-stock-news.timer", "surveil-sina-stock-news.service"),
+                health_keys=(("sina_stock_news", "*"),),
+                fetcher="scripts/sina_stock_news.py",
+                skeptic_enabled=False,
+                web_evidence_enabled=False,
+                text_length_policy="按持仓相关性优先；长文/旧闻争议后续可接 Skeptic",
+            ),
+            SourceProfile(
+                id="ifind_notice",
+                category="company_disclosures",
+                name="iFinD 公司公告",
+                source_type="iFinD notices/filings",
+                fetch_range="启用持仓最近公告和 PDF 文本",
+                filter_policy="持仓范围、公告类型、事件去重；公告原文优先",
+                frequency="每天 08:00 / 20:00 timer",
+                runtime_shape="timer one-shot",
+                pipeline="公告/事件专用 event_pipeline",
+                service_units=("surveil-ifind-notice.timer", "surveil-ifind-notice.service"),
+                health_keys=(("ifind_notice", "notice"), ("signal_pipeline", "ifind_notice")),
+                fetcher="scripts/ifind_batch.py --kind notice",
+                skeptic_enabled=False,
+                web_evidence_enabled=False,
+                notes="正式披露以公告原文和 iFinD 数据为准。",
+            ),
+            SourceProfile(
+                id="ifind_report",
+                category="company_disclosures",
+                name="iFinD 研报/数据池（可选）",
+                source_type="iFinD report/data pool",
+                fetch_range="账号权限允许时读取配置研报/数据池",
+                filter_policy="当前权限不足时保持关闭；未来按持仓和配置公式筛选",
+                frequency="每天 08:00 / 20:00 timer（启用时）",
+                runtime_shape="timer one-shot",
+                pipeline="report adapter / event_pipeline",
+                service_units=("surveil-ifind-report.timer", "surveil-ifind-report.service"),
+                health_keys=(("ifind_report", "report"),),
+                fetcher="scripts/ifind_batch.py --kind report",
+                skeptic_enabled=False,
+                web_evidence_enabled=False,
+                notes="当前部署可保留为关闭状态，待权限具备后再启用。",
+            ),
+        ]
+    )
+    return profiles
+
+
+CORE_COMPANY_FEEDS = {
+    "openai_news",
+    "nvidia_blog",
+    "nvidia_developer_blog",
+    "samsung_semiconductor_news",
+    "samsung_global_semiconductor",
+    "skhynix_newsroom",
+    "micron_news_releases",
+}
+
+
+def table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    row = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone()
+    return bool(row)
+
+
+def source_health_lookup(db_path: Path = DEFAULT_DB_PATH) -> dict[tuple[str, str], dict[str, Any]]:
+    lookup: dict[tuple[str, str], dict[str, Any]] = {}
+    with connect_sqlite(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        if not table_exists(conn, "source_health"):
+            return lookup
+        for row in conn.execute(
+            """
+            SELECT monitor, source, consecutive_failures, last_success_at, last_failure_at,
+                   last_error, last_alerted_at, updated_at
+            FROM source_health
+            """
+        ):
+            failures = int(row["consecutive_failures"] or 0)
+            lookup[(str(row["monitor"] or ""), str(row["source"] or ""))] = {
+                "monitor": row["monitor"] or "",
+                "source": row["source"] or "",
+                "status": "failing" if failures else "ok",
+                "consecutive_failures": failures,
+                "last_success_at": row["last_success_at"] or "",
+                "last_failure_at": row["last_failure_at"] or "",
+                "last_error": row["last_error"] or "",
+                "last_alerted_at": row["last_alerted_at"] or "",
+                "updated_at": row["updated_at"] or "",
+            }
+    return lookup
+
+
+def matching_health_rows(
+    profile: SourceProfile,
+    health: dict[tuple[str, str], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for monitor, source in profile.health_keys:
+        if source == "*":
+            rows.extend(row for (row_monitor, _), row in health.items() if row_monitor == monitor)
+        elif source.endswith("*"):
+            prefix = source[:-1]
+            rows.extend(
+                row
+                for (row_monitor, row_source), row in health.items()
+                if row_monitor == monitor and row_source.startswith(prefix)
+            )
+        elif (monitor, source) in health:
+            rows.append(health[(monitor, source)])
+    return rows
+
+
+def attach_health(profile: SourceProfile, health: dict[tuple[str, str], dict[str, Any]]) -> dict[str, Any]:
+    payload = profile.to_dict()
+    rows = matching_health_rows(profile, health)
+    payload["health_records"] = rows
+    if not rows:
+        payload["health_status"] = "unknown"
+        payload["last_success_at"] = ""
+        payload["last_failure_at"] = ""
+        payload["last_error"] = ""
+        payload["consecutive_failures"] = 0
+        return payload
+    failing = [row for row in rows if row.get("status") == "failing"]
+    latest = max(rows, key=lambda row: str(row.get("updated_at") or row.get("last_success_at") or row.get("last_failure_at") or ""))
+    payload["health_status"] = "failing" if failing else "ok"
+    payload["last_success_at"] = latest.get("last_success_at") or ""
+    payload["last_failure_at"] = latest.get("last_failure_at") or ""
+    payload["last_error"] = latest.get("last_error") or ""
+    payload["consecutive_failures"] = max(int(row.get("consecutive_failures") or 0) for row in rows)
+    return payload
+
+
+def source_profiles_payload(db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
+    health = source_health_lookup(db_path)
+    profiles = [attach_health(profile, health) for profile in build_profiles()]
+    counts = {category: 0 for category in CATEGORY_ORDER}
+    failing = {category: 0 for category in CATEGORY_ORDER}
+    for profile in profiles:
+        category = str(profile.get("category") or "")
+        counts[category] = counts.get(category, 0) + 1
+        if profile.get("health_status") == "failing":
+            failing[category] = failing.get(category, 0) + 1
+    categories = [
+        {
+            "id": category,
+            "label": CATEGORY_LABELS.get(category, category),
+            "count": counts.get(category, 0),
+            "failing": failing.get(category, 0),
+        }
+        for category in CATEGORY_ORDER
+    ]
+    return {"ok": True, "categories": categories, "profiles": profiles}

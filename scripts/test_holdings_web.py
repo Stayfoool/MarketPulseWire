@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 from holdings_web import RUN_ONCE_TARGETS, html_page, unit_actions, unit_display_metadata
+from source_profiles import source_profiles_payload
 
 
 def test_embedded_script_keeps_newline_escapes() -> None:
@@ -24,6 +29,76 @@ def test_health_page_exposes_service_action_controls() -> None:
     assert "fetching_persistent" in html
     assert "重启定时器" in html
     assert "立即运行" in html
+
+
+def test_source_profile_view_is_exposed() -> None:
+    html = html_page(token_required=False)
+    assert "showView('sources')" in html
+    assert "/api/source-profiles" in html
+    assert "renderSourceProfiles" in html
+    assert "信息源" in html
+
+
+def test_source_profiles_group_six_categories() -> None:
+    with TemporaryDirectory() as tmpdir:
+        payload = source_profiles_payload(Path(tmpdir) / "surveil.sqlite3")
+    labels = [item["label"] for item in payload["categories"]]
+    assert labels == [
+        "0. X / Serenity",
+        "1. 研究机构/行业媒体",
+        "2. 公司官网",
+        "3. 新闻媒体",
+        "4. 新浪个股新闻",
+        "5. iFinD 公司公告",
+    ]
+    profile_ids = {item["id"] for item in payload["profiles"]}
+    assert {"x_serenity", "semianalysis", "nvidia_blog", "cls_telegraph_api", "sina_stock_news", "ifind_notice"} <= profile_ids
+
+
+def test_source_profiles_aggregate_wildcard_health() -> None:
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE source_health (
+                monitor TEXT NOT NULL,
+                source TEXT NOT NULL,
+                consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                last_success_at TEXT,
+                last_failure_at TEXT,
+                last_error TEXT,
+                last_alerted_at TEXT,
+                updated_at TEXT,
+                PRIMARY KEY (monitor, source)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO source_health (
+                monitor, source, consecutive_failures, last_success_at,
+                last_failure_at, last_error, last_alerted_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "sina_stock_news",
+                "legacy:300308.SZ",
+                2,
+                "",
+                "2026-07-07T00:00:00+00:00",
+                "boom",
+                "",
+                "2026-07-07T00:00:00+00:00",
+            ),
+        )
+        conn.commit()
+        conn.close()
+        payload = source_profiles_payload(db_path)
+    profile = next(item for item in payload["profiles"] if item["id"] == "sina_stock_news")
+    assert profile["health_status"] == "failing"
+    assert profile["consecutive_failures"] == 2
+    assert profile["last_error"] == "boom"
 
 
 def test_systemd_actions_are_whitelisted() -> None:
@@ -59,6 +134,9 @@ def test_unit_display_metadata_translates_waiting_timer() -> None:
 def main() -> int:
     test_embedded_script_keeps_newline_escapes()
     test_health_page_exposes_service_action_controls()
+    test_source_profile_view_is_exposed()
+    test_source_profiles_group_six_categories()
+    test_source_profiles_aggregate_wildcard_health()
     test_systemd_actions_are_whitelisted()
     test_unit_display_metadata_translates_oneshot_success()
     test_unit_display_metadata_translates_waiting_timer()
