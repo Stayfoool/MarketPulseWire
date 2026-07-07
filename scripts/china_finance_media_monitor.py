@@ -39,7 +39,13 @@ from china_media_sources import (
     china_media_module,
     is_china_media_source,
 )
-from db_utils import connect_sqlite, ensure_seen_tables, ensure_source_state_table, retry_on_locked
+from collector_runtime import (
+    filter_enabled_mapping_for_run,
+    load_source_state as runtime_load_source_state,
+    save_source_state as runtime_save_source_state,
+    split_sources_by_backoff,
+)
+from db_utils import connect_sqlite, ensure_seen_tables, retry_on_locked
 from env_utils import load_env
 from feishu import send_card
 from http_utils import http_get
@@ -47,9 +53,8 @@ from llm_analysis import llm_config
 from macro_policy import is_macro_event
 from media_keyword_config import is_media_focus_item
 from rss_monitor import DB_PATH, fetch_article_body, parse_date, strip_tags
-from source_backoff import backoff_state_after_failure, clear_backoff_state, should_skip_by_backoff
+from source_backoff import backoff_state_after_failure, clear_backoff_state
 from source_health import record_source_failure, record_source_success
-from source_profiles import filter_enabled_source_mapping
 from skeptic_evaluator import apply_skeptic_review
 from time_utils import parse_datetime_to_utc_iso, timestamp_to_utc_iso
 
@@ -184,30 +189,12 @@ def env_int(name: str, default: int, minimum: int = 0) -> int:
 
 def load_source_state(source: str) -> dict[str, Any]:
     with connect_db() as conn:
-        ensure_source_state_table(conn)
-        row = conn.execute("SELECT state_json FROM source_state WHERE source = ?", (source,)).fetchone()
-    if not row:
-        return {}
-    try:
-        parsed = json.loads(row[0] or "{}")
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        return runtime_load_source_state(conn, source)
 
 
 def save_source_state(source: str, state: dict[str, Any]) -> None:
     with connect_db() as conn:
-        ensure_source_state_table(conn)
-        conn.execute(
-            """
-            INSERT INTO source_state (source, state_json, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(source) DO UPDATE SET
-                state_json = excluded.state_json,
-                updated_at = excluded.updated_at
-            """,
-            (source, json.dumps(state, ensure_ascii=False, sort_keys=True), datetime.now(timezone.utc).isoformat()),
-        )
+        runtime_save_source_state(conn, source, state)
         conn.commit()
 
 
@@ -681,25 +668,18 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
 
 
 def run_once(sources: list[str], notify_baseline: bool = False) -> int:
-    enabled_sources = list(filter_enabled_source_mapping({source: source for source in sources}).keys())
-    disabled_count = len(sources) - len(enabled_sources)
-    if disabled_count:
-        print(f"source profile: 中国财经媒体跳过 {disabled_count} 个已停用 source。", flush=True)
-    sources = enabled_sources
+    sources = list(filter_enabled_mapping_for_run({source: source for source in sources}, label="中国财经媒体").keys())
     if not sources:
-        print("source profile: 中国财经媒体没有启用的 source，跳过本轮。", flush=True)
         return 0
     total_new = 0
     fetched: dict[str, list[dict[str, Any]]] = {}
     max_workers = min(len(sources), env_int("CHINA_MEDIA_FETCH_MAX_WORKERS", 3, minimum=1))
     source_states = {source: load_source_state(source) for source in sources}
-    runnable_sources: list[str] = []
-    for source in sources:
-        skip, until = should_skip_by_backoff(source_states.get(source, {}))
-        if skip:
-            print(f"{china_media_module(source)}：源级退避中，跳过抓取直到 {until}。", flush=True)
-            continue
-        runnable_sources.append(source)
+    runnable_sources, _skipped_sources = split_sources_by_backoff(
+        sources,
+        source_states,
+        label_for_source=china_media_module,
+    )
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(source_items, source): source for source in runnable_sources}
         for future in as_completed(futures):
