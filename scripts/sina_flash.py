@@ -24,6 +24,7 @@ from market_db import DEFAULT_DB_PATH, init_db
 from portfolio_import import import_holdings
 from sina_zy_client import client_from_env, result_data
 from source_health import record_source_failure, record_source_success
+from source_profiles import source_profile_enabled
 from time_utils import parse_datetime_to_utc_iso, timestamp_to_utc_iso
 
 
@@ -252,6 +253,9 @@ def is_verbose() -> bool:
 
 
 def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
+    if not source_profile_enabled(SOURCE):
+        print("source profile: sina_flash 已停用，跳过本轮。", flush=True)
+        return 0
     init_db(DEFAULT_DB_PATH).close()
     import_holdings(DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH)
     holdings = load_enabled_holdings(DEFAULT_DB_PATH)

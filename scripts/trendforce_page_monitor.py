@@ -32,6 +32,7 @@ from industry_hardline import event_first_hardline_review
 from llm_analysis import llm_config
 from rss_monitor import connect_db, fetch_article_body, parse_date, strip_tags
 from source_health import record_source_failure, record_source_success
+from source_profiles import filter_enabled_named_sources
 from skeptic_evaluator import apply_skeptic_review
 from trendforce_sources import PageSource, TREND_FORCE_PAGE_SOURCES, is_focus_item
 from x_check import load_env
@@ -427,6 +428,7 @@ def notify_item(item: dict) -> None:
                 review = apply_skeptic_review(
                     conn,
                     source=PAGE_SOURCE_KEY,
+                    source_profile_id=str(enriched.get("page_source") or PAGE_SOURCE_KEY),
                     item=enriched,
                     review=review,
                     push_key="push_now",
@@ -449,6 +451,14 @@ def notify_item(item: dict) -> None:
 
 
 def run_once(sources: list[PageSource], notify_baseline: bool = False) -> int:
+    enabled_sources = filter_enabled_named_sources(sources)
+    disabled_count = len(sources) - len(enabled_sources)
+    if disabled_count:
+        print(f"source profile: TrendForce 页面跳过 {disabled_count} 个已停用 source。", flush=True)
+    if not enabled_sources:
+        print("source profile: TrendForce 页面没有启用的 source，跳过本轮。", flush=True)
+        return 0
+    sources = enabled_sources
     total_new = 0
     for source in sources:
         try:

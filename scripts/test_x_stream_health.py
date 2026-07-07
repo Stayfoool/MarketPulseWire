@@ -66,9 +66,26 @@ def test_stream_recovery_clears_unified_health() -> None:
             x_stream.alerts_enabled = original_alerts
 
 
+def test_x_stream_enabled_uses_source_profile() -> None:
+    original = x_stream.source_profile_enabled
+    seen = []
+
+    def fake_enabled(source_id: str) -> bool:
+        seen.append(source_id)
+        return False
+
+    try:
+        x_stream.source_profile_enabled = fake_enabled
+        assert x_stream.x_stream_enabled() is False
+        assert seen == ["x_serenity"]
+    finally:
+        x_stream.source_profile_enabled = original
+
+
 def main() -> int:
     test_stream_failure_records_unified_health()
     test_stream_recovery_clears_unified_health()
+    test_x_stream_enabled_uses_source_profile()
     print("x stream health checks passed")
     return 0
 

@@ -1,8 +1,9 @@
 """Source profile registry for the Web workbench.
 
 Profiles are defined in code and can be overlaid by a private local config.
-The override layer is intentionally UI-only for now; collectors do not read it
-until the source-profile migration is explicitly wired into runtime code.
+Low-risk runtime fields are honored by collectors: enabled, skeptic_enabled,
+and web_evidence_enabled. Frequency and proxy fields are still recorded for
+operator visibility and later migration.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import os
 import sqlite3
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from china_media_sources import CHINA_MEDIA_FEEDS, CHINA_MEDIA_LABELS
 from db_utils import connect_sqlite
@@ -472,9 +473,93 @@ def apply_local_config(profile: SourceProfile, config: dict[str, Any]) -> dict[s
     payload["override_fields"] = sorted(overrides)
     payload["overrides"] = overrides
     payload["config_modified"] = (not payload["enabled"]) or bool(overrides)
-    payload["runtime_effective"] = False
-    payload["runtime_note"] = "当前覆盖配置仅用于 Web 配置层；collector 尚未读取。"
+    payload["runtime_effective"] = True
+    payload["runtime_note"] = "enabled/Skeptic/Tavily 覆盖已接入运行时；频率/代理暂仅记录。"
     return payload
+
+
+def runtime_profile_map(config_path: Path = SOURCE_PROFILE_CONFIG_PATH) -> dict[str, dict[str, Any]]:
+    config = load_source_profile_config(config_path)
+    return {profile.id: apply_local_config(profile, config) for profile in build_profiles()}
+
+
+def runtime_source_profile(source_id: str, config_path: Path = SOURCE_PROFILE_CONFIG_PATH) -> dict[str, Any] | None:
+    source_id = str(source_id or "").strip()
+    if not source_id:
+        return None
+    return runtime_profile_map(config_path).get(source_id)
+
+
+def source_profile_enabled(
+    source_id: str,
+    *,
+    default: bool = True,
+    config_path: Path = SOURCE_PROFILE_CONFIG_PATH,
+) -> bool:
+    profile = runtime_source_profile(source_id, config_path=config_path)
+    if profile is None:
+        return default
+    return bool(profile.get("enabled", default))
+
+
+def source_profile_bool(
+    source_id: str,
+    field: str,
+    *,
+    default: bool,
+    config_path: Path = SOURCE_PROFILE_CONFIG_PATH,
+) -> bool:
+    profile = runtime_source_profile(source_id, config_path=config_path)
+    if profile is None or field not in profile:
+        return default
+    return normalize_bool(profile.get(field), default)
+
+
+def source_profile_skeptic_enabled(
+    source_id: str,
+    *,
+    default: bool = True,
+    config_path: Path = SOURCE_PROFILE_CONFIG_PATH,
+) -> bool:
+    return source_profile_bool(source_id, "skeptic_enabled", default=default, config_path=config_path)
+
+
+def source_profile_web_evidence_enabled(
+    source_id: str,
+    *,
+    default: bool = True,
+    config_path: Path = SOURCE_PROFILE_CONFIG_PATH,
+) -> bool:
+    return source_profile_bool(source_id, "web_evidence_enabled", default=default, config_path=config_path)
+
+
+def disabled_source_ids(config_path: Path = SOURCE_PROFILE_CONFIG_PATH) -> set[str]:
+    config = load_source_profile_config(config_path)
+    return set(config.get("disabled_sources") or [])
+
+
+def filter_enabled_source_mapping(
+    sources: dict[str, Any],
+    *,
+    config_path: Path = SOURCE_PROFILE_CONFIG_PATH,
+) -> dict[str, Any]:
+    disabled = disabled_source_ids(config_path)
+    return {source_id: value for source_id, value in sources.items() if source_id not in disabled}
+
+
+def filter_enabled_named_sources(
+    sources: Iterable[Any],
+    *,
+    config_path: Path = SOURCE_PROFILE_CONFIG_PATH,
+) -> list[Any]:
+    disabled = disabled_source_ids(config_path)
+    enabled = []
+    for source in sources:
+        source_id = str(getattr(source, "name", source) or "").strip()
+        if source_id and source_id in disabled:
+            continue
+        enabled.append(source)
+    return enabled
 
 
 CORE_COMPANY_FEEDS = {
@@ -595,6 +680,6 @@ def source_profiles_payload(
         "config_path": str(config_path),
         "config_exists": config_exists(config_path),
         "override_config": config,
-        "runtime_effective": False,
-        "runtime_note": "信息源覆盖配置当前只在 Web 工作台保存和回显，尚未接入实际采集服务。",
+        "runtime_effective": True,
+        "runtime_note": "enabled/Skeptic/Tavily 覆盖已接入实际采集；频率/代理字段暂仅用于记录和后续迁移。",
     }
