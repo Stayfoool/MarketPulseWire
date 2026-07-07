@@ -121,6 +121,38 @@ def test_history_candidates_respects_cutoff() -> None:
         conn.close()
 
 
+def test_source_profile_can_disable_skeptic() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "surveil.sqlite3"
+        conn = init_db(path)
+        seed_seen_item(conn, title="美光业绩超预期 存储价格继续上涨", days_ago=3)
+        original_profile_flag = skeptic_evaluator.source_profile_skeptic_enabled
+
+        def disabled_profile(_source: str, **_kwargs) -> bool:
+            return False
+
+        review = {
+            "importance": "high",
+            "push_now": True,
+            "reason": "业绩超预期。",
+        }
+        item = {
+            "id": "new-1",
+            "url": "https://example.com/new",
+            "title": "美光业绩超预期 存储价格继续上涨",
+            "published_at": datetime.now(timezone.utc).isoformat(),
+            "summary": "重复报道。",
+        }
+        try:
+            skeptic_evaluator.source_profile_skeptic_enabled = disabled_profile
+            updated = apply_skeptic_review(conn, source="cls_telegraph_api", item=item, review=review, push_key="push_now")
+        finally:
+            skeptic_evaluator.source_profile_skeptic_enabled = original_profile_flag
+
+        assert updated == review
+        conn.close()
+
+
 def test_skeptic_llm_failure_records_health_without_blocking() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "surveil.sqlite3"
@@ -272,6 +304,7 @@ def main() -> int:
     test_skeptic_downgrades_duplicate_article()
     test_official_review_preserves_skeptic_metadata()
     test_history_candidates_respects_cutoff()
+    test_source_profile_can_disable_skeptic()
     test_skeptic_llm_failure_records_health_without_blocking()
     test_hbm_hard_variable_override_keeps_push_now()
     test_nvidia_ai_platform_delay_override_keeps_push_now()

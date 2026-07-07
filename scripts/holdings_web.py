@@ -1246,7 +1246,7 @@ def html_page(token_required: bool) -> str:
         </div>
       </div>
       <div id="sourceProfileConfigHint" class="status ok" style="display:block">
-按 6 类信息抓取模型展示来源。当前支持保存本地覆盖配置，但实际采集服务尚未读取这些覆盖项。
+按 6 类信息抓取模型展示来源。启用、Skeptic、Tavily 覆盖已接入采集运行时；频率和代理暂仅记录。
       </div>
       <div id="sourceProfileMetrics" class="metric-grid"></div>
       <div class="toolbar">
@@ -2257,7 +2257,7 @@ async function loadSourceProfiles() {{
     const hint = document.getElementById('sourceProfileConfigHint');
     if (hint) {{
       const suffix = sourceProfileCache.config_exists ? '已存在本地覆盖配置' : '尚未保存本地覆盖配置';
-      hint.textContent = `${{data.runtime_note || '覆盖配置当前尚未接入实际采集服务。'}} 配置文件：${{sourceProfileCache.config_path || '-'}}；${{suffix}}。`;
+      hint.textContent = `${{data.runtime_note || 'enabled/Skeptic/Tavily 覆盖已接入实际采集。'}} 配置文件：${{sourceProfileCache.config_path || '-'}}；${{suffix}}。`;
     }}
   }} catch (err) {{
     showStatus(err.message, 'err');
@@ -2284,10 +2284,10 @@ async function saveSourceProfiles() {{
     setSourceProfileDirty(false);
     const hint = document.getElementById('sourceProfileConfigHint');
     if (hint) {{
-      hint.textContent = `${{data.runtime_note || '覆盖配置当前尚未接入实际采集服务。'}} 配置文件：${{sourceProfileCache.config_path || '-'}}；已存在本地覆盖配置。`;
+      hint.textContent = `${{data.runtime_note || 'enabled/Skeptic/Tavily 覆盖已接入实际采集。'}} 配置文件：${{sourceProfileCache.config_path || '-'}}；已存在本地覆盖配置。`;
     }}
     const saved = data.save_result || {{}};
-    showStatus(`信息源配置已保存：停用 ${{saved.disabled_count || 0}} 个，覆盖 ${{saved.override_count || 0}} 个。当前仍是配置层，不改变实际抓取。`);
+    showStatus(`信息源配置已保存：停用 ${{saved.disabled_count || 0}} 个，覆盖 ${{saved.override_count || 0}} 个。启用/Skeptic/Tavily 将由运行时读取；频率/代理暂仅记录。`);
   }} catch (err) {{
     showStatus(err.message, 'err');
   }}

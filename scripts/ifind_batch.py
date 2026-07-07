@@ -19,6 +19,7 @@ from ifind_notice_pdf import parse_notice_pdf
 from llm_analysis import LLMBalanceInsufficientError
 from market_db import DEFAULT_DB_PATH, init_db
 from portfolio_import import import_holdings
+from source_profiles import source_profile_enabled
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -425,6 +426,10 @@ def run_batch(
     limit: int | None,
     parse_pdf_dry_run: bool = False,
 ) -> int:
+    profile_id = "ifind_notice" if kind == "notice" else "ifind_report"
+    if not source_profile_enabled(profile_id):
+        print(f"source profile: {profile_id} 已停用，跳过本轮。", flush=True)
+        return 0
     init_db(DEFAULT_DB_PATH).close()
     import_holdings(DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH)
     holdings = load_enabled_holdings(DEFAULT_DB_PATH)

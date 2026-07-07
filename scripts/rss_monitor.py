@@ -49,6 +49,7 @@ from official_news_gate import (
     save_review,
 )
 from skeptic_evaluator import apply_skeptic_review
+from source_profiles import filter_enabled_source_mapping
 from trendforce_sources import DEFAULT_RSS_FEEDS
 from x_check import load_env
 from source_backoff import backoff_state_after_failure, clear_backoff_state, should_skip_by_backoff
@@ -468,6 +469,14 @@ def filter_items(source: str, items: list[dict]) -> list[dict]:
 
 
 def run_once(feeds: dict[str, str], notify_baseline: bool = False) -> int:
+    enabled_feeds = filter_enabled_source_mapping(feeds)
+    disabled_count = len(feeds) - len(enabled_feeds)
+    feeds = enabled_feeds
+    if disabled_count:
+        print(f"source profile: RSS 跳过 {disabled_count} 个已停用 source。", flush=True)
+    if not feeds:
+        print("source profile: RSS 没有启用的 source，跳过本轮。", flush=True)
+        return 0
     total_new = 0
     with connect_db() as conn:
         feed_states = {source: load_source_state(conn, source) for source in feeds}

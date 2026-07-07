@@ -49,6 +49,7 @@ from media_keyword_config import is_media_focus_item
 from rss_monitor import DB_PATH, fetch_article_body, parse_date, strip_tags
 from source_backoff import backoff_state_after_failure, clear_backoff_state, should_skip_by_backoff
 from source_health import record_source_failure, record_source_success
+from source_profiles import filter_enabled_source_mapping
 from skeptic_evaluator import apply_skeptic_review
 from time_utils import parse_datetime_to_utc_iso, timestamp_to_utc_iso
 
@@ -680,7 +681,13 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
 
 
 def run_once(sources: list[str], notify_baseline: bool = False) -> int:
+    enabled_sources = list(filter_enabled_source_mapping({source: source for source in sources}).keys())
+    disabled_count = len(sources) - len(enabled_sources)
+    if disabled_count:
+        print(f"source profile: 中国财经媒体跳过 {disabled_count} 个已停用 source。", flush=True)
+    sources = enabled_sources
     if not sources:
+        print("source profile: 中国财经媒体没有启用的 source，跳过本轮。", flush=True)
         return 0
     total_new = 0
     fetched: dict[str, list[dict[str, Any]]] = {}

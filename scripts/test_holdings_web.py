@@ -8,7 +8,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from holdings_web import RUN_ONCE_TARGETS, html_page, unit_actions, unit_display_metadata
-from source_profiles import load_source_profile_config, save_source_profile_config, source_profiles_payload
+from source_profiles import (
+    filter_enabled_named_sources,
+    filter_enabled_source_mapping,
+    load_source_profile_config,
+    save_source_profile_config,
+    source_profile_skeptic_enabled,
+    source_profiles_payload,
+)
 
 
 def test_embedded_script_keeps_newline_escapes() -> None:
@@ -147,8 +154,30 @@ def test_source_profile_local_config_roundtrip() -> None:
     assert profile["proxy_profile"] == "测试代理"
     assert profile["notes"] == "测试覆盖"
     assert profile["config_modified"] is True
-    assert profile["runtime_effective"] is False
+    assert profile["runtime_effective"] is True
     assert payload["config_exists"] is True
+
+
+def test_source_profile_runtime_filters_and_flags() -> None:
+    with TemporaryDirectory() as tmpdir:
+        config_path = Path(tmpdir) / "source_profiles.local.json"
+        save_source_profile_config(
+            {
+                "profiles": [
+                    {"id": "semianalysis", "enabled": False},
+                    {"id": "cls_telegraph_api", "skeptic_enabled": False},
+                ]
+            },
+            path=config_path,
+        )
+        feeds = {"semianalysis": "https://example.com/feed", "nvidia_blog": "https://example.com/nvidia"}
+        assert filter_enabled_source_mapping(feeds, config_path=config_path) == {
+            "nvidia_blog": "https://example.com/nvidia"
+        }
+        assert filter_enabled_named_sources(["semianalysis", "nvidia_blog"], config_path=config_path) == [
+            "nvidia_blog"
+        ]
+        assert source_profile_skeptic_enabled("cls_telegraph_api", config_path=config_path) is False
 
 
 def test_systemd_actions_are_whitelisted() -> None:
@@ -188,6 +217,7 @@ def main() -> int:
     test_source_profiles_group_six_categories()
     test_source_profiles_aggregate_wildcard_health()
     test_source_profile_local_config_roundtrip()
+    test_source_profile_runtime_filters_and_flags()
     test_systemd_actions_are_whitelisted()
     test_unit_display_metadata_translates_oneshot_success()
     test_unit_display_metadata_translates_waiting_timer()

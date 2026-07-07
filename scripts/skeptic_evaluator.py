@@ -12,6 +12,7 @@ from typing import Any
 
 from llm_analysis import call_chat_completion_with_prompts, llm_config
 from source_health import record_source_failure, record_source_success
+from source_profiles import source_profile_skeptic_enabled, source_profile_web_evidence_enabled
 from web_evidence import collect_web_evidence, prompt_pack
 
 
@@ -492,30 +493,35 @@ def apply_skeptic_review(
     conn: sqlite3.Connection,
     *,
     source: str,
+    source_profile_id: str | None = None,
     item: dict[str, Any],
     review: dict[str, Any],
     push_key: str,
 ) -> dict[str, Any]:
     """Return a review possibly downgraded by the skeptic evaluator."""
-    if not skeptic_enabled() or not review.get(push_key):
+    profile_source = str(source_profile_id or source or "").strip()
+    if not skeptic_enabled() or not source_profile_skeptic_enabled(profile_source) or not review.get(push_key):
         return review
     history = history_candidates(conn, source=source, item=item)
     deterministic = deterministic_skeptic(item=item, history=history)
     if deterministic["skeptic_verdict"] == "pass":
-        try:
-            web_pack = collect_web_evidence(
-                conn,
-                trigger_module="skeptic_evaluator",
-                source=source,
-                item=item,
-                review=review,
-                trigger_reason="skeptic_pass_before_llm",
-                mode=os.getenv("WEB_EVIDENCE_MODE", "realtime").strip() or "realtime",
-            )
-            if web_pack:
-                deterministic["web_evidence"] = web_pack
-        except Exception as exc:  # noqa: BLE001 - web evidence must not block skeptic
-            deterministic["web_evidence_error"] = f"联网证据检索失败：{exc}"
+        if source_profile_web_evidence_enabled(profile_source):
+            try:
+                web_pack = collect_web_evidence(
+                    conn,
+                    trigger_module="skeptic_evaluator",
+                    source=source,
+                    item=item,
+                    review=review,
+                    trigger_reason="skeptic_pass_before_llm",
+                    mode=os.getenv("WEB_EVIDENCE_MODE", "realtime").strip() or "realtime",
+                )
+                if web_pack:
+                    deterministic["web_evidence"] = web_pack
+            except Exception as exc:  # noqa: BLE001 - web evidence must not block skeptic
+                deterministic["web_evidence_error"] = f"联网证据检索失败：{exc}"
+        else:
+            deterministic["web_evidence_error"] = "source profile 已关闭 Web Evidence。"
         try:
             skeptic = llm_skeptic_review(source=source, item=item, gate_review=review, fallback=deterministic)
             record_source_success(conn, "signal_pipeline", "skeptic_evaluator")

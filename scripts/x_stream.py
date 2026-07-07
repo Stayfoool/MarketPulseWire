@@ -21,6 +21,7 @@ from feishu import send_card, send_text
 from link_enrichment import enrich_post_links
 from llm_analysis import llm_config
 from source_health import record_source_failure, record_source_success
+from source_profiles import source_profile_enabled
 from x_check import configured_x_username, load_env, post_text, refresh_oauth2_token, request_with_available_tokens
 
 
@@ -33,6 +34,7 @@ MEDIA_FIELDS = "media_key,type,url,preview_image_url,width,height,variants"
 MAX_DELIVERY_ATTEMPTS = 5
 DEFAULT_ALERT_THRESHOLD = 3
 DEFAULT_ALERT_COOLDOWN_SECONDS = 1800
+SOURCE_PROFILE_ID = "x_serenity"
 
 
 def bearer_token() -> str:
@@ -124,6 +126,10 @@ def alert_cooldown_seconds() -> int:
 
 def alerts_enabled() -> bool:
     return os.getenv("X_STREAM_ALERT_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def x_stream_enabled() -> bool:
+    return source_profile_enabled(SOURCE_PROFILE_ID)
 
 
 def utc_now_iso() -> str:
@@ -758,6 +764,10 @@ def stream_forever(username: str) -> None:
     last_backfill_at = 0.0
     backfill_interval = rest_backfill_interval_seconds()
     while True:
+        if not x_stream_enabled():
+            print("source profile: x_serenity 已停用，X stream 暂停连接。", flush=True)
+            time.sleep(60)
+            continue
         token = bearer_token()
         try:
             ensure_rule(username, token)
@@ -792,6 +802,9 @@ def stream_forever(username: str) -> None:
                 record_stream_recovery(phase="stream_connected")
                 backoff = 5
                 for raw_line in response:
+                    if not x_stream_enabled():
+                        print("source profile: x_serenity 已停用，断开当前 X stream。", flush=True)
+                        break
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line:
                         continue
@@ -835,9 +848,16 @@ def main() -> int:
     else:
         print("X stream LLM config: 未配置", flush=True)
     username = configured_x_username()
+    while not x_stream_enabled():
+        print("source profile: x_serenity 已停用，X stream 启动校验暂缓。", flush=True)
+        time.sleep(60)
     # Resolve the user once with the existing helper; this also proves credentials before opening stream.
     startup_backoff = 5
     while True:
+        if not x_stream_enabled():
+            print("source profile: x_serenity 已停用，X API 启动校验暂停。", flush=True)
+            time.sleep(60)
+            continue
         try:
             request_with_available_tokens(f"/users/by/username/{username}", {"user.fields": "id,name,username"})
             record_stream_recovery(phase="startup_check")
