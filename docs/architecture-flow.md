@@ -187,6 +187,8 @@ The health page uses the same high-level grouping: fetching services are separat
 
 Non-fetching runtime units are intentionally omitted from this table: `surveil-signals-extract`, `surveil-signal-outcome`, `surveil-signal-review`, `surveil-signal-digest`, `surveil-article-daily`, `surveil-holdings-web`, and `surveil-proxy` operate on existing state, UI, logs, proxying, or post-processing rather than fetching new market information.
 
+The Web workbench exposes a read-only `source_profiles.py` catalog above these historical units. It groups sources into the six target categories used for the cleanup plan: X / Serenity, Research / industry media, official company sources, news media, Sina portfolio stock news, and iFinD company disclosures. This source-profile view is a UI and observability layer first; it does not yet rename or merge the underlying systemd collectors.
+
 ## Decision and Delivery Pipeline
 
 ```mermaid
