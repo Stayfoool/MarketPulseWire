@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import html
-import json
 import os
 import re
 import sqlite3
@@ -32,6 +31,14 @@ from article_gate import (
 )
 from official_news_gate import apply_official_hardline_override
 from cards import build_article_card
+from collector_runtime import (
+    filter_enabled_mapping_for_run,
+    load_source_state as runtime_load_source_state,
+    load_source_states,
+    save_source_state as runtime_save_source_state,
+    source_state_key,
+    split_sources_by_backoff,
+)
 from db_utils import connect_sqlite, ensure_seen_tables, ensure_source_state_table, retry_on_locked
 from feishu import send_card
 from http_utils import http_get
@@ -49,10 +56,9 @@ from official_news_gate import (
     save_review,
 )
 from skeptic_evaluator import apply_skeptic_review
-from source_profiles import filter_enabled_source_mapping
 from trendforce_sources import DEFAULT_RSS_FEEDS
 from x_check import load_env
-from source_backoff import backoff_state_after_failure, clear_backoff_state, should_skip_by_backoff
+from source_backoff import backoff_state_after_failure, clear_backoff_state
 from source_health import record_source_failure, record_source_success
 
 
@@ -110,32 +116,15 @@ def parse_date(value: str) -> str:
 
 
 def feed_state_key(source: str) -> str:
-    return f"rss_feed:{source}"
+    return source_state_key(source, prefix="rss_feed")
 
 
 def load_source_state(conn: sqlite3.Connection, source: str) -> dict:
-    row = conn.execute("SELECT state_json FROM source_state WHERE source = ?", (feed_state_key(source),)).fetchone()
-    if not row or not row[0]:
-        return {}
-    try:
-        parsed = json.loads(str(row[0]))
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+    return runtime_load_source_state(conn, source, prefix="rss_feed")
 
 
 def save_source_state(conn: sqlite3.Connection, source: str, state: dict) -> None:
-    now = datetime.now(timezone.utc).isoformat()
-    conn.execute(
-        """
-        INSERT INTO source_state (source, state_json, updated_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(source) DO UPDATE SET
-            state_json = excluded.state_json,
-            updated_at = excluded.updated_at
-        """,
-        (feed_state_key(source), json.dumps(state, ensure_ascii=False, sort_keys=True), now),
-    )
+    runtime_save_source_state(conn, source, state, prefix="rss_feed")
 
 
 def feed_entry_value(entry: dict, key: str) -> str:
@@ -469,31 +458,20 @@ def filter_items(source: str, items: list[dict]) -> list[dict]:
 
 
 def run_once(feeds: dict[str, str], notify_baseline: bool = False) -> int:
-    enabled_feeds = filter_enabled_source_mapping(feeds)
-    disabled_count = len(feeds) - len(enabled_feeds)
-    feeds = enabled_feeds
-    if disabled_count:
-        print(f"source profile: RSS 跳过 {disabled_count} 个已停用 source。", flush=True)
+    feeds = filter_enabled_mapping_for_run(feeds, label="RSS")
     if not feeds:
-        print("source profile: RSS 没有启用的 source，跳过本轮。", flush=True)
         return 0
     total_new = 0
     with connect_db() as conn:
-        feed_states = {source: load_source_state(conn, source) for source in feeds}
+        feed_states = load_source_states(conn, feeds, prefix="rss_feed")
     max_workers = max(1, int(os.getenv("RSS_FETCH_MAX_WORKERS", "8") or "8"))
     fetched: dict[str, tuple[list[dict], dict, bool]] = {}
     with ThreadPoolExecutor(max_workers=min(max_workers, max(1, len(feeds)))) as executor:
-        skipped_sources: set[str] = set()
+        runnable_sources, skipped_sources = split_sources_by_backoff(feeds, feed_states)
         futures = {
             executor.submit(fetch_feed, source, url, feed_states.get(source, {})): source
-            for source, url in feeds.items()
-            if not should_skip_by_backoff(feed_states.get(source, {}))[0]
+            for source, url in feeds.items() if source in runnable_sources
         }
-        for source in feeds:
-            skip, until = should_skip_by_backoff(feed_states.get(source, {}))
-            if skip:
-                skipped_sources.add(source)
-                print(f"{source}: 源级退避中，跳过抓取直到 {until}。", flush=True)
         for future in as_completed(futures):
             source = futures[future]
             try:
