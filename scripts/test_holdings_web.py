@@ -185,6 +185,8 @@ def test_systemd_actions_are_whitelisted() -> None:
     assert "restart" in unit_actions("surveil-trendforce-page-monitor.service")
     assert "restart_timer" in unit_actions("surveil-china-media.timer")
     assert "run_once" in unit_actions("surveil-china-media.timer")
+    assert "run_once" in unit_actions("surveil-research-collector-shadow.timer")
+    assert RUN_ONCE_TARGETS["surveil-research-collector-shadow.timer"] == "surveil-research-collector-shadow.service"
     assert RUN_ONCE_TARGETS["surveil-china-media.timer"] == "surveil-china-media.service"
     assert unit_actions("surveil-holdings-web.service") == ["status"]
     assert unit_actions("ssh.service") == []
@@ -210,6 +212,16 @@ def test_unit_display_metadata_translates_waiting_timer() -> None:
     assert meta["status_text"] == "等待下次触发"
 
 
+def test_unit_display_metadata_groups_shadow_collectors() -> None:
+    meta = unit_display_metadata(
+        "surveil-news-collector-shadow.timer",
+        {"ActiveState": "active", "SubState": "waiting", "Result": "success"},
+    )
+    assert meta["group"] == "fetching_shadow"
+    assert meta["unit_type"] == "影子定时器"
+    assert meta["group_label"] == "影子采集任务"
+
+
 def main() -> int:
     test_embedded_script_keeps_newline_escapes()
     test_health_page_exposes_service_action_controls()
@@ -221,6 +233,7 @@ def main() -> int:
     test_systemd_actions_are_whitelisted()
     test_unit_display_metadata_translates_oneshot_success()
     test_unit_display_metadata_translates_waiting_timer()
+    test_unit_display_metadata_groups_shadow_collectors()
     print("holdings web checks passed")
     return 0
 

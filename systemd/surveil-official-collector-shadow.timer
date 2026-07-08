@@ -1,0 +1,11 @@
+[Unit]
+Description=Run MarketPulseWire official company collector shadow batch every 30 minutes
+
+[Timer]
+OnBootSec=13min
+OnUnitActiveSec=30min
+Persistent=true
+Unit=surveil-official-collector-shadow.service
+
+[Install]
+WantedBy=timers.target

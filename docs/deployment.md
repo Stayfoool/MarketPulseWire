@@ -99,6 +99,17 @@ Install services and timers:
 ./scripts/install_remote_systemd.sh
 ```
 
+The installer also enables shadow collector timers:
+
+- `surveil-research-collector-shadow.timer`
+- `surveil-official-collector-shadow.timer`
+- `surveil-news-collector-shadow.timer`
+- `surveil-collector-shadow-digest.timer`
+
+These shadow jobs are migration aids. They write JSON/Markdown reports under
+`reports/` and logs under `logs/`; they do not send Feishu messages, do not run
+LLM gates, and do not write production `seen_items` or review tables.
+
 Open the Web workbench through an SSH tunnel:
 
 ```bash

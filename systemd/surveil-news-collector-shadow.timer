@@ -1,0 +1,11 @@
+[Unit]
+Description=Run MarketPulseWire news media collector shadow batch every 10 minutes
+
+[Timer]
+OnBootSec=9min
+OnUnitActiveSec=10min
+Persistent=true
+Unit=surveil-news-collector-shadow.service
+
+[Install]
+WantedBy=timers.target
