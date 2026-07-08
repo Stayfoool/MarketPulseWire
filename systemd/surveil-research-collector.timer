@@ -1,0 +1,12 @@
+[Unit]
+Description=Run MarketPulseWire research and industry-media collector every 5 minutes
+
+[Timer]
+OnActiveSec=2min
+OnBootSec=9min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=surveil-research-collector.service
+
+[Install]
+WantedBy=timers.target
