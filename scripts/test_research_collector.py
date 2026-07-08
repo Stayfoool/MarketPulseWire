@@ -133,11 +133,70 @@ def test_json_report_shape() -> None:
     assert payload["errors"] == []
 
 
+def test_production_collect_delegates_to_existing_pipelines() -> None:
+    calls: list[tuple[str, object, bool]] = []
+    original_run_rss_once = research_collector.run_rss_once
+    original_run_page_once = research_collector.run_page_once
+    original_due_page_sources = research_collector.due_page_sources
+    original_mark_page_sources_checked = research_collector.mark_page_sources_checked
+
+    class Page:
+        name = "trendforce_research_latest"
+
+    page = Page()
+
+    def fake_run_rss_once(feeds: dict[str, str], notify_baseline: bool = False) -> int:
+        calls.append(("rss", feeds, notify_baseline))
+        return 2
+
+    def fake_run_page_once(pages: list[object], notify_baseline: bool = False) -> int:
+        calls.append(("pages", [item.name for item in pages], notify_baseline))
+        return 1
+
+    def fake_due_page_sources(pages: list[object], *, min_interval_seconds: int, force: bool):
+        calls.append(("due", {"min_interval_seconds": min_interval_seconds, "force": force}, False))
+        return pages, []
+
+    def fake_mark_page_sources_checked(pages: list[object]) -> None:
+        calls.append(("mark", [item.name for item in pages], False))
+
+    try:
+        research_collector.run_rss_once = fake_run_rss_once
+        research_collector.run_page_once = fake_run_page_once
+        research_collector.due_page_sources = fake_due_page_sources
+        research_collector.mark_page_sources_checked = fake_mark_page_sources_checked
+        payload = research_collector.collect_production(
+            feeds={"semianalysis": "https://example.com/feed.xml"},
+            page_sources=[page],  # type: ignore[list-item]
+            notify_baseline=True,
+            page_min_interval_seconds=900,
+            force_pages=False,
+        )
+    finally:
+        research_collector.run_rss_once = original_run_rss_once
+        research_collector.run_page_once = original_run_page_once
+        research_collector.due_page_sources = original_due_page_sources
+        research_collector.mark_page_sources_checked = original_mark_page_sources_checked
+
+    assert payload["mode"] == "production"
+    assert payload["wrote_production_seen_items"] is True
+    assert payload["counts"]["rss_new_items"] == 2
+    assert payload["counts"]["page_new_items"] == 1
+    assert payload["counts"]["new_items"] == 3
+    assert calls == [
+        ("rss", {"semianalysis": "https://example.com/feed.xml"}, True),
+        ("due", {"min_interval_seconds": 900, "force": False}, False),
+        ("pages", ["trendforce_research_latest"], True),
+        ("mark", ["trendforce_research_latest"], False),
+    ]
+
+
 def main() -> int:
     test_research_sources_include_expected_groups()
     test_disabled_source_is_filtered()
     test_shadow_collect_rss_does_not_write_prod_seen_items()
     test_json_report_shape()
+    test_production_collect_delegates_to_existing_pipelines()
     print("research collector checks passed")
     return 0
 

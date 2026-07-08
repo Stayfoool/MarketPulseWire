@@ -110,6 +110,16 @@ These shadow jobs are migration aids. They write JSON/Markdown reports under
 `reports/` and logs under `logs/`; they do not send Feishu messages, do not run
 LLM gates, and do not write production `seen_items` or review tables.
 
+The installer also copies the production research/industry-media migration
+unit, but does not enable it automatically:
+
+- `surveil-research-collector.service`
+- `surveil-research-collector.timer`
+
+Use it only during the staged collector migration. In production mode it writes
+the normal `seen_items` / review tables and can send Feishu cards through the
+existing article pipeline.
+
 Open the Web workbench through an SSH tunnel:
 
 ```bash

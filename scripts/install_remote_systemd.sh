@@ -55,6 +55,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-outcome.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-review.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-digest.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-research-collector.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector-shadow.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector-shadow.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-news-collector-shadow.service, \\
@@ -71,6 +72,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-ifind-notice.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-ifind-report.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-jygs-actions.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-research-collector.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector-shadow.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector-shadow.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-news-collector-shadow.timer, \\
@@ -86,6 +88,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block start surveil-ifind-notice.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-ifind-report.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-jygs-actions.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-research-collector.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-research-collector-shadow.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-official-collector-shadow.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-news-collector-shadow.service, \\

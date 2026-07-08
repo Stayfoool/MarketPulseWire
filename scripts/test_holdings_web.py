@@ -185,6 +185,8 @@ def test_systemd_actions_are_whitelisted() -> None:
     assert "restart" in unit_actions("surveil-trendforce-page-monitor.service")
     assert "restart_timer" in unit_actions("surveil-china-media.timer")
     assert "run_once" in unit_actions("surveil-china-media.timer")
+    assert "run_once" in unit_actions("surveil-research-collector.timer")
+    assert RUN_ONCE_TARGETS["surveil-research-collector.timer"] == "surveil-research-collector.service"
     assert "run_once" in unit_actions("surveil-research-collector-shadow.timer")
     assert RUN_ONCE_TARGETS["surveil-research-collector-shadow.timer"] == "surveil-research-collector-shadow.service"
     assert RUN_ONCE_TARGETS["surveil-china-media.timer"] == "surveil-china-media.service"
@@ -222,6 +224,16 @@ def test_unit_display_metadata_groups_shadow_collectors() -> None:
     assert meta["group_label"] == "影子采集任务"
 
 
+def test_unit_display_metadata_includes_research_production_collector() -> None:
+    meta = unit_display_metadata(
+        "surveil-research-collector.timer",
+        {"ActiveState": "active", "SubState": "waiting", "Result": "success"},
+    )
+    assert meta["group"] == "fetching_scheduled"
+    assert meta["unit_type"] == "定时器"
+    assert "5 分钟" in meta["schedule"]
+
+
 def main() -> int:
     test_embedded_script_keeps_newline_escapes()
     test_health_page_exposes_service_action_controls()
@@ -234,6 +246,7 @@ def main() -> int:
     test_unit_display_metadata_translates_oneshot_success()
     test_unit_display_metadata_translates_waiting_timer()
     test_unit_display_metadata_groups_shadow_collectors()
+    test_unit_display_metadata_includes_research_production_collector()
     print("holdings web checks passed")
     return 0
 
