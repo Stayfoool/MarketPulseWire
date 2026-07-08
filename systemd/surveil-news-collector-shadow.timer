@@ -2,6 +2,7 @@
 Description=Run MarketPulseWire news media collector shadow batch every 10 minutes
 
 [Timer]
+OnActiveSec=3min
 OnBootSec=9min
 OnUnitActiveSec=10min
 Persistent=true

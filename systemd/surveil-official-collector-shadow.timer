@@ -2,6 +2,7 @@
 Description=Run MarketPulseWire official company collector shadow batch every 30 minutes
 
 [Timer]
+OnActiveSec=7min
 OnBootSec=13min
 OnUnitActiveSec=30min
 Persistent=true
