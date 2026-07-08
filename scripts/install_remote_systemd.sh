@@ -55,6 +55,10 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-outcome.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-review.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-digest.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-research-collector-shadow.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-official-collector-shadow.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-news-collector-shadow.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-collector-shadow-digest.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-proxy.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-sina-stock-news.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-overseas-media.timer, \\
@@ -67,6 +71,10 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-ifind-notice.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-ifind-report.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-jygs-actions.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-research-collector-shadow.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-official-collector-shadow.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-news-collector-shadow.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-collector-shadow-digest.timer, \\
     \$SYSTEMCTL_BIN --no-block start surveil-sina-stock-news.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-overseas-media.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-china-media.service, \\
@@ -77,7 +85,11 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block start surveil-signal-digest.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-ifind-notice.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-ifind-report.service, \\
-    \$SYSTEMCTL_BIN --no-block start surveil-jygs-actions.service
+    \$SYSTEMCTL_BIN --no-block start surveil-jygs-actions.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-research-collector-shadow.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-official-collector-shadow.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-news-collector-shadow.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-collector-shadow-digest.service
 $REMOTE_SERVICE_USER ALL=(root) NOPASSWD: SURVEIL_WEB_SYSTEMCTL
 SUDOERS
 chmod 0440 \"\$SUDOERS_PATH\"
@@ -95,6 +107,10 @@ systemctl enable --now surveil-signals-extract.timer
 systemctl enable --now surveil-signal-outcome.timer
 systemctl enable --now surveil-signal-review.timer
 systemctl enable --now surveil-signal-digest.timer
+systemctl enable --now surveil-research-collector-shadow.timer
+systemctl enable --now surveil-official-collector-shadow.timer
+systemctl enable --now surveil-news-collector-shadow.timer
+systemctl enable --now surveil-collector-shadow-digest.timer
 systemctl start surveil-stock-relations-import.service || true
 systemctl enable --now surveil-rss-monitor.service
 systemctl enable --now surveil-trendforce-page-monitor.service
@@ -124,6 +140,9 @@ systemctl --no-pager --full status surveil-sina-flash.service || true
 systemctl --no-pager --full status surveil-holdings-web.service || true
 systemctl --no-pager --full status surveil-rss-monitor.service || true
 systemctl --no-pager --full status surveil-trendforce-page-monitor.service || true
+systemctl --no-pager --full status surveil-research-collector-shadow.timer || true
+systemctl --no-pager --full status surveil-official-collector-shadow.timer || true
+systemctl --no-pager --full status surveil-news-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-x-stream.service || true
-echo '已安装 surveil-db-init.service，启用 iFinD 公告、Sina 个股新闻、中国财经媒体、RSS/TrendForce/海外媒体、文章日报、信号抽取/outcome/复盘/复盘日报、持仓 Web UI，并启动新浪快讯常驻服务。iFinD smoke test 可用：systemctl start surveil-ifind-smoke.service'
+echo '已安装 surveil-db-init.service，启用 iFinD 公告、Sina 个股新闻、中国财经媒体、RSS/TrendForce/海外媒体、collector shadow timers、文章日报、信号抽取/outcome/复盘/复盘日报、持仓 Web UI，并启动新浪快讯常驻服务。iFinD smoke test 可用：systemctl start surveil-ifind-smoke.service'
 "

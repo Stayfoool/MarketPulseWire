@@ -1,0 +1,11 @@
+[Unit]
+Description=Run MarketPulseWire research collector shadow batch every 15 minutes
+
+[Timer]
+OnBootSec=11min
+OnUnitActiveSec=15min
+Persistent=true
+Unit=surveil-research-collector-shadow.service
+
+[Install]
+WantedBy=timers.target

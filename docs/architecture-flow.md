@@ -138,6 +138,13 @@ flowchart LR
         JYGSSvc["surveil-jygs-actions<br/>oneshot timer<br/>jygs_actions.py"]
     end
 
+    subgraph ShadowServices["Shadow Collector Services"]
+        ResearchShadow["surveil-research-collector-shadow<br/>oneshot timer / 15 min<br/>research_collector.py"]
+        OfficialShadow["surveil-official-collector-shadow<br/>oneshot timer / 30 min<br/>official_collector.py"]
+        NewsShadow["surveil-news-collector-shadow<br/>oneshot timer / 10 min<br/>news_collector.py"]
+        ShadowDigest["surveil-collector-shadow-digest<br/>oneshot timer / 21:05<br/>collector_shadow_digest.py"]
+    end
+
     subgraph ProcessingServices["Non-Fetching Processing and Infrastructure"]
         SignalExtractSvc["surveil-signals-extract<br/>oneshot timer / 10 min"]
         OutcomeSvc["surveil-signal-outcome<br/>oneshot timer / 16:20"]
@@ -150,12 +157,19 @@ flowchart LR
 
     Serenity --> XSvc
     SemiAnalysis --> RSSSvc
+    SemiAnalysis --> ResearchShadow
     TrendRSS --> RSSSvc
+    TrendRSS --> ResearchShadow
     CompanyFeeds --> RSSSvc
+    CompanyFeeds --> OfficialShadow
     TrendPages --> TrendSvc
+    TrendPages --> ResearchShadow
     SemiPR --> TrendSvc
+    SemiPR --> ResearchShadow
     OverseasFeeds --> OverseasSvc
+    OverseasFeeds --> ResearchShadow
     Domestic --> ChinaSvc
+    Domestic --> NewsShadow
     Sina --> SinaFlashSvc
     Sina --> SinaStockSvc
     IfindSource --> IfindSvc
@@ -165,6 +179,9 @@ flowchart LR
     TrendSvc --> SignalExtractSvc
     OverseasSvc --> SignalExtractSvc
     ChinaSvc --> SignalExtractSvc
+    ResearchShadow --> ShadowDigest
+    OfficialShadow --> ShadowDigest
+    NewsShadow --> ShadowDigest
     SignalExtractSvc --> OutcomeSvc --> ReviewSvc --> DigestSvc
 ```
 
@@ -184,8 +201,11 @@ The health page uses the same high-level grouping: fetching services are separat
 | `surveil-ifind-notice.timer` -> `.service` | iFinD notices/filings for enabled holdings | Recent notices over the configured lookback window | Holdings universe, iFinD notice kind, event dedupe; PDF text extraction when available | `oneshot` batch | 08:00 and 20:00 | `event_pipeline` | No | No |
 | `surveil-ifind-report.timer` -> `.service` | iFinD research/report data pool, if account permissions allow | Recent configured report formulas/report names | Disabled unless report env config is present; current deployment keeps it off when iFinD permission has no report data | `oneshot` batch | 08:00 and 20:00 when enabled | `event_pipeline` / report adapter path | No | No |
 | `surveil-jygs-actions.timer` -> `.service` | JYGS action/limit-up feed, currently low priority | Intraday action pool entries when enabled | Requires valid login cookie/API state; `ENABLE_JYGS_TIMER=1` gates the timer; LLM prediction path for selected events | `oneshot` batch | 12:30 and 16:00 when enabled | JYGS-specific event/prediction path, not article gate | No | No |
+| `surveil-research-collector-shadow.timer` -> `.service` | SemiAnalysis, TrendForce RSS/pages, SEMI/PRNewswire, DIGITIMES, Nikkei xTECH, The Elec | Same source family as the target research/industry-media collector | Source profile enabled filtering; writes JSON shadow reports only | `oneshot` shadow batch | Every 15 minutes | No production pipeline; report-only comparison | No | No |
+| `surveil-official-collector-shadow.timer` -> `.service` | OpenAI, NVIDIA, Samsung, SK hynix, Micron official feeds | Official RSS/Atom feed candidates | Source profile enabled filtering; compares sampled candidates to existing `seen_items` / `official_news_reviews` | `oneshot` shadow batch | Every 30 minutes | No production pipeline; report-only comparison | No | No |
+| `surveil-news-collector-shadow.timer` -> `.service` | First Yicai, CLS, Star Market Daily, Jin10 | Domestic public news-media candidates | Source profile enabled filtering; focus/mandatory flags only; does not touch CLS production poll state | `oneshot` shadow batch | Every 10 minutes | No production pipeline; report-only comparison | No | No |
 
-Non-fetching runtime units are intentionally omitted from this table: `surveil-signals-extract`, `surveil-signal-outcome`, `surveil-signal-review`, `surveil-signal-digest`, `surveil-article-daily`, `surveil-holdings-web`, and `surveil-proxy` operate on existing state, UI, logs, proxying, or post-processing rather than fetching new market information.
+Non-fetching runtime units are intentionally omitted from this table: `surveil-signals-extract`, `surveil-signal-outcome`, `surveil-signal-review`, `surveil-signal-digest`, `surveil-article-daily`, `surveil-collector-shadow-digest`, `surveil-holdings-web`, and `surveil-proxy` operate on existing state, UI, logs, proxying, or post-processing rather than fetching new market information.
 
 The Web workbench exposes a read-only `source_profiles.py` catalog above these historical units. It groups sources into the six target categories used for the cleanup plan: X / Serenity, Research / industry media, official company sources, news media, Sina portfolio stock news, and iFinD company disclosures. This source-profile view is a UI and observability layer first; it does not yet rename or merge the underlying systemd collectors.
 

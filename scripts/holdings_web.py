@@ -65,6 +65,10 @@ SERVICE_UNITS = [
     "surveil-signal-outcome.service",
     "surveil-signal-review.service",
     "surveil-signal-digest.service",
+    "surveil-research-collector-shadow.service",
+    "surveil-official-collector-shadow.service",
+    "surveil-news-collector-shadow.service",
+    "surveil-collector-shadow-digest.service",
     "surveil-holdings-web.service",
     "surveil-proxy.service",
 ]
@@ -81,6 +85,10 @@ TIMER_UNITS = [
     "surveil-ifind-notice.timer",
     "surveil-ifind-report.timer",
     "surveil-jygs-actions.timer",
+    "surveil-research-collector-shadow.timer",
+    "surveil-official-collector-shadow.timer",
+    "surveil-news-collector-shadow.timer",
+    "surveil-collector-shadow-digest.timer",
 ]
 
 RUN_ONCE_TARGETS = {
@@ -95,6 +103,10 @@ RUN_ONCE_TARGETS = {
     "surveil-ifind-notice.timer": "surveil-ifind-notice.service",
     "surveil-ifind-report.timer": "surveil-ifind-report.service",
     "surveil-jygs-actions.timer": "surveil-jygs-actions.service",
+    "surveil-research-collector-shadow.timer": "surveil-research-collector-shadow.service",
+    "surveil-official-collector-shadow.timer": "surveil-official-collector-shadow.service",
+    "surveil-news-collector-shadow.timer": "surveil-news-collector-shadow.service",
+    "surveil-collector-shadow-digest.timer": "surveil-collector-shadow-digest.service",
 }
 
 ALLOWED_SYSTEMD_UNITS = set(SERVICE_UNITS) | set(TIMER_UNITS) | set(RUN_ONCE_TARGETS.values())
@@ -110,6 +122,10 @@ UNIT_METADATA = {
     "surveil-ifind-notice.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 08:00 / 20:00"},
     "surveil-ifind-report.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 08:00 / 20:00"},
     "surveil-jygs-actions.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 12:30 / 16:00"},
+    "surveil-research-collector-shadow.service": {"group": "fetching_shadow", "type": "影子采集", "schedule": "timer 每 15 分钟"},
+    "surveil-official-collector-shadow.service": {"group": "fetching_shadow", "type": "影子采集", "schedule": "timer 每 30 分钟"},
+    "surveil-news-collector-shadow.service": {"group": "fetching_shadow", "type": "影子采集", "schedule": "timer 每 10 分钟"},
+    "surveil-collector-shadow-digest.service": {"group": "processing_scheduled", "type": "影子报告", "schedule": "timer 21:05"},
     "surveil-article-daily.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 20:50"},
     "surveil-signals-extract.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 每 10 分钟"},
     "surveil-signal-outcome.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 交易日 16:20"},
@@ -123,6 +139,10 @@ UNIT_METADATA = {
     "surveil-ifind-notice.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "08:00 / 20:00"},
     "surveil-ifind-report.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "08:00 / 20:00"},
     "surveil-jygs-actions.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "12:30 / 16:00"},
+    "surveil-research-collector-shadow.timer": {"group": "fetching_shadow", "type": "影子定时器", "schedule": "每 15 分钟"},
+    "surveil-official-collector-shadow.timer": {"group": "fetching_shadow", "type": "影子定时器", "schedule": "每 30 分钟"},
+    "surveil-news-collector-shadow.timer": {"group": "fetching_shadow", "type": "影子定时器", "schedule": "每 10 分钟"},
+    "surveil-collector-shadow-digest.timer": {"group": "processing_scheduled", "type": "影子报告定时器", "schedule": "21:05"},
     "surveil-article-daily.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "20:50"},
     "surveil-signals-extract.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "每 10 分钟"},
     "surveil-signal-outcome.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "交易日 16:20"},
@@ -133,6 +153,7 @@ UNIT_METADATA = {
 UNIT_GROUP_LABELS = {
     "fetching_persistent": "常驻采集服务",
     "fetching_scheduled": "定时采集任务",
+    "fetching_shadow": "影子采集任务",
     "processing_scheduled": "非抓取处理/日报任务",
     "infrastructure": "基础设施",
     "other": "其他",
@@ -144,6 +165,10 @@ LOG_FILES = [
     "trendforce-page-monitor.err.log",
     "overseas-media.err.log",
     "china-media.err.log",
+    "research-collector-shadow.err.log",
+    "official-collector-shadow.err.log",
+    "news-collector-shadow.err.log",
+    "collector-shadow-digest.err.log",
     "sina-flash.err.log",
     "sina-stock-news.err.log",
     "ifind-notice.err.log",

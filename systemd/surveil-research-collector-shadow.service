@@ -1,0 +1,14 @@
+[Unit]
+Description=MarketPulseWire research collector shadow batch
+After=network-online.target surveil-db-init.service surveil-proxy.service
+Wants=network-online.target surveil-proxy.service
+
+[Service]
+Type=oneshot
+User=surveil
+WorkingDirectory=/opt/surveil
+EnvironmentFile=-/opt/surveil/.env
+EnvironmentFile=-/opt/surveil/proxy.env
+ExecStart=/opt/surveil/.venv/bin/python /opt/surveil/scripts/research_collector.py --write-report --limit 5 --save-shadow-state
+StandardOutput=append:/opt/surveil/logs/research-collector-shadow.log
+StandardError=append:/opt/surveil/logs/research-collector-shadow.err.log

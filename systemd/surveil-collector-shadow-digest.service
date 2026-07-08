@@ -1,0 +1,12 @@
+[Unit]
+Description=MarketPulseWire collector shadow digest
+After=surveil-db-init.service
+
+[Service]
+Type=oneshot
+User=surveil
+WorkingDirectory=/opt/surveil
+EnvironmentFile=-/opt/surveil/.env
+ExecStart=/opt/surveil/.venv/bin/python /opt/surveil/scripts/collector_shadow_digest.py --hours 24 --write-report
+StandardOutput=append:/opt/surveil/logs/collector-shadow-digest.log
+StandardError=append:/opt/surveil/logs/collector-shadow-digest.err.log
