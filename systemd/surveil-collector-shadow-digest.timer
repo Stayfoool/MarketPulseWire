@@ -2,6 +2,7 @@
 Description=Run MarketPulseWire collector shadow digest daily
 
 [Timer]
+OnActiveSec=15min
 OnCalendar=*-*-* 21:05:00
 Persistent=true
 Unit=surveil-collector-shadow-digest.service
