@@ -37,6 +37,7 @@ jobs:
           python scripts/test_sina_stock_news.py
           python scripts/test_china_finance_media_monitor.py
           python scripts/test_collector_runtime.py
+          python scripts/test_news_collector.py
           python scripts/test_official_collector.py
           python scripts/test_research_collector.py
           python scripts/test_rss_monitor_fetch.py

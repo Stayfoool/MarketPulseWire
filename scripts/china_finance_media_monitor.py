@@ -252,9 +252,9 @@ def parse_first_finance_items() -> list[dict[str, Any]]:
     return items
 
 
-def parse_cls_items() -> list[dict[str, Any]]:
+def parse_cls_items(*, persist_state: bool = True, force: bool = False) -> list[dict[str, Any]]:
     source = "cls_telegraph_api"
-    if should_skip_cls_poll(source):
+    if should_skip_cls_poll(source, force=force):
         return []
     params = {
         "app": "CailianpressWeb",
@@ -281,7 +281,8 @@ def parse_cls_items() -> list[dict[str, Any]]:
     except Exception as exc:
         print(f"财联社公开前端 API 读取失败：{exc}", flush=True)
         raise
-    save_source_state(source, {"last_fetch_at": datetime.now(timezone.utc).isoformat()})
+    if persist_state:
+        save_source_state(source, {"last_fetch_at": datetime.now(timezone.utc).isoformat()})
 
     if not isinstance(data, dict):
         raise RuntimeError("财联社公开前端 API 响应格式异常：root 不是 JSON object")
@@ -459,11 +460,11 @@ def parse_jin10_items() -> list[dict[str, Any]]:
     return items
 
 
-def source_items(source: str) -> list[dict[str, Any]]:
+def source_items(source: str, *, persist_state: bool = True, force: bool = False) -> list[dict[str, Any]]:
     if source == "yicai_brief":
         return parse_first_finance_items()
     if source == "cls_telegraph_api":
-        return parse_cls_items()
+        return parse_cls_items(persist_state=persist_state, force=force)
     if source == "star_market_daily_subject":
         return parse_star_market_daily_subject_items()
     if source == "jin10_rsshub_important":
