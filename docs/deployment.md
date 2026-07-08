@@ -120,6 +120,14 @@ Use it only during the staged collector migration. In production mode it writes
 the normal `seen_items` / review tables and can send Feishu cards through the
 existing article pipeline.
 
+During the research collector cutover, keep the old RSS monitor for official
+company feeds by setting this on the server and restarting
+`surveil-rss-monitor.service`:
+
+```bash
+RSS_MONITOR_EXCLUDE_PROFILE_CATEGORIES=research_industry_media
+```
+
 Open the Web workbench through an SSH tunnel:
 
 ```bash

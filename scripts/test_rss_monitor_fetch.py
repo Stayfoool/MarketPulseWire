@@ -210,6 +210,28 @@ def test_pipeline_health_helpers() -> None:
         conn.close()
 
 
+def test_profile_category_filter_supports_research_cutover() -> None:
+    feeds = {
+        "semianalysis": "https://example.com/semianalysis.xml",
+        "openai_news": "https://example.com/openai.xml",
+        "unknown_source": "https://example.com/unknown.xml",
+    }
+    official_only = rss_monitor.filter_feeds_by_profile_categories(
+        feeds,
+        include_categories={"official_company"},
+    )
+    assert official_only == {"openai_news": "https://example.com/openai.xml"}
+
+    without_research = rss_monitor.filter_feeds_by_profile_categories(
+        feeds,
+        exclude_categories={"research_industry_media"},
+    )
+    assert without_research == {
+        "openai_news": "https://example.com/openai.xml",
+        "unknown_source": "https://example.com/unknown.xml",
+    }
+
+
 def main() -> int:
     test_feedparser_parses_rss_atom_and_rdf()
     test_feed_state_roundtrip()
@@ -219,6 +241,7 @@ def main() -> int:
     test_source_health_recovery_respects_alert_cooldown()
     test_source_backoff_state_roundtrip()
     test_pipeline_health_helpers()
+    test_profile_category_filter_supports_research_cutover()
     print("rss monitor fetch/state checks passed")
     return 0
 

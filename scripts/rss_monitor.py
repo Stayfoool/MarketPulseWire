@@ -60,6 +60,7 @@ from trendforce_sources import DEFAULT_RSS_FEEDS
 from x_check import load_env
 from source_backoff import backoff_state_after_failure, clear_backoff_state
 from source_health import record_source_failure, record_source_success
+from source_profiles import SOURCE_PROFILE_CONFIG_PATH, runtime_profile_map
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -536,6 +537,52 @@ def parse_feed_args(feed_args: list[str]) -> dict[str, str]:
     return feeds
 
 
+def split_filter_values(*values: str | list[str] | tuple[str, ...] | None) -> set[str]:
+    parsed: set[str] = set()
+    for value in values:
+        if not value:
+            continue
+        if isinstance(value, str):
+            raw_values = [value]
+        else:
+            raw_values = list(value)
+        for raw in raw_values:
+            parsed.update(part.strip() for part in str(raw or "").split(",") if part.strip())
+    return parsed
+
+
+def filter_feeds_by_profile_categories(
+    feeds: dict[str, str],
+    *,
+    include_categories: set[str] | None = None,
+    exclude_categories: set[str] | None = None,
+) -> dict[str, str]:
+    include_categories = include_categories or set()
+    exclude_categories = exclude_categories or set()
+    if not include_categories and not exclude_categories:
+        return feeds
+
+    profiles = runtime_profile_map(config_path=SOURCE_PROFILE_CONFIG_PATH)
+    filtered: dict[str, str] = {}
+    skipped: list[str] = []
+    for source, url in feeds.items():
+        category = str(profiles.get(source, {}).get("category") or "")
+        if include_categories and category not in include_categories:
+            skipped.append(source)
+            continue
+        if exclude_categories and category in exclude_categories:
+            skipped.append(source)
+            continue
+        filtered[source] = url
+    if skipped:
+        print(
+            "RSS monitor source category filter: "
+            f"跳过 {len(skipped)} 个 source：{', '.join(skipped[:12])}",
+            flush=True,
+        )
+    return filtered
+
+
 def main() -> int:
     load_env(ENV_PATH)
     config = llm_config()
@@ -548,8 +595,30 @@ def main() -> int:
     parser.add_argument("--feed", action="append", default=[], help="RSS feed as name=url. Repeatable.")
     parser.add_argument("--interval", type=int, default=0, help="Polling interval in seconds. 0 means run once.")
     parser.add_argument("--notify-baseline", action="store_true", help="首次建立基线时也发送通知。默认不发送旧条目。")
+    parser.add_argument(
+        "--include-profile-category",
+        action="append",
+        default=[],
+        help="只运行指定 source profile category，可重复或用逗号分隔。",
+    )
+    parser.add_argument(
+        "--exclude-profile-category",
+        action="append",
+        default=[],
+        help="排除指定 source profile category，可重复或用逗号分隔。",
+    )
     args = parser.parse_args()
-    feeds = parse_feed_args(args.feed)
+    feeds = filter_feeds_by_profile_categories(
+        parse_feed_args(args.feed),
+        include_categories=split_filter_values(
+            args.include_profile_category,
+            os.getenv("RSS_MONITOR_INCLUDE_PROFILE_CATEGORIES"),
+        ),
+        exclude_categories=split_filter_values(
+            args.exclude_profile_category,
+            os.getenv("RSS_MONITOR_EXCLUDE_PROFILE_CATEGORIES"),
+        ),
+    )
     notify_baseline = args.notify_baseline or os.getenv("SURVEIL_NOTIFY_BASELINE", "") == "1"
 
     if args.interval <= 0:
