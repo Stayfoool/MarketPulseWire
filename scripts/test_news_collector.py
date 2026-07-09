@@ -173,12 +173,42 @@ def test_json_report_shape() -> None:
     assert payload["errors"] == []
 
 
+def test_production_collect_delegates_to_existing_china_media_pipeline() -> None:
+    calls: list[tuple[list[str], bool]] = []
+    original_run_once = news_collector.china_media.run_once
+
+    def fake_run_once(sources: list[str], notify_baseline: bool = False) -> int:
+        calls.append((sources, notify_baseline))
+        return 3
+
+    try:
+        news_collector.china_media.run_once = fake_run_once
+        payload = news_collector.collect_production(
+            sources={
+                "yicai_brief": "https://example.com/yicai",
+                "cls_telegraph_api": "https://example.com/cls",
+            },
+            notify_baseline=True,
+        )
+    finally:
+        news_collector.china_media.run_once = original_run_once
+
+    assert payload["mode"] == "production"
+    assert payload["wrote_production_seen_items"] is True
+    assert payload["wrote_production_reviews"] is True
+    assert payload["touched_production_source_state"] is True
+    assert payload["counts"]["sources"] == 2
+    assert payload["counts"]["new_items"] == 3
+    assert calls == [(["yicai_brief", "cls_telegraph_api"], True)]
+
+
 def main() -> int:
     test_news_sources_include_expected_batch_and_exclude_sina_flash()
     test_disabled_source_is_filtered()
     test_shadow_collect_does_not_write_prod_seen_reviews_or_source_state()
     test_respect_prod_cls_state_passes_force_false()
     test_json_report_shape()
+    test_production_collect_delegates_to_existing_china_media_pipeline()
     print("news collector checks passed")
     return 0
 

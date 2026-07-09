@@ -1,0 +1,12 @@
+[Unit]
+Description=Run MarketPulseWire domestic news media collector every 2 minutes
+
+[Timer]
+OnActiveSec=2min
+OnBootSec=8min
+OnUnitActiveSec=2min
+Persistent=true
+Unit=surveil-news-collector.service
+
+[Install]
+WantedBy=timers.target

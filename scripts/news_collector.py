@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Shadow collector for domestic news-media sources.
+"""Collector for domestic news-media sources.
 
 This consolidates the current first batch of news-media feeds
 (`yicai_brief`, `cls_telegraph_api`, `star_market_daily_subject`,
-`jin10_rsshub_important`) without changing production behavior. It does not
-send Feishu cards, does not run LLM review, and does not write production
-seen/review tables.
+`jin10_rsshub_important`). By default it runs in shadow mode: it does not send
+Feishu cards, does not run LLM review, and does not write production
+seen/review tables. The explicit ``--production`` mode delegates to the
+existing china_finance_media_monitor production path so behavior stays aligned
+during systemd migration.
 """
 
 from __future__ import annotations
@@ -269,16 +271,59 @@ def collect_shadow(
     }
 
 
+def collect_production(
+    *,
+    sources: dict[str, str],
+    notify_baseline: bool = False,
+) -> dict[str, Any]:
+    started_at = utc_now()
+    errors: list[dict[str, str]] = []
+    new_items = 0
+    if sources:
+        try:
+            new_items = china_media.run_once(list(sources), notify_baseline=notify_baseline)
+        except Exception as exc:  # noqa: BLE001 - report the batch failure clearly
+            errors.append({"stage": "news_media", "error": f"{type(exc).__name__}: {exc}"})
+    return {
+        "ok": not errors,
+        "mode": "production",
+        "sent_feishu": True,
+        "ran_llm_review": True,
+        "wrote_production_seen_items": True,
+        "wrote_production_reviews": True,
+        "touched_production_source_state": True,
+        "started_at": started_at,
+        "finished_at": utc_now(),
+        "counts": {
+            "sources": len(sources),
+            "new_items": new_items,
+        },
+        "errors": errors,
+    }
+
+
 def write_report(payload: dict[str, Any], report_dir: Path = REPORT_DIR) -> Path:
     report_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    path = report_dir / f"news-collector-shadow-{stamp}.json"
+    mode = "production" if payload.get("mode") == "production" else "shadow"
+    path = report_dir / f"news-collector-{mode}-{stamp}.json"
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
 
 
 def print_text_summary(payload: dict[str, Any]) -> None:
     counts = payload.get("counts", {})
+    if payload.get("mode") == "production":
+        print(
+            "news_collector production: "
+            f"sources={counts.get('sources', 0)} "
+            f"new_items={counts.get('new_items', 0)} "
+            f"errors={len(payload.get('errors', []))}",
+            flush=True,
+        )
+        for error in payload.get("errors", []):
+            print(f"[ERR] {error.get('stage')}: {error.get('error')}", flush=True)
+        return
     print(
         "news_collector shadow: "
         f"sources={counts.get('sources', 0)} "
@@ -305,8 +350,10 @@ def print_text_summary(payload: dict[str, Any]) -> None:
 
 def main() -> int:
     load_env(ENV_PATH)
-    parser = argparse.ArgumentParser(description="Shadow-run domestic news-media collector.")
+    parser = argparse.ArgumentParser(description="Run domestic news-media collector.")
     parser.add_argument("--source", action="append", default=[], help="只跑指定 source id，可重复。")
+    parser.add_argument("--production", action="store_true", help="运行生产链路：入库、article gate、Skeptic/Tavily、飞书推送。")
+    parser.add_argument("--notify-baseline", action="store_true", help="生产模式下首次建立基线时也发送通知。默认不发送旧条目。")
     parser.add_argument("--limit", type=int, default=5, help="每个 source 输出候选条数；0 表示不限制。")
     parser.add_argument("--json", action="store_true", help="输出完整 JSON。")
     parser.add_argument("--write-report", action="store_true", help="把 JSON 报告写入 reports/。")
@@ -321,13 +368,19 @@ def main() -> int:
     args = parser.parse_args()
 
     sources = selected_sources(args.source)
-    payload = collect_shadow(
-        sources=sources,
-        limit=max(0, args.limit),
-        compare_seen=not args.no_compare_seen,
-        compare_reviews=not args.no_compare_reviews,
-        respect_prod_cls_state=args.respect_prod_cls_state,
-    )
+    if args.production:
+        payload = collect_production(
+            sources=sources,
+            notify_baseline=args.notify_baseline or os.getenv("SURVEIL_NOTIFY_BASELINE", "") == "1",
+        )
+    else:
+        payload = collect_shadow(
+            sources=sources,
+            limit=max(0, args.limit),
+            compare_seen=not args.no_compare_seen,
+            compare_reviews=not args.no_compare_reviews,
+            respect_prod_cls_state=args.respect_prod_cls_state,
+        )
     if args.write_report:
         payload["report_path"] = str(write_report(payload))
     if args.json:

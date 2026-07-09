@@ -138,6 +138,7 @@ flowchart LR
         JYGSSvc["surveil-jygs-actions<br/>oneshot timer<br/>jygs_actions.py"]
         ResearchProd["surveil-research-collector<br/>oneshot timer / 5 min<br/>research_collector.py<br/>migration target"]
         OfficialProd["surveil-official-collector<br/>oneshot timer / 10 min<br/>official_collector.py<br/>migration target"]
+        NewsProd["surveil-news-collector<br/>oneshot timer / 2 min<br/>news_collector.py<br/>migration target"]
     end
 
     subgraph ShadowServices["Shadow Collector Services"]
@@ -177,6 +178,7 @@ flowchart LR
     OverseasFeeds -. migration .-> ResearchProd
     OverseasFeeds --> ResearchShadow
     Domestic --> ChinaSvc
+    Domestic -. migration .-> NewsProd
     Domestic --> NewsShadow
     Sina --> SinaFlashSvc
     Sina --> SinaStockSvc
@@ -189,6 +191,7 @@ flowchart LR
     ResearchProd -. when enabled .-> SignalExtractSvc
     OfficialProd -. when enabled .-> SignalExtractSvc
     ChinaSvc --> SignalExtractSvc
+    NewsProd -. when enabled .-> SignalExtractSvc
     ResearchShadow --> ShadowDigest
     OfficialShadow --> ShadowDigest
     NewsShadow --> ShadowDigest
@@ -208,6 +211,7 @@ The health page uses the same high-level grouping: fetching services are separat
 | `surveil-research-collector.timer` -> `.service` | Migration target for SemiAnalysis, TrendForce RSS/pages, SEMI/PRNewswire, DIGITIMES, Nikkei xTECH, The Elec | Same research/industry-media source family as the three historical collectors | Source profile enabled filtering; RSS runs every batch; page sources are internally throttled to 15 minutes by default | `oneshot` batch | Timer every 5 minutes; page cadence default 900 seconds | Production mode delegates to existing `rss_monitor.run_once` and `trendforce_page_monitor.run_once`, so it keeps the same `article_gate`, hardline, Skeptic, Tavily, Feishu, and `seen_items` behavior | Yes | Yes, only through Skeptic |
 | `surveil-official-collector.timer` -> `.service` | Migration target for OpenAI, NVIDIA, Samsung, SK hynix, Micron official feeds | Official RSS/Atom feed entries and public article bodies when accessible | Source profile enabled filtering; official-company source list only; ordinary marketing/newsroom items are downgraded by `official_news_gate` | `oneshot` batch | Every 10 minutes | Production mode delegates to existing `rss_monitor.run_once`, so it keeps the same `official_news_gate`, hardline, Skeptic, Tavily, Feishu, and `official_news_reviews` behavior | Yes | Yes, only through Skeptic |
 | `surveil-china-media.timer` -> `.service` | First Yicai, CLS public front-end roll API, Jin10 public/RSSHub important feed, Star Market Daily | Public flash/news/list entries from configured domestic sources | Source-specific parsers; macro policy override for CPI/PCE/NFP/Fed-relevant items; mandatory Yicai morning brief rule | `oneshot` batch | Every 2 minutes | `article_gate` | Yes | Yes, only through Skeptic |
+| `surveil-news-collector.timer` -> `.service` | Migration target for First Yicai, CLS public front-end roll API, Jin10 public/RSSHub important feed, Star Market Daily | Same domestic news-media source family as `surveil-china-media`; Sina flash remains a separate high-frequency persistent service for now | Source profile enabled filtering; production mode delegates to `china_finance_media_monitor.run_once`, preserving CLS state, backoff, macro override, mandatory Yicai morning brief, Skeptic, Tavily, Feishu, and `article_reviews` behavior | `oneshot` batch | Every 2 minutes | `article_gate` through the existing China media pipeline | Yes | Yes, only through Skeptic |
 | `surveil-sina-flash.service` | Sina Finance 7x24 flash API or optional Sina ZY provider | All fetched flash rows for configured tags/provider page | Match enabled holdings by code/name/aliases or macro policy line; dedupe into `events` | `simple` persistent | Script loop, default `SINA_FLASH_POLL_SECONDS=15` seconds | `event_pipeline` (`analyze_event` / `maybe_deliver_event`) | No | No |
 | `surveil-sina-stock-news.timer` -> `.service` | Sina per-stock public news page or optional Sina ZY stock news provider | For each enabled holding, latest `SINA_STOCK_NEWS_PER_STOCK_LIMIT` items, default 12 | Filter announcement-like items, AI-generated pages, holding exclude keywords; direct mention/business keyword pass; ambiguous items use relevance LLM | `oneshot` batch | Every 30 minutes | `event_pipeline` after relevance filter and optional article-body fetch | No; current guard is relevance LLM + freshness hint | No |
 | `surveil-ifind-notice.timer` -> `.service` | iFinD notices/filings for enabled holdings | Recent notices over the configured lookback window | Holdings universe, iFinD notice kind, event dedupe; PDF text extraction when available | `oneshot` batch | 08:00 and 20:00 | `event_pipeline` | No | No |
