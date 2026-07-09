@@ -146,11 +146,37 @@ def test_json_report_shape() -> None:
     assert payload["errors"] == []
 
 
+def test_production_collect_delegates_to_existing_rss_pipeline() -> None:
+    calls: list[tuple[dict[str, str], bool]] = []
+    original_run_rss_once = official_collector.run_rss_once
+
+    def fake_run_rss_once(feeds: dict[str, str], notify_baseline: bool = False) -> int:
+        calls.append((feeds, notify_baseline))
+        return 2
+
+    try:
+        official_collector.run_rss_once = fake_run_rss_once
+        payload = official_collector.collect_production(
+            feeds={"nvidia_blog": "https://example.com/feed.xml"},
+            notify_baseline=True,
+        )
+    finally:
+        official_collector.run_rss_once = original_run_rss_once
+
+    assert payload["mode"] == "production"
+    assert payload["wrote_production_seen_items"] is True
+    assert payload["wrote_production_reviews"] is True
+    assert payload["counts"]["rss_sources"] == 1
+    assert payload["counts"]["new_items"] == 2
+    assert calls == [({"nvidia_blog": "https://example.com/feed.xml"}, True)]
+
+
 def main() -> int:
     test_official_sources_include_expected_company_feeds()
     test_disabled_source_is_filtered()
     test_shadow_collect_rss_does_not_write_prod_seen_or_reviews()
     test_json_report_shape()
+    test_production_collect_delegates_to_existing_rss_pipeline()
     print("official collector checks passed")
     return 0
 

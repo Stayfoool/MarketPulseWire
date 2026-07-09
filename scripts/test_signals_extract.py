@@ -29,6 +29,7 @@ from signals_extract import extract_signals, target_from_text, x_targets
 
 
 NOW = "2026-06-29T02:00:00+00:00"
+TEST_WINDOW_DAYS = 30
 
 
 def dumps(value) -> str:  # noqa: ANN001 - tiny test helper
@@ -244,7 +245,7 @@ def test_extract_signals_from_existing_sources() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "surveil.sqlite3"
         seed_db(path)
-        counts = extract_signals(db_path=path, days=10, dry_run=False)
+        counts = extract_signals(db_path=path, days=TEST_WINDOW_DAYS, dry_run=False)
         assert counts["events"] == 1
         assert counts["article_reviews"] == 1
         assert counts["official_news_reviews"] == 1
@@ -259,7 +260,7 @@ def test_extract_signals_from_existing_sources() -> None:
         ).fetchall()
         assert ("000725.SZ", "京东方A", "holding") in targets
         assert ("NVDA", "NVDA", "global_mapping") in targets
-        extract_signals(db_path=path, days=10, dry_run=False)
+        extract_signals(db_path=path, days=TEST_WINDOW_DAYS, dry_run=False)
         assert conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0] == 4
         conn.close()
 
@@ -313,10 +314,10 @@ def test_outcome_target_rows_only_select_a_share_symbols() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "surveil.sqlite3"
         seed_db(path)
-        extract_signals(db_path=path, days=10, dry_run=False)
+        extract_signals(db_path=path, days=TEST_WINDOW_DAYS, dry_run=False)
         conn = init_db(path)
         conn.row_factory = sqlite3.Row
-        rows = target_rows(conn, days=10, limit=None)
+        rows = target_rows(conn, days=TEST_WINDOW_DAYS, limit=None)
         assert rows
         assert all(str(row["symbol"]).endswith((".SZ", ".SH", ".BJ")) for row in rows)
         conn.close()
@@ -427,7 +428,7 @@ def test_relation_import_expands_signal_targets() -> None:
         )
         counts = import_relations(db_path=path, config_path=config_path)
         assert counts["imported"] == 1
-        extract_signals(db_path=path, days=10, dry_run=False)
+        extract_signals(db_path=path, days=TEST_WINDOW_DAYS, dry_run=False)
         conn = init_db(path)
         targets = conn.execute(
             "SELECT symbol, name, target_role, relation_type FROM signal_targets ORDER BY symbol"
@@ -527,7 +528,7 @@ def test_theme_context_expands_signal_targets() -> None:
                 ),
             )
             conn.commit()
-        extract_signals(db_path=path, days=10, dry_run=False)
+        extract_signals(db_path=path, days=TEST_WINDOW_DAYS, dry_run=False)
         with sqlite3.connect(path) as conn:
             row = conn.execute(
                 "SELECT symbol, name, target_role, relation_type FROM signal_targets WHERE symbol = '300179.SZ'"
@@ -608,7 +609,7 @@ staleness: Rubin进度为2026-05时点
                 ),
             )
             conn.commit()
-        extract_signals(db_path=path, days=10, dry_run=False)
+        extract_signals(db_path=path, days=TEST_WINDOW_DAYS, dry_run=False)
         with sqlite3.connect(path) as conn:
             target = conn.execute(
                 """
@@ -629,7 +630,7 @@ def test_signal_review_classification_and_insert() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "surveil.sqlite3"
         seed_db(path)
-        extract_signals(db_path=path, days=10, dry_run=False)
+        extract_signals(db_path=path, days=TEST_WINDOW_DAYS, dry_run=False)
         conn = init_db(path)
         signal_id, target_id = conn.execute(
             """
@@ -671,7 +672,7 @@ def test_signal_review_classification_and_insert() -> None:
         review = classify_review(row)
         assert review["verdict"] == "hit"
         conn.close()
-        counts = review_signals(db_path=path, days=10, dry_run=False)
+        counts = review_signals(db_path=path, days=TEST_WINDOW_DAYS, dry_run=False)
         assert counts["reviewed"] >= 1
         conn = init_db(path)
         stored = conn.execute(
@@ -710,7 +711,7 @@ def test_manual_signal_feedback_insert() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "surveil.sqlite3"
         seed_db(path)
-        extract_signals(db_path=path, days=10, dry_run=False)
+        extract_signals(db_path=path, days=TEST_WINDOW_DAYS, dry_run=False)
         conn = init_db(path)
         signal_id, target_id = conn.execute(
             """

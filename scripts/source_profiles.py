@@ -227,13 +227,25 @@ def build_profiles() -> list[SourceProfile]:
     for source_id in CORE_COMPANY_FEEDS:
         url = DEFAULT_RSS_FEEDS[source_id]
         profiles.append(
-            rss_profile(
-                source_id,
-                official_names.get(source_id, source_id),
-                "official_company",
-                url,
-                pipeline="official_news_gate",
+            SourceProfile(
+                id=source_id,
+                category="official_company",
+                name=official_names.get(source_id, source_id),
+                source_type="RSS/Atom",
+                fetch_range="官方 RSS/Atom 条目，必要时抓取公开正文",
                 filter_policy="公司官网一手消息；普通营销/活动降级，产业链重大变量即时推送",
+                frequency="每 10 分钟 timer",
+                runtime_shape="timer one-shot",
+                pipeline="official_news_gate",
+                service_units=("surveil-official-collector.timer", "surveil-official-collector.service"),
+                health_keys=(("rss_monitor", source_id),),
+                fetcher="scripts/official_collector.py",
+                skeptic_enabled=True,
+                web_evidence_enabled=True,
+                tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key",
+                proxy_profile="可通过 SURVEIL_HTTP_PROXY / mihomo",
+                text_length_policy="默认官网新闻流；普通营销/活动降级",
+                url=url,
                 notes="公司官网源属于一手信息，默认进入 official_news_reviews。",
             )
         )

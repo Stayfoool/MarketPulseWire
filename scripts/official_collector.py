@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Shadow collector for official core-company news feeds.
+"""Collector for official core-company news feeds.
 
-This collector is intentionally read-only for production state: it does not send
-Feishu cards, does not run LLM review, and does not write production
-seen/review tables. It lets us compare a future company-official collector
-against the existing rss_monitor + official_news_gate path.
+By default this collector runs in shadow mode: it does not send Feishu cards,
+does not run LLM review, and does not write production seen/review tables. The
+explicit ``--production`` mode delegates to the existing RSS production path so
+the official_news_gate behavior stays identical during systemd migration.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from typing import Any, Iterable
 from collector_runtime import filter_enabled_mapping_for_run, load_source_states, save_source_state
 from db_utils import connect_sqlite, ensure_source_state_table
 from official_news_gate import OFFICIAL_NEWS_SOURCES
-from rss_monitor import DB_PATH, fetch_feed, filter_items, strip_tags
+from rss_monitor import DB_PATH, fetch_feed, filter_items, run_once as run_rss_once, strip_tags
 from source_profiles import SOURCE_PROFILE_CONFIG_PATH, runtime_profile_map
 from trendforce_sources import DEFAULT_RSS_FEEDS
 from x_check import load_env
@@ -268,16 +268,58 @@ def collect_shadow(
     }
 
 
+def collect_production(
+    *,
+    feeds: dict[str, str],
+    notify_baseline: bool = False,
+) -> dict[str, Any]:
+    started_at = utc_now()
+    errors: list[dict[str, str]] = []
+    rss_new = 0
+    if feeds:
+        try:
+            rss_new = run_rss_once(feeds, notify_baseline=notify_baseline)
+        except Exception as exc:  # noqa: BLE001 - report the batch failure clearly
+            errors.append({"stage": "rss", "error": f"{type(exc).__name__}: {exc}"})
+    return {
+        "ok": not errors,
+        "mode": "production",
+        "sent_feishu": True,
+        "ran_llm_review": True,
+        "wrote_production_seen_items": True,
+        "wrote_production_reviews": True,
+        "started_at": started_at,
+        "finished_at": utc_now(),
+        "counts": {
+            "rss_sources": len(feeds),
+            "new_items": rss_new,
+        },
+        "errors": errors,
+    }
+
+
 def write_report(payload: dict[str, Any], report_dir: Path = REPORT_DIR) -> Path:
     report_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    path = report_dir / f"official-collector-shadow-{stamp}.json"
+    mode = "production" if payload.get("mode") == "production" else "shadow"
+    path = report_dir / f"official-collector-{mode}-{stamp}.json"
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
 
 
 def print_text_summary(payload: dict[str, Any]) -> None:
     counts = payload.get("counts", {})
+    if payload.get("mode") == "production":
+        print(
+            "official_collector production: "
+            f"rss_sources={counts.get('rss_sources', 0)} "
+            f"new_items={counts.get('new_items', 0)} "
+            f"errors={len(payload.get('errors', []))}",
+            flush=True,
+        )
+        for error in payload.get("errors", []):
+            print(f"[ERR] {error.get('stage')}: {error.get('error')}", flush=True)
+        return
     print(
         "official_collector shadow: "
         f"sources={counts.get('sources', 0)} "
@@ -301,8 +343,10 @@ def print_text_summary(payload: dict[str, Any]) -> None:
 
 def main() -> int:
     load_env(ENV_PATH)
-    parser = argparse.ArgumentParser(description="Shadow-run official company news collector.")
+    parser = argparse.ArgumentParser(description="Run official company news collector.")
     parser.add_argument("--source", action="append", default=[], help="只跑指定 source id，可重复。")
+    parser.add_argument("--production", action="store_true", help="运行生产链路：入库、official gate、Skeptic/Tavily、飞书推送。")
+    parser.add_argument("--notify-baseline", action="store_true", help="生产模式下首次建立基线时也发送通知。默认不发送旧条目。")
     parser.add_argument("--limit", type=int, default=5, help="每个 source 输出候选条数；0 表示不限制。")
     parser.add_argument("--json", action="store_true", help="输出完整 JSON。")
     parser.add_argument("--write-report", action="store_true", help="把 JSON 报告写入 reports/。")
@@ -315,15 +359,23 @@ def main() -> int:
         help="仅保存 official_shadow_feed:* 条件请求状态；不写生产 seen/review 表。",
     )
     args = parser.parse_args()
+    if args.production and args.save_shadow_state:
+        raise SystemExit("--production 不能与 --save-shadow-state 同时使用")
 
     feeds = selected_sources(args.source)
-    payload = collect_shadow(
-        feeds=feeds,
-        limit=max(0, args.limit),
-        compare_seen=not args.no_compare_seen,
-        compare_reviews=not args.no_compare_reviews,
-        save_shadow_state=args.save_shadow_state,
-    )
+    if args.production:
+        payload = collect_production(
+            feeds=feeds,
+            notify_baseline=args.notify_baseline or os.getenv("SURVEIL_NOTIFY_BASELINE", "") == "1",
+        )
+    else:
+        payload = collect_shadow(
+            feeds=feeds,
+            limit=max(0, args.limit),
+            compare_seen=not args.no_compare_seen,
+            compare_reviews=not args.no_compare_reviews,
+            save_shadow_state=args.save_shadow_state,
+        )
     if args.write_report:
         payload["report_path"] = str(write_report(payload))
     if args.json:
