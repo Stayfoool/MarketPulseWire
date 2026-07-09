@@ -20,8 +20,10 @@ from article_gate import (
     failed_review,
     gate_lines,
     mark_pushed as mark_article_pushed,
+    apply_push_rule_override,
     review_article,
     review_exists as article_review_exists,
+    rule_first_review,
     save_review as save_article_review,
 )
 from cards import build_article_card
@@ -418,11 +420,19 @@ def notify_item(item: dict) -> None:
                     flush=True,
                 )
             else:
-                try:
-                    review = review_article(PAGE_SOURCE_KEY, enriched)
-                except Exception as exc:  # noqa: BLE001 - keep item in daily digest
-                    print(f"{enriched.get('page_source') or PAGE_SOURCE_KEY} 文章门控失败：{exc}", flush=True)
-                    review = failed_review(enriched, exc)
+                review = rule_first_review(PAGE_SOURCE_KEY, enriched)
+                if review:
+                    print(
+                        f"{enriched.get('page_source') or PAGE_SOURCE_KEY} 规则优先门控："
+                        f"title={enriched.get('title', '')}",
+                        flush=True,
+                    )
+                else:
+                    try:
+                        review = review_article(PAGE_SOURCE_KEY, enriched)
+                    except Exception as exc:  # noqa: BLE001 - keep item in daily digest
+                        print(f"{enriched.get('page_source') or PAGE_SOURCE_KEY} 文章门控失败：{exc}", flush=True)
+                        review = failed_review(enriched, exc)
             with connect_db() as conn:
                 review = apply_article_hardline_override(PAGE_SOURCE_KEY, enriched, review)
                 review = apply_skeptic_review(
@@ -433,6 +443,7 @@ def notify_item(item: dict) -> None:
                     review=review,
                     push_key="push_now",
                 )
+                review = apply_push_rule_override(PAGE_SOURCE_KEY, enriched, review)
                 save_article_review(conn, PAGE_SOURCE_KEY, enriched, review)
         print(
             f"{enriched.get('page_source') or PAGE_SOURCE_KEY} 文章门控：importance={review.get('importance')} "

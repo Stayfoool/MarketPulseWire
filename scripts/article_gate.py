@@ -11,45 +11,43 @@ from typing import Any
 from llm_analysis import call_chat_completion_with_prompts, llm_config
 from industry_hardline import apply_hardline_review_override, explain_hardline
 from macro_policy import apply_macro_review_override, macro_prompt_note
+from push_rules import (
+    apply_article_push_rules,
+    first_matching_push_rule,
+    load_enabled_holdings_for_rules,
+    review_from_push_rule,
+)
 from skeptic_evaluator import skeptic_lines
 
 
 GATE_SYSTEM_PROMPT = """你是半导体、AI 基础设施和二级市场研究助理。
-任务：判断一条资讯/报告是否值得第一时间推送给投资者。
+任务：为一条已通过规则预筛的资讯/报告生成极简实时摘要。
 
-重点关注：
-- 是否可能显著影响 A 股/美股/海外相关股票未来几个交易日到数月的价格预期。
-- 是否是增量利好/增量利空，还是已有预期、利好/利空落地、利好/利空出尽。
-- 是否直接涉及持仓股、持仓股上下游/同行/竞争对手，或半导体/AI 强主题。
-- 是否有订单、涨价、停产、扩产、客户认证、资本开支、业绩指引、监管、供需缺口等硬变量。
-- 是否属于“星际之门/Stargate-like”的超大资本开支事件：政府、云厂商、半导体龙头、AI 基础设施龙头或产业联盟计划投入超大金额建设 AI 数据中心、半导体工厂、HBM/存储产能、先进封装、CPO/光互联、电力/液冷等基础设施。
+当前系统的实时推送开关优先由确定性规则、来源权重、持仓/观察名单、关系映射和 Web 反馈控制；不要把自己当成最终裁判。
 
-请克制：
-- 只有标题/摘要、缺少量化数据时，不要硬判高重要性。
-- 普通月报、价格表、营销、ESG、活动、泛泛趋势，通常不要即时推送。
-- 已被市场广泛讨论且没有新增数据的内容，通常进日报。
-- 但超大资本开支“预告/据报/拟宣布/将公布”不能因为尚未正式公布就自动降为 medium：只要金额足够重大、主体可信、产业方向明确、且有明确会议/发布时间/高层表态/政策背景，应判为 high、push_now=true，并在 reason 中标注“待确认/预告性质”和需要跟踪的正式公告。
+只做三件事：
+- 用一句到两句中文写清核心内容。
+- 用一句短句说明为什么这条可能值得关注；如果信息不足，就说明“规则命中/来源命中，影响待确认”。
+- 只列原文明确涉及、或输入提示明确给出的股票/公司/产业链环节；不要自由扩散。
+
+不要输出：股价方向、影响幅度、持续时间、完整 A 股/美股利好利空列表、tracking points、risks、watchlist、price-in 判断、surprise_level、confidence、长篇 market impact。
 
 只输出 JSON，不要 Markdown。"""
 
 
 GATE_USER_PROMPT = """请判断以下内容是否需要第一时间推送，输出 JSON：
 {
-  "importance": "high/medium/low",
-  "push_now": true,
-  "market_impact": "是否可能显著影响相关股票价格，以及方向",
-  "incremental_classification": "增量利好/增量利空/已有预期/符合预期/利好落地/利空落地/可能利好出尽/可能利空出尽/中性信息/无法判断",
-  "affected_targets": ["最相关股票或产业链环节，最多5个"],
-  "daily_summary": "如果不即时推送，日报里的一句话摘要",
-  "reason": "为什么推或不推，说明是否有硬变量和超预期",
-  "confidence": "高/中/低"
+  "core_content": "一句到两句中文核心内容",
+  "brief_reason": "一句简短关注原因；不要写长篇门控理由",
+  "related_targets": [
+    {"name": "股票/公司/环节", "code": "可选代码", "relation": "持仓/观察/上游/下游/竞争/主题/来源提及", "direction": "positive/negative/neutral/uncertain"}
+  ]
 }
 
-判定规则：
-- push_now 只有在 importance=high 且信息可能显著影响股票预期时才为 true。
-- medium/low 默认进入日报，不即时推送。
-- 如果信息不足，importance=low 或 medium，push_now=false。
-- 对半导体/AI 基础设施“超大资本开支预告”单独处理：即使尚未正式公布，只要金额、主体和产业方向明确，并可能重估设备、材料、存储、光通信、PCB、先进封装、电力、液冷等产业链预期，应 importance=high、push_now=true；同时在 reason 和 daily_summary 中明确写“待确认/预告性质”，列出需要验证的正式公布时间、投资拆分、产能、设备订单和供应链受益方向。
+注意：
+- 不要输出 importance/push_now/market_impact/price_impact/a_share/global_equity/tracking_points/risks/watchlist_view。
+- 国际投行目标价/评级、SemiAnalysis、SEMI/TrendForce/DIGITIMES/The Elec/Nikkei xTECH、持仓硬变量、美国核心宏观变量等是否即时推送，由规则层决定。
+- 对“星际之门/Stargate-like”超大资本开支预告，只需在 core_content/brief_reason 中标注“待确认/预告性质”和涉及环节，如设备、材料、存储、光通信、PCB、先进封装、电力、液冷。
 
 来源：{source}
 来源模块：{source_module}
@@ -124,16 +122,30 @@ def normalize_review(parsed: dict[str, Any]) -> dict[str, Any]:
     targets = parsed.get("affected_targets")
     if not isinstance(targets, list):
         targets = []
+    related_targets = parsed.get("related_targets")
+    if isinstance(related_targets, list):
+        for target in related_targets:
+            if isinstance(target, dict):
+                name = str(target.get("name") or "").strip()
+                code = str(target.get("code") or "").strip()
+                label = " ".join(part for part in (name, code) if part)
+            else:
+                label = str(target).strip()
+            if label:
+                targets.append(label)
+    core_content = str(parsed.get("core_content") or "").strip()
+    brief_reason = str(parsed.get("brief_reason") or parsed.get("reason") or "").strip()
     return {
         "importance": importance,
         "push_now": push_now,
         "market_impact": str(parsed.get("market_impact") or "").strip(),
         "incremental_classification": str(parsed.get("incremental_classification") or "").strip(),
         "affected_targets": [str(item).strip() for item in targets if str(item).strip()][:5],
-        "daily_summary": str(parsed.get("daily_summary") or "").strip(),
-        "reason": str(parsed.get("reason") or "").strip(),
+        "daily_summary": str(parsed.get("daily_summary") or core_content or "").strip(),
+        "reason": brief_reason,
+        "brief_reason": brief_reason,
         "confidence": str(parsed.get("confidence") or "").strip(),
-        "raw": parsed,
+        "raw": {**parsed, "llm_mode": "thin"},
     }
 
 
@@ -242,6 +254,25 @@ def apply_hardline_override(source: str, item: dict[str, Any], review: dict[str,
 
 def apply_macro_override(item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
     return apply_macro_review_override(review, item)
+
+
+def rule_first_review(source: str, item: dict[str, Any], *, push_key: str = "push_now") -> dict[str, Any] | None:
+    holdings = load_enabled_holdings_for_rules()
+    rule = first_matching_push_rule(source=source, item=item, holdings=holdings)
+    if not rule:
+        return None
+    return review_from_push_rule(rule, item, push_key=push_key)
+
+
+def apply_push_rule_override(
+    source: str,
+    item: dict[str, Any],
+    review: dict[str, Any],
+    *,
+    push_key: str = "push_now",
+) -> dict[str, Any]:
+    holdings = load_enabled_holdings_for_rules()
+    return apply_article_push_rules(source, item, review, holdings=holdings, push_key=push_key)
 
 
 def review_exists(conn: sqlite3.Connection, source: str, item_id: str) -> dict[str, Any] | None:

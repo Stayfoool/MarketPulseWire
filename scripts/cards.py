@@ -102,6 +102,15 @@ def review_analysis(review: dict[str, Any]) -> dict[str, Any]:
 def target_names_from_review(review: dict[str, Any]) -> list[str]:
     targets = [str(item).strip() for item in as_list(review.get("affected_targets")) if str(item).strip()]
     analysis = review_analysis(review)
+    for item in as_list(analysis.get("related_targets")):
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            code = str(item.get("code") or "").strip()
+            label = " ".join(part for part in (name, code) if part)
+        else:
+            label = str(item).strip()
+        if label:
+            targets.append(label)
     for section_key in ("a_share", "global_equity"):
         section = analysis.get(section_key)
         if not isinstance(section, dict):
@@ -172,6 +181,9 @@ def thin_push_reason(item: dict[str, Any], review: dict[str, Any]) -> str:
     explicit = str(item.get("push_reason") or "").strip()
     if explicit:
         return explicit
+    brief = str(review.get("brief_reason") or "").strip()
+    if brief:
+        return brief
     raw = review.get("raw") if isinstance(review.get("raw"), dict) else {}
     if review.get("mandatory_push") == "yicai_morning_brief":
         return "每日固定栏目：第一财经券商晨会观点速递。"

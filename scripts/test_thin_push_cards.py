@@ -87,10 +87,10 @@ def test_compact_event_analysis_lines_only_keep_core_and_targets() -> None:
     )
     joined = "\n".join(lines)
     assert "核心内容：某公司上调AI服务器PCB订单指引。" in joined
+    assert "为什么推送：模型认为应该推送。" in joined
     assert "相关标的：沪电股份 002463.SZ" in joined
     assert "增量/定价" not in joined
     assert "初步影响" not in joined
-    assert "为什么推送" not in joined
     assert "模型：" not in joined
 
 
