@@ -56,6 +56,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-review.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-digest.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-official-collector.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector-shadow.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector-shadow.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-news-collector-shadow.service, \\
@@ -73,6 +74,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-ifind-report.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-jygs-actions.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-official-collector.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector-shadow.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector-shadow.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-news-collector-shadow.timer, \\
@@ -89,6 +91,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block start surveil-ifind-report.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-jygs-actions.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-research-collector.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-official-collector.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-research-collector-shadow.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-official-collector-shadow.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-news-collector-shadow.service, \\
@@ -103,7 +106,13 @@ systemctl is-enabled surveil-db-init.service
 journalctl -u surveil-db-init.service -n 20 --no-pager
 systemctl enable --now surveil-ifind-notice.timer
 systemctl enable --now surveil-sina-stock-news.timer
-systemctl enable --now surveil-overseas-media.timer
+if grep -Eq '^DISABLE_LEGACY_RESEARCH_MONITORS=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
+  systemctl disable --now surveil-overseas-media.timer >/dev/null 2>&1 || true
+  systemctl stop surveil-overseas-media.service >/dev/null 2>&1 || true
+  echo 'DISABLE_LEGACY_RESEARCH_MONITORS=1，保持旧 surveil-overseas-media.timer 停用。'
+else
+  systemctl enable --now surveil-overseas-media.timer
+fi
 systemctl enable --now surveil-china-media.timer
 systemctl enable --now surveil-article-daily.timer
 systemctl enable --now surveil-signals-extract.timer
@@ -115,8 +124,18 @@ systemctl enable --now surveil-official-collector-shadow.timer
 systemctl enable --now surveil-news-collector-shadow.timer
 systemctl enable --now surveil-collector-shadow-digest.timer
 systemctl start surveil-stock-relations-import.service || true
-systemctl enable --now surveil-rss-monitor.service
-systemctl enable --now surveil-trendforce-page-monitor.service
+if grep -Eq '^DISABLE_LEGACY_RSS_MONITOR=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
+  systemctl disable --now surveil-rss-monitor.service >/dev/null 2>&1 || true
+  echo 'DISABLE_LEGACY_RSS_MONITOR=1，保持旧 surveil-rss-monitor.service 停用。'
+else
+  systemctl enable --now surveil-rss-monitor.service
+fi
+if grep -Eq '^DISABLE_LEGACY_RESEARCH_MONITORS=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
+  systemctl disable --now surveil-trendforce-page-monitor.service >/dev/null 2>&1 || true
+  echo 'DISABLE_LEGACY_RESEARCH_MONITORS=1，保持旧 surveil-trendforce-page-monitor.service 停用。'
+else
+  systemctl enable --now surveil-trendforce-page-monitor.service
+fi
 if grep -Eq '^(IFIND_RESEARCH_FORMULA|IFIND_REPORT_FORMULA|IFIND_RESEARCH_REPORTNAME|IFIND_REPORT_REPORTNAME|IFIND_RESEARCH_REPORT_TYPE|IFIND_REPORT_REPORT_TYPE)=[^[:space:]]+' '$REMOTE_DIR/.env' 2>/dev/null; then
   systemctl enable --now surveil-ifind-report.timer
 else

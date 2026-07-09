@@ -111,14 +111,16 @@ These shadow jobs are migration aids. They write JSON/Markdown reports under
 LLM gates, and do not write production `seen_items` or review tables.
 
 The installer also copies the production research/industry-media migration
-unit, but does not enable it automatically:
+and official-company migration units, but does not enable them automatically:
 
 - `surveil-research-collector.service`
 - `surveil-research-collector.timer`
+- `surveil-official-collector.service`
+- `surveil-official-collector.timer`
 
-Use it only during the staged collector migration. In production mode it writes
-the normal `seen_items` / review tables and can send Feishu cards through the
-existing article pipeline.
+Use them only during the staged collector migration. In production mode they
+write the normal `seen_items` / review tables and can send Feishu cards through
+the existing article/official-news pipelines.
 
 During the research collector cutover, keep the old RSS monitor for official
 company feeds by setting this on the server and restarting
@@ -126,6 +128,14 @@ company feeds by setting this on the server and restarting
 
 ```bash
 RSS_MONITOR_EXCLUDE_PROFILE_CATEGORIES=research_industry_media
+```
+
+After the official-company collector cutover, the old RSS monitor can be kept
+off across future installs by setting:
+
+```bash
+DISABLE_LEGACY_RSS_MONITOR=1
+DISABLE_LEGACY_RESEARCH_MONITORS=1
 ```
 
 Open the Web workbench through an SSH tunnel:

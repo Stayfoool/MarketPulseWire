@@ -187,6 +187,8 @@ def test_systemd_actions_are_whitelisted() -> None:
     assert "run_once" in unit_actions("surveil-china-media.timer")
     assert "run_once" in unit_actions("surveil-research-collector.timer")
     assert RUN_ONCE_TARGETS["surveil-research-collector.timer"] == "surveil-research-collector.service"
+    assert "run_once" in unit_actions("surveil-official-collector.timer")
+    assert RUN_ONCE_TARGETS["surveil-official-collector.timer"] == "surveil-official-collector.service"
     assert "run_once" in unit_actions("surveil-research-collector-shadow.timer")
     assert RUN_ONCE_TARGETS["surveil-research-collector-shadow.timer"] == "surveil-research-collector-shadow.service"
     assert RUN_ONCE_TARGETS["surveil-china-media.timer"] == "surveil-china-media.service"
@@ -234,6 +236,16 @@ def test_unit_display_metadata_includes_research_production_collector() -> None:
     assert "5 分钟" in meta["schedule"]
 
 
+def test_unit_display_metadata_includes_official_production_collector() -> None:
+    meta = unit_display_metadata(
+        "surveil-official-collector.timer",
+        {"ActiveState": "active", "SubState": "waiting", "Result": "success"},
+    )
+    assert meta["group"] == "fetching_scheduled"
+    assert meta["unit_type"] == "定时器"
+    assert "10 分钟" in meta["schedule"]
+
+
 def main() -> int:
     test_embedded_script_keeps_newline_escapes()
     test_health_page_exposes_service_action_controls()
@@ -247,6 +259,7 @@ def main() -> int:
     test_unit_display_metadata_translates_waiting_timer()
     test_unit_display_metadata_groups_shadow_collectors()
     test_unit_display_metadata_includes_research_production_collector()
+    test_unit_display_metadata_includes_official_production_collector()
     print("holdings web checks passed")
     return 0
 

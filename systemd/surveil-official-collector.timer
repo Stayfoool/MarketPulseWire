@@ -1,0 +1,12 @@
+[Unit]
+Description=Run MarketPulseWire official company news collector every 10 minutes
+
+[Timer]
+OnActiveSec=3min
+OnBootSec=13min
+OnUnitActiveSec=10min
+Persistent=true
+Unit=surveil-official-collector.service
+
+[Install]
+WantedBy=timers.target
