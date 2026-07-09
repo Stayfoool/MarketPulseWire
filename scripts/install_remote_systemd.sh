@@ -112,6 +112,7 @@ systemctl enable --now surveil-sina-stock-news.timer
 if grep -Eq '^DISABLE_LEGACY_RESEARCH_MONITORS=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
   systemctl disable --now surveil-overseas-media.timer >/dev/null 2>&1 || true
   systemctl stop surveil-overseas-media.service >/dev/null 2>&1 || true
+  systemctl enable --now surveil-research-collector.timer
   echo 'DISABLE_LEGACY_RESEARCH_MONITORS=1，保持旧 surveil-overseas-media.timer 停用。'
 else
   systemctl enable --now surveil-overseas-media.timer
@@ -119,6 +120,7 @@ fi
 if grep -Eq '^DISABLE_LEGACY_CHINA_MEDIA_MONITOR=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
   systemctl disable --now surveil-china-media.timer >/dev/null 2>&1 || true
   systemctl stop surveil-china-media.service >/dev/null 2>&1 || true
+  systemctl enable --now surveil-news-collector.timer
   echo 'DISABLE_LEGACY_CHINA_MEDIA_MONITOR=1，保持旧 surveil-china-media.timer 停用。'
 else
   systemctl enable --now surveil-china-media.timer
@@ -135,12 +137,14 @@ systemctl enable --now surveil-collector-shadow-digest.timer
 systemctl start surveil-stock-relations-import.service || true
 if grep -Eq '^DISABLE_LEGACY_RSS_MONITOR=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
   systemctl disable --now surveil-rss-monitor.service >/dev/null 2>&1 || true
+  systemctl enable --now surveil-official-collector.timer
   echo 'DISABLE_LEGACY_RSS_MONITOR=1，保持旧 surveil-rss-monitor.service 停用。'
 else
   systemctl enable --now surveil-rss-monitor.service
 fi
 if grep -Eq '^DISABLE_LEGACY_RESEARCH_MONITORS=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
   systemctl disable --now surveil-trendforce-page-monitor.service >/dev/null 2>&1 || true
+  systemctl enable --now surveil-research-collector.timer
   echo 'DISABLE_LEGACY_RESEARCH_MONITORS=1，保持旧 surveil-trendforce-page-monitor.service 停用。'
 else
   systemctl enable --now surveil-trendforce-page-monitor.service
@@ -171,9 +175,12 @@ systemctl --no-pager --full status surveil-sina-flash.service || true
 systemctl --no-pager --full status surveil-holdings-web.service || true
 systemctl --no-pager --full status surveil-rss-monitor.service || true
 systemctl --no-pager --full status surveil-trendforce-page-monitor.service || true
+systemctl --no-pager --full status surveil-research-collector.timer || true
+systemctl --no-pager --full status surveil-official-collector.timer || true
+systemctl --no-pager --full status surveil-news-collector.timer || true
 systemctl --no-pager --full status surveil-research-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-official-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-news-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-x-stream.service || true
-echo '已安装 surveil-db-init.service，启用 iFinD 公告、Sina 个股新闻、中国财经媒体、RSS/TrendForce/海外媒体、collector shadow timers、文章日报、信号抽取/outcome/复盘/复盘日报、持仓 Web UI，并启动新浪快讯常驻服务。iFinD smoke test 可用：systemctl start surveil-ifind-smoke.service'
+echo '已安装 surveil-db-init.service，启用 iFinD 公告、Sina 个股新闻、collector timers（按 DISABLE_LEGACY_* 切换生产/历史入口）、collector shadow timers、文章日报、信号抽取/outcome/复盘/复盘日报、持仓 Web UI，并启动新浪快讯常驻服务。iFinD smoke test 可用：systemctl start surveil-ifind-smoke.service'
 "

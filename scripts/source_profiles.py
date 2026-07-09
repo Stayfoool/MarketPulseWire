@@ -2,8 +2,8 @@
 
 Profiles are defined in code and can be overlaid by a private local config.
 Low-risk runtime fields are honored by collectors: enabled, skeptic_enabled,
-and web_evidence_enabled. Frequency and proxy fields are still recorded for
-operator visibility and later migration.
+and web_evidence_enabled. Frequency and proxy fields are recorded for operator
+visibility and source-by-source tuning.
 """
 
 from __future__ import annotations
@@ -101,12 +101,12 @@ def rss_profile(
         source_type="RSS/Atom",
         fetch_range="官方 RSS/Atom 条目，必要时抓取公开正文",
         filter_policy=filter_policy,
-        frequency="进程内每 300 秒",
-        runtime_shape="常驻 simple",
+        frequency="每 5 分钟 timer",
+        runtime_shape="timer one-shot",
         pipeline=pipeline,
-        service_units=("surveil-rss-monitor.service",),
+        service_units=("surveil-research-collector.timer", "surveil-research-collector.service"),
         health_keys=(("rss_monitor", source_id),),
-        fetcher="scripts/rss_monitor.py",
+        fetcher="scripts/research_collector.py -> scripts/rss_monitor.py",
         skeptic_enabled=skeptic_enabled,
         web_evidence_enabled=skeptic_enabled,
         tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key" if skeptic_enabled else "不触发",
@@ -114,7 +114,7 @@ def rss_profile(
         text_length_policy="默认文章流；研究机构/行业媒体短硬变量可 event-first",
         source_priority=source_priority,
         url=url,
-        notes=notes,
+        notes=(notes + " " if notes else "") + "生产入口已切到 research collector；健康记录沿用 rss_monitor 标签。",
     )
 
 
@@ -175,12 +175,12 @@ def build_profiles() -> list[SourceProfile]:
                 source_type="公开列表页",
                 fetch_range="官方列表页标题、摘要和链接；不绕过付费墙或访问控制",
                 filter_policy="页面抽取 + 趋势/半导体硬变量规则；短量化硬变量 event-first",
-                frequency="进程内每 900 秒",
-                runtime_shape="常驻 simple",
+                frequency="每 5 分钟 timer；页面源内部 900 秒节流",
+                runtime_shape="timer one-shot",
                 pipeline="短硬变量 event-first；其余 article_gate",
-                service_units=("surveil-trendforce-page-monitor.service",),
+                service_units=("surveil-research-collector.timer", "surveil-research-collector.service"),
                 health_keys=(("trendforce_page", page_source.name),),
-                fetcher="scripts/trendforce_page_monitor.py",
+                fetcher="scripts/research_collector.py -> scripts/trendforce_page_monitor.py",
                 skeptic_enabled=True,
                 web_evidence_enabled=True,
                 tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key",
@@ -203,9 +203,9 @@ def build_profiles() -> list[SourceProfile]:
                 frequency="每 5 分钟 timer",
                 runtime_shape="timer one-shot",
                 pipeline="复用 rss_monitor；短硬变量 event-first；其余 article_gate",
-                service_units=("surveil-overseas-media.timer", "surveil-overseas-media.service"),
+                service_units=("surveil-research-collector.timer", "surveil-research-collector.service"),
                 health_keys=(("rss_monitor", source_id),),
-                fetcher="scripts/overseas_media_monitor.py -> scripts/rss_monitor.py",
+                fetcher="scripts/research_collector.py -> scripts/overseas_media_monitor.py / rss_monitor.py",
                 skeptic_enabled=True,
                 web_evidence_enabled=True,
                 tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key",
@@ -693,5 +693,5 @@ def source_profiles_payload(
         "config_exists": config_exists(config_path),
         "override_config": config,
         "runtime_effective": True,
-        "runtime_note": "enabled/Skeptic/Tavily 覆盖已接入实际采集；频率/代理字段暂仅用于记录和后续迁移。",
+        "runtime_note": "enabled/Skeptic/Tavily 覆盖已接入实际采集；生产入口按 6 类 collector 展示，底层健康记录仍沿用原 monitor/source 标签。",
     }

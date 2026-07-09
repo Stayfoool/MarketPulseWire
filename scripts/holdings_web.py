@@ -120,13 +120,42 @@ RUN_ONCE_TARGETS = {
 
 ALLOWED_SYSTEMD_UNITS = set(SERVICE_UNITS) | set(TIMER_UNITS) | set(RUN_ONCE_TARGETS.values())
 
+LEGACY_CUTOVER_UNITS = {
+    "surveil-rss-monitor.service",
+    "surveil-trendforce-page-monitor.service",
+    "surveil-overseas-media.service",
+    "surveil-overseas-media.timer",
+    "surveil-china-media.service",
+    "surveil-china-media.timer",
+}
+
+SHADOW_UNITS = {
+    "surveil-research-collector-shadow.service",
+    "surveil-research-collector-shadow.timer",
+    "surveil-official-collector-shadow.service",
+    "surveil-official-collector-shadow.timer",
+    "surveil-news-collector-shadow.service",
+    "surveil-news-collector-shadow.timer",
+    "surveil-collector-shadow-digest.service",
+    "surveil-collector-shadow-digest.timer",
+}
+
+LEGACY_REPLACEMENTS = {
+    "surveil-rss-monitor.service": "surveil-research-collector.timer / surveil-official-collector.timer",
+    "surveil-trendforce-page-monitor.service": "surveil-research-collector.timer",
+    "surveil-overseas-media.service": "surveil-research-collector.timer",
+    "surveil-overseas-media.timer": "surveil-research-collector.timer",
+    "surveil-china-media.service": "surveil-news-collector.timer",
+    "surveil-china-media.timer": "surveil-news-collector.timer",
+}
+
 UNIT_METADATA = {
     "surveil-x-stream.service": {"group": "fetching_persistent", "type": "常驻采集", "schedule": "X 长连接"},
-    "surveil-rss-monitor.service": {"group": "fetching_persistent", "type": "常驻采集", "schedule": "进程内每 300 秒"},
-    "surveil-trendforce-page-monitor.service": {"group": "fetching_persistent", "type": "常驻采集", "schedule": "进程内每 900 秒"},
+    "surveil-rss-monitor.service": {"group": "fetching_legacy", "type": "历史兼容", "schedule": "已切流；旧 300 秒 RSS 常驻"},
+    "surveil-trendforce-page-monitor.service": {"group": "fetching_legacy", "type": "历史兼容", "schedule": "已切流；旧 900 秒 TrendForce 页面常驻"},
     "surveil-sina-flash.service": {"group": "fetching_persistent", "type": "常驻采集", "schedule": "脚本内高频轮询"},
-    "surveil-overseas-media.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 5 分钟"},
-    "surveil-china-media.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 2 分钟"},
+    "surveil-overseas-media.service": {"group": "fetching_legacy", "type": "历史兼容", "schedule": "已切流；旧海外媒体批处理"},
+    "surveil-china-media.service": {"group": "fetching_legacy", "type": "历史兼容", "schedule": "已切流；旧中国财经媒体批处理"},
     "surveil-sina-stock-news.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 30 分钟"},
     "surveil-ifind-notice.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 08:00 / 20:00"},
     "surveil-ifind-report.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 08:00 / 20:00"},
@@ -146,8 +175,8 @@ UNIT_METADATA = {
     "surveil-holdings-web.service": {"group": "infrastructure", "type": "基础设施", "schedule": "Web 工作台"},
     "surveil-proxy.service": {"group": "infrastructure", "type": "基础设施", "schedule": "本地代理"},
     "surveil-sina-stock-news.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 30 分钟"},
-    "surveil-overseas-media.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 5 分钟"},
-    "surveil-china-media.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 2 分钟"},
+    "surveil-overseas-media.timer": {"group": "fetching_legacy", "type": "历史兼容定时器", "schedule": "已切流；旧每 5 分钟"},
+    "surveil-china-media.timer": {"group": "fetching_legacy", "type": "历史兼容定时器", "schedule": "已切流；旧每 2 分钟"},
     "surveil-ifind-notice.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "08:00 / 20:00"},
     "surveil-ifind-report.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "08:00 / 20:00"},
     "surveil-jygs-actions.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "12:30 / 16:00"},
@@ -169,6 +198,7 @@ UNIT_GROUP_LABELS = {
     "fetching_persistent": "常驻采集服务",
     "fetching_scheduled": "定时采集任务",
     "fetching_shadow": "影子采集任务",
+    "fetching_legacy": "历史兼容采集单元",
     "processing_scheduled": "非抓取处理/日报任务",
     "infrastructure": "基础设施",
     "other": "其他",
@@ -811,10 +841,25 @@ def unit_actions(unit: str) -> list[str]:
     return []
 
 
-def unit_display_metadata(unit: str, values: dict[str, Any]) -> dict[str, str]:
+def unit_display_metadata(unit: str, values: dict[str, Any]) -> dict[str, Any]:
     meta = dict(UNIT_METADATA.get(unit) or {})
     group = str(meta.get("group") or "other")
     unit_type = str(meta.get("type") or ("定时器" if unit.endswith(".timer") else "服务"))
+    if unit in LEGACY_CUTOVER_UNITS:
+        lifecycle = "legacy_cutover"
+        lifecycle_label = "历史兼容"
+        replacement = LEGACY_REPLACEMENTS.get(unit, "")
+        default_visible = False
+    elif unit in SHADOW_UNITS:
+        lifecycle = "shadow"
+        lifecycle_label = "影子验证"
+        replacement = ""
+        default_visible = False
+    else:
+        lifecycle = "production"
+        lifecycle_label = "生产"
+        replacement = ""
+        default_visible = True
     active = str(values.get("ActiveState") or "")
     sub = str(values.get("SubState") or "")
     result = str(values.get("Result") or "")
@@ -841,6 +886,10 @@ def unit_display_metadata(unit: str, values: dict[str, Any]) -> dict[str, str]:
         "unit_type": unit_type,
         "schedule": str(meta.get("schedule") or ""),
         "status_text": status_text,
+        "lifecycle": lifecycle,
+        "lifecycle_label": lifecycle_label,
+        "replacement": replacement,
+        "default_visible": default_visible,
     }
 
 
@@ -1325,7 +1374,12 @@ def html_page(token_required: bool) -> str:
         <button onclick="loadHealth()">刷新</button>
       </div>
       <div class="status ok" style="display:block">
-只允许操作 MarketPulseWire 白名单内的 systemd 单元。常驻服务可重启；定时器可重启调度或立即运行一次对应任务。
+只允许操作 MarketPulseWire 白名单内的 systemd 单元。默认展示生产单元；历史兼容单元已完成切流，通常保持停用。
+      </div>
+      <div class="toolbar">
+        <label><input id="showShadowUnits" type="checkbox" onchange="loadHealth()"> 显示影子任务</label>
+        <label><input id="showLegacyUnits" type="checkbox" onchange="loadHealth()"> 显示历史兼容单元</label>
+        <span id="healthUnitSummary" class="summary"></span>
       </div>
       <section class="panel">
         <div class="table-wrap">
@@ -1648,15 +1702,33 @@ function serviceActionButtons(unit) {{
 }}
 
 function renderHealthUnits(units, groupLabels) {{
-  const order = ['fetching_persistent', 'fetching_scheduled', 'processing_scheduled', 'infrastructure', 'other'];
+  const showShadow = Boolean(document.getElementById('showShadowUnits')?.checked);
+  const showLegacy = Boolean(document.getElementById('showLegacyUnits')?.checked);
+  const allUnits = units || [];
+  const visibleUnits = allUnits.filter(unit => {{
+    if (unit.lifecycle === 'shadow' && !showShadow) return false;
+    if (unit.lifecycle === 'legacy_cutover' && !showLegacy) return false;
+    return true;
+  }});
+  const hiddenShadow = allUnits.filter(unit => unit.lifecycle === 'shadow').length;
+  const hiddenLegacy = allUnits.filter(unit => unit.lifecycle === 'legacy_cutover').length;
+  const summary = document.getElementById('healthUnitSummary');
+  if (summary) {{
+    const parts = [`展示 ${{visibleUnits.length}} / ${{allUnits.length}} 个单元`];
+    if (!showShadow && hiddenShadow) parts.push(`隐藏影子 ${{hiddenShadow}} 个`);
+    if (!showLegacy && hiddenLegacy) parts.push(`隐藏历史兼容 ${{hiddenLegacy}} 个`);
+    summary.textContent = parts.join('；');
+  }}
+  const order = ['fetching_persistent', 'fetching_scheduled', 'processing_scheduled', 'infrastructure', 'fetching_shadow', 'fetching_legacy', 'other'];
   const byGroup = {{}};
-  (units || []).forEach(unit => {{
+  visibleUnits.forEach(unit => {{
     const group = unit.group || 'other';
     if (!byGroup[group]) byGroup[group] = [];
     byGroup[group].push(unit);
   }});
   const rows = [];
-  order.forEach(group => {{
+  const orderedGroups = [...order, ...Object.keys(byGroup).filter(group => !order.includes(group))];
+  orderedGroups.forEach(group => {{
     const groupUnits = byGroup[group] || [];
     if (!groupUnits.length) return;
     rows.push(`
@@ -1669,10 +1741,12 @@ function renderHealthUnits(units, groupLabels) {{
     groupUnits.forEach(unit => {{
       const rawStatus = [unit.ActiveState || unit.LoadState || '', unit.SubState || '', unit.Result || unit.error || '']
         .filter(Boolean).join(' / ');
+      const lifecycle = unit.lifecycle_label ? `<div class="hint">${{escapeHtml(unit.lifecycle_label)}}</div>` : '';
+      const replacement = unit.replacement ? `<div class="hint">替代：${{escapeHtml(unit.replacement)}}</div>` : '';
       rows.push(`
         <tr>
           <td>${{escapeHtml(unit.Id || '')}}</td>
-          <td>${{escapeHtml(unit.unit_type || '')}}</td>
+          <td>${{escapeHtml(unit.unit_type || '')}}${{lifecycle}}${{replacement}}</td>
           <td>${{badge(unit.status_text || unit.ActiveState || unit.LoadState || '')}}</td>
           <td>${{escapeHtml(unit.schedule || '')}}</td>
           <td>${{escapeHtml(rawStatus)}}</td>
@@ -2453,10 +2527,10 @@ function settingsRestartAdvice(changedItems) {{
   const hasAny = names => keys.some(key => names.includes(key));
   const lines = [];
   if (hasPrefix('WEB_EVIDENCE_') || hasAny(['TAVILY_API_KEY', 'BRAVE_SEARCH_API_KEY'])) {{
-    lines.push('Tavily/Web Evidence：重启 surveil-rss-monitor.service、surveil-trendforce-page-monitor.service；可选对 overseas-media/china-media timer 点“立即运行”。');
+    lines.push('Tavily/Web Evidence：新 collector 为 timer one-shot，下一轮会读取配置；如需马上验证，在任务健康页立即运行 surveil-research-collector.timer、surveil-official-collector.timer、surveil-news-collector.timer。');
   }}
   if (hasPrefix('LLM_') || hasPrefix('OPENAI_')) {{
-    lines.push('大模型配置：重启 RSS、TrendForce、X stream、Sina flash 等常驻分析服务；定时批处理等下一轮或点“立即运行”。');
+    lines.push('大模型配置：重启常驻的 surveil-x-stream.service、surveil-sina-flash.service；研究机构/官网/新闻媒体 collector 下一轮自动读取，也可立即运行对应 timer。');
   }}
   if (hasPrefix('X_')) {{
     lines.push('X 配置：重启 surveil-x-stream.service。');
@@ -2468,7 +2542,7 @@ function settingsRestartAdvice(changedItems) {{
     lines.push('iFinD 配置：公告/研报 timer 下一轮自动读取；如需马上验证，立即运行对应 timer 或 smoke service。');
   }}
   if (hasAny(['SURVEIL_HTTP_PROXY', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'])) {{
-    lines.push('代理环境：重启使用代理的常驻服务；定时批处理下一轮自动读取。若修改 mihomo 配置，重启 surveil-proxy.service。');
+    lines.push('代理环境：重启使用代理的常驻服务；collector timer 下一轮自动读取。若修改 mihomo 配置，重启 surveil-proxy.service。');
   }}
   return lines;
 }}

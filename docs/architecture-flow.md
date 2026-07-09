@@ -19,10 +19,9 @@ flowchart TD
 
     subgraph C["Collectors"]
         XStream["surveil-x-stream<br/>scripts/x_stream.py"]
-        RSS["surveil-rss-monitor<br/>scripts/rss_monitor.py"]
-        Overseas["surveil-overseas-media<br/>scripts/overseas_media_monitor.py"]
-        TrendPage["surveil-trendforce-page-monitor<br/>scripts/trendforce_page_monitor.py"]
-        ChinaMedia["surveil-china-media<br/>scripts/china_finance_media_monitor.py"]
+        ResearchCollector["surveil-research-collector<br/>scripts/research_collector.py"]
+        OfficialCollector["surveil-official-collector<br/>scripts/official_collector.py"]
+        NewsCollector["surveil-news-collector<br/>scripts/news_collector.py"]
         SinaFlash["surveil-sina-flash<br/>scripts/sina_flash.py"]
         SinaStock["surveil-sina-stock-news<br/>scripts/sina_stock_news.py"]
         Ifind["surveil-ifind-notice/report<br/>scripts/ifind_batch.py"]
@@ -57,11 +56,9 @@ flowchart TD
     end
 
     X --> XStream
-    Official --> RSS
-    Industry --> RSS
-    Industry --> Overseas
-    Industry --> TrendPage
-    China --> ChinaMedia
+    Official --> OfficialCollector
+    Industry --> ResearchCollector
+    China --> NewsCollector
     China --> SinaFlash
     China --> SinaStock
     Notices --> Ifind
@@ -70,10 +67,9 @@ flowchart TD
     WebSearch --> EvidenceLayer
 
     XStream --> SQLite
-    RSS --> SQLite
-    Overseas --> SQLite
-    TrendPage --> SQLite
-    ChinaMedia --> SQLite
+    ResearchCollector --> SQLite
+    OfficialCollector --> SQLite
+    NewsCollector --> SQLite
     SinaFlash --> SQLite
     SinaStock --> SQLite
     Ifind --> SQLite
@@ -128,17 +124,20 @@ flowchart LR
 
     subgraph FetchingServices["Fetching Services"]
         XSvc["surveil-x-stream<br/>simple / long connection<br/>x_stream.py"]
-        RSSSvc["surveil-rss-monitor<br/>simple / 300s loop<br/>rss_monitor.py"]
-        TrendSvc["surveil-trendforce-page-monitor<br/>simple / 900s loop<br/>trendforce_page_monitor.py"]
-        OverseasSvc["surveil-overseas-media<br/>oneshot timer / 5 min<br/>overseas_media_monitor.py"]
-        ChinaSvc["surveil-china-media<br/>oneshot timer / 2 min<br/>china_finance_media_monitor.py"]
+        ResearchProd["surveil-research-collector<br/>oneshot timer / 5 min<br/>research_collector.py"]
+        OfficialProd["surveil-official-collector<br/>oneshot timer / 10 min<br/>official_collector.py"]
+        NewsProd["surveil-news-collector<br/>oneshot timer / 2 min<br/>news_collector.py"]
         SinaFlashSvc["surveil-sina-flash<br/>simple / high-frequency loop<br/>sina_flash.py"]
         SinaStockSvc["surveil-sina-stock-news<br/>oneshot timer / 30 min<br/>sina_stock_news.py"]
         IfindSvc["surveil-ifind-notice/report<br/>oneshot timer<br/>ifind_batch.py"]
         JYGSSvc["surveil-jygs-actions<br/>oneshot timer<br/>jygs_actions.py"]
-        ResearchProd["surveil-research-collector<br/>oneshot timer / 5 min<br/>research_collector.py<br/>migration target"]
-        OfficialProd["surveil-official-collector<br/>oneshot timer / 10 min<br/>official_collector.py<br/>migration target"]
-        NewsProd["surveil-news-collector<br/>oneshot timer / 2 min<br/>news_collector.py<br/>migration target"]
+    end
+
+    subgraph LegacyServices["Historical Compatibility Units<br/>disabled after cutover"]
+        RSSSvc["surveil-rss-monitor<br/>legacy 300s loop"]
+        TrendSvc["surveil-trendforce-page-monitor<br/>legacy 900s loop"]
+        OverseasSvc["surveil-overseas-media<br/>legacy 5 min timer"]
+        ChinaSvc["surveil-china-media<br/>legacy 2 min timer"]
     end
 
     subgraph ShadowServices["Shadow Collector Services"]
@@ -159,39 +158,28 @@ flowchart LR
     end
 
     Serenity --> XSvc
-    SemiAnalysis --> RSSSvc
-    SemiAnalysis -. migration .-> ResearchProd
+    SemiAnalysis --> ResearchProd
     SemiAnalysis --> ResearchShadow
-    TrendRSS --> RSSSvc
-    TrendRSS -. migration .-> ResearchProd
+    TrendRSS --> ResearchProd
     TrendRSS --> ResearchShadow
-    CompanyFeeds --> RSSSvc
-    CompanyFeeds -. migration .-> OfficialProd
+    CompanyFeeds --> OfficialProd
     CompanyFeeds --> OfficialShadow
-    TrendPages --> TrendSvc
-    TrendPages -. migration .-> ResearchProd
+    TrendPages --> ResearchProd
     TrendPages --> ResearchShadow
-    SemiPR --> TrendSvc
-    SemiPR -. migration .-> ResearchProd
+    SemiPR --> ResearchProd
     SemiPR --> ResearchShadow
-    OverseasFeeds --> OverseasSvc
-    OverseasFeeds -. migration .-> ResearchProd
+    OverseasFeeds --> ResearchProd
     OverseasFeeds --> ResearchShadow
-    Domestic --> ChinaSvc
-    Domestic -. migration .-> NewsProd
+    Domestic --> NewsProd
     Domestic --> NewsShadow
     Sina --> SinaFlashSvc
     Sina --> SinaStockSvc
     IfindSource --> IfindSvc
     JYGSSource --> JYGSSvc
     EvidenceAPI --> EvidenceMod
-    RSSSvc --> SignalExtractSvc
-    TrendSvc --> SignalExtractSvc
-    OverseasSvc --> SignalExtractSvc
-    ResearchProd -. when enabled .-> SignalExtractSvc
-    OfficialProd -. when enabled .-> SignalExtractSvc
-    ChinaSvc --> SignalExtractSvc
-    NewsProd -. when enabled .-> SignalExtractSvc
+    ResearchProd --> SignalExtractSvc
+    OfficialProd --> SignalExtractSvc
+    NewsProd --> SignalExtractSvc
     ResearchShadow --> ShadowDigest
     OfficialShadow --> ShadowDigest
     NewsShadow --> ShadowDigest
@@ -200,18 +188,14 @@ flowchart LR
 
 ## Fetching Service Analysis Matrix
 
-The health page uses the same high-level grouping: fetching services are separated from non-fetching processing and infrastructure. `simple` services stay alive and generally need a restart after environment changes. `oneshot` services are started by timers, run one batch, and exit; `inactive/dead/success` means the previous batch completed successfully.
+The health page uses the same high-level grouping: fetching services are separated from non-fetching processing and infrastructure. `simple` services stay alive and generally need a restart after environment changes. `oneshot` services are started by timers, run one batch, and exit; `inactive/dead/success` means the previous batch completed successfully. After the collector cutover, the default Web health view shows production units first and hides shadow / legacy compatibility units unless explicitly requested.
 
 | Unit | Information source | Fetch range | Main filters / routing | Runtime shape | Frequency / trigger | Pipeline | Skeptic Evaluator | Tavily / Web Evidence |
 |---|---|---|---|---|---|---|---|---|
 | `surveil-x-stream.service` | X API filtered stream, currently focused on Serenity and configured X rules | Public X posts received from the stream; link/card enrichment is best-effort | X stream rules, account/list configuration, local delivery status retry; no article keyword prefilter | `simple` persistent | Long connection, reconnect on failure | X post pipeline (`seen_posts`, X card/report path), not `event_pipeline` / `article_gate` | No | No |
-| `surveil-rss-monitor.service` | SemiAnalysis RSS; core company feeds from OpenAI, NVIDIA, Samsung, SK hynix, Micron; TrendForce RSS categories | RSS/Atom feed entries plus optional article body extraction | SemiAnalysis is source-priority immediate; TrendForce/core company feeds pass media keyword filters; official company feeds route to official gate; during research cutover `RSS_MONITOR_EXCLUDE_PROFILE_CATEGORIES=research_industry_media` can keep only non-research sources here | `simple` persistent | Internal 300s loop | Research / industry-media short hard variables use event-first gate; normal SemiAnalysis/TrendForce RSS uses `article_gate`; core company feeds use `official_news_gate` | Yes, after event-first/article/official gate; explicit `block` can still stop | Yes, only when Skeptic runs and `WEB_EVIDENCE_ENABLED=1` |
-| `surveil-trendforce-page-monitor.service` | TrendForce public list pages and PRNewswire semiconductor list for SEMI releases | TrendForce Research / Selected Topics / Press Centre pages; PRNewswire semiconductor release list | Page-source extractors, TrendForce focus categories, event-first gate for short quantified hard variables | `simple` persistent | Internal 900s loop | Short hard-variable items use event-first gate; normal items use `article_gate` with source `trendforce_page` | Yes | Yes, only through Skeptic |
-| `surveil-overseas-media.timer` -> `.service` | DIGITIMES Taiwan/English, Nikkei xTECH RDF, The Elec Korean/English feeds | Official RSS/RDF feed titles, summaries, and article bodies when accessible | Media keyword include/exclude filters; source access notes; no paywall bypass; event-first gate for short quantified hard variables | `oneshot` batch | Every 5 minutes | Reuses `rss_monitor.run_once`; short hard-variable items use event-first gate, otherwise `article_gate` | Yes | Yes, only through Skeptic |
-| `surveil-research-collector.timer` -> `.service` | Migration target for SemiAnalysis, TrendForce RSS/pages, SEMI/PRNewswire, DIGITIMES, Nikkei xTECH, The Elec | Same research/industry-media source family as the three historical collectors | Source profile enabled filtering; RSS runs every batch; page sources are internally throttled to 15 minutes by default | `oneshot` batch | Timer every 5 minutes; page cadence default 900 seconds | Production mode delegates to existing `rss_monitor.run_once` and `trendforce_page_monitor.run_once`, so it keeps the same `article_gate`, hardline, Skeptic, Tavily, Feishu, and `seen_items` behavior | Yes | Yes, only through Skeptic |
-| `surveil-official-collector.timer` -> `.service` | Migration target for OpenAI, NVIDIA, Samsung, SK hynix, Micron official feeds | Official RSS/Atom feed entries and public article bodies when accessible | Source profile enabled filtering; official-company source list only; ordinary marketing/newsroom items are downgraded by `official_news_gate` | `oneshot` batch | Every 10 minutes | Production mode delegates to existing `rss_monitor.run_once`, so it keeps the same `official_news_gate`, hardline, Skeptic, Tavily, Feishu, and `official_news_reviews` behavior | Yes | Yes, only through Skeptic |
-| `surveil-china-media.timer` -> `.service` | First Yicai, CLS public front-end roll API, Jin10 public/RSSHub important feed, Star Market Daily | Public flash/news/list entries from configured domestic sources | Source-specific parsers; macro policy override for CPI/PCE/NFP/Fed-relevant items; mandatory Yicai morning brief rule | `oneshot` batch | Every 2 minutes | `article_gate` | Yes | Yes, only through Skeptic |
-| `surveil-news-collector.timer` -> `.service` | Migration target for First Yicai, CLS public front-end roll API, Jin10 public/RSSHub important feed, Star Market Daily | Same domestic news-media source family as `surveil-china-media`; Sina flash remains a separate high-frequency persistent service for now | Source profile enabled filtering; production mode delegates to `china_finance_media_monitor.run_once`, preserving CLS state, backoff, macro override, mandatory Yicai morning brief, Skeptic, Tavily, Feishu, and `article_reviews` behavior | `oneshot` batch | Every 2 minutes | `article_gate` through the existing China media pipeline | Yes | Yes, only through Skeptic |
+| `surveil-research-collector.timer` -> `.service` | SemiAnalysis, TrendForce RSS/pages, SEMI/PRNewswire, DIGITIMES, Nikkei xTECH, The Elec | Official RSS/RDF/list-page entries and public article bodies when accessible | Source profile enabled filtering; RSS/RDF runs every batch; page sources are internally throttled to 15 minutes by default | `oneshot` batch | Timer every 5 minutes; page cadence default 900 seconds | Production mode delegates to the existing RSS/page gates, preserving `article_gate`, hardline, Skeptic, Tavily, Feishu, and `seen_items` behavior | Yes | Yes, only through Skeptic |
+| `surveil-official-collector.timer` -> `.service` | OpenAI, NVIDIA, Samsung, SK hynix, Micron official feeds | Official RSS/Atom feed entries and public article bodies when accessible | Source profile enabled filtering; official-company source list only; ordinary marketing/newsroom items are downgraded by `official_news_gate` | `oneshot` batch | Every 10 minutes | Production mode delegates to existing `rss_monitor.run_once`, keeping `official_news_gate`, hardline, Skeptic, Tavily, Feishu, and `official_news_reviews` behavior | Yes | Yes, only through Skeptic |
+| `surveil-news-collector.timer` -> `.service` | First Yicai, CLS public front-end roll API, Jin10 public/RSSHub important feed, Star Market Daily | Public flash/news/list entries from configured domestic sources | Source profile enabled filtering; production mode delegates to `china_finance_media_monitor.run_once`, preserving CLS state, backoff, macro override, mandatory Yicai morning brief, Skeptic, Tavily, Feishu, and `article_reviews` behavior | `oneshot` batch | Every 2 minutes | `article_gate` through the existing China media pipeline | Yes | Yes, only through Skeptic |
 | `surveil-sina-flash.service` | Sina Finance 7x24 flash API or optional Sina ZY provider | All fetched flash rows for configured tags/provider page | Match enabled holdings by code/name/aliases or macro policy line; dedupe into `events` | `simple` persistent | Script loop, default `SINA_FLASH_POLL_SECONDS=15` seconds | `event_pipeline` (`analyze_event` / `maybe_deliver_event`) | No | No |
 | `surveil-sina-stock-news.timer` -> `.service` | Sina per-stock public news page or optional Sina ZY stock news provider | For each enabled holding, latest `SINA_STOCK_NEWS_PER_STOCK_LIMIT` items, default 12 | Filter announcement-like items, AI-generated pages, holding exclude keywords; direct mention/business keyword pass; ambiguous items use relevance LLM | `oneshot` batch | Every 30 minutes | `event_pipeline` after relevance filter and optional article-body fetch | No; current guard is relevance LLM + freshness hint | No |
 | `surveil-ifind-notice.timer` -> `.service` | iFinD notices/filings for enabled holdings | Recent notices over the configured lookback window | Holdings universe, iFinD notice kind, event dedupe; PDF text extraction when available | `oneshot` batch | 08:00 and 20:00 | `event_pipeline` | No | No |
@@ -223,7 +207,16 @@ The health page uses the same high-level grouping: fetching services are separat
 
 Non-fetching runtime units are intentionally omitted from this table: `surveil-signals-extract`, `surveil-signal-outcome`, `surveil-signal-review`, `surveil-signal-digest`, `surveil-article-daily`, `surveil-collector-shadow-digest`, `surveil-holdings-web`, and `surveil-proxy` operate on existing state, UI, logs, proxying, or post-processing rather than fetching new market information.
 
-The Web workbench exposes a read-only `source_profiles.py` catalog above these historical units. It groups sources into the six target categories used for the cleanup plan: X / Serenity, Research / industry media, official company sources, news media, Sina portfolio stock news, and iFinD company disclosures. This source-profile view is a UI and observability layer first; it does not yet rename or merge the underlying systemd collectors.
+Historical compatibility units remain installed and whitelisted so operators can inspect or manually run them during rollback/debugging, but production deployments keep them disabled after cutover:
+
+| Legacy unit | Replaced by | Notes |
+|---|---|---|
+| `surveil-rss-monitor.service` | `surveil-research-collector.timer` and `surveil-official-collector.timer` | Kept for rollback/debugging; `DISABLE_LEGACY_RSS_MONITOR=1` keeps it off. |
+| `surveil-trendforce-page-monitor.service` | `surveil-research-collector.timer` | Kept for rollback/debugging; `DISABLE_LEGACY_RESEARCH_MONITORS=1` keeps it off. |
+| `surveil-overseas-media.timer` -> `.service` | `surveil-research-collector.timer` | Kept for rollback/debugging; `DISABLE_LEGACY_RESEARCH_MONITORS=1` keeps it off. |
+| `surveil-china-media.timer` -> `.service` | `surveil-news-collector.timer` | Kept for rollback/debugging; `DISABLE_LEGACY_CHINA_MEDIA_MONITOR=1` keeps it off. |
+
+The Web workbench exposes a `source_profiles.py` catalog above these systemd units. It groups sources into the six target categories used by the production cleanup plan: X / Serenity, Research / industry media, official company sources, news media, Sina portfolio stock news, and iFinD company disclosures. Source profiles now show the unified production collectors while keeping the original `source_health` monitor/source labels for historical continuity.
 
 ## Decision and Delivery Pipeline
 
