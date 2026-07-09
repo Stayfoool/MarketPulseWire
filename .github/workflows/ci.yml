@@ -42,6 +42,7 @@ jobs:
           python scripts/test_official_collector.py
           python scripts/test_research_collector.py
           python scripts/test_rss_monitor_fetch.py
+          python scripts/test_push_rules.py
           python scripts/test_gate_prompts.py
           python scripts/test_sina_zy_client.py
           python scripts/test_industry_hardline.py

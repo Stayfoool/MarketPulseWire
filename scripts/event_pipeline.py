@@ -14,22 +14,18 @@ from db_utils import connect_sqlite
 from feishu import send_card_with_response
 from llm_analysis import call_chat_completion_with_prompts, format_llm_analysis
 from market_db import DEFAULT_DB_PATH, init_db
+from push_rules import apply_event_push_rules
 
 
 PORTFOLIO_EVENT_SYSTEM_PROMPT = """你是 A 股持仓监控系统的投研与风控助理。
-任务：阅读一条公告、研报、快讯或异动信息，判断它对用户持仓和相关 A 股/美股标的的股价影响。
+任务：为一条已通过规则预筛的公告、研报、快讯或异动信息生成极简实时摘要。
 要求：
 - 只输出 JSON，不要 Markdown，不要输出 JSON 外解释。
 - 不要给无条件买入/卖出指令，只能输出研究信号、观察建议和风险提示。
-- 必须判断重要性：high/medium/low。只有可能对股价有中高影响的信息才建议推送。
-- 必须判断信息属性：增量利好/增量利空/已有预期/符合预期/利好落地/利空落地/可能利好出尽/可能利空出尽/中性信息/无法判断。
-- 必须判断股价预期方向、影响幅度、持续时间，以及是一次性还是持续性影响。
-- 如果只是异常波动公告、常规投资者关系活动记录、例行披露、没有新增订单/业绩/价格/产能/政策/指引变化，倾向判为已有预期、中性信息或低重要性。
-- 如果原文不足以支持具体股票影响，明确写“暂无明确直接标的”，不要硬凑。
-- 涉及上市公司时，写简称、代码、公司全称或上市地；A 股/美股最多各列 3 个最直接标的。
-- 要区分直接影响、间接影响、情绪影响和产业链扩散，不要把无关内容机械映射到热门主题。
-- 对利好/利空都要说明是否可能已被市场定价、是否存在利好出尽或利空落地风险。
-- 对 `sina_stock_news` 尤其要区分“文章发布时间”和“事件首次披露/市场首次知道的时间”。如果输入 raw.freshness 显示 `stale_or_rehash`、`possibly_stale`，或正文提到更早日期已经公告/报道/股价已大涨大跌，除非文章提供新的订单、业绩、价格、产能、监管或经营事实，否则必须倾向判为“已有预期/已定价/低重要性”，不要判为增量利好或增量利空。
+- 实时推送开关优先由确定性规则、持仓、关系映射和宏观规则决定；不要把自己当成最终裁判。
+- 只做三件事：核心内容、简短关注原因、相关持仓/标的/环节。
+- 不要输出股价方向、影响幅度、持续时间、完整 A 股/美股扩散列表、tracking points、risks、watchlist、price-in 判断、surprise_level、confidence。
+- 如果输入 raw.freshness 显示旧闻或已反应，只能在 brief_reason 中简短备注；不能用它覆盖规则层强推。
 """
 
 
@@ -37,73 +33,19 @@ PORTFOLIO_EVENT_USER_PROMPT = """请分析以下持仓事件，并输出 JSON。
 
 输出字段：
 {
-  "importance": "high/medium/low",
   "core_content": "一句到两句中文核心内容",
-  "themes": ["主题1", "主题2"],
+  "brief_reason": "一句简短关注原因；不要写长篇门控理由",
   "related_holdings": [
     {
       "name": "持仓简称",
       "code": "持仓代码",
       "relation": "直接相关/同行相关/上下游相关/竞争相关/主题相关/无明确关系",
-      "impact_direction": "positive/negative/neutral/uncertain",
-      "impact_magnitude": "高/中/低/无法判断",
-      "reason": "对该持仓的影响理由"
+      "impact_direction": "positive/negative/neutral/uncertain"
     }
-  ],
-  "incremental_view": {
-    "classification": "增量利好/增量利空/已有预期/符合预期/利好落地/利空落地/可能利好出尽/可能利空出尽/中性信息/无法判断",
-    "surprise_level": "高/中/低/无法判断",
-    "priced_in": "大概率已定价/部分定价/尚未充分定价/无法判断",
-    "reason": "说明新增信息是什么、是否超预期、是否只是落地或重复已知预期"
-  },
-  "price_impact": {
-    "direction": "上涨/下跌/震荡或中性/无法判断",
-    "magnitude": "高/中/低/无法判断",
-    "duration": "盘中/数日/数周到数月/季度以上/无法判断",
-    "persistence": "一次性/阶段性持续/长期持续/无法判断",
-    "reason": "股价方向、持续性的判断依据"
-  },
-  "initial_impact": "初步影响判断",
-  "a_share": {
-    "positive": [
-      {
-        "name": "简称",
-        "code": "代码",
-        "full_name": "公司全称",
-        "listing": "上市地",
-        "reason": "为什么直接受益",
-        "impact_magnitude": "高/中/低/无法判断",
-        "duration": "盘中/数日/数周到数月/季度以上/无法判断",
-        "persistence": "一次性/阶段性持续/长期持续/无法判断",
-        "confidence": "高/中/低"
-      }
-    ],
-    "negative": [
-      {
-        "name": "简称",
-        "code": "代码",
-        "full_name": "公司全称",
-        "listing": "上市地",
-        "reason": "为什么直接承压",
-        "impact_magnitude": "高/中/低/无法判断",
-        "duration": "盘中/数日/数周到数月/季度以上/无法判断",
-        "persistence": "一次性/阶段性持续/长期持续/无法判断",
-        "confidence": "高/中/低"
-      }
-    ]
-  },
-  "global_equity": {
-    "positive": [],
-    "negative": []
-  },
-  "tracking_points": ["后续跟踪点1", "后续跟踪点2"],
-  "risks": ["风险1", "风险2"],
-  "watchlist_view": "是否值得继续观察及理由",
-  "push_decision": {
-    "should_push": true,
-    "reason": "为什么应该/不应该第一时间推送"
-  }
+  ]
 }
+
+注意：不要输出 importance、incremental_view、price_impact、a_share、global_equity、tracking_points、risks、watchlist_view。是否推送由规则层决定。
 
 输入：
 {content}
@@ -242,7 +184,43 @@ def analyze_event(event_id: int, task: str = "portfolio_event", db_path: Path = 
             (event_id, task),
         ).fetchone()
         if existing:
-            return json.loads(existing[1])
+            parsed = json.loads(existing[1])
+            updated = apply_event_rules_to_analysis(
+                {
+                    "source": source,
+                    "event_type": event_type,
+                    "title": title,
+                    "summary": summary,
+                    "full_text": full_text,
+                    "url": url,
+                    "published_at": published_at,
+                    "symbols_json": symbols_json,
+                    "raw_json": raw_json,
+                },
+                parsed,
+                db_path=db_path,
+            )
+            if updated != parsed:
+                importance, classification, direction, impact_duration, should_push = analysis_record_fields(updated)
+                conn.execute(
+                    """
+                    UPDATE event_analyses
+                    SET importance = ?, classification = ?, direction = ?, impact_duration = ?,
+                        should_push = ?, analysis_json = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        importance,
+                        classification,
+                        direction,
+                        impact_duration,
+                        should_push,
+                        json_dumps(updated),
+                        existing[0],
+                    ),
+                )
+                conn.commit()
+            return updated
 
     text = build_portfolio_event_input(
         {
@@ -264,18 +242,23 @@ def analyze_event(event_id: int, task: str = "portfolio_event", db_path: Path = 
         user_agent="surveil-portfolio-event-llm/0.1",
     )
     parsed["_model"] = model
-    importance = infer_importance(parsed)
-    classification = ""
-    incremental = parsed.get("incremental_view")
-    if isinstance(incremental, dict):
-        classification = str(incremental.get("classification") or "")
-    direction = ""
-    impact_duration = ""
-    price_impact = parsed.get("price_impact")
-    if isinstance(price_impact, dict):
-        direction = str(price_impact.get("direction") or "")
-        impact_duration = str(price_impact.get("duration") or "")
-    should_push = 1 if should_push_analysis(parsed, importance) else 0
+    parsed["llm_mode"] = "thin"
+    parsed = apply_event_rules_to_analysis(
+        {
+            "source": source,
+            "event_type": event_type,
+            "title": title,
+            "summary": summary,
+            "full_text": full_text,
+            "url": url,
+            "published_at": published_at,
+            "symbols_json": symbols_json,
+            "raw_json": raw_json,
+        },
+        parsed,
+        db_path=db_path,
+    )
+    importance, classification, direction, impact_duration, should_push = analysis_record_fields(parsed)
     with connect_sqlite(db_path) as conn:
         conn.execute(
             """
@@ -300,6 +283,49 @@ def analyze_event(event_id: int, task: str = "portfolio_event", db_path: Path = 
         )
         conn.commit()
     return parsed
+
+
+def analysis_record_fields(parsed: dict[str, Any]) -> tuple[str, str, str, str, int]:
+    importance = infer_importance(parsed)
+    classification = ""
+    incremental = parsed.get("incremental_view")
+    if isinstance(incremental, dict):
+        classification = str(incremental.get("classification") or "")
+    elif parsed.get("rule_forced_push"):
+        classification = "规则命中"
+    direction = ""
+    impact_duration = ""
+    price_impact = parsed.get("price_impact")
+    if isinstance(price_impact, dict):
+        direction = str(price_impact.get("direction") or "")
+        impact_duration = str(price_impact.get("duration") or "")
+    should_push = 1 if should_push_analysis(parsed, importance) else 0
+    return importance, classification, direction, impact_duration, should_push
+
+
+def apply_event_rules_to_analysis(
+    event_row: dict[str, Any], analysis: dict[str, Any], *, db_path: Path = DEFAULT_DB_PATH
+) -> dict[str, Any]:
+    try:
+        symbols = json.loads(str(event_row.get("symbols_json") or "[]"))
+    except json.JSONDecodeError:
+        symbols = []
+    try:
+        raw = json.loads(str(event_row.get("raw_json") or "{}"))
+    except json.JSONDecodeError:
+        raw = {}
+    event = {
+        "source": event_row.get("source"),
+        "event_type": event_row.get("event_type"),
+        "title": event_row.get("title"),
+        "summary": event_row.get("summary"),
+        "full_text": event_row.get("full_text"),
+        "url": event_row.get("url"),
+        "published_at": event_row.get("published_at"),
+        "raw": raw if isinstance(raw, dict) else {},
+    }
+    symbol_set = {str(symbol).upper() for symbol in symbols if str(symbol).strip()}
+    return apply_event_push_rules(event, analysis, holdings=load_enabled_holdings(db_path), symbols=symbol_set)
 
 
 def build_portfolio_event_input(event: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> str:
@@ -386,6 +412,17 @@ def compact_text(value: str, limit: int = 900) -> str:
 
 def compact_targets(parsed: dict[str, Any]) -> list[str]:
     targets: list[str] = []
+    related_targets = parsed.get("related_targets")
+    if isinstance(related_targets, list):
+        for item in related_targets:
+            if isinstance(item, dict):
+                name = str(item.get("name") or "").strip()
+                code = str(item.get("code") or "").strip()
+                label = " ".join(part for part in (name, code) if part)
+            else:
+                label = str(item).strip()
+            if label:
+                targets.append(label)
     related = parsed.get("related_holdings")
     if isinstance(related, list):
         for item in related:
@@ -428,6 +465,12 @@ def compact_event_analysis_lines(parsed: dict[str, Any]) -> list[str]:
     core = str(parsed.get("core_content") or "").strip()
     if core:
         lines.append(f"核心内容：{core}")
+    reason = str(parsed.get("brief_reason") or "").strip()
+    push_decision = parsed.get("push_decision")
+    if not reason and isinstance(push_decision, dict):
+        reason = str(push_decision.get("reason") or "").strip()
+    if reason:
+        lines.append("为什么推送：" + compact_text(reason, 260))
     targets = compact_targets(parsed)
     if targets:
         lines.append("相关标的：" + "；".join(targets))
@@ -438,21 +481,36 @@ def compact_event_analysis_lines(parsed: dict[str, Any]) -> list[str]:
 
 def maybe_deliver_event(event_id: int, analysis: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> str:
     """Deliver when Feishu is configured; otherwise record a skipped delivery."""
+    with connect_sqlite(db_path) as conn:
+        row = conn.execute(
+            "SELECT source, event_type, title, summary, full_text, url, published_at, symbols_json, raw_json FROM events WHERE id = ?",
+            (event_id,),
+        ).fetchone()
+    if not row:
+        raise RuntimeError(f"事件不存在：{event_id}")
+    source, event_type, title, summary, full_text, url, published_at, symbols_json, raw_json = row
+    analysis = apply_event_rules_to_analysis(
+        {
+            "source": source,
+            "event_type": event_type,
+            "title": title,
+            "summary": summary,
+            "full_text": full_text,
+            "url": url,
+            "published_at": published_at,
+            "symbols_json": symbols_json,
+            "raw_json": raw_json,
+        },
+        analysis,
+        db_path=db_path,
+    )
     if not should_push_analysis(analysis):
-        record_delivery(event_id, "feishu", "skipped", {"reason": "LLM 判断重要性低，不推送"}, db_path=db_path)
+        record_delivery(event_id, "feishu", "skipped", {"reason": "未命中强推规则，不即时推送"}, db_path=db_path)
         return "skipped"
     webhook = os.getenv("FEISHU_WEBHOOK", "").strip()
     if not webhook:
         record_delivery(event_id, "feishu", "skipped", {"reason": "FEISHU_WEBHOOK 未配置"}, db_path=db_path)
         return "skipped"
-    with connect_sqlite(db_path) as conn:
-        row = conn.execute(
-            "SELECT source, title, summary, full_text, url, published_at FROM events WHERE id = ?",
-            (event_id,),
-        ).fetchone()
-    if not row:
-        raise RuntimeError(f"事件不存在：{event_id}")
-    source, title, summary, full_text, url, published_at = row
     if thin_event_card_enabled():
         lines = compact_event_analysis_lines(analysis)
         display_text = compact_text(summary or full_text, 1000)

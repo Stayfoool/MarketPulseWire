@@ -25,8 +25,10 @@ from article_gate import (
     failed_review,
     gate_lines,
     mark_pushed as mark_article_pushed,
+    apply_push_rule_override,
     review_article,
     review_exists as article_review_exists,
+    rule_first_review,
     save_review as save_article_review,
 )
 from official_news_gate import apply_official_hardline_override
@@ -48,11 +50,13 @@ from media_sources import is_overseas_media_source, overseas_media_access_note, 
 from media_keyword_config import is_media_focus_item
 from official_news_gate import (
     analysis_lines_from_review,
+    apply_official_push_rule_override,
     is_official_news_source,
     mark_pushed,
     official_news_enabled,
     review_exists,
     review_official_news,
+    rule_first_official_review,
     save_review,
 )
 from skeptic_evaluator import apply_skeptic_review
@@ -372,16 +376,21 @@ def notify_item(source: str, item: dict) -> None:
             if review:
                 print(f"{source} event-first 硬变量门控：title={item.get('title', '')}", flush=True)
             else:
-                try:
-                    review = review_article(source, item)
-                except Exception as exc:  # noqa: BLE001 - keep item in daily digest
-                    print(f"{source} 文章门控失败：{exc}", flush=True)
-                    review = failed_review(item, exc)
+                review = rule_first_review(source, item)
+                if review:
+                    print(f"{source} 规则优先门控：title={item.get('title', '')}", flush=True)
+                else:
+                    try:
+                        review = review_article(source, item)
+                    except Exception as exc:  # noqa: BLE001 - keep item in daily digest
+                        print(f"{source} 文章门控失败：{exc}", flush=True)
+                        review = failed_review(item, exc)
             with connect_db() as conn:
                 review = apply_source_priority_override(source, item, review)
                 review = apply_article_hardline_override(source, item, review)
                 review = apply_skeptic_review(conn, source=source, item=item, review=review, push_key="push_now")
                 review = apply_source_priority_override(source, item, review)
+                review = apply_push_rule_override(source, item, review)
                 save_article_review(conn, source, item, review)
         print(
             f"{source} 文章门控：importance={review.get('importance')} "
@@ -418,7 +427,11 @@ def handle_official_news_item(source: str, item: dict) -> None:
         with connect_db() as conn:
             save_review(conn, source, enriched, review)
     else:
-        review = review_official_news(source, enriched)
+        review = rule_first_official_review(source, enriched)
+        if review:
+            print(f"{source} 官网新闻规则优先门控：title={enriched.get('title', '')}", flush=True)
+        else:
+            review = review_official_news(source, enriched)
         with connect_db() as conn:
             review = apply_official_hardline_override(source, enriched, review)
             review = apply_skeptic_review(
@@ -428,6 +441,7 @@ def handle_official_news_item(source: str, item: dict) -> None:
                 review=review,
                 push_key="should_push_now",
             )
+            review = apply_official_push_rule_override(source, enriched, review)
             save_review(conn, source, enriched, review)
 
     print(

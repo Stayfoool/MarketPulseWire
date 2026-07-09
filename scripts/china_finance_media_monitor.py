@@ -26,8 +26,10 @@ from article_gate import (
     failed_review,
     gate_lines,
     mark_pushed as mark_article_pushed,
+    apply_push_rule_override,
     review_article,
     review_exists as article_review_exists,
+    rule_first_review,
     save_review as save_article_review,
 )
 from cards import build_article_card
@@ -654,11 +656,15 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
         if existing:
             review = existing
         else:
-            try:
-                review = review_article(source, enriched)
-            except Exception as exc:  # noqa: BLE001
-                print(f"{source} 文章门控失败：{exc}", flush=True)
-                review = failed_review(enriched, exc)
+            review = rule_first_review(source, enriched)
+            if review:
+                print(f"{source} 规则优先门控：title={enriched.get('title', '')}", flush=True)
+            else:
+                try:
+                    review = review_article(source, enriched)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"{source} 文章门控失败：{exc}", flush=True)
+                    review = failed_review(enriched, exc)
             with connect_db() as conn:
                 review = apply_macro_override(enriched, review)
                 review = apply_skeptic_review(
@@ -668,6 +674,7 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
                     review=review,
                     push_key="push_now",
                 )
+                review = apply_push_rule_override(source, enriched, review)
                 save_article_review(conn, source, enriched, review)
         if mandatory_morning:
             review = force_mandatory_morning_review(review, enriched)

@@ -10,6 +10,12 @@ from typing import Any
 
 from llm_analysis import call_chat_completion_with_prompts, format_llm_analysis, llm_config
 from industry_hardline import apply_hardline_review_override, explain_hardline
+from push_rules import (
+    apply_article_push_rules,
+    first_matching_push_rule,
+    load_enabled_holdings_for_rules,
+    review_from_push_rule,
+)
 from skeptic_evaluator import skeptic_lines
 
 
@@ -25,56 +31,34 @@ OFFICIAL_NEWS_SOURCES = {
 
 
 GATE_SYSTEM_PROMPT = """你是半导体、AI 基础设施和二级市场研究助理。
-任务：判断一条核心公司官网新闻是否需要“第一时间”推送给投资者。
+任务：为一条核心公司官网新闻生成极简实时摘要。
 核心公司包括 OpenAI、NVIDIA、Samsung Semiconductor、SK hynix、Micron 等。
 
-请重点关注会影响半导体/AI 产业链供需、资本开支、技术路线、价格、订单、产能、竞争格局、A 股映射和美股映射的新闻。
-高重要性示例：
-- 新一代 GPU/ASIC/CPU/互联/液冷/服务器平台/AI 基础设施架构发布或重大技术方案，例如 Rubin 100% 液冷。
-- HBM/DRAM/NAND/存储供货、样品、量产、涨价、产能、客户资格认证。
-- 大客户采购、战略合作、供应协议、资本开支、建厂、先进封装、数据中心扩张。
-- “星际之门/Stargate-like”超大资本开支事件：政府、云厂商、半导体龙头、AI 基础设施龙头或产业联盟计划投入超大金额建设 AI 数据中心、半导体工厂、HBM/存储产能、先进封装、CPO/光互联、电力/液冷等基础设施。
-- 会直接影响 CPO、光模块、PCB、MLCC、电子布、玻璃基板、特气、电力、液冷等产业链的明确变化。
+实时推送开关优先由确定性规则、来源权重和关系映射控制；不要把自己当成最终裁判。
 
-低/中重要性通常进入日报：
-- 普通营销、案例、开发者教程、招聘、活动预告、泛泛生态合作。
-- 没有新增订单、价格、产能、技术路线、客户、财务指引或产业链传导的内容。
-- 注意：超大资本开支“预告/据报/拟宣布/将公布”不能因为尚未正式公布就自动降为 medium。只要金额足够重大、主体可信、产业方向明确、且有明确会议/发布时间/高层表态/政策背景，应判为 high、should_push_now=true，并在 reason 中标注“待确认/预告性质”和需要跟踪的正式公告。
+只做三件事：
+- 用一句到两句中文写清核心内容。
+- 用一句短句说明为什么值得关注；如果只是来源或规则命中，就写“核心公司官网硬变量，影响待确认”。
+- 只列原文明确涉及的公司/股票/产业链环节；不要自由扩散。
+
+不要输出：股价方向、影响幅度、持续时间、完整 A 股/美股利好利空列表、tracking points、risks、watchlist、price-in 判断、surprise_level、confidence、长篇 industry impact。
 
 只输出 JSON，不要 Markdown。"""
 
 
 GATE_USER_PROMPT = """请分析以下官网新闻，输出 JSON：
 {
-  "importance": "high/medium/low",
-  "should_push_now": true,
-  "reason": "为什么需要或不需要第一时间推送",
-  "industry_impact": "对半导体/AI产业链的影响",
-  "a_share_relevance": "可能影响的A股方向或标的，无法判断则写无法判断",
-  "daily_summary": "一句中文日报摘要",
-  "analysis": {
-    "core_content": "一句到两句中文核心内容",
-    "themes": ["主题1", "主题2"],
-    "incremental_view": {
-      "classification": "增量利好/增量利空/已有预期/符合预期/利好落地/利空落地/可能利好出尽/可能利空出尽/中性信息/无法判断",
-      "surprise_level": "高/中/低/无法判断",
-      "priced_in": "大概率已定价/部分定价/尚未充分定价/无法判断",
-      "reason": "为什么这么判断"
-    },
-    "initial_impact": "初步影响判断",
-    "a_share": {"positive": [], "negative": []},
-    "global_equity": {"positive": [], "negative": []},
-    "tracking_points": ["后续跟踪点1"],
-    "risks": ["风险1"],
-    "watchlist_view": "是否值得纳入观察名单及理由"
-  }
+  "core_content": "一句到两句中文核心内容",
+  "brief_reason": "一句简短关注原因；不要写长篇门控理由",
+  "related_targets": [
+    {"name": "股票/公司/环节", "code": "可选代码", "relation": "核心公司/上游/下游/竞争/主题/来源提及", "direction": "positive/negative/neutral/uncertain"}
+  ]
 }
 
 注意：
-- should_push_now 只有在 importance=high 且产业链传导明确时才为 true。
-- 如果只是普通博客、教程、客户案例、活动信息，importance 应为 medium 或 low，should_push_now=false。
-- 对半导体/AI 基础设施“超大资本开支预告”单独处理：即使尚未正式公布，只要金额、主体和产业方向明确，并可能重估设备、材料、存储、光通信、PCB、先进封装、电力、液冷等产业链预期，应 importance=high、should_push_now=true；同时在 reason、daily_summary 和 analysis.tracking_points 中明确写“待确认/预告性质”，列出需要验证的正式公布时间、投资拆分、产能、设备订单和供应链受益方向。
-- analysis 字段必须尽量符合既有研究简报格式。
+- 不要输出 importance/should_push_now/industry_impact/a_share/global_equity/tracking_points/risks/watchlist_view。
+- 是否即时推送由规则层决定。新一代 GPU/ASIC/CPU/互联/液冷/服务器平台、HBM/DRAM/NAND、样品/量产/客户资格认证、大客户采购、资本开支、建厂、先进封装、数据中心扩张、星际之门/Stargate-like 超大资本开支预告等，规则层会优先处理。
+- 对超大资本开支“预告/据报/拟宣布/将公布”，只需在 core_content/brief_reason 中标注“待确认/预告性质”和涉及环节，如设备、材料、存储、光通信、PCB、先进封装、电力、液冷。
 
 来源：{source}
 标题：{title}
@@ -218,13 +202,21 @@ def normalize_review(parsed: dict[str, Any]) -> dict[str, Any]:
         importance = "low"
     should_push_now = bool(parsed.get("should_push_now")) and importance == "high"
     analysis = parsed.get("analysis") if isinstance(parsed.get("analysis"), dict) else parsed
+    if isinstance(analysis, dict):
+        analysis = {**analysis, "llm_mode": "thin"}
+    core_content = str(parsed.get("core_content") or (analysis.get("core_content") if isinstance(analysis, dict) else "") or "").strip()
+    brief_reason = str(parsed.get("brief_reason") or parsed.get("reason") or "").strip()
+    related_targets = parsed.get("related_targets")
+    if isinstance(related_targets, list) and isinstance(analysis, dict):
+        analysis = {**analysis, "related_targets": related_targets}
     return {
         "importance": importance,
         "should_push_now": should_push_now,
-        "reason": str(parsed.get("reason") or "").strip(),
+        "reason": brief_reason,
+        "brief_reason": brief_reason,
         "industry_impact": str(parsed.get("industry_impact") or "").strip(),
         "a_share_relevance": str(parsed.get("a_share_relevance") or "").strip(),
-        "daily_summary": str(parsed.get("daily_summary") or "").strip(),
+        "daily_summary": str(parsed.get("daily_summary") or core_content or "").strip(),
         "analysis": analysis,
     }
 
@@ -255,7 +247,29 @@ def review_official_news(source: str, item: dict[str, Any]) -> dict[str, Any]:
 
 
 def apply_official_hardline_override(source: str, item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
-    return apply_hardline_review_override(source, item, review)
+    updated = apply_hardline_review_override(source, item, review)
+    if updated.get("push_now"):
+        updated["should_push_now"] = True
+    return updated
+
+
+def rule_first_official_review(source: str, item: dict[str, Any]) -> dict[str, Any] | None:
+    holdings = load_enabled_holdings_for_rules()
+    rule = first_matching_push_rule(source=source, item=item, holdings=holdings)
+    if not rule:
+        return None
+    review = review_from_push_rule(rule, item, push_key="should_push_now")
+    review["analysis"] = {
+        "core_content": str(item.get("summary") or item.get("title") or "").strip(),
+        "related_targets": rule.get("related_targets") or [],
+        "llm_mode": "rule_only",
+    }
+    return review
+
+
+def apply_official_push_rule_override(source: str, item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
+    holdings = load_enabled_holdings_for_rules()
+    return apply_article_push_rules(source, item, review, holdings=holdings, push_key="should_push_now")
 
 
 def analysis_lines_from_review(review: dict[str, Any]) -> list[str]:

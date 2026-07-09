@@ -19,13 +19,13 @@ def main() -> int:
     for prompt in (article_prompt, official_prompt):
         assert_contains(prompt, "星际之门/Stargate-like")
         assert_contains(prompt, "超大资本开支")
-        assert_contains(prompt, "预告/据报/拟宣布/将公布")
-        assert_contains(prompt, "不能因为尚未正式公布就自动降为 medium")
         assert_contains(prompt, "待确认/预告性质")
         assert_contains(prompt, "设备、材料、存储、光通信、PCB、先进封装、电力、液冷")
+        assert_contains(prompt, "不要输出")
+        assert_contains(prompt, "规则层决定")
 
-    assert_contains(article_prompt, "push_now=true")
-    assert_contains(official_prompt, "should_push_now=true")
+    assert_contains(article_prompt, "是否即时推送，由规则层决定")
+    assert_contains(official_prompt, "是否即时推送由规则层决定")
     print("gate prompt guardrail checks passed")
     return 0
 
