@@ -16,12 +16,39 @@ PRIMARY_DATA_KEYWORDS = (
     "nonfarm",
     "payroll",
     "nfp",
+)
+
+US_SCOPED_PRIMARY_DATA_KEYWORDS = (
     "cpi",
     "消费者价格指数",
     "pce",
     "个人消费支出",
     "核心pce",
     "core pce",
+)
+
+US_CONTEXT_KEYWORDS = (
+    "美国",
+    "美國",
+    "美联储",
+    "美聯儲",
+    "联储",
+    "federal reserve",
+    "fed",
+    "fomc",
+    "warsh",
+    "沃什",
+    "沃尔什",
+    "powell",
+    "鲍威尔",
+    "美债",
+    "美元",
+    "dxy",
+    "u.s.",
+    "us ",
+    "usa",
+    "united states",
+    "treasury",
 )
 
 FED_EVENT_KEYWORDS = (
@@ -42,6 +69,25 @@ FED_EVENT_KEYWORDS = (
     "降息",
     "加息",
     "利率路径",
+)
+
+FED_OFFICIAL_EVENT_KEYWORDS = (
+    "fomc",
+    "沃什",
+    "沃尔什",
+    "warsh",
+    "鲍威尔",
+    "powell",
+    "主席讲话",
+    "票委",
+    "理事",
+    "议息",
+    "会议纪要",
+    "点阵图",
+    "利率决议",
+    "press conference",
+    "minutes",
+    "dot plot",
 )
 
 SECONDARY_DATA_KEYWORDS = (
@@ -117,9 +163,31 @@ def has_surprise(text: str) -> bool:
 def is_retail_sales_only(text: str) -> bool:
     return contains_any(text, IGNORED_DATA_KEYWORDS) and not (
         contains_any(text, PRIMARY_DATA_KEYWORDS)
+        or contains_any(text, US_SCOPED_PRIMARY_DATA_KEYWORDS)
         or contains_any(text, FED_EVENT_KEYWORDS)
         or contains_any(text, MARKET_REACTION_KEYWORDS)
     )
+
+
+def has_us_context(text: str) -> bool:
+    padded = f"{text.lower()} "
+    return any(keyword.lower() in padded for keyword in US_CONTEXT_KEYWORDS)
+
+
+def primary_data_match(text: str) -> bool:
+    if contains_any(text, PRIMARY_DATA_KEYWORDS):
+        return True
+    return contains_any(text, US_SCOPED_PRIMARY_DATA_KEYWORDS) and has_us_context(text)
+
+
+def fed_event_match(text: str, *, market_reaction: bool, large_move: bool, surprise: bool) -> bool:
+    if not contains_any(text, FED_EVENT_KEYWORDS):
+        return False
+    if contains_any(text, FED_OFFICIAL_EVENT_KEYWORDS):
+        return True
+    if has_us_context(text) and (market_reaction or large_move or surprise):
+        return True
+    return False
 
 
 def macro_policy_match(item: dict[str, Any]) -> dict[str, Any]:
@@ -127,12 +195,12 @@ def macro_policy_match(item: dict[str, Any]) -> dict[str, Any]:
     if is_retail_sales_only(text):
         return {"matched": False, "tier": "ignored", "reason": "零售销售不纳入宏观政策线。"}
 
-    primary = contains_any(text, PRIMARY_DATA_KEYWORDS)
-    fed_event = contains_any(text, FED_EVENT_KEYWORDS)
+    primary = primary_data_match(text)
     secondary = contains_any(text, SECONDARY_DATA_KEYWORDS)
     market_reaction = contains_any(text, MARKET_REACTION_KEYWORDS)
     large_move = has_large_move(text)
     surprise = has_surprise(text)
+    fed_event = fed_event_match(text, market_reaction=market_reaction, large_move=large_move, surprise=surprise)
 
     if primary or fed_event:
         return {

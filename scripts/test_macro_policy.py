@@ -31,6 +31,16 @@ def test_nonfarm_cpi_pce_are_primary() -> None:
         assert macro_policy_match({"title": title})["tier"] == "primary"
 
 
+def test_non_us_cpi_is_not_macro_policy_line() -> None:
+    item = {"title": "财联社7月9日电，乌克兰6月CPI同比上涨7.2%，环比下降0.1%。"}
+    assert macro_policy_match(item)["matched"] is False
+
+
+def test_generic_fed_bank_view_is_not_macro_policy_line() -> None:
+    item = {"title": "巴克莱：美联储或将按兵不动到2027年底。"}
+    assert macro_policy_match(item)["matched"] is False
+
+
 def test_secondary_data_requires_surprise_or_market_reaction() -> None:
     assert macro_policy_match({"title": "美国ADP就业人数今晚公布"})["matched"] is False
     match = macro_policy_match({"title": "美国ADP就业人数大幅不及预期，2年期美债收益率大跌8个基点"})
@@ -79,6 +89,8 @@ def main() -> int:
     test_primary_macro_events_match_without_market_move()
     test_former_chair_powell_still_matches_when_relevant()
     test_nonfarm_cpi_pce_are_primary()
+    test_non_us_cpi_is_not_macro_policy_line()
+    test_generic_fed_bank_view_is_not_macro_policy_line()
     test_secondary_data_requires_surprise_or_market_reaction()
     test_retail_sales_is_ignored()
     test_macro_review_override_pushes_primary_events()

@@ -441,6 +441,7 @@ def notify_item(item: dict) -> None:
         )
         if not review.get("push_now") or review.get("pushed_at"):
             return
+        enriched["article_review"] = review
         enriched["analysis_thinking"] = "enabled"
         enriched["analysis_max_tokens"] = int(os.getenv("LLM_HIGH_IMPORTANCE_MAX_OUTPUT_TOKENS", "1800"))
         enriched["analysis_lines_prefix"] = gate_lines(review)
