@@ -9,7 +9,9 @@ import tempfile
 from pathlib import Path
 
 import china_finance_media_monitor as cfm
+import investment_universe as iu
 from china_finance_media_monitor import cls_sign, next_data_from_html, parse_cls_time
+from media_keyword_config import keyword_matches_text
 
 
 def test_cls_sign_includes_empty_values_and_sorts_keys() -> None:
@@ -106,6 +108,76 @@ def test_yicai_morning_brief_is_mandatory_push() -> None:
     assert "强制推送规则" in updated["reason"]
 
 
+def test_short_english_keyword_requires_token_boundary() -> None:
+    assert keyword_matches_text("ai", "https://m.yicai.com CailianpressWeb aijd") is False
+    assert keyword_matches_text("ai", "AI PCB需求放量、高阶升级趋势明确") is True
+
+
+def test_china_media_focus_filters_generic_power_and_accepts_ai_context() -> None:
+    original_match = cfm.investment_universe_match
+    original_focus = cfm.is_media_focus_item
+    original_media = iu.media_keyword_match
+    with tempfile.TemporaryDirectory() as tmpdir:
+        empty_db = Path(tmpdir) / "empty.sqlite3"
+
+        def no_holding_match(source: str, item: dict):
+            return original_match(source, item, db_path=empty_db)
+
+        try:
+            cfm.investment_universe_match = no_holding_match
+            cfm.is_media_focus_item = lambda *parts: True
+            iu.media_keyword_match = lambda *parts: {"matched": False, "blocked": False, "keyword": "", "bucket": ""}
+            transformer = {
+                "title": "常州：前五个月变压器出口额同比增长33.2%，订单已排至2027年下半年",
+                "summary": "据常州发布，常州变压器出口额同比增长，龙头企业订单已排至2027年下半年。",
+                "full_text": "",
+            }
+            assert cfm.should_focus_item(transformer, "yicai_brief") is False
+            assert "generic_power_filtered" in transformer["_investment_universe_match"]["tags"]
+
+            ai_power = {
+                "title": "AI数据中心电力瓶颈推动高压变压器订单增长",
+                "summary": "海外AI数据中心扩建拉动电力设备需求。",
+                "full_text": "",
+            }
+            assert cfm.should_focus_item(ai_power, "yicai_brief") is True
+        finally:
+            cfm.investment_universe_match = original_match
+            cfm.is_media_focus_item = original_focus
+            iu.media_keyword_match = original_media
+
+
+def test_jin10_mixed_digest_keeps_only_relevant_lines() -> None:
+    original_holding = iu.matched_holding
+    original_media = iu.media_keyword_match
+    try:
+        iu.matched_holding = lambda text, db_path=iu.DEFAULT_DB_PATH: ""
+        iu.media_keyword_match = lambda *parts: {"matched": False, "blocked": False, "keyword": "", "bucket": ""}
+        item = {
+            "title": "金十重要事件",
+            "summary": "\n".join(
+                [
+                    "国外",
+                    "1. 汇丰银行：金价将保持震荡走势，预计年底目标价为4750美元/盎司。",
+                    "2. 高盛：若美伊谈判继续，波斯湾石油供应量有望7月底恢复。",
+                    "3. 巴克莱：美联储或将按兵不动到2027年底。",
+                    "国内",
+                    "1. 中信建投：AI PCB需求放量、高阶升级趋势明确，打开设备耗材新空间。",
+                    "2. 华泰证券：原奶或迎景气周期，全产业链受益。",
+                ]
+            ),
+            "full_text": "",
+        }
+        digest = iu.relevant_digest_for_mixed_item("jin10_rsshub_important", item)
+        assert "AI PCB需求放量" in digest
+        assert "金价" not in digest
+        assert "美联储或将按兵不动" not in digest
+        assert "原奶" not in digest
+    finally:
+        iu.matched_holding = original_holding
+        iu.media_keyword_match = original_media
+
+
 def test_star_market_daily_next_data_parser() -> None:
     payload = {
         "props": {
@@ -185,6 +257,9 @@ def main() -> int:
     test_cls_poll_interval_skips_recent_fetch()
     test_run_once_fetches_sources_independently()
     test_yicai_morning_brief_is_mandatory_push()
+    test_short_english_keyword_requires_token_boundary()
+    test_china_media_focus_filters_generic_power_and_accepts_ai_context()
+    test_jin10_mixed_digest_keeps_only_relevant_lines()
     test_star_market_daily_next_data_parser()
     test_star_market_daily_cross_source_dedup()
     test_default_sources_include_star_market_daily()

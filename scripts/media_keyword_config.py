@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Iterable
@@ -84,11 +85,32 @@ def media_keyword_payload() -> dict[str, object]:
     }
 
 
-def is_media_focus_item(*parts: str) -> bool:
-    text = " ".join(part for part in parts if part).casefold()
-    user_config = load_media_keyword_config()
-    if any(keyword.casefold() in text for keyword in user_config["exclude_keywords"]):
+def keyword_matches_text(keyword: str, text: str) -> bool:
+    key = str(keyword or "").strip()
+    if not key:
         return False
+    lowered = str(text or "").casefold()
+    folded_key = key.casefold()
+    if re.fullmatch(r"[a-z0-9][a-z0-9.+#/-]{0,3}", folded_key):
+        return re.search(rf"(?<![a-z0-9]){re.escape(folded_key)}(?![a-z0-9])", lowered) is not None
+    return folded_key in lowered
+
+
+def media_keyword_match(*parts: str) -> dict[str, str | bool]:
+    text = " ".join(part for part in parts if part)
+    user_config = load_media_keyword_config()
+    for keyword in user_config["exclude_keywords"]:
+        if keyword_matches_text(keyword, text):
+            return {"matched": False, "blocked": True, "keyword": keyword, "bucket": "exclude"}
+    for keyword in user_config["include_keywords"]:
+        if keyword_matches_text(keyword, text):
+            return {"matched": True, "blocked": False, "keyword": keyword, "bucket": "include"}
     base_keywords = user_config["base_keywords"] or list(FOCUS_KEYWORDS)
-    keywords = [*base_keywords, *user_config["include_keywords"]]
-    return any(keyword.casefold() in text for keyword in keywords)
+    for keyword in base_keywords:
+        if keyword_matches_text(keyword, text):
+            return {"matched": True, "blocked": False, "keyword": keyword, "bucket": "base"}
+    return {"matched": False, "blocked": False, "keyword": "", "bucket": ""}
+
+
+def is_media_focus_item(*parts: str) -> bool:
+    return bool(media_keyword_match(*parts).get("matched"))

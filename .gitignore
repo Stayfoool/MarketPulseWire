@@ -6,6 +6,7 @@
 *.backup
 
 # User portfolio/config/runtime state
+LOCAL_COMMANDS.md
 docs/monitoring-plan.md
 config/portfolio.json
 config/media_keywords.json

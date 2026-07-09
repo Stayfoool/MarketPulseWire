@@ -49,6 +49,7 @@ from db_utils import connect_sqlite, ensure_seen_tables, retry_on_locked
 from env_utils import load_env
 from feishu import send_card
 from http_utils import http_get
+from investment_universe import investment_universe_match, relevant_digest_for_mixed_item
 from llm_analysis import llm_config
 from macro_policy import is_macro_event
 from media_keyword_config import is_media_focus_item
@@ -490,6 +491,15 @@ def enrich_item(source: str, item: dict[str, Any]) -> dict[str, Any]:
     enriched["body_source"] = body_source if body else body_source
     enriched.setdefault("source_module", china_media_module(source))
     enriched.setdefault("access_note", china_media_access_note(source, enriched["body_source"]))
+    if source == "jin10_rsshub_important":
+        digest = relevant_digest_for_mixed_item(source, enriched)
+        if digest:
+            first_line = digest.splitlines()[0].strip()
+            enriched["_original_full_text"] = enriched.get("full_text") or ""
+            enriched["full_text"] = digest
+            enriched["summary"] = digest
+            enriched["title"] = f"金十重要事件：{first_line[:80]}"
+            enriched["body_source"] = f"{enriched['body_source']}（相关条目摘取）"
     return enriched
 
 
@@ -589,10 +599,14 @@ def save_new_items_with_retry(
     return retry_on_locked(operation)
 
 
-def should_focus_item(item: dict[str, Any]) -> bool:
+def should_focus_item(item: dict[str, Any], source: str = "") -> bool:
+    match = investment_universe_match(source or str(item.get("source") or ""), item)
+    item["_investment_universe_match"] = match
+    if not match.get("matched"):
+        return False
     if is_macro_event(item):
         return True
-    return is_media_focus_item(
+    return bool({"holding_match", "user_include_keyword"} & set(match.get("tags") or [])) or is_media_focus_item(
         str(item.get("title") or ""),
         str(item.get("summary") or ""),
         str(item.get("full_text") or ""),
@@ -624,9 +638,15 @@ def force_mandatory_morning_review(review: dict[str, Any], item: dict[str, Any])
 
 def notify_item(source: str, item: dict[str, Any]) -> None:
     enriched = enrich_item(source, item)
-    if not should_focus_item(enriched):
-        return
     mandatory_morning = is_mandatory_yicai_morning_brief(source, enriched)
+    if not mandatory_morning and not should_focus_item(enriched, source):
+        return
+    universe_match = enriched.get("_investment_universe_match") or investment_universe_match(source, enriched)
+    enriched["push_reason"] = (
+        "强制推送规则：第一财经券商晨会观点速递为每日固定栏目。"
+        if mandatory_morning
+        else str(universe_match.get("reason") or "")
+    )
     if article_gate_enabled():
         item_id = article_item_id(enriched)
         with connect_db() as conn:
@@ -659,6 +679,7 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
         )
         if not review.get("push_now") or review.get("pushed_at"):
             return
+        enriched["article_review"] = review
         enriched["analysis_thinking"] = "enabled"
         enriched["analysis_max_tokens"] = int(os.getenv("LLM_HIGH_IMPORTANCE_MAX_OUTPUT_TOKENS", "1800"))
         enriched["analysis_lines_prefix"] = gate_lines(review)

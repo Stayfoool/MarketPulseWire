@@ -373,6 +373,69 @@ def should_push_analysis(parsed: dict[str, Any], importance: str | None = None) 
     return False
 
 
+def thin_event_card_enabled() -> bool:
+    return os.getenv("SURVEIL_THIN_EVENT_CARD", "1").strip() != "0"
+
+
+def compact_text(value: str, limit: int = 900) -> str:
+    cleaned = " ".join(str(value or "").split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 3] + "..."
+
+
+def compact_targets(parsed: dict[str, Any]) -> list[str]:
+    targets: list[str] = []
+    related = parsed.get("related_holdings")
+    if isinstance(related, list):
+        for item in related:
+            if isinstance(item, dict):
+                name = str(item.get("name") or "").strip()
+                code = str(item.get("code") or "").strip()
+                label = " ".join(part for part in (name, code) if part)
+                if label:
+                    targets.append(label)
+    for section_key in ("a_share", "global_equity"):
+        section = parsed.get(section_key)
+        if not isinstance(section, dict):
+            continue
+        for direction in ("positive", "negative"):
+            values = section.get(direction)
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                if isinstance(item, dict):
+                    name = str(item.get("name") or "").strip()
+                    code = str(item.get("code") or "").strip()
+                    label = " ".join(part for part in (name, code) if part)
+                    if label:
+                        targets.append(label)
+    result: list[str] = []
+    seen: set[str] = set()
+    for target in targets:
+        key = target.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(target)
+        if len(result) >= 5:
+            break
+    return result
+
+
+def compact_event_analysis_lines(parsed: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    core = str(parsed.get("core_content") or "").strip()
+    if core:
+        lines.append(f"核心内容：{core}")
+    targets = compact_targets(parsed)
+    if targets:
+        lines.append("相关标的：" + "；".join(targets))
+    if not lines:
+        lines.append("核心内容：" + compact_text(str(parsed.get("initial_impact") or "模型未给出明确核心内容。"), 260))
+    return lines
+
+
 def maybe_deliver_event(event_id: int, analysis: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> str:
     """Deliver when Feishu is configured; otherwise record a skipped delivery."""
     if not should_push_analysis(analysis):
@@ -390,8 +453,13 @@ def maybe_deliver_event(event_id: int, analysis: dict[str, Any], db_path: Path =
     if not row:
         raise RuntimeError(f"事件不存在：{event_id}")
     source, title, summary, full_text, url, published_at = row
-    lines = format_llm_analysis(analysis, str(analysis.get("_model") or "llm"))
-    card = simple_event_card(source, title, summary or full_text, url, published_at, lines)
+    if thin_event_card_enabled():
+        lines = compact_event_analysis_lines(analysis)
+        display_text = compact_text(summary or full_text, 1000)
+    else:
+        lines = format_llm_analysis(analysis, str(analysis.get("_model") or "llm"))
+        display_text = summary or full_text
+    card = simple_event_card(source, title, display_text, url, published_at, lines)
     try:
         response = send_card_with_response(card)
     except Exception as exc:  # noqa: BLE001 - keep delivery failures isolated
@@ -469,7 +537,7 @@ def simple_event_card(
     for index, chunk in enumerate(text_chunks(text or "", limit=1000), start=1):
         label = "原文/摘要" if index == 1 else f"原文/摘要（续 {index}）"
         elements.append(div_markdown(f"**{label}**\n{md_escape(chunk)}"))
-    elements.append(div_markdown("**模型解读**\n" + md_escape("\n".join(analysis_lines))))
+    elements.append(div_markdown("**中文解读**\n" + md_escape("\n".join(analysis_lines))))
     if url:
         elements.append(
             {

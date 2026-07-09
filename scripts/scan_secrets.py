@@ -22,6 +22,7 @@ EXCLUDED_FILES = {
     ".env",
     ".DS_Store",
     ".gitignore",
+    "LOCAL_COMMANDS.md",
     "scan_secrets.py",
 }
 EXCLUDED_GLOBS = (

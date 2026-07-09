@@ -390,6 +390,7 @@ def notify_item(source: str, item: dict) -> None:
         )
         if not review.get("push_now") or review.get("pushed_at"):
             return
+        item["article_review"] = review
         item["analysis_thinking"] = "enabled"
         item["analysis_max_tokens"] = int(os.getenv("LLM_HIGH_IMPORTANCE_MAX_OUTPUT_TOKENS", "1800"))
         item["analysis_lines_prefix"] = gate_lines(review)
@@ -436,6 +437,7 @@ def handle_official_news_item(source: str, item: dict) -> None:
     )
     if not review.get("should_push_now") or review.get("pushed_at"):
         return
+    enriched["article_review"] = review
     enriched["analysis_lines"] = analysis_lines_from_review(review)
     sent = send_card(build_article_card(source, enriched))
     if sent:

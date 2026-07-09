@@ -52,6 +52,7 @@ jobs:
           python scripts/test_skeptic_evaluator.py
           python scripts/test_web_evidence.py
           python scripts/test_signals_extract.py
+          python scripts/test_thin_push_cards.py
 
       - name: Secret pattern scan
         run: python scripts/scan_secrets.py
