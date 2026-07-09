@@ -1,0 +1,14 @@
+[Unit]
+Description=MarketPulseWire domestic news media collector
+After=network-online.target surveil-db-init.service surveil-proxy.service
+Wants=network-online.target surveil-proxy.service
+
+[Service]
+Type=oneshot
+User=surveil
+WorkingDirectory=/opt/surveil
+EnvironmentFile=-/opt/surveil/.env
+EnvironmentFile=-/opt/surveil/proxy.env
+ExecStart=/opt/surveil/.venv/bin/python /opt/surveil/scripts/news_collector.py --production
+StandardOutput=append:/opt/surveil/logs/news-collector.log
+StandardError=append:/opt/surveil/logs/news-collector.err.log

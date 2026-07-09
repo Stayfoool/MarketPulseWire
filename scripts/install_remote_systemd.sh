@@ -57,6 +57,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-digest.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-news-collector.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector-shadow.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector-shadow.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-news-collector-shadow.service, \\
@@ -75,6 +76,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-jygs-actions.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-news-collector.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector-shadow.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector-shadow.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-news-collector-shadow.timer, \\
@@ -92,6 +94,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block start surveil-jygs-actions.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-research-collector.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-official-collector.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-news-collector.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-research-collector-shadow.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-official-collector-shadow.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-news-collector-shadow.service, \\
@@ -113,7 +116,13 @@ if grep -Eq '^DISABLE_LEGACY_RESEARCH_MONITORS=1$' '$REMOTE_DIR/.env' 2>/dev/nul
 else
   systemctl enable --now surveil-overseas-media.timer
 fi
-systemctl enable --now surveil-china-media.timer
+if grep -Eq '^DISABLE_LEGACY_CHINA_MEDIA_MONITOR=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
+  systemctl disable --now surveil-china-media.timer >/dev/null 2>&1 || true
+  systemctl stop surveil-china-media.service >/dev/null 2>&1 || true
+  echo 'DISABLE_LEGACY_CHINA_MEDIA_MONITOR=1，保持旧 surveil-china-media.timer 停用。'
+else
+  systemctl enable --now surveil-china-media.timer
+fi
 systemctl enable --now surveil-article-daily.timer
 systemctl enable --now surveil-signals-extract.timer
 systemctl enable --now surveil-signal-outcome.timer
