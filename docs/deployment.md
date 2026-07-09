@@ -110,9 +110,7 @@ These shadow jobs are migration aids. They write JSON/Markdown reports under
 `reports/` and logs under `logs/`; they do not send Feishu messages, do not run
 LLM gates, and do not write production `seen_items` or review tables.
 
-The installer also copies the production research/industry-media migration
-official-company, and domestic-news migration units, but does not enable them
-automatically:
+The installer also copies the production collector units:
 
 - `surveil-research-collector.service`
 - `surveil-research-collector.timer`
@@ -121,20 +119,21 @@ automatically:
 - `surveil-news-collector.service`
 - `surveil-news-collector.timer`
 
-Use them only during the staged collector migration. In production mode they
-write the normal `seen_items` / review tables and can send Feishu cards through
-the existing article/official-news pipelines.
+In production mode they write the normal `seen_items` / review tables and can
+send Feishu cards through the existing article/official-news pipelines. After
+cutover, keep the legacy guards below in `.env`: the installer will keep the
+old units disabled and enable the matching production collector timers.
 
-During the research collector cutover, keep the old RSS monitor for official
-company feeds by setting this on the server and restarting
-`surveil-rss-monitor.service`:
+During the earlier research collector cutover, the old RSS monitor could be kept
+for official company feeds with:
 
 ```bash
 RSS_MONITOR_EXCLUDE_PROFILE_CATEGORIES=research_industry_media
 ```
 
-After the official-company collector cutover, the old RSS monitor can be kept
-off across future installs by setting:
+After the official-company and research/industry-media collector cutovers, keep
+the old RSS / TrendForce / overseas media units off across future installs by
+setting:
 
 ```bash
 DISABLE_LEGACY_RSS_MONITOR=1
@@ -142,10 +141,27 @@ DISABLE_LEGACY_RESEARCH_MONITORS=1
 ```
 
 After the domestic news-media collector cutover, keep the old China media timer
-off across future installs by setting:
+off across future installs and enable `surveil-news-collector.timer` by setting:
 
 ```bash
 DISABLE_LEGACY_CHINA_MEDIA_MONITOR=1
+```
+
+With the three cutovers complete, the production fetching timers to inspect are:
+
+```bash
+systemctl status --no-pager \
+  surveil-research-collector.timer \
+  surveil-official-collector.timer \
+  surveil-news-collector.timer \
+  surveil-sina-stock-news.timer \
+  surveil-ifind-notice.timer
+```
+
+The high-frequency persistent fetchers remain:
+
+```bash
+systemctl status --no-pager surveil-x-stream.service surveil-sina-flash.service
 ```
 
 Open the Web workbench through an SSH tunnel:

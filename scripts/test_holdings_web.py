@@ -34,6 +34,9 @@ def test_health_page_exposes_service_action_controls() -> None:
     assert "runServiceAction" in html
     assert "renderHealthUnits" in html
     assert "fetching_persistent" in html
+    assert "showShadowUnits" in html
+    assert "showLegacyUnits" in html
+    assert "显示历史兼容单元" in html
     assert "重启定时器" in html
     assert "立即运行" in html
 
@@ -62,6 +65,12 @@ def test_source_profiles_group_six_categories() -> None:
     ]
     profile_ids = {item["id"] for item in payload["profiles"]}
     assert {"x_serenity", "semianalysis", "nvidia_blog", "cls_telegraph_api", "sina_stock_news", "ifind_notice"} <= profile_ids
+    semianalysis = next(item for item in payload["profiles"] if item["id"] == "semianalysis")
+    trendforce_page = next(item for item in payload["profiles"] if item["category"] == "research_industry_media" and item["source_type"] == "公开列表页")
+    assert "surveil-research-collector.timer" in semianalysis["service_units"]
+    assert "surveil-rss-monitor.service" not in semianalysis["service_units"]
+    assert "surveil-research-collector.timer" in trendforce_page["service_units"]
+    assert "surveil-trendforce-page-monitor.service" not in trendforce_page["service_units"]
 
 
 def test_source_profiles_aggregate_wildcard_health() -> None:
@@ -203,8 +212,11 @@ def test_unit_display_metadata_translates_oneshot_success() -> None:
         "surveil-china-media.service",
         {"ActiveState": "inactive", "SubState": "dead", "Result": "success"},
     )
-    assert meta["group"] == "fetching_scheduled"
-    assert meta["unit_type"] == "定时采集"
+    assert meta["group"] == "fetching_legacy"
+    assert meta["unit_type"] == "历史兼容"
+    assert meta["lifecycle"] == "legacy_cutover"
+    assert meta["default_visible"] is False
+    assert meta["replacement"] == "surveil-news-collector.timer"
     assert meta["status_text"] == "上次运行成功"
 
 
@@ -213,8 +225,10 @@ def test_unit_display_metadata_translates_waiting_timer() -> None:
         "surveil-overseas-media.timer",
         {"ActiveState": "active", "SubState": "waiting", "Result": "success"},
     )
-    assert meta["group"] == "fetching_scheduled"
-    assert meta["unit_type"] == "定时器"
+    assert meta["group"] == "fetching_legacy"
+    assert meta["unit_type"] == "历史兼容定时器"
+    assert meta["lifecycle"] == "legacy_cutover"
+    assert meta["replacement"] == "surveil-research-collector.timer"
     assert meta["status_text"] == "等待下次触发"
 
 
@@ -226,6 +240,8 @@ def test_unit_display_metadata_groups_shadow_collectors() -> None:
     assert meta["group"] == "fetching_shadow"
     assert meta["unit_type"] == "影子定时器"
     assert meta["group_label"] == "影子采集任务"
+    assert meta["lifecycle"] == "shadow"
+    assert meta["default_visible"] is False
 
 
 def test_unit_display_metadata_includes_research_production_collector() -> None:
@@ -235,6 +251,8 @@ def test_unit_display_metadata_includes_research_production_collector() -> None:
     )
     assert meta["group"] == "fetching_scheduled"
     assert meta["unit_type"] == "定时器"
+    assert meta["lifecycle"] == "production"
+    assert meta["default_visible"] is True
     assert "5 分钟" in meta["schedule"]
 
 
