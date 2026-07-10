@@ -306,17 +306,54 @@ def grouped_counts(conn: sqlite3.Connection, table: str, field: str, where: str,
     return [{"key": row["key"] or "unknown", "count": int(row["count"])} for row in rows]
 
 
-def fetch_events_rows(day: str = "", source: str = "", kind: str = "", q: str = "", limit: int = 100) -> list[dict[str, Any]]:
+def event_center_where_clause(
+    *,
+    time_field: str,
+    start_utc: str,
+    end_utc: str,
+    source_lower: str,
+    source_fields: tuple[str, ...],
+    q_lower: str,
+    q_fields: tuple[str, ...],
+) -> tuple[str, list[str]]:
+    clauses = [f"{time_field} >= ?", f"{time_field} < ?"]
+    params = [start_utc, end_utc]
+    if source_lower and source_fields:
+        clauses.append("(" + " OR ".join(f"LOWER(COALESCE({field}, '')) LIKE ?" for field in source_fields) + ")")
+        params.extend([f"%{source_lower}%"] * len(source_fields))
+    if q_lower and q_fields:
+        clauses.append("(" + " OR ".join(f"LOWER(COALESCE({field}, '')) LIKE ?" for field in q_fields) + ")")
+        params.extend([f"%{q_lower}%"] * len(q_fields))
+    return " AND ".join(clauses), params
+
+
+def fetch_events_rows(
+    day: str = "",
+    source: str = "",
+    kind: str = "",
+    q: str = "",
+    limit: int = 100,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> list[dict[str, Any]]:
     start_utc, end_utc, _ = utc_window_for_day(day)
     q_lower = q.strip().lower()
     source_lower = source.strip().lower()
     kind_lower = kind.strip().lower()
     rows: list[dict[str, Any]] = []
-    with connect_sqlite(DEFAULT_DB_PATH) as conn:
+    with connect_sqlite(db_path) as conn:
         conn.row_factory = sqlite3.Row
         if table_exists(conn, "events"):
+            where, params = event_center_where_clause(
+                time_field="e.first_seen_at",
+                start_utc=start_utc,
+                end_utc=end_utc,
+                source_lower=source_lower,
+                source_fields=("e.source",),
+                q_lower=q_lower,
+                q_fields=("e.title", "e.summary", "e.full_text", "e.url", "e.symbols_json", "e.themes_json"),
+            )
             for row in conn.execute(
-                """
+                f"""
                 SELECT e.id, e.source, e.event_type, e.title, e.summary, e.url, e.published_at,
                        e.first_seen_at, e.baseline_only,
                        (
@@ -340,11 +377,11 @@ def fetch_events_rows(day: str = "", source: str = "", kind: str = "", q: str = 
                          ORDER BY d.id DESC LIMIT 1
                        ) AS delivery_status
                 FROM events e
-                WHERE e.first_seen_at >= ? AND e.first_seen_at < ?
+                WHERE {where}
                 ORDER BY e.first_seen_at DESC
                 LIMIT 300
                 """,
-                (start_utc, end_utc),
+                params,
             ):
                 rows.append(
                     {
@@ -364,16 +401,25 @@ def fetch_events_rows(day: str = "", source: str = "", kind: str = "", q: str = 
                     }
                 )
         if table_exists(conn, "article_reviews"):
+            where, params = event_center_where_clause(
+                time_field="created_at",
+                start_utc=start_utc,
+                end_utc=end_utc,
+                source_lower=source_lower,
+                source_fields=("source", "source_module"),
+                q_lower=q_lower,
+                q_fields=("title", "daily_summary", "reason", "affected_targets_json", "url"),
+            )
             for row in conn.execute(
-                """
+                f"""
                 SELECT source, item_id, url, title, source_module, published_at, importance,
                        push_now, incremental_classification, daily_summary, reason, pushed_at, created_at
                 FROM article_reviews
-                WHERE created_at >= ? AND created_at < ?
+                WHERE {where}
                 ORDER BY created_at DESC
                 LIMIT 300
                 """,
-                (start_utc, end_utc),
+                params,
             ):
                 rows.append(
                     {
@@ -393,16 +439,25 @@ def fetch_events_rows(day: str = "", source: str = "", kind: str = "", q: str = 
                     }
                 )
         if table_exists(conn, "official_news_reviews"):
+            where, params = event_center_where_clause(
+                time_field="created_at",
+                start_utc=start_utc,
+                end_utc=end_utc,
+                source_lower=source_lower,
+                source_fields=("source",),
+                q_lower=q_lower,
+                q_fields=("title", "daily_summary", "reason", "url"),
+            )
             for row in conn.execute(
-                """
+                f"""
                 SELECT source, item_id, url, title, published_at, importance, daily_summary,
                        reason, pushed_at, created_at
                 FROM official_news_reviews
-                WHERE created_at >= ? AND created_at < ?
+                WHERE {where}
                 ORDER BY created_at DESC
                 LIMIT 200
                 """,
-                (start_utc, end_utc),
+                params,
             ):
                 rows.append(
                     {
@@ -424,16 +479,25 @@ def fetch_events_rows(day: str = "", source: str = "", kind: str = "", q: str = 
         if table_exists(conn, "seen_posts"):
             seen_columns = table_columns(conn, "seen_posts")
             delivery_expr = "delivery_status" if "delivery_status" in seen_columns else "'sent'"
+            where, params = event_center_where_clause(
+                time_field="first_seen_at",
+                start_utc=start_utc,
+                end_utc=end_utc,
+                source_lower=source_lower,
+                source_fields=("source",),
+                q_lower=q_lower,
+                q_fields=("text", "url"),
+            )
             for row in conn.execute(
                 f"""
                 SELECT source, post_id, url, text, published_at, first_seen_at,
                        {delivery_expr} AS delivery_status
                 FROM seen_posts
-                WHERE first_seen_at >= ? AND first_seen_at < ?
+                WHERE {where}
                 ORDER BY first_seen_at DESC
                 LIMIT 100
                 """,
-                (start_utc, end_utc),
+                params,
             ):
                 text = row["text"] or ""
                 rows.append(
