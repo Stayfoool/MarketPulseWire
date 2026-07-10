@@ -38,6 +38,7 @@ rsync -az --delete \
   --exclude 'proxy.env' \
   --exclude 'config/portfolio.json' \
   --exclude 'config/media_keywords.json' \
+  --exclude 'config/investment_bank_theme_rules.json' \
   --exclude 'config/source_profiles.local.json' \
   --exclude 'config/stock_relations.json' \
   --exclude 'config/market_skill/' \

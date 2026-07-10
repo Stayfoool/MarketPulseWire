@@ -125,6 +125,22 @@ CREATE TABLE IF NOT EXISTS deliveries (
     FOREIGN KEY(event_id) REFERENCES events(id)
 );
 
+CREATE TABLE IF NOT EXISTS rule_alert_dedup (
+    dedup_key TEXT PRIMARY KEY,
+    rule_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    first_source TEXT NOT NULL,
+    first_item_id TEXT NOT NULL,
+    first_title TEXT NOT NULL,
+    first_published_at TEXT,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_rule_alert_dedup_rule_created
+ON rule_alert_dedup(rule_id, created_at);
+
 CREATE TABLE IF NOT EXISTS jygs_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     trade_date TEXT NOT NULL,
@@ -507,6 +523,10 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_web_evidence_runs_created ON web_evidence_runs(created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_web_evidence_docs_run ON web_evidence_docs(run_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_web_evidence_docs_url ON web_evidence_docs(canonical_url)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_rule_alert_dedup_rule_created "
+        "ON rule_alert_dedup(rule_id, created_at)"
+    )
 
 
 def init_db(path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:

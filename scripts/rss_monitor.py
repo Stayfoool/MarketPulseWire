@@ -59,6 +59,7 @@ from official_news_gate import (
     rule_first_official_review,
     save_review,
 )
+from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert
 from skeptic_evaluator import apply_skeptic_review
 from trendforce_sources import DEFAULT_RSS_FEEDS
 from x_check import load_env
@@ -399,11 +400,40 @@ def notify_item(source: str, item: dict) -> None:
         )
         if not review.get("push_now") or review.get("pushed_at"):
             return
+        reservation = reserve_rule_alert(
+            review,
+            source=source,
+            item_id=item_id,
+            title=str(item.get("title") or ""),
+            published_at=str(item.get("published_at") or ""),
+            db_path=DB_PATH,
+        )
+        if reservation.get("duplicate"):
+            first = reservation.get("first") or {}
+            note = (
+                "同一国际投行主题报告跨来源去重：已由 "
+                f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
+            )
+            review = dict(review)
+            review["push_now"] = False
+            review["reason"] = f"{review.get('reason') or ''}\n{note}".strip()
+            raw = dict(review.get("raw") or {})
+            raw["rule_alert_dedup"] = reservation
+            review["raw"] = raw
+            with connect_db() as conn:
+                save_article_review(conn, source, item, review)
+            print(f"{source} 国际投行主题策略去重：title={item.get('title', '')}", flush=True)
+            return
         item["article_review"] = review
         item["analysis_thinking"] = "enabled"
         item["analysis_max_tokens"] = int(os.getenv("LLM_HIGH_IMPORTANCE_MAX_OUTPUT_TOKENS", "1800"))
         item["analysis_lines_prefix"] = gate_lines(review)
     sent = send_card(build_article_card(source, item))
+    if article_gate_enabled():
+        if sent:
+            confirm_rule_alert(reservation, db_path=DB_PATH)
+        else:
+            release_rule_alert(reservation, db_path=DB_PATH)
     if sent and article_gate_enabled():
         with connect_db() as conn:
             mark_article_pushed(conn, source, article_item_id(item))

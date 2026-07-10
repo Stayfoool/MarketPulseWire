@@ -29,6 +29,8 @@ from holdings_store import (
 )
 from market_db import DEFAULT_DB_PATH
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
+from investment_bank_theme_config import config_payload as investment_bank_theme_config_payload
+from investment_bank_theme_config import save_config as save_investment_bank_theme_config
 from settings_store import save_settings, settings_payload
 from signals_extract import extract_signals
 from source_profiles import save_source_profile_config, source_profiles_payload
@@ -1538,6 +1540,51 @@ def html_page(token_required: bool) -> str:
 保存后如需立即生效，请按页面提示重启对应服务。
       </div>
       <div id="settingsGrid" class="settings-grid"></div>
+      <section class="panel" style="margin-top:12px">
+        <div class="section-title">
+          <h3 style="margin:0">国际投行重大主题策略</h3>
+          <div>
+            <button onclick="loadInvestmentBankThemeRules()">刷新</button>
+            <button class="primary" onclick="saveInvestmentBankThemeRules()">保存</button>
+          </div>
+        </div>
+        <div class="hint">命中认可机构的明确做多/做空/超配/低配/资金切换策略，并达到重大性证据阈值时即时薄推送。空白白名单表示使用代码内置机构名单；该配置不含任何密钥。</div>
+        <div class="settings-grid" style="margin-top:12px">
+          <section class="settings-card">
+            <div class="setting-field">
+              <label><span>启用策略规则</span></label>
+              <label><input id="investmentBankThemeEnabled" type="checkbox"> 启用</label>
+            </div>
+            <div class="setting-field">
+              <label><span>最低重大性证据分</span></label>
+              <input id="investmentBankThemeMinScore" type="number" min="1" max="8">
+            </div>
+            <div class="setting-field">
+              <label><span>跨来源去重天数</span></label>
+              <input id="investmentBankThemeDedupDays" type="number" min="1" max="90">
+            </div>
+            <div class="setting-field">
+              <label><span>允许媒体明确署名转述</span></label>
+              <label><input id="investmentBankThemeSecondary" type="checkbox"> 允许</label>
+            </div>
+          </section>
+          <section class="settings-card">
+            <div class="setting-field">
+              <label><span>机构白名单</span></label>
+              <textarea id="investmentBankThemeBanks" style="min-height:110px" placeholder="每行一个；留空使用代码默认名单"></textarea>
+            </div>
+            <div class="setting-field">
+              <label><span>额外主题关键词</span></label>
+              <textarea id="investmentBankThemeKeywords" style="min-height:95px" placeholder="每行一个，例如：卫星通信"></textarea>
+            </div>
+            <div class="setting-field">
+              <label><span>额外配置动作词</span></label>
+              <textarea id="investmentBankThemeActions" style="min-height:70px" placeholder="每行一个，例如：战略性增配"></textarea>
+            </div>
+          </section>
+        </div>
+        <div id="investmentBankThemeRuleHint" class="hint"></div>
+      </section>
     </section>
 
     <section id="view-holdings" class="view">
@@ -1857,7 +1904,10 @@ function showView(name) {{
   if (name === 'sources') loadSourceProfiles();
   if (name === 'health') loadHealth();
   if (name === 'keywords') loadKeywords();
-  if (name === 'settings') loadSettings();
+  if (name === 'settings') {{
+    loadSettings();
+    loadInvestmentBankThemeRules();
+  }}
   if (name === 'holdings' && !loadedHoldings) reloadData();
 }}
 
@@ -2554,6 +2604,42 @@ async function saveKeywords() {{
   }}
 }}
 
+async function loadInvestmentBankThemeRules() {{
+  try {{
+    const data = await api('/api/investment-bank-theme-rules');
+    document.getElementById('investmentBankThemeEnabled').checked = Boolean(data.enabled);
+    document.getElementById('investmentBankThemeMinScore').value = data.min_evidence_score || 2;
+    document.getElementById('investmentBankThemeDedupDays').value = data.dedup_lookback_days || 14;
+    document.getElementById('investmentBankThemeSecondary').checked = Boolean(data.allow_secondary_sources);
+    document.getElementById('investmentBankThemeBanks').value = keywordListToText(data.allowed_banks || []);
+    document.getElementById('investmentBankThemeKeywords').value = keywordListToText(data.extra_theme_keywords || []);
+    document.getElementById('investmentBankThemeActions').value = keywordListToText(data.extra_action_keywords || []);
+    document.getElementById('investmentBankThemeRuleHint').textContent =
+      `本地配置：${{data.path || '-'}}；${{data.has_local_override ? '已存在本地覆盖' : '当前使用代码默认配置'}}。`;
+  }} catch (err) {{
+    showStatus(err.message, 'err');
+  }}
+}}
+
+async function saveInvestmentBankThemeRules() {{
+  try {{
+    const payload = {{
+      enabled: document.getElementById('investmentBankThemeEnabled').checked,
+      min_evidence_score: Number(document.getElementById('investmentBankThemeMinScore').value || 2),
+      dedup_lookback_days: Number(document.getElementById('investmentBankThemeDedupDays').value || 14),
+      allow_secondary_sources: document.getElementById('investmentBankThemeSecondary').checked,
+      allowed_banks: keywordTextToList(document.getElementById('investmentBankThemeBanks').value),
+      extra_theme_keywords: keywordTextToList(document.getElementById('investmentBankThemeKeywords').value),
+      extra_action_keywords: keywordTextToList(document.getElementById('investmentBankThemeActions').value)
+    }};
+    const data = await api('/api/investment-bank-theme-rules', {{method: 'POST', body: JSON.stringify(payload)}});
+    await loadInvestmentBankThemeRules();
+    showStatus(`国际投行重大主题策略已保存：最低证据分 ${{data.min_evidence_score}}，去重 ${{data.dedup_lookback_days}} 天。下一条新资讯会自动读取。`);
+  }} catch (err) {{
+    showStatus(err.message, 'err');
+  }}
+}}
+
 async function loadSettings() {{
   try {{
     const data = await api('/api/settings');
@@ -3104,6 +3190,16 @@ class HoldingsHandler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
+        if parsed.path == "/api/investment-bank-theme-rules":
+            if not self.require_auth():
+                return
+            try:
+                payload = investment_bank_theme_config_payload()
+                payload["ok"] = True
+                self.send_json(payload)
+            except Exception as exc:  # noqa: BLE001
+                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path == "/api/settings":
             if not self.require_auth():
                 return
@@ -3139,6 +3235,17 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                     }
                 )
                 saved["ok"] = True
+                self.send_json(saved)
+                return
+            if parsed.path == "/api/investment-bank-theme-rules":
+                saved = save_investment_bank_theme_config(payload)
+                saved.update(
+                    {
+                        "path": str(investment_bank_theme_config_payload()["path"]),
+                        "has_local_override": True,
+                        "ok": True,
+                    }
+                )
                 self.send_json(saved)
                 return
             if parsed.path == "/api/settings":

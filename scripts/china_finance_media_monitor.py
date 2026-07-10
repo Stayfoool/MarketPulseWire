@@ -56,6 +56,7 @@ from llm_analysis import llm_config
 from macro_policy import is_macro_event
 from media_keyword_config import is_media_focus_item
 from rss_monitor import DB_PATH, fetch_article_body, parse_date, strip_tags
+from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert
 from source_backoff import backoff_state_after_failure, clear_backoff_state
 from source_health import record_source_failure, record_source_success
 from skeptic_evaluator import apply_skeptic_review
@@ -686,11 +687,40 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
         )
         if not review.get("push_now") or review.get("pushed_at"):
             return
+        reservation = reserve_rule_alert(
+            review,
+            source=source,
+            item_id=item_id,
+            title=str(enriched.get("title") or ""),
+            published_at=str(enriched.get("published_at") or ""),
+            db_path=DB_PATH,
+        )
+        if reservation.get("duplicate"):
+            first = reservation.get("first") or {}
+            note = (
+                "同一国际投行主题报告跨来源去重：已由 "
+                f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
+            )
+            review = dict(review)
+            review["push_now"] = False
+            review["reason"] = f"{review.get('reason') or ''}\n{note}".strip()
+            raw = dict(review.get("raw") or {})
+            raw["rule_alert_dedup"] = reservation
+            review["raw"] = raw
+            with connect_db() as conn:
+                save_article_review(conn, source, enriched, review)
+            print(f"{source} 国际投行主题策略去重：title={enriched.get('title', '')}", flush=True)
+            return
         enriched["article_review"] = review
         enriched["analysis_thinking"] = "enabled"
         enriched["analysis_max_tokens"] = int(os.getenv("LLM_HIGH_IMPORTANCE_MAX_OUTPUT_TOKENS", "1800"))
         enriched["analysis_lines_prefix"] = gate_lines(review)
     sent = send_card(build_article_card(source, enriched))
+    if article_gate_enabled():
+        if sent:
+            confirm_rule_alert(reservation, db_path=DB_PATH)
+        else:
+            release_rule_alert(reservation, db_path=DB_PATH)
     if sent and article_gate_enabled():
         with connect_db() as conn:
             mark_article_pushed(conn, source, article_item_id(enriched))

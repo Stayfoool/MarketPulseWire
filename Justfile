@@ -11,6 +11,8 @@ test:
     python3 scripts/test_china_finance_media_monitor.py
     python3 scripts/test_rss_monitor_fetch.py
     python3 scripts/test_push_rules.py
+    python3 scripts/test_investment_bank_theme_config.py
+    python3 scripts/test_rule_alert_dedup.py
     python3 scripts/test_gate_prompts.py
     python3 scripts/test_sina_zy_client.py
     python3 scripts/test_time_utils.py

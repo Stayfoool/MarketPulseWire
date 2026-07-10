@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "allowed_banks": [],
+  "extra_theme_keywords": [],
+  "extra_action_keywords": [],
+  "min_evidence_score": 2,
+  "allow_secondary_sources": true,
+  "dedup_lookback_days": 14
+}
