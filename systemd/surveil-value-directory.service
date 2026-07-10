@@ -8,6 +8,7 @@ Type=oneshot
 User=surveil
 WorkingDirectory=/opt/surveil
 EnvironmentFile=-/opt/surveil/.env
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/surveil/data/ms-playwright
 ExecStart=/usr/bin/env bash -c 'if command -v xvfb-run >/dev/null 2>&1; then xvfb-run -a -s "-screen 0 1280x900x24" /opt/surveil/.venv/bin/python /opt/surveil/scripts/value_directory_monitor.py --production --write-report --strict-exit; else /opt/surveil/.venv/bin/python /opt/surveil/scripts/value_directory_monitor.py --production --write-report --strict-exit; fi'
 StandardOutput=append:/opt/surveil/logs/value-directory.log
 StandardError=append:/opt/surveil/logs/value-directory.err.log

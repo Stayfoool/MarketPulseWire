@@ -44,6 +44,7 @@ rsync -az --delete \
   --exclude 'config/stock_relations.json' \
   --exclude 'config/market_skill/' \
   --exclude '.venv' \
+  --exclude '.cache/' \
   --exclude '__pycache__' \
   --exclude '*.pyc' \
   --exclude 'data/' \
