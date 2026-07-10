@@ -350,6 +350,9 @@ def enrich_item(source: str, item: dict) -> dict:
     if source.startswith("digitimes_") and os.getenv("DIGITIMES_FETCH_BODY", "").strip() != "1":
         should_fetch_body = False
         body_source = "RSS description"
+    if source == "value_directory_ib_stocks":
+        should_fetch_body = False
+        body_source = "价值目录列表页"
     if should_fetch_body:
         try:
             body, body_source = fetch_article_body(item.get("url", ""))

@@ -215,6 +215,31 @@ def build_profiles() -> list[SourceProfile]:
             )
         )
 
+    profiles.append(
+        SourceProfile(
+            id="value_directory_ib_stocks",
+            category="research_industry_media",
+            name="价值目录 / 国际投行-个股",
+            source_type="登录授权列表页",
+            fetch_range="用户账号正常可访问的国际投行个股研报索引标题、日期和详情 URL；不下载 PDF，不访问积分/VIP内容",
+            filter_policy="只读列表页元数据；命中直接持仓/观察标的的国际投行评级/目标价硬规则才即时推送",
+            frequency="每天 08:00 timer；首次登录后手动启用",
+            runtime_shape="timer one-shot / server browser profile",
+            pipeline="value_directory_monitor.py -> rule-first article review",
+            service_units=("surveil-value-directory.timer", "surveil-value-directory.service"),
+            health_keys=(("value_directory", "value_directory_ib_stocks"),),
+            fetcher="scripts/value_directory_monitor.py -> scripts/value_directory_browser.py",
+            skeptic_enabled=False,
+            web_evidence_enabled=False,
+            tavily_policy="首期不触发；仅规则命中即时推送",
+            proxy_profile="服务器专用持久化 Chromium profile；遇 WAF/验证码停止并告警",
+            text_length_policy="仅标题/索引，不抓全文",
+            source_priority="国际投行单股评级/目标价硬规则",
+            url="https://www.valuelist.cn/ib-research/global-investment-banks-stocks",
+            notes="登录态只保存在服务器私有浏览器 profile；不支持导入/导出 cookie。",
+        )
+    )
+
     official_names = {
         "openai_news": "OpenAI News",
         "nvidia_blog": "NVIDIA Blog",
