@@ -22,14 +22,16 @@ apt-get install -y --no-install-recommends \
   libxshmfence1 libdrm2 libxrandr2 libxcomposite1 libxdamage1 libxfixes3 \
   libpango-1.0-0 libcairo2
 mkdir -p '$REMOTE_DIR/data/browser-profiles/valuelist'
+mkdir -p '$REMOTE_DIR/data/ms-playwright'
 chown -R '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' '$REMOTE_DIR/data/browser-profiles'
+chown -R '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' '$REMOTE_DIR/data/ms-playwright'
 chmod 700 '$REMOTE_DIR/data/browser-profiles' '$REMOTE_DIR/data/browser-profiles/valuelist'
 if [ -x '$REMOTE_DIR/.venv/bin/python' ]; then
   PLAYWRIGHT_INSTALL_ARGS='chromium'
   if runuser -u '$REMOTE_SERVICE_USER' -- '$REMOTE_DIR/.venv/bin/python' -m playwright install --help | grep -q -- '--no-shell'; then
     PLAYWRIGHT_INSTALL_ARGS='--no-shell chromium'
   fi
-  runuser -u '$REMOTE_SERVICE_USER' -- '$REMOTE_DIR/.venv/bin/python' -m playwright install \$PLAYWRIGHT_INSTALL_ARGS || \
+  runuser -u '$REMOTE_SERVICE_USER' -- env PLAYWRIGHT_BROWSERS_PATH='$REMOTE_DIR/data/ms-playwright' '$REMOTE_DIR/.venv/bin/python' -m playwright install \$PLAYWRIGHT_INSTALL_ARGS || \
     echo 'Playwright 官方 Chromium 下载失败；将尝试使用系统 Chrome/Chromium。'
 fi
 if command -v chromium-browser >/dev/null 2>&1; then
@@ -38,7 +40,7 @@ elif command -v chromium >/dev/null 2>&1; then
   echo 'chromium='\"\$(command -v chromium)\"
 elif command -v google-chrome-stable >/dev/null 2>&1; then
   echo 'google-chrome-stable='\"\$(command -v google-chrome-stable)\"
-elif find '$REMOTE_DIR/.cache/ms-playwright' -maxdepth 1 -type d -name 'chromium-*' | grep -q .; then
+elif find '$REMOTE_DIR/data/ms-playwright' -maxdepth 1 -type d -name 'chromium-*' | grep -q .; then
   echo 'playwright-chromium-cache=ok'
 else
   echo '浏览器安装后仍未找到 chromium/chrome。' >&2

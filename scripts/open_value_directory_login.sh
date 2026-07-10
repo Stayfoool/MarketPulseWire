@@ -49,6 +49,7 @@ sleep 1
 echo "远程 VNC 已启动在 127.0.0.1:$VNC_PORT。请通过 SSH 隧道连接并登录。"
 runuser -u "$REMOTE_SERVICE_USER" -- env \
   DISPLAY="$DISPLAY" \
+  PLAYWRIGHT_BROWSERS_PATH="$REMOTE_DIR/data/ms-playwright" \
   VALUE_DIRECTORY_PROFILE_DIR="$PROFILE_DIR" \
   "$REMOTE_DIR/.venv/bin/python" "$REMOTE_DIR/scripts/value_directory_login.py" --url "$URL" \
   >/tmp/surveil-valuelist-browser.log 2>&1 &
