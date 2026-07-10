@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from holdings_web import RUN_ONCE_TARGETS, html_page, unit_actions, unit_display_metadata
+from holdings_web import RUN_ONCE_TARGETS, fetch_events_rows, html_page, unit_actions, unit_display_metadata
 from source_profiles import (
     filter_enabled_named_sources,
     filter_enabled_source_mapping,
@@ -49,6 +49,88 @@ def test_source_profile_view_is_exposed() -> None:
     assert "saveSourceProfiles" in html
     assert "保存配置" in html
     assert "信息源" in html
+
+
+def test_event_center_search_filters_before_per_pipeline_limit() -> None:
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE article_reviews (
+                source TEXT,
+                item_id TEXT,
+                url TEXT,
+                title TEXT,
+                source_module TEXT,
+                published_at TEXT,
+                importance TEXT,
+                push_now INTEGER,
+                incremental_classification TEXT,
+                affected_targets_json TEXT,
+                daily_summary TEXT,
+                reason TEXT,
+                pushed_at TEXT,
+                created_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO article_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "cls_telegraph_api",
+                "2421358",
+                "https://example.com/goldman",
+                "高盛重磅发声：做多中国AI价值链",
+                "财联社 / 电报 API",
+                "2026-07-09T03:57:30+00:00",
+                "medium",
+                0,
+                "已有预期",
+                "[]",
+                "高盛发布中国AI价值链策略",
+                "旧门控未推送",
+                "",
+                "2026-07-09T03:57:58.693585+00:00",
+            ),
+        )
+        for index in range(301):
+            conn.execute(
+                """
+                INSERT INTO article_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "cls_telegraph_api",
+                    f"noise-{index}",
+                    "",
+                    f"噪音新闻 {index}",
+                    "财联社 / 电报 API",
+                    "2026-07-09T15:00:00+00:00",
+                    "low",
+                    0,
+                    "",
+                    "[]",
+                    "普通内容",
+                    "",
+                    "",
+                    f"2026-07-09T15:00:00.{index:03d}+00:00",
+                ),
+            )
+        conn.commit()
+        conn.close()
+
+        rows = fetch_events_rows(
+            day="2026-07-09",
+            source="财联社",
+            q="高盛重磅发声",
+            db_path=db_path,
+        )
+
+    assert len(rows) == 1
+    assert rows[0]["id"] == "2421358"
+    assert rows[0]["kind"] == "article"
 
 
 def test_source_profiles_group_six_categories() -> None:
