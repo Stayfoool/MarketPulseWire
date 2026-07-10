@@ -297,6 +297,8 @@ def test_systemd_actions_are_whitelisted() -> None:
     assert RUN_ONCE_TARGETS["surveil-official-collector.timer"] == "surveil-official-collector.service"
     assert "run_once" in unit_actions("surveil-news-collector.timer")
     assert RUN_ONCE_TARGETS["surveil-news-collector.timer"] == "surveil-news-collector.service"
+    assert "run_once" in unit_actions("surveil-value-directory.timer")
+    assert RUN_ONCE_TARGETS["surveil-value-directory.timer"] == "surveil-value-directory.service"
     assert "run_once" in unit_actions("surveil-research-collector-shadow.timer")
     assert RUN_ONCE_TARGETS["surveil-research-collector-shadow.timer"] == "surveil-research-collector-shadow.service"
     assert RUN_ONCE_TARGETS["surveil-china-media.timer"] == "surveil-china-media.service"

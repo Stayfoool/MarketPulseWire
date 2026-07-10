@@ -58,6 +58,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-news-collector.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-value-directory.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector-shadow.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector-shadow.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-news-collector-shadow.service, \\
@@ -77,6 +78,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-news-collector.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-value-directory.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector-shadow.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector-shadow.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-news-collector-shadow.timer, \\
@@ -95,6 +97,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block start surveil-research-collector.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-official-collector.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-news-collector.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-value-directory.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-research-collector-shadow.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-official-collector-shadow.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-news-collector-shadow.service, \\
@@ -178,6 +181,7 @@ systemctl --no-pager --full status surveil-trendforce-page-monitor.service || tr
 systemctl --no-pager --full status surveil-research-collector.timer || true
 systemctl --no-pager --full status surveil-official-collector.timer || true
 systemctl --no-pager --full status surveil-news-collector.timer || true
+systemctl --no-pager --full status surveil-value-directory.timer || true
 systemctl --no-pager --full status surveil-research-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-official-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-news-collector-shadow.timer || true

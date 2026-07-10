@@ -18,6 +18,8 @@ config/market_skill/
 data/
 logs/
 reports/
+browser-profiles/
+config/value_directory.local.json
 *.sqlite
 *.sqlite3
 *.db
