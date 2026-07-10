@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "rules": {
+    "investment_bank_rating_target_direct_holding": {
+      "enabled": true,
+      "priority": 100,
+      "allowed_banks": [],
+      "extra_keywords": []
+    },
+    "international_bank_theme_strategy": {
+      "enabled": true,
+      "priority": 90,
+      "allowed_banks": [],
+      "extra_theme_keywords": [],
+      "extra_action_keywords": [],
+      "min_evidence_score": 2,
+      "allow_secondary_sources": true,
+      "dedup_lookback_days": 14
+    },
+    "direct_holding_hard_variable": {
+      "enabled": true,
+      "priority": 80,
+      "extra_keywords": []
+    },
+    "official_company_hard_variable": {
+      "enabled": true,
+      "priority": 70,
+      "extra_keywords": [],
+      "extra_sources": []
+    },
+    "macro_policy_line": {
+      "enabled": true,
+      "priority": 60,
+      "extra_primary_keywords": [],
+      "extra_secondary_keywords": []
+    },
+    "source_priority_semianalysis": {
+      "enabled": true,
+      "sources": ["semianalysis"]
+    },
+    "industry_quantified_hardline": {
+      "enabled": true,
+      "extra_keywords": [],
+      "extra_sources": []
+    }
+  }
+}

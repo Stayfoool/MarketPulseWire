@@ -16,6 +16,7 @@ from typing import Any
 from investment_bank_theme_config import load_config
 from investment_universe import investment_universe_match
 from media_keyword_config import keyword_matches_text
+from rule_center import effective_list, rule_enabled, rule_priority
 
 
 INTERNATIONAL_BANK_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -570,8 +571,12 @@ def investment_bank_research_rule(
     )
     if not text:
         return None
-    banks = matched_bank_names(text)
-    if not banks or not contains_keyword(text, RATING_OR_TARGET_KEYWORDS):
+    if not rule_enabled("investment_bank_rating_target_direct_holding"):
+        return None
+    allowed_banks = {item.casefold() for item in effective_list("investment_bank_rating_target_direct_holding", "allowed_banks", ())}
+    banks = matched_bank_names(text, allowed_banks=allowed_banks or None)
+    keywords = effective_list("investment_bank_rating_target_direct_holding", "extra_keywords", RATING_OR_TARGET_KEYWORDS)
+    if not banks or not contains_keyword(text, keywords):
         return None
     direct_holdings = matched_holdings(text, holdings, symbols=symbols)
     if not direct_holdings:
@@ -629,7 +634,10 @@ def direct_holding_hard_variable_rule(
         item.get("source_module"),
         item.get("source_display"),
     )
-    if not text or not contains_keyword(text, DIRECT_HOLDING_HARD_VARIABLE_KEYWORDS):
+    if not text or not rule_enabled("direct_holding_hard_variable"):
+        return None
+    keywords = effective_list("direct_holding_hard_variable", "extra_keywords", DIRECT_HOLDING_HARD_VARIABLE_KEYWORDS)
+    if not contains_keyword(text, keywords):
         return None
     direct_holdings = matched_holdings(text, holdings, symbols=symbols)
     if not direct_holdings:
@@ -673,7 +681,10 @@ def official_company_hard_variable_rule(
     symbols: set[str] | None = None,
 ) -> dict[str, Any] | None:
     del holdings, symbols
-    if str(source or "") not in OFFICIAL_COMPANY_SOURCES:
+    if not rule_enabled("official_company_hard_variable"):
+        return None
+    sources = set(effective_list("official_company_hard_variable", "extra_sources", OFFICIAL_COMPANY_SOURCES))
+    if str(source or "") not in sources:
         return None
     text = compact_text(
         item.get("title"),
@@ -683,7 +694,8 @@ def official_company_hard_variable_rule(
         item.get("source_module"),
         item.get("source_display"),
     )
-    if not text or not contains_keyword(text, OFFICIAL_COMPANY_HARD_VARIABLE_KEYWORDS):
+    keywords = effective_list("official_company_hard_variable", "extra_keywords", OFFICIAL_COMPANY_HARD_VARIABLE_KEYWORDS)
+    if not text or not contains_keyword(text, keywords):
         return None
     reason = (
         "公司官网硬变量规则：核心 AI/半导体公司官网内容命中 HBM/存储、GPU/AI 平台、量产/送样、"
@@ -719,6 +731,8 @@ def macro_policy_event_rule(
 ) -> dict[str, Any] | None:
     del source, holdings, symbols
     raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+    if not rule_enabled("macro_policy_line"):
+        return None
     macro = raw.get("macro_policy_line") if isinstance(raw.get("macro_policy_line"), dict) else {}
     if not macro.get("matched"):
         return None
@@ -751,13 +765,14 @@ def first_matching_push_rule(
     holdings: list[dict[str, Any]],
     symbols: set[str] | None = None,
 ) -> dict[str, Any] | None:
-    for matcher in (
-        investment_bank_research_rule,
-        international_bank_theme_strategy_rule,
-        direct_holding_hard_variable_rule,
-        official_company_hard_variable_rule,
-        macro_policy_event_rule,
-    ):
+    matchers = (
+        ("investment_bank_rating_target_direct_holding", investment_bank_research_rule),
+        ("international_bank_theme_strategy", international_bank_theme_strategy_rule),
+        ("direct_holding_hard_variable", direct_holding_hard_variable_rule),
+        ("official_company_hard_variable", official_company_hard_variable_rule),
+        ("macro_policy_line", macro_policy_event_rule),
+    )
+    for _rule_id, matcher in sorted(matchers, key=lambda item: rule_priority(item[0]), reverse=True):
         rule = matcher(source=source, item=item, holdings=holdings, symbols=symbols)
         if rule:
             return rule

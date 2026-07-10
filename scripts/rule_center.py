@@ -1,0 +1,564 @@
+"""Rule registry, private overrides, audit, and dry-run helpers for the Web workbench."""
+
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+from db_utils import connect_sqlite
+from market_db import DEFAULT_DB_PATH, db_table_exists, init_db
+
+
+ROOT = Path(__file__).resolve().parents[1]
+CONFIG_PATH = ROOT / "config" / "push_rules.local.json"
+
+
+RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "investment_bank_rating_target_direct_holding",
+        "name": "国际投行单股评级/目标价",
+        "group": "投行研究",
+        "description": "认可国际投行对直接持仓/观察标的给出评级、目标价或覆盖变化时即时提醒。",
+        "runtime": "push_rules / article + event",
+        "hit_markers": ("investment_bank_rating_target_direct_holding",),
+        "priority": 100,
+        "fields": (
+            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
+            {"key": "priority", "label": "规则顺序", "type": "int", "default": 100, "min": 1, "max": 999},
+            {
+                "key": "allowed_banks",
+                "label": "机构白名单",
+                "type": "list",
+                "default": [],
+                "help": "留空使用代码内置国际投行名单；填写后仅允许列表中的中文名或英文别名。",
+            },
+            {
+                "key": "extra_keywords",
+                "label": "额外评级/目标价触发词",
+                "type": "list",
+                "default": [],
+                "help": "叠加到内置评级、目标价、上调/下调等词表。",
+            },
+        ),
+    },
+    {
+        "id": "international_bank_theme_strategy",
+        "name": "国际投行重大主题策略",
+        "group": "投行研究",
+        "description": "明确做多/做空/超配等主题策略，且有资金切换、估值错配、量化比较或行业篮子等重大性证据时即时提醒。",
+        "runtime": "push_rules / article + event",
+        "hit_markers": ("international_bank_theme_strategy",),
+        "priority": 90,
+        "external_config": "investment_bank_theme",
+        "fields": (
+            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
+            {"key": "priority", "label": "规则顺序", "type": "int", "default": 90, "min": 1, "max": 999},
+            {"key": "allowed_banks", "label": "机构白名单", "type": "list", "default": []},
+            {"key": "extra_theme_keywords", "label": "额外主题关键词", "type": "list", "default": []},
+            {"key": "extra_action_keywords", "label": "额外配置动作词", "type": "list", "default": []},
+            {"key": "min_evidence_score", "label": "最低重大性证据分", "type": "int", "default": 2, "min": 1, "max": 8},
+            {"key": "allow_secondary_sources", "label": "允许媒体明确署名转述", "type": "bool", "default": True},
+            {"key": "dedup_lookback_days", "label": "跨来源去重天数", "type": "int", "default": 14, "min": 1, "max": 90},
+        ),
+    },
+    {
+        "id": "direct_holding_hard_variable",
+        "name": "直接持仓硬变量",
+        "group": "持仓与公司",
+        "description": "持仓/观察标的命中订单、涨价、产能、客户认证、资本开支、并购、管制或业绩指引等硬变量时即时提醒。",
+        "runtime": "push_rules / article + event",
+        "hit_markers": ("direct_holding_hard_variable",),
+        "priority": 80,
+        "fields": (
+            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
+            {"key": "priority", "label": "规则顺序", "type": "int", "default": 80, "min": 1, "max": 999},
+            {"key": "extra_keywords", "label": "额外硬变量触发词", "type": "list", "default": []},
+        ),
+    },
+    {
+        "id": "official_company_hard_variable",
+        "name": "核心公司官网硬变量",
+        "group": "持仓与公司",
+        "description": "核心公司官网的 HBM/存储、GPU/AI 平台、量产、客户认证、产能、资本开支、液冷和先进封装等硬变量即时提醒。",
+        "runtime": "push_rules / official article",
+        "hit_markers": ("official_company_hard_variable",),
+        "priority": 70,
+        "fields": (
+            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
+            {"key": "priority", "label": "规则顺序", "type": "int", "default": 70, "min": 1, "max": 999},
+            {"key": "extra_keywords", "label": "额外硬变量触发词", "type": "list", "default": []},
+            {
+                "key": "extra_sources",
+                "label": "额外官网来源 ID",
+                "type": "list",
+                "default": [],
+                "help": "叠加到 OpenAI、NVIDIA、Samsung、SK hynix、Micron 等内置官网来源。",
+            },
+        ),
+    },
+    {
+        "id": "macro_policy_line",
+        "name": "美国宏观/Fed 政策线",
+        "group": "宏观流动性",
+        "description": "非农、CPI、PCE、FOMC/主席讲话及伴随大幅市场反应的次重点数据即时提醒。",
+        "runtime": "macro_policy + push_rules / article + event",
+        "hit_markers": ("macro_policy_line",),
+        "priority": 60,
+        "fields": (
+            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
+            {"key": "priority", "label": "规则顺序", "type": "int", "default": 60, "min": 1, "max": 999},
+            {"key": "extra_primary_keywords", "label": "额外核心宏观关键词", "type": "list", "default": []},
+            {"key": "extra_secondary_keywords", "label": "额外次重点数据关键词", "type": "list", "default": []},
+        ),
+    },
+    {
+        "id": "source_priority_semianalysis",
+        "name": "SemiAnalysis 来源优先级",
+        "group": "研究机构/行业媒体",
+        "description": "指定的高价值研究源默认进入即时提醒，除非 Skeptic 明确 block。",
+        "runtime": "industry_hardline / article",
+        "hit_markers": ("source_priority_override",),
+        "priority": 0,
+        "fields": (
+            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
+            {
+                "key": "sources",
+                "label": "优先来源 ID",
+                "type": "list",
+                "default": ["semianalysis"],
+                "help": "填写后替换默认来源列表；来源 ID 可在“信息源”页查看。",
+            },
+        ),
+    },
+    {
+        "id": "industry_quantified_hardline",
+        "name": "量化产业硬变量",
+        "group": "研究机构/行业媒体",
+        "description": "SEMI、TrendForce、DIGITIMES、The Elec、Nikkei xTECH 的设备、材料、产能、资本开支、涨价、管制、订单等量化硬变量即时提醒。",
+        "runtime": "industry_hardline / article + event-first",
+        "hit_markers": ("industry_hardline_override", "event_first_hardline"),
+        "priority": 0,
+        "fields": (
+            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
+            {"key": "extra_keywords", "label": "额外硬变量触发词", "type": "list", "default": []},
+            {
+                "key": "extra_sources",
+                "label": "额外来源 ID/前缀",
+                "type": "list",
+                "default": [],
+                "help": "仅用于新增已接入的研究机构/行业媒体来源；输入完整来源 ID 或稳定前缀。",
+            },
+        ),
+    },
+)
+
+RULE_BY_ID = {str(rule["id"]): rule for rule in RULE_DEFINITIONS}
+
+
+def normalize_list(values: Iterable[object]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        normalized = str(value or "").strip()
+        if not normalized:
+            continue
+        key = normalized.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(normalized)
+    return result
+
+
+def _bounded_int(value: object, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(parsed, maximum))
+
+
+def _default_settings(rule: dict[str, Any]) -> dict[str, Any]:
+    return {str(field["key"]): field.get("default") for field in rule.get("fields") or ()}
+
+
+def _normalize_settings(rule: dict[str, Any], raw: object) -> dict[str, Any]:
+    values = raw if isinstance(raw, dict) else {}
+    normalized = _default_settings(rule)
+    for field in rule.get("fields") or ():
+        key = str(field["key"])
+        if key not in values:
+            continue
+        kind = str(field.get("type") or "")
+        if kind == "bool":
+            normalized[key] = bool(values[key])
+        elif kind == "list":
+            normalized[key] = normalize_list(values[key] if isinstance(values[key], list) else [])
+        elif kind == "int":
+            normalized[key] = _bounded_int(
+                values[key],
+                int(field.get("default") or 0),
+                minimum=int(field.get("min") or 0),
+                maximum=int(field.get("max") or 999),
+            )
+    return normalized
+
+
+def default_config() -> dict[str, Any]:
+    return {"version": 1, "rules": {rule_id: _default_settings(rule) for rule_id, rule in RULE_BY_ID.items()}}
+
+
+def load_rule_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
+    if not path.exists():
+        return default_config()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"规则中心配置读取失败：{exc}") from exc
+    rules_raw = raw.get("rules") if isinstance(raw, dict) else {}
+    rules_raw = rules_raw if isinstance(rules_raw, dict) else {}
+    return {
+        "version": 1,
+        "rules": {rule_id: _normalize_settings(rule, rules_raw.get(rule_id)) for rule_id, rule in RULE_BY_ID.items()},
+    }
+
+
+def configured_rule_settings(rule_id: str, path: Path = CONFIG_PATH) -> dict[str, Any]:
+    """Return only fields explicitly present in the private override file."""
+    rule = RULE_BY_ID.get(str(rule_id))
+    if not rule or not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    rules_raw = raw.get("rules") if isinstance(raw, dict) and isinstance(raw.get("rules"), dict) else {}
+    values = rules_raw.get(str(rule_id))
+    if not isinstance(values, dict):
+        return {}
+    normalized = _normalize_settings(rule, values)
+    return {key: normalized[key] for key in values if key in normalized}
+
+
+def save_rule_config(raw: object, path: Path = CONFIG_PATH) -> dict[str, Any]:
+    rules_raw = raw.get("rules") if isinstance(raw, dict) and isinstance(raw.get("rules"), dict) else {}
+    payload = {
+        "version": 1,
+        "rules": {rule_id: _normalize_settings(rule, rules_raw.get(rule_id)) for rule_id, rule in RULE_BY_ID.items()},
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+        os.replace(tmp_name, path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+    return payload
+
+
+def rule_settings(rule_id: str) -> dict[str, Any]:
+    rule = RULE_BY_ID.get(str(rule_id))
+    if not rule:
+        return {}
+    return load_rule_config()["rules"][str(rule_id)]
+
+
+def rule_enabled(rule_id: str) -> bool:
+    settings = rule_settings(rule_id)
+    return bool(settings.get("enabled", True))
+
+
+def rule_priority(rule_id: str) -> int:
+    rule = RULE_BY_ID.get(str(rule_id))
+    default = int((rule or {}).get("priority") or 0)
+    return int(rule_settings(rule_id).get("priority") or default)
+
+
+def effective_list(rule_id: str, key: str, default: Iterable[object], *, replace_when_set: bool = False) -> tuple[str, ...]:
+    configured = rule_settings(rule_id).get(key)
+    values = normalize_list(configured if isinstance(configured, list) else [])
+    if replace_when_set and values:
+        return tuple(values)
+    return tuple(normalize_list([*default, *values]))
+
+
+def _theme_settings() -> dict[str, Any]:
+    from investment_bank_theme_config import load_config
+
+    return load_config()
+
+
+def _rule_view(rule: dict[str, Any], settings: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
+    fields = []
+    for field in rule.get("fields") or ():
+        key = str(field["key"])
+        fields.append({**field, "value": settings.get(key, field.get("default"))})
+    return {
+        "id": rule["id"],
+        "name": rule["name"],
+        "group": rule["group"],
+        "description": rule["description"],
+        "runtime": rule["runtime"],
+        "fields": fields,
+        "stats": stats,
+    }
+
+
+def _marker_stats(conn, markers: tuple[str, ...], cutoff: str) -> dict[str, Any]:
+    total = 0
+    latest: dict[str, Any] | None = None
+    table_specs = (
+        ("article_reviews", "gate_json", "created_at", "source, item_id, title, published_at, created_at"),
+        ("official_news_reviews", "analysis_json", "created_at", "source, item_id, title, published_at, created_at"),
+        ("event_analyses", "analysis_json", "created_at", "NULL, CAST(event_id AS TEXT), '', '', created_at"),
+    )
+    for table, json_column, created_column, select_columns in table_specs:
+        if not db_table_exists(conn, table):
+            continue
+        clauses = " OR ".join(f"{json_column} LIKE ?" for _ in markers)
+        params = [f"%{marker}%" for marker in markers]
+        total += int(
+            conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE {created_column} >= ? AND ({clauses})",
+                [cutoff, *params],
+            ).fetchone()[0]
+        )
+        if latest is None:
+            row = conn.execute(
+                f"""
+                SELECT {select_columns}
+                FROM {table}
+                WHERE {created_column} >= ? AND ({clauses})
+                ORDER BY {created_column} DESC
+                LIMIT 1
+                """,
+                [cutoff, *params],
+            ).fetchone()
+            if row:
+                latest = {
+                    "source": row[0] or "",
+                    "item_id": row[1] or "",
+                    "title": row[2] or "",
+                    "published_at": row[3] or "",
+                    "created_at": row[4] or "",
+                }
+    return {"matches_30d": total, "last_match": latest or {}}
+
+
+def rule_center_payload(db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
+    generic = load_rule_config()
+    theme = _theme_settings()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    init_db(db_path).close()
+    with connect_sqlite(db_path) as conn:
+        rules = []
+        for definition in RULE_DEFINITIONS:
+            rule_id = str(definition["id"])
+            settings = dict(generic["rules"][rule_id])
+            if definition.get("external_config") == "investment_bank_theme":
+                settings.update(theme)
+            rules.append(_rule_view(definition, settings, _marker_stats(conn, tuple(definition["hit_markers"]), cutoff)))
+    return {
+        "rules": rules,
+        "config_path": str(CONFIG_PATH),
+        "has_local_override": CONFIG_PATH.exists(),
+        "theme_config_path": str(ROOT / "config" / "investment_bank_theme_rules.json"),
+        "theme_has_local_override": (ROOT / "config" / "investment_bank_theme_rules.json").exists(),
+        "runtime_note": "保存后新资讯会动态读取私有配置，无需重启；只有同时更新代码或环境变量时才需要重启对应常驻服务。",
+    }
+
+
+def _changes(before: dict[str, Any], after: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    before_rules = before.get("rules") if isinstance(before.get("rules"), dict) else {}
+    after_rules = after.get("rules") if isinstance(after.get("rules"), dict) else {}
+    for rule_id in RULE_BY_ID:
+        left = before_rules.get(rule_id, {})
+        right = after_rules.get(rule_id, {})
+        if left != right:
+            result.append({"rule_id": rule_id, "before": left, "after": right})
+    return result
+
+
+def _write_audit(before: dict[str, Any], after: dict[str, Any], db_path: Path) -> None:
+    changes = _changes(before, after)
+    if not changes:
+        return
+    init_db(db_path).close()
+    with connect_sqlite(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO rule_config_audit (changed_at, actor, before_json, after_json, changes_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                datetime.now(timezone.utc).isoformat(),
+                "web_workbench",
+                json.dumps(before, ensure_ascii=False),
+                json.dumps(after, ensure_ascii=False),
+                json.dumps(changes, ensure_ascii=False),
+            ),
+        )
+        conn.commit()
+
+
+def save_rule_center_config(raw: object, *, db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
+    incoming_rules = raw.get("rules") if isinstance(raw, dict) and isinstance(raw.get("rules"), dict) else {}
+    before_generic = load_rule_config()
+    before_theme = _theme_settings()
+    generic_input = {"rules": {rule_id: incoming_rules.get(rule_id) for rule_id in RULE_BY_ID}}
+    saved_generic = save_rule_config(generic_input)
+
+    theme_input = incoming_rules.get("international_bank_theme_strategy")
+    if isinstance(theme_input, dict):
+        from investment_bank_theme_config import save_config
+
+        saved_theme = save_config(theme_input)
+    else:
+        saved_theme = before_theme
+    before = {"rules": {**before_generic["rules"], "international_bank_theme_strategy": before_theme}}
+    after = {"rules": {**saved_generic["rules"], "international_bank_theme_strategy": saved_theme}}
+    _write_audit(before, after, db_path)
+    return rule_center_payload(db_path)
+
+
+def list_rule_audit(*, db_path: Path = DEFAULT_DB_PATH, limit: int = 30) -> list[dict[str, Any]]:
+    init_db(db_path).close()
+    with connect_sqlite(db_path) as conn:
+        if not db_table_exists(conn, "rule_config_audit"):
+            return []
+        rows = conn.execute(
+            """
+            SELECT id, changed_at, actor, changes_json
+            FROM rule_config_audit
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (max(1, min(int(limit), 100)),),
+        ).fetchall()
+    result = []
+    for row in rows:
+        try:
+            changes = json.loads(row[3] or "[]")
+        except json.JSONDecodeError:
+            changes = []
+        result.append({"id": row[0], "changed_at": row[1], "actor": row[2], "changes": changes if isinstance(changes, list) else []})
+    return result
+
+
+def _article_candidates(conn, cutoff: str, limit: int) -> list[dict[str, Any]]:
+    if not db_table_exists(conn, "article_reviews"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT source, item_id, title, daily_summary, published_at, gate_json
+        FROM article_reviews
+        WHERE created_at >= ?
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (cutoff, limit),
+    ).fetchall()
+    candidates = []
+    for source, item_id, title, summary, published_at, gate_json in rows:
+        try:
+            raw = json.loads(gate_json or "{}")
+        except json.JSONDecodeError:
+            raw = {}
+        candidates.append(
+            {
+                "kind": "article",
+                "source": source,
+                "item_id": item_id,
+                "title": title,
+                "summary": summary or raw.get("core_content") or "",
+                "published_at": published_at or "",
+                "full_text": raw.get("core_content") or "",
+                "raw": raw,
+            }
+        )
+    return candidates
+
+
+def _event_candidates(conn, cutoff: str, limit: int) -> list[dict[str, Any]]:
+    if not db_table_exists(conn, "events"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT id, source, title, summary, full_text, published_at, raw_json
+        FROM events
+        WHERE first_seen_at >= ?
+        ORDER BY first_seen_at DESC
+        LIMIT ?
+        """,
+        (cutoff, limit),
+    ).fetchall()
+    candidates = []
+    for event_id, source, title, summary, full_text, published_at, raw_json in rows:
+        try:
+            raw = json.loads(raw_json or "{}")
+        except json.JSONDecodeError:
+            raw = {}
+        candidates.append(
+            {
+                "kind": "event",
+                "source": source,
+                "item_id": str(event_id),
+                "title": title,
+                "summary": summary or "",
+                "full_text": full_text or "",
+                "published_at": published_at or "",
+                "raw": raw,
+            }
+        )
+    return candidates
+
+
+def simulate_rules(*, db_path: Path = DEFAULT_DB_PATH, days: int = 7, limit: int = 120) -> dict[str, Any]:
+    """Evaluate recent stored entries with the live rules without sending Feishu."""
+    from industry_hardline import is_quantified_hardline_item, is_source_priority_immediate
+    from push_rules import first_matching_push_rule, load_enabled_holdings_for_rules
+
+    safe_days = max(1, min(int(days), 60))
+    safe_limit = max(10, min(int(limit), 300))
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=safe_days)).isoformat()
+    init_db(db_path).close()
+    with connect_sqlite(db_path) as conn:
+        candidates = _article_candidates(conn, cutoff, safe_limit) + _event_candidates(conn, cutoff, safe_limit)
+    holdings = load_enabled_holdings_for_rules(db_path)
+    results = []
+    for item in candidates:
+        matches: list[dict[str, Any]] = []
+        rule = first_matching_push_rule(source=str(item["source"]), item=item, holdings=holdings)
+        if rule:
+            matches.append(
+                {
+                    "rule_id": rule["rule_id"],
+                    "name": RULE_BY_ID.get(rule["rule_id"], {}).get("name", rule["rule_id"]),
+                    "reason": str(rule.get("brief_reason") or rule.get("reason") or ""),
+                }
+            )
+        if is_source_priority_immediate(str(item["source"])):
+            matches.append({"rule_id": "source_priority_semianalysis", "name": "SemiAnalysis 来源优先级", "reason": "来源在优先级白名单内。"})
+        if is_quantified_hardline_item(str(item["source"]), item):
+            matches.append({"rule_id": "industry_quantified_hardline", "name": "量化产业硬变量", "reason": "来源和量化硬变量条件同时命中。"})
+        if not matches:
+            continue
+        results.append(
+            {
+                "kind": item["kind"],
+                "source": item["source"],
+                "item_id": item["item_id"],
+                "title": item["title"],
+                "published_at": item["published_at"],
+                "matches": matches,
+            }
+        )
+    return {"days": safe_days, "scanned": len(candidates), "matched": len(results), "results": results[:100]}

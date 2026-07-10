@@ -45,6 +45,7 @@ jobs:
           python scripts/test_push_rules.py
           python scripts/test_investment_bank_theme_config.py
           python scripts/test_rule_alert_dedup.py
+          python scripts/test_rule_center.py
           python scripts/test_gate_prompts.py
           python scripts/test_sina_zy_client.py
           python scripts/test_industry_hardline.py

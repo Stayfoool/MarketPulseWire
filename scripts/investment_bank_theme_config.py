@@ -72,12 +72,23 @@ def normalize_config(raw: object) -> dict[str, Any]:
 
 def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
     if not path.exists():
-        return dict(DEFAULT_CONFIG)
+        config = dict(DEFAULT_CONFIG)
+    else:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"国际投行主题策略配置读取失败：{exc}") from exc
+        config = normalize_config(raw)
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(f"国际投行主题策略配置读取失败：{exc}") from exc
-    return normalize_config(raw)
+        from rule_center import configured_rule_settings
+
+        override = configured_rule_settings("international_bank_theme_strategy")
+    except Exception:  # noqa: BLE001 - rule-center config must not break alerts.
+        override = {}
+    for key in DEFAULT_CONFIG:
+        if key in override:
+            config[key] = normalize_config({**config, key: override[key]})[key]
+    return config
 
 
 def save_config(raw: object, path: Path = CONFIG_PATH) -> dict[str, Any]:

@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from rule_center import effective_list, rule_enabled
+
 
 PRIMARY_DATA_KEYWORDS = (
     "非农",
@@ -175,9 +177,11 @@ def has_us_context(text: str) -> bool:
 
 
 def primary_data_match(text: str) -> bool:
-    if contains_any(text, PRIMARY_DATA_KEYWORDS):
+    primary_keywords = effective_list("macro_policy_line", "extra_primary_keywords", PRIMARY_DATA_KEYWORDS)
+    us_scoped_primary = effective_list("macro_policy_line", "extra_primary_keywords", US_SCOPED_PRIMARY_DATA_KEYWORDS)
+    if contains_any(text, primary_keywords):
         return True
-    return contains_any(text, US_SCOPED_PRIMARY_DATA_KEYWORDS) and has_us_context(text)
+    return contains_any(text, us_scoped_primary) and has_us_context(text)
 
 
 def fed_event_match(text: str, *, market_reaction: bool, large_move: bool, surprise: bool) -> bool:
@@ -191,12 +195,14 @@ def fed_event_match(text: str, *, market_reaction: bool, large_move: bool, surpr
 
 
 def macro_policy_match(item: dict[str, Any]) -> dict[str, Any]:
+    if not rule_enabled("macro_policy_line"):
+        return {"matched": False, "tier": "disabled", "reason": "宏观政策线规则已停用。"}
     text = text_blob(item.get("title"), item.get("summary"), item.get("content"), item.get("full_text"))
     if is_retail_sales_only(text):
         return {"matched": False, "tier": "ignored", "reason": "零售销售不纳入宏观政策线。"}
 
     primary = primary_data_match(text)
-    secondary = contains_any(text, SECONDARY_DATA_KEYWORDS)
+    secondary = contains_any(text, effective_list("macro_policy_line", "extra_secondary_keywords", SECONDARY_DATA_KEYWORDS))
     market_reaction = contains_any(text, MARKET_REACTION_KEYWORDS)
     large_move = has_large_move(text)
     surprise = has_surprise(text)

@@ -14,6 +14,7 @@ import os
 import re
 from typing import Iterable
 
+from rule_center import effective_list, rule_enabled
 
 HARDLINE_SOURCE_PREFIXES = (
     "semi_prnewswire_semiconductors",
@@ -136,7 +137,11 @@ STRONG_HARDLINE_KEYWORDS = (
 
 
 def is_hardline_source(source: str) -> bool:
-    return source in HARDLINE_SOURCE_NAMES or source.startswith(HARDLINE_SOURCE_PREFIXES)
+    if not rule_enabled("industry_quantified_hardline"):
+        return False
+    source_names = effective_list("industry_quantified_hardline", "extra_sources", HARDLINE_SOURCE_NAMES)
+    source_prefixes = effective_list("industry_quantified_hardline", "extra_sources", HARDLINE_SOURCE_PREFIXES)
+    return source in source_names or source.startswith(source_prefixes)
 
 
 def effective_source(source: str, item: dict | None = None) -> str:
@@ -152,7 +157,8 @@ def hardline_heuristic_matches(text: str) -> bool:
 
 def has_strong_keyword(text: str) -> bool:
     lowered = str(text or "").lower()
-    return any(keyword.lower() in lowered for keyword in STRONG_HARDLINE_KEYWORDS)
+    keywords = effective_list("industry_quantified_hardline", "extra_keywords", STRONG_HARDLINE_KEYWORDS)
+    return any(keyword.lower() in lowered for keyword in keywords)
 
 
 def has_quantified_signal(text: str) -> bool:
@@ -212,7 +218,15 @@ def apply_hardline_review_override(source: str, item: dict, review: dict) -> dic
 
 
 def is_source_priority_immediate(source: str) -> bool:
-    return str(source or "").strip().lower() in SOURCE_PRIORITY_IMMEDIATE_SOURCES
+    if not rule_enabled("source_priority_semianalysis"):
+        return False
+    sources = effective_list(
+        "source_priority_semianalysis",
+        "sources",
+        SOURCE_PRIORITY_IMMEDIATE_SOURCES,
+        replace_when_set=True,
+    )
+    return str(source or "").strip().lower() in {item.lower() for item in sources}
 
 
 def apply_source_priority_override(source: str, item: dict, review: dict) -> dict:

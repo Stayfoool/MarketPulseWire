@@ -31,6 +31,7 @@ from market_db import DEFAULT_DB_PATH
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
 from investment_bank_theme_config import config_payload as investment_bank_theme_config_payload
 from investment_bank_theme_config import save_config as save_investment_bank_theme_config
+from rule_center import list_rule_audit, rule_center_payload, save_rule_center_config, simulate_rules
 from settings_store import save_settings, settings_payload
 from signals_extract import extract_signals
 from source_profiles import save_source_profile_config, source_profiles_payload
@@ -1209,6 +1210,7 @@ def html_page(token_required: bool) -> str:
     <button id="tab-sources" onclick="showView('sources')">信息源</button>
     <button id="tab-health" onclick="showView('health')">任务健康</button>
     <button id="tab-keywords" onclick="showView('keywords')">媒体关键词</button>
+    <button id="tab-rules" onclick="showView('rules')">规则中心</button>
     <button id="tab-settings" onclick="showView('settings')">配置中心</button>
     <button id="tab-holdings" onclick="showView('holdings')">持仓管理</button>
   </nav>
@@ -1542,48 +1544,65 @@ def html_page(token_required: bool) -> str:
       <div id="settingsGrid" class="settings-grid"></div>
       <section class="panel" style="margin-top:12px">
         <div class="section-title">
-          <h3 style="margin:0">国际投行重大主题策略</h3>
+          <h3 style="margin:0">确定性推送规则</h3>
+          <button class="primary" onclick="showView('rules')">打开规则中心</button>
+        </div>
+        <div class="hint">国际投行、持仓硬变量、核心公司官网、宏观/Fed、SemiAnalysis 和量化产业硬变量规则已集中到规则中心。页面仅开放启停、顺序、白名单和额外词表等安全调整，并提供历史 dry-run 与修改审计。</div>
+      </section>
+    </section>
+
+    <section id="view-rules" class="view">
+      <div class="section-title">
+        <h2>规则中心</h2>
+        <div>
+          <button onclick="loadRuleCenter()">刷新</button>
+          <button class="primary" onclick="saveRuleCenter()">保存规则</button>
+        </div>
+      </div>
+      <div id="ruleCenterHint" class="status ok" style="display:block">
+规则由代码定义默认边界；本页仅调整安全参数。保存不会发送历史新闻，新的采集轮次会自动读取私有配置。
+      </div>
+      <div id="ruleCenterMetrics" class="metric-grid"></div>
+      <div id="ruleCenterRows"></div>
+      <section class="panel" style="margin-top:12px">
+        <div class="section-title">
+          <h3 style="margin:0">规则 Dry-run</h3>
           <div>
-            <button onclick="loadInvestmentBankThemeRules()">刷新</button>
-            <button class="primary" onclick="saveInvestmentBankThemeRules()">保存</button>
+            <input id="ruleSimulationDays" type="number" min="1" max="60" value="7" style="width:80px">
+            <button class="primary" onclick="runRuleSimulation()">用最近新闻模拟</button>
           </div>
         </div>
-        <div class="hint">命中认可机构的明确做多/做空/超配/低配/资金切换策略，并达到重大性证据阈值时即时薄推送。空白白名单表示使用代码内置机构名单；该配置不含任何密钥。</div>
-        <div class="settings-grid" style="margin-top:12px">
-          <section class="settings-card">
-            <div class="setting-field">
-              <label><span>启用策略规则</span></label>
-              <label><input id="investmentBankThemeEnabled" type="checkbox"> 启用</label>
-            </div>
-            <div class="setting-field">
-              <label><span>最低重大性证据分</span></label>
-              <input id="investmentBankThemeMinScore" type="number" min="1" max="8">
-            </div>
-            <div class="setting-field">
-              <label><span>跨来源去重天数</span></label>
-              <input id="investmentBankThemeDedupDays" type="number" min="1" max="90">
-            </div>
-            <div class="setting-field">
-              <label><span>允许媒体明确署名转述</span></label>
-              <label><input id="investmentBankThemeSecondary" type="checkbox"> 允许</label>
-            </div>
-          </section>
-          <section class="settings-card">
-            <div class="setting-field">
-              <label><span>机构白名单</span></label>
-              <textarea id="investmentBankThemeBanks" style="min-height:110px" placeholder="每行一个；留空使用代码默认名单"></textarea>
-            </div>
-            <div class="setting-field">
-              <label><span>额外主题关键词</span></label>
-              <textarea id="investmentBankThemeKeywords" style="min-height:95px" placeholder="每行一个，例如：卫星通信"></textarea>
-            </div>
-            <div class="setting-field">
-              <label><span>额外配置动作词</span></label>
-              <textarea id="investmentBankThemeActions" style="min-height:70px" placeholder="每行一个，例如：战略性增配"></textarea>
-            </div>
-          </section>
+        <div class="hint">只读取数据库中最近的文章和事件，按当前页面已保存的规则运行；不会发飞书、不会改新闻状态。</div>
+        <div class="table-wrap" style="margin-top:10px; max-height:420px">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:120px">时间</th>
+                <th style="width:150px">来源</th>
+                <th>新闻与命中规则</th>
+              </tr>
+            </thead>
+            <tbody id="ruleSimulationRows"></tbody>
+          </table>
         </div>
-        <div id="investmentBankThemeRuleHint" class="hint"></div>
+      </section>
+      <section class="panel" style="margin-top:12px">
+        <div class="section-title">
+          <h3 style="margin:0">规则修改审计</h3>
+          <button onclick="loadRuleAudit()">刷新</button>
+        </div>
+        <div class="table-wrap" style="max-height:300px">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:170px">时间</th>
+                <th style="width:120px">操作者</th>
+                <th>变化</th>
+              </tr>
+            </thead>
+            <tbody id="ruleAuditRows"></tbody>
+          </table>
+        </div>
       </section>
     </section>
 
@@ -1749,6 +1768,7 @@ let editingRelationId = null;
 let signalRowsCache = [];
 let editingSignalFeedback = null;
 let sourceProfileCache = {{categories: [], profiles: []}};
+let ruleCenterCache = {{rules: []}};
 
 function headers() {{
   const h = {{'Content-Type': 'application/json'}};
@@ -1904,9 +1924,9 @@ function showView(name) {{
   if (name === 'sources') loadSourceProfiles();
   if (name === 'health') loadHealth();
   if (name === 'keywords') loadKeywords();
+  if (name === 'rules') loadRuleCenter();
   if (name === 'settings') {{
     loadSettings();
-    loadInvestmentBankThemeRules();
   }}
   if (name === 'holdings' && !loadedHoldings) reloadData();
 }}
@@ -2604,6 +2624,147 @@ async function saveKeywords() {{
   }}
 }}
 
+function ruleFieldId(ruleId, fieldKey) {{
+  return `rule-${{ruleId}}-${{fieldKey}}`;
+}}
+
+function renderRuleField(rule, field) {{
+  const id = ruleFieldId(rule.id, field.key);
+  const help = field.help ? `<div class="hint">${{escapeHtml(field.help)}}</div>` : '';
+  if (field.type === 'bool') {{
+    return `
+      <div class="setting-field">
+        <label><span>${{escapeHtml(field.label || field.key)}}</span></label>
+        <label><input id="${{escapeHtml(id)}}" data-rule-id="${{escapeHtml(rule.id)}}" data-rule-key="${{escapeHtml(field.key)}}" data-rule-type="bool" type="checkbox" ${{field.value ? 'checked' : ''}}> 启用</label>
+        ${{help}}
+      </div>
+    `;
+  }}
+  if (field.type === 'list') {{
+    return `
+      <div class="setting-field">
+        <label><span>${{escapeHtml(field.label || field.key)}}</span></label>
+        <textarea id="${{escapeHtml(id)}}" data-rule-id="${{escapeHtml(rule.id)}}" data-rule-key="${{escapeHtml(field.key)}}" data-rule-type="list" style="min-height:72px" placeholder="每行一个">${{escapeHtml(keywordListToText(field.value || []))}}</textarea>
+        ${{help}}
+      </div>
+    `;
+  }}
+  return `
+    <div class="setting-field">
+      <label><span>${{escapeHtml(field.label || field.key)}}</span></label>
+      <input id="${{escapeHtml(id)}}" data-rule-id="${{escapeHtml(rule.id)}}" data-rule-key="${{escapeHtml(field.key)}}" data-rule-type="int" type="number" value="${{escapeHtml(field.value ?? '')}}" min="${{escapeHtml(field.min ?? '')}}" max="${{escapeHtml(field.max ?? '')}}">
+      ${{help}}
+    </div>
+  `;
+}}
+
+function renderRuleCenter() {{
+  const rules = ruleCenterCache.rules || [];
+  const total = rules.length;
+  const enabled = rules.filter(rule => (rule.fields || []).find(field => field.key === 'enabled')?.value !== false).length;
+  const recent = rules.reduce((sum, rule) => sum + Number((rule.stats || {{}}).matches_30d || 0), 0);
+  document.getElementById('ruleCenterMetrics').innerHTML = [
+    {{label: '硬规则', value: total, hint: '代码定义的确定性规则'}},
+    {{label: '当前启用', value: enabled, hint: '可在本页启停'}},
+    {{label: '近 30 天命中', value: recent, hint: '按规则命中 JSON 汇总'}}
+  ].map(item => `<section class="metric"><div class="label">${{escapeHtml(item.label)}}</div><div class="value">${{escapeHtml(item.value)}}</div><div class="hint">${{escapeHtml(item.hint)}}</div></section>`).join('');
+  document.getElementById('ruleCenterRows').innerHTML = rules.map(rule => {{
+    const stats = rule.stats || {{}};
+    const last = stats.last_match || {{}};
+    const fields = rule.fields || [];
+    const left = fields.slice(0, Math.ceil(fields.length / 2));
+    const right = fields.slice(Math.ceil(fields.length / 2));
+    return `
+      <section class="panel" style="margin-top:12px">
+        <div class="section-title">
+          <div>
+            <h3 style="margin:0">${{escapeHtml(rule.name || rule.id || '')}}</h3>
+            <div class="hint">${{escapeHtml(rule.group || '')}} / ${{escapeHtml(rule.runtime || '')}}</div>
+          </div>
+          <div>${{badge('近30天 ' + String(stats.matches_30d || 0) + ' 次')}}</div>
+        </div>
+        <div class="summary-cell">${{escapeHtml(rule.description || '')}}</div>
+        <div class="settings-grid" style="margin-top:10px">
+          <section class="settings-card">${{left.map(field => renderRuleField(rule, field)).join('')}}</section>
+          <section class="settings-card">
+            ${{right.map(field => renderRuleField(rule, field)).join('')}}
+            <div class="hint" style="margin-top:12px">最近命中：${{last.title ? escapeHtml(shortText(last.title, 160)) : '暂无'}}${{last.published_at ? '；' + escapeHtml(formatTime(last.published_at)) : ''}}</div>
+          </section>
+        </div>
+      </section>
+    `;
+  }}).join('') || '<section class="panel">暂无规则定义。</section>';
+}}
+
+async function loadRuleCenter() {{
+  try {{
+    const data = await api('/api/rule-center');
+    ruleCenterCache = data;
+    renderRuleCenter();
+    document.getElementById('ruleCenterHint').textContent =
+      `${{data.runtime_note || ''}} 私有覆盖：${{data.config_path || '-'}}；${{data.has_local_override ? '已存在覆盖' : '当前使用代码默认'}}。`;
+    await loadRuleAudit();
+  }} catch (err) {{
+    showStatus(err.message, 'err');
+  }}
+}}
+
+function ruleCenterPayloadFromDom() {{
+  const rules = {{}};
+  (ruleCenterCache.rules || []).forEach(rule => {{ rules[rule.id] = {{}}; }});
+  document.querySelectorAll('[data-rule-id][data-rule-key]').forEach(input => {{
+    const ruleId = input.dataset.ruleId;
+    const key = input.dataset.ruleKey;
+    const type = input.dataset.ruleType;
+    if (!rules[ruleId]) rules[ruleId] = {{}};
+    if (type === 'bool') rules[ruleId][key] = Boolean(input.checked);
+    else if (type === 'list') rules[ruleId][key] = keywordTextToList(input.value);
+    else rules[ruleId][key] = Number(input.value || 0);
+  }});
+  return {{rules}};
+}}
+
+async function saveRuleCenter() {{
+  try {{
+    const data = await api('/api/rule-center', {{method: 'POST', body: JSON.stringify(ruleCenterPayloadFromDom())}});
+    ruleCenterCache = data;
+    renderRuleCenter();
+    await loadRuleAudit();
+    showStatus('规则中心配置已保存并写入审计记录。新资讯会动态读取，无需重启服务。');
+  }} catch (err) {{
+    showStatus(err.message, 'err');
+  }}
+}}
+
+async function loadRuleAudit() {{
+  try {{
+    const data = await api('/api/rule-center/audit');
+    document.getElementById('ruleAuditRows').innerHTML = (data.items || []).map(item => {{
+      const changes = (item.changes || []).map(change => {{
+        const rule = (ruleCenterCache.rules || []).find(row => row.id === change.rule_id);
+        return `<div><strong>${{escapeHtml((rule || {{}}).name || change.rule_id || '')}}</strong>：${{escapeHtml(shortText(JSON.stringify(change.after || {{}}), 220))}}</div>`;
+      }}).join('');
+      return `<tr><td>${{escapeHtml(formatTime(item.changed_at || ''))}}</td><td>${{escapeHtml(item.actor || '')}}</td><td class="summary-cell">${{changes || '-'}}</td></tr>`;
+    }}).join('') || '<tr><td colspan="3">暂无规则修改记录。</td></tr>';
+  }} catch (err) {{
+    showStatus(err.message, 'err');
+  }}
+}}
+
+async function runRuleSimulation() {{
+  try {{
+    const days = Number(document.getElementById('ruleSimulationDays').value || 7);
+    const data = await api('/api/rule-center/simulate', {{method: 'POST', body: JSON.stringify({{days}})}});
+    document.getElementById('ruleSimulationRows').innerHTML = (data.results || []).map(item => {{
+      const matches = (item.matches || []).map(match => `<div><strong>${{escapeHtml(match.name || match.rule_id || '')}}</strong><div class="hint">${{escapeHtml(shortText(match.reason || '', 180))}}</div></div>`).join('');
+      return `<tr><td>${{escapeHtml(formatTime(item.published_at || ''))}}</td><td>${{escapeHtml(item.source || '')}}</td><td class="summary-cell"><strong>${{escapeHtml(item.title || '')}}</strong><div style="margin-top:6px">${{matches}}</div></td></tr>`;
+    }}).join('') || `<tr><td colspan="3">最近 ${{data.days || days}} 天扫描 ${{data.scanned || 0}} 条，没有命中当前硬规则。</td></tr>`;
+    showStatus(`Dry-run 完成：扫描 ${{data.scanned || 0}} 条，命中 ${{data.matched || 0}} 条；未发送飞书。`);
+  }} catch (err) {{
+    showStatus(err.message, 'err');
+  }}
+}}
+
 async function loadInvestmentBankThemeRules() {{
   try {{
     const data = await api('/api/investment-bank-theme-rules');
@@ -3190,6 +3351,24 @@ class HoldingsHandler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
+        if parsed.path == "/api/rule-center":
+            if not self.require_auth():
+                return
+            try:
+                payload = rule_center_payload(DEFAULT_DB_PATH)
+                payload["ok"] = True
+                self.send_json(payload)
+            except Exception as exc:  # noqa: BLE001
+                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path == "/api/rule-center/audit":
+            if not self.require_auth():
+                return
+            try:
+                self.send_json({"ok": True, "items": list_rule_audit(db_path=DEFAULT_DB_PATH)})
+            except Exception as exc:  # noqa: BLE001
+                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path == "/api/investment-bank-theme-rules":
             if not self.require_auth():
                 return
@@ -3236,6 +3415,20 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 )
                 saved["ok"] = True
                 self.send_json(saved)
+                return
+            if parsed.path == "/api/rule-center":
+                response = save_rule_center_config(payload, db_path=DEFAULT_DB_PATH)
+                response["ok"] = True
+                self.send_json(response)
+                return
+            if parsed.path == "/api/rule-center/simulate":
+                response = simulate_rules(
+                    db_path=DEFAULT_DB_PATH,
+                    days=int(payload.get("days") or 7),
+                    limit=int(payload.get("limit") or 120),
+                )
+                response["ok"] = True
+                self.send_json(response)
                 return
             if parsed.path == "/api/investment-bank-theme-rules":
                 saved = save_investment_bank_theme_config(payload)

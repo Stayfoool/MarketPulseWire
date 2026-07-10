@@ -141,6 +141,18 @@ CREATE TABLE IF NOT EXISTS rule_alert_dedup (
 CREATE INDEX IF NOT EXISTS idx_rule_alert_dedup_rule_created
 ON rule_alert_dedup(rule_id, created_at);
 
+CREATE TABLE IF NOT EXISTS rule_config_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    changed_at TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    before_json TEXT NOT NULL,
+    after_json TEXT NOT NULL,
+    changes_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_rule_config_audit_changed
+ON rule_config_audit(changed_at);
+
 CREATE TABLE IF NOT EXISTS jygs_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     trade_date TEXT NOT NULL,
@@ -527,6 +539,7 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_rule_alert_dedup_rule_created "
         "ON rule_alert_dedup(rule_id, created_at)"
     )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_config_audit_changed ON rule_config_audit(changed_at)")
 
 
 def init_db(path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
