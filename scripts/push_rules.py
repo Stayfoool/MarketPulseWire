@@ -7,9 +7,15 @@ if the model labels the item as old news or already priced in.
 
 from __future__ import annotations
 
+import hashlib
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from investment_bank_theme_config import load_config
+from investment_universe import investment_universe_match
+from media_keyword_config import keyword_matches_text
 
 
 INTERNATIONAL_BANK_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -58,6 +64,65 @@ RATING_OR_TARGET_KEYWORDS = (
     "underweight",
     "outperform",
     "underperform",
+)
+
+THEME_STRATEGY_ACTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("做多", ("做多", "long", "go long")),
+    ("做空", ("做空", "short", "go short")),
+    ("超配", ("超配", "overweight")),
+    ("低配", ("低配", "underweight")),
+    ("加仓", ("加仓", "增配", "增持", "add exposure")),
+    ("减仓", ("减仓", "减配", "减持", "reduce exposure")),
+    ("买入", ("买入", "买进", "buy")),
+    ("卖出", ("卖出", "卖出", "sell")),
+    ("配置转向", ("配置转向", "资金切换", "资金轮动", "切换至", "rotate", "rotation", "switch to")),
+)
+
+THEME_STRATEGY_THEMES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("AI/算力价值链", ("ai价值链", "人工智能价值链", "ai基础设施", "算力", "大模型", "ai")),
+    ("半导体", ("半导体", "芯片", "晶圆", "先进封装", "设备", "材料")),
+    ("存储/HBM", ("hbm", "dram", "nand", "存储", "内存", "ssd")),
+    ("数据中心电力/液冷", ("数据中心", "data center", "液冷", "散热", "电力", "电源")),
+    ("光通信/光互联", ("光模块", "光通信", "硅光", "cpo", "光互联")),
+    ("PCB/电子制造", ("pcb", "覆铜板", "电子制造", "中板")),
+    ("机器人", ("人形机器人", "机器人", "谐波减速器", "丝杠")),
+)
+
+THEME_EVIDENCE_PATTERNS: tuple[tuple[str, int, tuple[str, ...]], ...] = (
+    (
+        "资金/地区/行业切换",
+        2,
+        (
+            "资金切换",
+            "资本轮动",
+            "结构性资本轮动",
+            "配置转向",
+            "地区轮动",
+            "行业轮动",
+            "从(?:韩国|美国|中国|欧洲).{0,28}(?:转向|切换)",
+            "switch from",
+            "rotate from",
+        ),
+    ),
+    ("完整估值错配/比较", 2, ("估值错配", "市值与市场空间", "估值与市场空间", "valuation mismatch", "valuation.*market")),
+    (
+        "量化估值/市场比较",
+        2,
+        (
+            "目标(?:回报|收益).{0,12}(?:\\d|%|倍)",
+            "(?:市值|估值|市场规模|tam).{0,18}(?:\\d|%|倍|亿|万)",
+            "(?:\\d|%|倍|亿|万).{0,18}(?:市值|估值|市场规模|tam)",
+            "资金流.{0,18}(?:\\d|%|亿|万)",
+        ),
+    ),
+)
+
+GENERIC_VALUATION_PATTERNS = (
+    "估值上行空间",
+    "估值偏低",
+    "低估",
+    "undervalued",
+    "upside",
 )
 
 DIRECT_HOLDING_HARD_VARIABLE_KEYWORDS = (
@@ -184,10 +249,14 @@ def contains_keyword(text: str, keywords: tuple[str, ...]) -> bool:
     return False
 
 
-def matched_bank_names(text: str) -> list[str]:
+def matched_bank_names(text: str, allowed_banks: set[str] | None = None) -> list[str]:
     lowered = text.lower()
     banks: list[str] = []
     for display, aliases in INTERNATIONAL_BANK_ALIASES:
+        if allowed_banks and display.casefold() not in allowed_banks and not any(
+            alias.casefold() in allowed_banks for alias in aliases
+        ):
+            continue
         if any(alias.lower() in lowered for alias in aliases):
             banks.append(display)
     return banks
@@ -314,6 +383,173 @@ def extract_target_gap(text: str) -> dict[str, Any]:
         gap = (target - current) / current
         return {"current_price": current, "target_price": target, "target_gap_pct": gap}
     return {}
+
+
+def _matches_pattern(text: str, pattern: str) -> bool:
+    if ".*" in pattern or "\\d" in pattern:
+        return re.search(pattern, text, flags=re.I | re.S) is not None
+    return keyword_matches_text(pattern, text)
+
+
+def _strategy_actions(text: str, extra_actions: list[str]) -> list[str]:
+    actions: list[str] = []
+    for label, phrases in THEME_STRATEGY_ACTIONS:
+        if any(keyword_matches_text(phrase, text) for phrase in phrases):
+            actions.append(label)
+    for action in extra_actions:
+        if keyword_matches_text(action, text):
+            actions.append(action)
+    return list(dict.fromkeys(actions))
+
+
+def _strategy_themes(text: str, extra_themes: list[str]) -> list[str]:
+    themes: list[str] = []
+    for label, phrases in THEME_STRATEGY_THEMES:
+        if any(keyword_matches_text(phrase, text) for phrase in phrases):
+            themes.append(label)
+    for theme in extra_themes:
+        if keyword_matches_text(theme, text):
+            themes.append(theme)
+    return list(dict.fromkeys(themes))
+
+
+def _strategy_evidence(text: str, themes: list[str]) -> list[dict[str, Any]]:
+    evidence: list[dict[str, Any]] = []
+    for kind, score, patterns in THEME_EVIDENCE_PATTERNS:
+        matched = next((pattern for pattern in patterns if _matches_pattern(text, pattern)), "")
+        if matched:
+            evidence.append({"kind": kind, "score": score, "snippet": matched})
+    if not any(item["kind"] == "完整估值错配/比较" for item in evidence):
+        matched = next((pattern for pattern in GENERIC_VALUATION_PATTERNS if _matches_pattern(text, pattern)), "")
+        if matched:
+            evidence.append({"kind": "泛估值上行/低估表述", "score": 1, "snippet": matched})
+    if len(themes) >= 3 or any(keyword_matches_text(pattern, text) for pattern in ("行业篮子", "标的篮子", "多环节", "产业链")):
+        evidence.append({"kind": "多环节/行业篮子", "score": 1, "snippet": "多环节主题覆盖"})
+    return evidence
+
+
+def _report_reference(text: str) -> str:
+    quoted = re.search(r"《([^》]{3,120})》", text)
+    if quoted:
+        return quoted.group(1).strip()
+    for pattern in (
+        r"(?:报告|研报|投资策略|策略报告|research|strategy)\s*[:：-]\s*([^。；;\n]{3,120})",
+        r"([^。；;\n]{3,120})(?:报告|研报)",
+    ):
+        match = re.search(pattern, text, flags=re.I)
+        if match:
+            return re.sub(r"\s+", " ", match.group(1)).strip()
+    return ""
+
+
+def _source_tier(source: str, item: dict[str, Any]) -> str:
+    source_text = compact_text(source, item.get("source_module"), item.get("source_display"), item.get("url"))
+    if any(token in source_text.casefold() for token in ("goldmansachs.com", "morganstanley.com", "jpmorgan.com", "citigroup.com")):
+        return "机构公开材料"
+    text = compact_text(item.get("title"), item.get("summary"), item.get("content"), item.get("full_text"))
+    if any(token in text for token in ("网传", "传闻", "未经证实", "市场消息")):
+        return "二手转述/待原报告确认"
+    return "媒体明确署名转述"
+
+
+def _published_day(value: object) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "undated"
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        match = re.search(r"\d{4}-\d{2}-\d{2}", raw)
+        return match.group(0) if match else "undated"
+
+
+def _theme_dedup_key(bank: str, report_title: str, themes: list[str], action: str, published_at: object) -> str:
+    identity = report_title or "|".join(themes[:3]) or action
+    normalized = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", identity.casefold())
+    digest = hashlib.sha256(f"{bank}|{_published_day(published_at)}|{normalized}|{action}".encode("utf-8")).hexdigest()[:20]
+    return f"ib_theme:{digest}"
+
+
+def international_bank_theme_strategy_rule(
+    *,
+    source: str,
+    item: dict[str, Any],
+    holdings: list[dict[str, Any]],
+    symbols: set[str] | None = None,
+) -> dict[str, Any] | None:
+    """Force major, relevant international-bank allocation strategy reports to push."""
+    del symbols
+    config = load_config()
+    if not config["enabled"]:
+        return None
+    text = compact_text(
+        item.get("title"),
+        item.get("summary"),
+        item.get("content"),
+        item.get("full_text"),
+        item.get("source_module"),
+        item.get("source_display"),
+    )
+    if not text:
+        return None
+    allowed = {value.casefold() for value in config["allowed_banks"]}
+    banks = matched_bank_names(text, allowed_banks=allowed or None)
+    if not banks:
+        return None
+    actions = _strategy_actions(text, config["extra_action_keywords"])
+    if not actions:
+        return None
+    themes = _strategy_themes(text, config["extra_theme_keywords"])
+    universe = investment_universe_match(source, item)
+    if not themes and not universe.get("matched"):
+        return None
+    evidence = _strategy_evidence(text, themes)
+    evidence_score = sum(int(item["score"]) for item in evidence)
+    if evidence_score < config["min_evidence_score"]:
+        return None
+    tier = _source_tier(source, item)
+    if tier != "机构公开材料" and not config["allow_secondary_sources"]:
+        return None
+    report_title = _report_reference(text)
+    bank = banks[0]
+    action = actions[0]
+    targets = themes[:4]
+    for holding in matched_holdings(text, holdings):
+        label = " ".join(part for part in (str(holding.get("name") or ""), str(holding.get("symbol") or "")) if part)
+        if label:
+            targets.append(label)
+    targets = list(dict.fromkeys(targets))[:5]
+    evidence_text = "；".join(f"{item['kind']}（{item['snippet']}）" for item in evidence[:3])
+    reason = (
+        f"国际投行重大主题策略规则：{bank}明确“{action}”{(' / ' + '、'.join(themes[:3])) if themes else ''}；"
+        f"重大性证据 {evidence_text}；来源层级：{tier}。"
+    )
+    if tier == "二手转述/待原报告确认":
+        reason += " 原报告尚待确认，先按明确署名策略观点提醒。"
+    return {
+        "matched": True,
+        "rule_id": "international_bank_theme_strategy",
+        "importance": "high",
+        "push_now": True,
+        "should_push": True,
+        "reason": reason,
+        "brief_reason": reason,
+        "affected_targets": targets,
+        "related_targets": [
+            {"name": target, "code": "", "relation": "国际投行主题策略", "direction": "uncertain"} for target in targets
+        ],
+        "banks": banks,
+        "action": action,
+        "actions": actions,
+        "themes": themes,
+        "report_title": report_title,
+        "source_tier": tier,
+        "evidence_score": evidence_score,
+        "evidence": evidence,
+        "dedup_key": _theme_dedup_key(bank, report_title, themes, action, item.get("published_at")),
+        "dedup_lookback_days": config["dedup_lookback_days"],
+        "source": source,
+    }
 
 
 def investment_bank_research_rule(
@@ -517,6 +753,7 @@ def first_matching_push_rule(
 ) -> dict[str, Any] | None:
     for matcher in (
         investment_bank_research_rule,
+        international_bank_theme_strategy_rule,
         direct_holding_hard_variable_rule,
         official_company_hard_variable_rule,
         macro_policy_event_rule,

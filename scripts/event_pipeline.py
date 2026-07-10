@@ -15,6 +15,7 @@ from feishu import send_card_with_response
 from llm_analysis import call_chat_completion_with_prompts, format_llm_analysis
 from market_db import DEFAULT_DB_PATH, init_db
 from push_rules import apply_event_push_rules
+from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert
 
 
 PORTFOLIO_EVENT_SYSTEM_PROMPT = """你是 A 股持仓监控系统的投研与风控助理。
@@ -507,8 +508,32 @@ def maybe_deliver_event(event_id: int, analysis: dict[str, Any], db_path: Path =
     if not should_push_analysis(analysis):
         record_delivery(event_id, "feishu", "skipped", {"reason": "未命中强推规则，不即时推送"}, db_path=db_path)
         return "skipped"
+    reservation = reserve_rule_alert(
+        analysis,
+        source=str(source),
+        item_id=str(event_id),
+        title=str(title),
+        published_at=str(published_at or ""),
+        db_path=db_path,
+    )
+    if reservation.get("duplicate"):
+        first = reservation.get("first") or {}
+        record_delivery(
+            event_id,
+            "feishu",
+            "skipped",
+            {
+                "reason": "同一国际投行主题报告跨来源去重",
+                "first_source": first.get("source"),
+                "first_published_at": first.get("published_at"),
+                "dedup_key": reservation.get("dedup_key"),
+            },
+            db_path=db_path,
+        )
+        return "skipped"
     webhook = os.getenv("FEISHU_WEBHOOK", "").strip()
     if not webhook:
+        release_rule_alert(reservation, db_path=db_path)
         record_delivery(event_id, "feishu", "skipped", {"reason": "FEISHU_WEBHOOK 未配置"}, db_path=db_path)
         return "skipped"
     if thin_event_card_enabled():
@@ -521,6 +546,7 @@ def maybe_deliver_event(event_id: int, analysis: dict[str, Any], db_path: Path =
     try:
         response = send_card_with_response(card)
     except Exception as exc:  # noqa: BLE001 - keep delivery failures isolated
+        release_rule_alert(reservation, db_path=db_path)
         record_delivery(
             event_id,
             "feishu",
@@ -534,6 +560,10 @@ def maybe_deliver_event(event_id: int, analysis: dict[str, Any], db_path: Path =
         )
         return "failed"
     status = "sent" if response.ok else "skipped"
+    if response.ok:
+        confirm_rule_alert(reservation, db_path=db_path)
+    else:
+        release_rule_alert(reservation, db_path=db_path)
     record_delivery(
         event_id,
         "feishu",

@@ -10,6 +10,7 @@ LOCAL_COMMANDS.md
 docs/monitoring-plan.md
 config/portfolio.json
 config/media_keywords.json
+config/investment_bank_theme_rules.json
 config/source_profiles.local.json
 config/stock_relations.json
 config/market_skill/

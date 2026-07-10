@@ -51,6 +51,13 @@ def test_source_profile_view_is_exposed() -> None:
     assert "信息源" in html
 
 
+def test_investment_bank_theme_rule_configuration_is_exposed() -> None:
+    html = html_page(token_required=False)
+    assert "/api/investment-bank-theme-rules" in html
+    assert "国际投行重大主题策略" in html
+    assert "saveInvestmentBankThemeRules" in html
+
+
 def test_event_center_search_filters_before_per_pipeline_limit() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
@@ -362,6 +369,7 @@ def main() -> int:
     test_embedded_script_keeps_newline_escapes()
     test_health_page_exposes_service_action_controls()
     test_source_profile_view_is_exposed()
+    test_investment_bank_theme_rule_configuration_is_exposed()
     test_source_profiles_group_six_categories()
     test_source_profiles_aggregate_wildcard_health()
     test_source_profile_local_config_roundtrip()
