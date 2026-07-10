@@ -92,6 +92,8 @@ def chromium_candidates() -> list[str]:
 def chromium_executable() -> str | None:
     for candidate in chromium_candidates():
         path = Path(candidate)
+        if path.parts[:2] == ("/", "snap"):
+            continue
         if path.exists() and os.access(path, os.X_OK):
             return str(path)
     return None
@@ -237,29 +239,7 @@ def collect_entries(limit: int = 30, url: str = LIST_URL) -> list[dict[str, Any]
             page = context.pages[0] if context.pages else context.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=config.timeout_ms)
             page.wait_for_timeout(int(os.getenv("VALUE_DIRECTORY_WAF_SETTLE_MS", "6000") or "6000"))
-            payload = page.evaluate(
-                """(limit) => {
-                    const text = document.body?.innerText || "";
-                    const articles = Array.from(document.querySelectorAll("article")).slice(0, limit);
-                    const entries = articles.map(article => {
-                        const link = article.querySelector("h2 a") || article.querySelector("a[href]");
-                        const time = article.querySelector("time");
-                        return {
-                            title: (link?.textContent || link?.querySelector("img")?.alt || "").trim(),
-                            url: link?.href || "",
-                            published: (time?.textContent || "").trim()
-                        };
-                    });
-                    return {
-                        url: location.href,
-                        title: document.title || "",
-                        bodySample: text.slice(0, 1200),
-                        articleCount: articles.length,
-                        entries
-                    };
-                }""",
-                safe_limit,
-            )
+            payload = evaluate_list_payload(page, safe_limit, config.timeout_ms)
         finally:
             context.close()
 
@@ -274,3 +254,38 @@ def collect_entries(limit: int = 30, url: str = LIST_URL) -> list[dict[str, Any]
     if not entries:
         raise AccessBlocked("价值目录列表页未解析到研报条目。")
     return entries
+
+
+def evaluate_list_payload(page: Any, safe_limit: int, timeout_ms: int) -> dict[str, Any]:
+    script = """(limit) => {
+        const text = document.body?.innerText || "";
+        const articles = Array.from(document.querySelectorAll("article")).slice(0, limit);
+        const entries = articles.map(article => {
+            const link = article.querySelector("h2 a") || article.querySelector("a[href]");
+            const time = article.querySelector("time");
+            return {
+                title: (link?.textContent || link?.querySelector("img")?.alt || "").trim(),
+                url: link?.href || "",
+                published: (time?.textContent || "").trim()
+            };
+        });
+        return {
+            url: location.href,
+            title: document.title || "",
+            bodySample: text.slice(0, 1200),
+            articleCount: articles.length,
+            entries
+        };
+    }"""
+    last_exc: Exception | None = None
+    for _ in range(3):
+        try:
+            return dict(page.evaluate(script, safe_limit))
+        except Exception as exc:  # noqa: BLE001 - page may still be navigating after WAF/SPA redirects
+            last_exc = exc
+            if "Execution context was destroyed" not in str(exc):
+                raise
+            page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+            page.wait_for_timeout(1500)
+    assert last_exc is not None
+    raise last_exc
