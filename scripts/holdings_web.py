@@ -1241,7 +1241,9 @@ def html_page(token_required: bool) -> str:
     <section id="view-events" class="view">
       <div class="toolbar">
         <input id="eventDate" type="date" style="width:160px">
-        <input id="eventSource" placeholder="来源过滤" style="width:180px">
+        <select id="eventSource" aria-label="来源过滤" style="width:320px" onchange="loadEvents()">
+          <option value="">全部来源</option>
+        </select>
         <input id="eventQuery" placeholder="搜索标题、摘要、标的" style="width:260px">
         <button class="primary" onclick="loadEvents()">查询</button>
       </div>
@@ -1775,6 +1777,7 @@ let signalRowsCache = [];
 let editingSignalFeedback = null;
 let sourceProfileCache = {{categories: [], profiles: []}};
 let ruleCenterCache = {{rules: []}};
+let eventSourceOptionsLoaded = false;
 
 function headers() {{
   const h = {{'Content-Type': 'application/json'}};
@@ -1924,7 +1927,7 @@ function showView(name) {{
   document.getElementById(`view-${{name}}`).classList.add('active');
   document.getElementById(`tab-${{name}}`).classList.add('active');
   if (name === 'overview') loadOverview();
-  if (name === 'events') loadEvents();
+  if (name === 'events') loadEventsView();
   if (name === 'signals') loadSignals();
   if (name === 'relations') loadRelationManager();
   if (name === 'sources') loadSourceProfiles();
@@ -1949,6 +1952,59 @@ function formatRate(value) {{
   const num = Number(value);
   if (Number.isNaN(num)) return String(value);
   return `${{(num * 100).toFixed(0)}}%`;
+}}
+
+function eventSourceFilterValue(profile) {{
+  if (profile.id === 'x_serenity') return 'x:serenity';
+  return String(profile.id || '').trim();
+}}
+
+async function loadEventSourceOptions() {{
+  if (eventSourceOptionsLoaded) return;
+  const select = document.getElementById('eventSource');
+  const selected = select.value;
+  let data = sourceProfileCache;
+  if (!Array.isArray(data.profiles) || !data.profiles.length) {{
+    data = await api('/api/source-profiles');
+    sourceProfileCache = data;
+  }}
+  const groups = new Map();
+  (data.profiles || []).forEach(profile => {{
+    const value = eventSourceFilterValue(profile);
+    if (!value) return;
+    const label = profile.category_label || '其他来源';
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push({{value, profile}});
+  }});
+  select.replaceChildren();
+  const all = document.createElement('option');
+  all.value = '';
+  all.textContent = '全部来源';
+  select.appendChild(all);
+  groups.forEach((items, label) => {{
+    const group = document.createElement('optgroup');
+    group.label = label;
+    items.forEach(({{value, profile}}) => {{
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = `${{profile.name || value}}（${{value}}）${{profile.enabled === false ? ' - 已停用' : ''}}`;
+      group.appendChild(option);
+    }});
+    select.appendChild(group);
+  }});
+  if ([...select.options].some(option => option.value === selected)) {{
+    select.value = selected;
+  }}
+  eventSourceOptionsLoaded = true;
+}}
+
+async function loadEventsView() {{
+  try {{
+    await loadEventSourceOptions();
+  }} catch (err) {{
+    showStatus(`来源下拉加载失败：${{err.message}}`, 'err');
+  }}
+  await loadEvents();
 }}
 
 async function loadOverview() {{
