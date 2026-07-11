@@ -1,5 +1,5 @@
 [Unit]
-Description=Run MarketPulseWire ValueList investment-bank stock research collector at 08:00
+Description=Run MarketPulseWire ValueList investment-bank research collector at 08:00
 
 [Timer]
 OnCalendar=*-*-* 08:00:00
