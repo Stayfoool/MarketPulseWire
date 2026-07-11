@@ -131,7 +131,7 @@ def rule_only_low_review(item: dict[str, Any]) -> dict[str, Any]:
         "incremental_classification": "规则未命中",
         "affected_targets": [],
         "daily_summary": title,
-        "reason": "价值目录国际投行个股研报索引已入库；未命中直接持仓/观察标的的投行评级或目标价硬规则，不即时推送。",
+        "reason": "价值目录国际投行个股研报索引已入库；未命中直接持仓/观察标的的投行评级/目标价或重大主题策略硬规则，不即时推送。",
         "brief_reason": "未命中即时硬规则，仅入库观察。",
         "confidence": "规则",
         "model": "rule_only",
@@ -143,12 +143,18 @@ def rule_only_low_review(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def review_and_maybe_push(item: dict[str, Any]) -> bool:
+def review_and_maybe_push(item: dict[str, Any], *, recheck_rules: bool = False) -> bool:
     item_id = article_item_id(item)
     with connect_db() as conn:
         existing = article_review_exists(conn, SOURCE_ID, item_id)
     if existing:
         review = existing
+        if recheck_rules and not review.get("pushed_at"):
+            refreshed = rule_first_review(SOURCE_ID, item)
+            if refreshed:
+                review = refreshed
+                with connect_db() as conn:
+                    save_article_review(conn, SOURCE_ID, item, review)
     else:
         review = rule_first_review(SOURCE_ID, item) or rule_only_low_review(item)
         with connect_db() as conn:
@@ -201,7 +207,13 @@ def review_and_maybe_push(item: dict[str, Any]) -> bool:
     return False
 
 
-def collect_production(entries: list[dict[str, Any]], *, notify_baseline: bool, started_at: str) -> dict[str, Any]:
+def collect_production(
+    entries: list[dict[str, Any]],
+    *,
+    notify_baseline: bool,
+    started_at: str,
+    recheck_item_id: str = "",
+) -> dict[str, Any]:
     new_items = save_new_items_with_retry(
         SOURCE_ID,
         entries,
@@ -214,6 +226,17 @@ def collect_production(entries: list[dict[str, Any]], *, notify_baseline: bool, 
         reviewed += 1
         if review_and_maybe_push(item):
             pushed += 1
+    rechecked = 0
+    target_id = recheck_item_id.strip()
+    if target_id and target_id not in {article_item_id(item) for item in new_items}:
+        for item in entries:
+            if article_item_id(item) != target_id:
+                continue
+            rechecked = 1
+            reviewed += 1
+            if review_and_maybe_push(item, recheck_rules=True):
+                pushed += 1
+            break
     return {
         "ok": True,
         "mode": "production",
@@ -229,6 +252,7 @@ def collect_production(entries: list[dict[str, Any]], *, notify_baseline: bool, 
             "raw_items": len(entries),
             "new_items": len(new_items),
             "reviewed_items": reviewed,
+            "rechecked_items": rechecked,
             "pushed_items": pushed,
         },
         "errors": [],
@@ -262,7 +286,7 @@ def print_summary(payload: dict[str, Any]) -> None:
         print(f"[ERR] {error}", flush=True)
 
 
-def run(*, production: bool, limit: int, notify_baseline: bool) -> dict[str, Any]:
+def run(*, production: bool, limit: int, notify_baseline: bool, recheck_item_id: str = "") -> dict[str, Any]:
     started_at = utc_now()
     if not source_profile_enabled(SOURCE_ID):
         payload = {
@@ -281,7 +305,12 @@ def run(*, production: bool, limit: int, notify_baseline: bool) -> dict[str, Any
         with connect_db() as conn:
             record_source_success(conn, MONITOR, SOURCE_ID)
         if production:
-            return collect_production(entries, notify_baseline=notify_baseline, started_at=started_at)
+            return collect_production(
+                entries,
+                notify_baseline=notify_baseline,
+                started_at=started_at,
+                recheck_item_id=recheck_item_id,
+            )
         return shadow_payload(entries, started_at=started_at)
     except Exception as exc:  # noqa: BLE001 - health state should capture every collector failure
         with connect_db() as conn:
@@ -304,6 +333,11 @@ def main() -> int:
     parser.add_argument("--production", action="store_true", help="写入 seen_items/article_reviews 并按硬规则发送飞书。")
     parser.add_argument("--notify-baseline", action="store_true", help="首次建立基线时也处理旧条目。默认只建立基线。")
     parser.add_argument("--limit", type=int, default=30, help="读取列表页前 N 条。")
+    parser.add_argument(
+        "--recheck-item-id",
+        default="",
+        help="仅复核当前列表中指定的未推送 item ID；只会重跑确定性硬规则。",
+    )
     parser.add_argument("--json", action="store_true", help="输出完整 JSON。")
     parser.add_argument("--write-report", action="store_true", help="把 JSON 报告写入 reports/。")
     parser.add_argument("--strict-exit", action="store_true", help="失败时返回非 0。")
@@ -313,6 +347,7 @@ def main() -> int:
         production=args.production,
         limit=max(1, min(args.limit, 100)),
         notify_baseline=args.notify_baseline or os.getenv("SURVEIL_NOTIFY_BASELINE", "") == "1",
+        recheck_item_id=args.recheck_item_id,
     )
     if args.write_report:
         payload["report_path"] = str(write_report(payload))

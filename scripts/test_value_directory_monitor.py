@@ -116,12 +116,44 @@ def test_source_profile_registers_value_directory() -> None:
     assert profile["skeptic_enabled"] is False
 
 
+class _DummyContext:
+    def __enter__(self):
+        return object()
+
+    def __exit__(self, *_):
+        return False
+
+
+def test_recheck_keeps_existing_review_without_new_rule() -> None:
+    item = {
+        "id": "862592",
+        "url": "https://www.valuelist.cn/862592.html",
+        "title": "高盛-交易思路：做多中国人工智能价值链",
+        "summary": "Trade Idea",
+        "published_at": "2026-07-09T16:00:00+00:00",
+    }
+    existing = {"push_now": False, "pushed_at": "", "importance": "medium"}
+    original_connect = value_directory_monitor.connect_db
+    original_existing = value_directory_monitor.article_review_exists
+    original_rule = value_directory_monitor.rule_first_review
+    try:
+        value_directory_monitor.connect_db = lambda: _DummyContext()
+        value_directory_monitor.article_review_exists = lambda *_: existing
+        value_directory_monitor.rule_first_review = lambda *_: None
+        assert value_directory_monitor.review_and_maybe_push(item, recheck_rules=True) is False
+    finally:
+        value_directory_monitor.connect_db = original_connect
+        value_directory_monitor.article_review_exists = original_existing
+        value_directory_monitor.rule_first_review = original_rule
+
+
 def main() -> int:
     test_normalize_entry_extracts_stable_id_and_utc_date()
     test_page_state_detection_separates_waf_login_and_empty()
     test_dedupe_entries_keeps_first_valid_url()
     test_shadow_payload_marks_seen_and_reviewed_without_delivery()
     test_source_profile_registers_value_directory()
+    test_recheck_keeps_existing_review_without_new_rule()
     print("value directory monitor checks passed")
     return 0
 
