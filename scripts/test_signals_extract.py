@@ -23,6 +23,7 @@ from stock_relations import (
     diff_relations,
     export_relations,
     import_relations,
+    portfolio_relation_matches,
     save_relation,
 )
 from signals_extract import extract_signals, target_from_text, x_targets
@@ -536,6 +537,60 @@ def test_theme_context_expands_signal_targets() -> None:
         assert row == ("300179.SZ", "四方达", "related_stock", "thermal material theme")
 
 
+def test_portfolio_relation_matches_peer_and_industry_theme() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(path).close()
+        holdings = [
+            {"symbol": "300179.SZ", "name": "四方达", "full_name": "", "aliases": []},
+            {"symbol": "300433.SZ", "name": "蓝思科技", "full_name": "", "aliases": []},
+        ]
+        save_relation(
+            {
+                "symbol": "600172.SH",
+                "symbol_name": "黄河旋风",
+                "related_symbol": "300179.SZ",
+                "related_name": "四方达",
+                "relation_type": "人造金刚石/超硬材料同业",
+                "impact_direction": "uncertain",
+                "theme": "人造金刚石/超硬材料",
+                "reason": "同行研报可作为四方达的行业定价参考。",
+                "confidence": "中",
+                "enabled": True,
+            },
+            db_path=path,
+        )
+        save_relation(
+            {
+                "symbol": "玻璃基板",
+                "symbol_name": "玻璃基板",
+                "related_symbol": "300433.SZ",
+                "related_name": "蓝思科技",
+                "relation_type": "玻璃基板/TGV主题",
+                "impact_direction": "uncertain",
+                "theme": "玻璃基板/TGV",
+                "reason": "玻璃基板行业研报可作为蓝思科技相关布局的跟踪线索。",
+                "confidence": "中",
+                "enabled": True,
+            },
+            db_path=path,
+        )
+        peer_matches = portfolio_relation_matches(
+            "高盛-黄河旋风(600172.SH)：人造金刚石需求与产能展望",
+            holdings,
+            db_path=path,
+        )
+        theme_matches = portfolio_relation_matches(
+            "摩根士丹利-玻璃基板与TGV产业链：设备与材料研究",
+            holdings,
+            db_path=path,
+        )
+    assert peer_matches[0]["holding_symbol"] == "300179.SZ"
+    assert peer_matches[0]["trigger_name"] == "黄河旋风"
+    assert theme_matches[0]["holding_symbol"] == "300433.SZ"
+    assert theme_matches[0]["matched_term"] in {"玻璃基板", "TGV"}
+
+
 def test_market_skill_import_and_signal_enrichment() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         path = Path(tmpdir) / "surveil.sqlite3"
@@ -764,6 +819,7 @@ def main() -> int:
     test_relation_import_expands_signal_targets()
     test_relation_json_roundtrip_and_suggestion_accept()
     test_theme_context_expands_signal_targets()
+    test_portfolio_relation_matches_peer_and_industry_theme()
     test_market_skill_import_and_signal_enrichment()
     test_signal_review_classification_and_insert()
     test_signal_review_low_attention_lesson_is_cautious()

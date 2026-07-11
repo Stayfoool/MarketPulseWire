@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import push_rules
 from push_rules import (
     apply_event_push_rules,
     direct_holding_hard_variable_rule,
@@ -13,6 +14,7 @@ from push_rules import (
 
 
 GREEN = {"symbol": "688017.SH", "name": "绿的谐波", "full_name": "绿的谐波传动科技股份有限公司", "aliases": []}
+SIFANGDA = {"symbol": "300179.SZ", "name": "四方达", "full_name": "", "aliases": []}
 
 
 def test_investment_bank_target_price_rule_for_direct_holding() -> None:
@@ -109,6 +111,36 @@ def test_international_bank_multi_leg_strategy_rule() -> None:
     assert rule["action"] == "超配"
 
 
+def test_value_directory_peer_or_industry_relation_rule() -> None:
+    item = {
+        "title": "高盛-黄河旋风(600172.SH)：人造金刚石需求与产能展望",
+        "summary": "国际投行个股研报索引。",
+        "published_at": "2026-07-11T00:00:00+00:00",
+    }
+    original_matches = push_rules.portfolio_relation_matches
+    try:
+        push_rules.portfolio_relation_matches = lambda *_args, **_kwargs: [
+            {
+                "holding_symbol": "300179.SZ",
+                "holding_name": "四方达",
+                "trigger_name": "黄河旋风",
+                "matched_term": "黄河旋风",
+                "relation_type": "人造金刚石/超硬材料同业",
+                "impact_direction": "uncertain",
+                "theme": "人造金刚石",
+            }
+        ]
+        rule = first_matching_push_rule(source="value_directory_ib_stocks", item=item, holdings=[SIFANGDA])
+    finally:
+        push_rules.portfolio_relation_matches = original_matches
+    assert rule is not None
+    assert rule["rule_id"] == "investment_bank_portfolio_relation"
+    assert rule["should_push"] is True
+    assert rule["affected_targets"] == ["四方达 300179.SZ"]
+    assert "黄河旋风 -> 人造金刚石/超硬材料同业 -> 四方达" in rule["reason"]
+    assert "LLM" in rule["reason"]
+
+
 def test_direct_holding_hard_variable_rule() -> None:
     item = {"title": "绿的谐波获得机器人客户大额订单，产能扩张推进", "summary": ""}
     rule = direct_holding_hard_variable_rule(source="sina_stock_news", item=item, holdings=[GREEN])
@@ -143,6 +175,7 @@ def main() -> int:
     test_international_bank_theme_strategy_requires_action_and_evidence()
     test_value_directory_strategy_title_is_index_evidence()
     test_international_bank_multi_leg_strategy_rule()
+    test_value_directory_peer_or_industry_relation_rule()
     test_direct_holding_hard_variable_rule()
     test_official_company_hard_variable_rule()
     test_macro_policy_rule_from_raw()

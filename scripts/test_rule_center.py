@@ -26,6 +26,8 @@ def test_rule_registry_payload_has_all_current_hard_rules() -> None:
     assert ids == set(RULE_BY_ID)
     theme = next(item for item in payload["rules"] if item["id"] == "international_bank_theme_strategy")
     assert any(field["key"] == "min_evidence_score" for field in theme["fields"])
+    relation = next(item for item in payload["rules"] if item["id"] == "investment_bank_portfolio_relation")
+    assert any(field["key"] == "max_relation_matches" for field in relation["fields"])
 
 
 def test_private_config_normalizes_and_preserves_explicit_fields() -> None:
