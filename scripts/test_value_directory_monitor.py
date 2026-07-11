@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -185,6 +186,75 @@ def test_recheck_keeps_existing_review_without_new_rule() -> None:
         value_directory_monitor.rule_first_review = original_rule
 
 
+def test_collect_production_rechecks_current_unpushed_reviews() -> None:
+    source = source_config("value_directory_ib_stocks")
+    entries = [
+        {
+            "id": "862591",
+            "url": "https://www.valuelist.cn/862591.html",
+            "title": "野村-中际旭创(300308.SZ)：我们预计2027年后将实现长期增长",
+            "summary": "国际投行个股研报索引。",
+            "published_at": "2026-07-11T00:00:10+00:00",
+        },
+        {
+            "id": "862592",
+            "url": "https://www.valuelist.cn/862592.html",
+            "title": "高盛-其他公司：例行观点",
+            "summary": "国际投行个股研报索引。",
+            "published_at": "2026-07-11T00:00:10+00:00",
+        },
+    ]
+    calls: list[tuple[str, bool]] = []
+    original_save_new = value_directory_monitor.save_new_items_with_retry
+    original_connect = value_directory_monitor.connect_db
+    original_exists = value_directory_monitor.article_review_exists
+    original_review = value_directory_monitor.review_and_maybe_push
+    original_enabled = os.environ.get("VALUE_DIRECTORY_RECHECK_UNPUSHED")
+    original_limit = os.environ.get("VALUE_DIRECTORY_RECHECK_UNPUSHED_LIMIT")
+    try:
+        os.environ["VALUE_DIRECTORY_RECHECK_UNPUSHED"] = "1"
+        os.environ["VALUE_DIRECTORY_RECHECK_UNPUSHED_LIMIT"] = "30"
+        value_directory_monitor.save_new_items_with_retry = lambda *_args, **_kwargs: []
+        value_directory_monitor.connect_db = lambda: _DummyContext()
+
+        def fake_exists(_conn, _source_id, item_id):
+            if item_id == "862591":
+                return {"push_now": False, "pushed_at": "", "importance": "medium"}
+            return None
+
+        def fake_review(item, *, source=None, recheck_rules=False):
+            calls.append((item["id"], recheck_rules))
+            return True
+
+        value_directory_monitor.article_review_exists = fake_exists
+        value_directory_monitor.review_and_maybe_push = fake_review
+        payload = value_directory_monitor.collect_production(
+            entries,
+            source=source,
+            notify_baseline=False,
+            started_at="2026-07-11T00:00:00+00:00",
+        )
+    finally:
+        value_directory_monitor.save_new_items_with_retry = original_save_new
+        value_directory_monitor.connect_db = original_connect
+        value_directory_monitor.article_review_exists = original_exists
+        value_directory_monitor.review_and_maybe_push = original_review
+        if original_enabled is None:
+            os.environ.pop("VALUE_DIRECTORY_RECHECK_UNPUSHED", None)
+        else:
+            os.environ["VALUE_DIRECTORY_RECHECK_UNPUSHED"] = original_enabled
+        if original_limit is None:
+            os.environ.pop("VALUE_DIRECTORY_RECHECK_UNPUSHED_LIMIT", None)
+        else:
+            os.environ["VALUE_DIRECTORY_RECHECK_UNPUSHED_LIMIT"] = original_limit
+
+    assert calls == [("862591", True)]
+    assert payload["counts"]["new_items"] == 0
+    assert payload["counts"]["reviewed_items"] == 1
+    assert payload["counts"]["rechecked_items"] == 1
+    assert payload["counts"]["pushed_items"] == 1
+
+
 def main() -> int:
     test_normalize_entry_extracts_stable_id_and_utc_date()
     test_normalize_entry_supports_industry_macro_source()
@@ -194,6 +264,7 @@ def main() -> int:
     test_source_profile_registers_value_directory()
     test_preview_failure_is_recorded_without_fake_summary()
     test_recheck_keeps_existing_review_without_new_rule()
+    test_collect_production_rechecks_current_unpushed_reviews()
     print("value directory monitor checks passed")
     return 0
 

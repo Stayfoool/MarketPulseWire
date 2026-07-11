@@ -163,6 +163,18 @@ def push_on_preview_failure() -> bool:
     return os.getenv("VALUE_DIRECTORY_PUSH_ON_PREVIEW_FAILURE", "1").strip() != "0"
 
 
+def recheck_unpushed_enabled() -> bool:
+    return os.getenv("VALUE_DIRECTORY_RECHECK_UNPUSHED", "1").strip() != "0"
+
+
+def recheck_unpushed_limit() -> int:
+    raw = os.getenv("VALUE_DIRECTORY_RECHECK_UNPUSHED_LIMIT", "").strip()
+    try:
+        return max(0, min(100, int(raw))) if raw else 30
+    except ValueError:
+        return 30
+
+
 def enrich_item_with_preview(item: dict[str, Any]) -> dict[str, Any]:
     if not preview_enabled():
         return item
@@ -328,12 +340,31 @@ def collect_production(
         if review_and_maybe_push(item, source=source):
             pushed += 1
     rechecked = 0
+    rechecked_item_ids: set[str] = set()
+    new_item_ids = {article_item_id(item) for item in new_items}
+    if recheck_unpushed_enabled():
+        limit = recheck_unpushed_limit()
+        for item in entries:
+            if rechecked >= limit:
+                break
+            item_id = article_item_id(item)
+            if item_id in new_item_ids:
+                continue
+            with connect_db() as conn:
+                existing = article_review_exists(conn, source.source_id, item_id)
+            if not existing or existing.get("pushed_at"):
+                continue
+            rechecked += 1
+            rechecked_item_ids.add(item_id)
+            reviewed += 1
+            if review_and_maybe_push(item, source=source, recheck_rules=True):
+                pushed += 1
     target_id = recheck_item_id.strip()
-    if target_id and target_id not in {article_item_id(item) for item in new_items}:
+    if target_id and target_id not in new_item_ids and target_id not in rechecked_item_ids:
         for item in entries:
             if article_item_id(item) != target_id:
                 continue
-            rechecked = 1
+            rechecked += 1
             reviewed += 1
             if review_and_maybe_push(item, source=source, recheck_rules=True):
                 pushed += 1
