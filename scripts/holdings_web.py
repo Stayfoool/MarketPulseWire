@@ -31,6 +31,7 @@ from market_db import DEFAULT_DB_PATH
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
 from investment_bank_theme_config import config_payload as investment_bank_theme_config_payload
 from investment_bank_theme_config import save_config as save_investment_bank_theme_config
+from market_view import article_view_from_row, event_view_from_row, official_view_from_row
 from rule_center import list_rule_audit, rule_center_payload, save_rule_center_config, simulate_rules
 from settings_store import save_settings, settings_payload
 from signals_extract import extract_signals
@@ -412,10 +413,21 @@ def fetch_events_rows(
                          ORDER BY a.id DESC LIMIT 1
                        ) AS should_push,
                        (
+                         SELECT analysis_json FROM event_analyses a
+                         WHERE a.event_id = e.id
+                         ORDER BY a.id DESC LIMIT 1
+                       ) AS analysis_json,
+                       (
                          SELECT status FROM deliveries d
                          WHERE d.event_id = e.id
                          ORDER BY d.id DESC LIMIT 1
-                       ) AS delivery_status
+                       ) AS delivery_status,
+                       (
+                         SELECT MAX(sent_at) FROM deliveries d
+                         WHERE d.event_id = e.id AND d.channel = 'feishu' AND d.status = 'sent'
+                       ) AS pushed_at,
+                       e.symbols_json,
+                       e.themes_json
                 FROM events e
                 WHERE {where}
                   {" " if include_baseline else "AND COALESCE(e.baseline_only, 0) = 0"}
@@ -424,25 +436,16 @@ def fetch_events_rows(
                 """,
                 params,
             ):
-                rows.append(
-                    {
-                        "kind": row["event_type"] or "event",
-                        "source": row["source"],
-                        "source_id": row["source"],
-                        "id": row["id"],
-                        "title": row["title"],
-                        "summary": row["summary"] or "",
-                        "url": row["url"] or "",
-                        "published_at": normalize_time(row["published_at"]),
-                        "seen_at": normalize_time(row["first_seen_at"]),
-                        "importance": row["importance"] or "",
-                        "classification": row["classification"] or "",
-                        "push": bool(row["should_push"]),
-                        "delivery_status": row["delivery_status"] or "",
-                        "baseline_only": bool(row["baseline_only"]),
-                    }
-                )
+                view = event_view_from_row(row).to_web_row()
+                view["published_at"] = normalize_time(row["published_at"])
+                view["seen_at"] = normalize_time(row["first_seen_at"])
+                rows.append(view)
         if table_exists(conn, "article_reviews"):
+            article_columns = table_columns(conn, "article_reviews")
+            gate_json_expr = "gate_json" if "gate_json" in article_columns else "'{}' AS gate_json"
+            affected_targets_expr = (
+                "affected_targets_json" if "affected_targets_json" in article_columns else "'[]' AS affected_targets_json"
+            )
             where, params = event_center_where_clause(
                 time_field=event_time_field(
                     basis=time_basis,
@@ -459,7 +462,8 @@ def fetch_events_rows(
             for row in conn.execute(
                 f"""
                 SELECT source, item_id, url, title, source_module, published_at, importance,
-                       push_now, incremental_classification, daily_summary, reason, pushed_at, created_at
+                       push_now, incremental_classification, daily_summary, reason, pushed_at, created_at,
+                       {affected_targets_expr}, {gate_json_expr}
                 FROM article_reviews
                 WHERE {where}
                 ORDER BY created_at DESC
@@ -467,25 +471,14 @@ def fetch_events_rows(
                 """,
                 params,
             ):
-                rows.append(
-                    {
-                        "kind": "article",
-                        "source": row["source_module"] or row["source"],
-                        "source_id": row["source"],
-                        "id": row["item_id"],
-                        "title": row["title"],
-                        "summary": row["daily_summary"] or row["reason"] or "",
-                        "url": row["url"] or "",
-                        "published_at": normalize_time(row["published_at"]),
-                        "seen_at": normalize_time(row["created_at"]),
-                        "importance": row["importance"] or "",
-                        "classification": row["incremental_classification"] or "",
-                        "push": bool(row["push_now"]),
-                        "delivery_status": "sent" if row["pushed_at"] else "daily",
-                        "baseline_only": False,
-                    }
-                )
+                view = article_view_from_row(row).to_web_row()
+                view["published_at"] = normalize_time(row["published_at"])
+                view["seen_at"] = normalize_time(row["created_at"])
+                rows.append(view)
         if table_exists(conn, "official_news_reviews"):
+            official_columns = table_columns(conn, "official_news_reviews")
+            should_push_expr = "should_push_now" if "should_push_now" in official_columns else "0 AS should_push_now"
+            analysis_json_expr = "analysis_json" if "analysis_json" in official_columns else "'{}' AS analysis_json"
             where, params = event_center_where_clause(
                 time_field=event_time_field(
                     basis=time_basis,
@@ -502,7 +495,7 @@ def fetch_events_rows(
             for row in conn.execute(
                 f"""
                 SELECT source, item_id, url, title, published_at, importance, daily_summary,
-                       reason, pushed_at, created_at
+                       reason, pushed_at, created_at, {should_push_expr}, {analysis_json_expr}
                 FROM official_news_reviews
                 WHERE {where}
                 ORDER BY created_at DESC
@@ -510,24 +503,10 @@ def fetch_events_rows(
                 """,
                 params,
             ):
-                rows.append(
-                    {
-                        "kind": "official_news",
-                        "source": row["source"],
-                        "source_id": row["source"],
-                        "id": row["item_id"],
-                        "title": row["title"],
-                        "summary": row["daily_summary"] or row["reason"] or "",
-                        "url": row["url"] or "",
-                        "published_at": normalize_time(row["published_at"]),
-                        "seen_at": normalize_time(row["created_at"]),
-                        "importance": row["importance"] or "",
-                        "classification": "",
-                        "push": bool(row["pushed_at"]),
-                        "delivery_status": "sent" if row["pushed_at"] else "daily",
-                        "baseline_only": False,
-                    }
-                )
+                view = official_view_from_row(row).to_web_row()
+                view["published_at"] = normalize_time(row["published_at"])
+                view["seen_at"] = normalize_time(row["created_at"])
+                rows.append(view)
         if include_baseline and table_exists(conn, "seen_items"):
             where, params = event_center_where_clause(
                 time_field=event_time_field(
@@ -569,7 +548,7 @@ def fetch_events_rows(
                         "source_id": row["source"],
                         "id": row["item_id"],
                         "title": row["title"],
-                        "summary": row["summary"] or "首次采集建立去重基线，未进入文章门控。",
+                        "summary": row["summary"] or "首次采集建立去重基线，未进入决策层。",
                         "url": row["url"] or "",
                         "published_at": normalize_time(row["published_at"]),
                         "seen_at": normalize_time(row["first_seen_at"]),
@@ -954,7 +933,7 @@ def overview_payload(day: str = "") -> dict[str, Any]:
             )
         cards = [
             {"label": "统一事件", "value": count_rows(conn, "events", "first_seen_at >= ? AND first_seen_at < ?", (start_utc, end_utc))},
-            {"label": "文章门控", "value": count_rows(conn, "article_reviews", "created_at >= ? AND created_at < ?", (start_utc, end_utc))},
+            {"label": "来源决策", "value": count_rows(conn, "article_reviews", "created_at >= ? AND created_at < ?", (start_utc, end_utc))},
             {"label": "X 新帖", "value": count_rows(conn, "seen_posts", "first_seen_at >= ? AND first_seen_at < ?", (start_utc, end_utc))},
             {"label": "韭研异动", "value": count_rows(conn, "jygs_events", "first_seen_at >= ? AND first_seen_at < ?", (start_utc, end_utc))},
             {"label": "飞书失败", "value": deliveries_failed + article_failures},
@@ -1530,14 +1509,14 @@ def html_page(token_required: bool) -> str:
         </div>
       </div>
       <div id="sourceProfileConfigHint" class="status ok" style="display:block">
-按 6 类信息抓取模型展示来源。启用、Skeptic、Tavily 覆盖已接入采集运行时；频率和代理暂仅记录。
+按 6 类信息来源展示采集层、决策层和薄解读的衔接。启用、Skeptic、Tavily 覆盖已接入采集运行时；频率和代理暂仅记录。
       </div>
       <div id="sourceProfileMetrics" class="metric-grid"></div>
       <div class="toolbar">
         <select id="sourceProfileCategory" style="width:210px" onchange="renderSourceProfiles()">
           <option value="">全部来源</option>
         </select>
-        <input id="sourceProfileQuery" placeholder="搜索来源、管道、服务、说明" style="width:320px" oninput="renderSourceProfiles()">
+        <input id="sourceProfileQuery" placeholder="搜索来源、处理层、服务、说明" style="width:320px" oninput="renderSourceProfiles()">
       </div>
       <section class="panel">
         <div class="table-wrap">
@@ -1549,7 +1528,7 @@ def html_page(token_required: bool) -> str:
                 <th style="width:210px">来源</th>
                 <th style="width:110px">状态</th>
                 <th style="width:155px">频率/形态</th>
-                <th style="width:170px">管道</th>
+                <th style="width:170px">处理层</th>
                 <th style="width:150px">Skeptic/Tavily</th>
                 <th>范围/筛选/代理/备注</th>
               </tr>

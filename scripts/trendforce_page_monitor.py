@@ -415,7 +415,7 @@ def notify_item(item: dict) -> None:
             review = event_first_hardline_review(PAGE_SOURCE_KEY, enriched)
             if review:
                 print(
-                    f"{enriched.get('page_source') or PAGE_SOURCE_KEY} event-first 硬变量门控："
+                    f"{enriched.get('page_source') or PAGE_SOURCE_KEY} 规则快判硬变量："
                     f"title={enriched.get('title', '')}",
                     flush=True,
                 )
@@ -431,7 +431,7 @@ def notify_item(item: dict) -> None:
                     try:
                         review = review_article(PAGE_SOURCE_KEY, enriched)
                     except Exception as exc:  # noqa: BLE001 - keep item in daily digest
-                        print(f"{enriched.get('page_source') or PAGE_SOURCE_KEY} 文章门控失败：{exc}", flush=True)
+                        print(f"{enriched.get('page_source') or PAGE_SOURCE_KEY} 薄解读失败：{exc}", flush=True)
                         review = failed_review(enriched, exc)
             with connect_db() as conn:
                 review = apply_article_hardline_override(PAGE_SOURCE_KEY, enriched, review)
@@ -446,7 +446,7 @@ def notify_item(item: dict) -> None:
                 review = apply_push_rule_override(PAGE_SOURCE_KEY, enriched, review)
                 save_article_review(conn, PAGE_SOURCE_KEY, enriched, review)
         print(
-            f"{enriched.get('page_source') or PAGE_SOURCE_KEY} 文章门控：importance={review.get('importance')} "
+            f"{enriched.get('page_source') or PAGE_SOURCE_KEY} 决策层：importance={review.get('importance')} "
             f"push={review.get('push_now')} title={enriched.get('title', '')}",
             flush=True,
         )

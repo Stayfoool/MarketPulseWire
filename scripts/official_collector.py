@@ -135,7 +135,7 @@ def candidate_from_item(
         "published_at": str(item.get("published_at") or ""),
         "summary": summarize_text(item.get("summary") or item.get("content") or ""),
         "categories": list(item.get("categories") or []),
-        "pipeline": "official_news_gate shadow",
+        "pipeline": "official_company shadow -> decision layer / thin interpretation planned",
     }
 
 

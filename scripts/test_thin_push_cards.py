@@ -74,6 +74,39 @@ def test_thin_article_card_shows_deterministic_push_reason_when_present() -> Non
     assert "美国核心宏观/Fed 政策线" in text
 
 
+def test_thin_article_card_prefers_unified_decision_and_interpretation_metadata() -> None:
+    card = build_article_card(
+        "nvidia_blog",
+        {
+            "title": "NVIDIA Rubin 平台更新",
+            "summary": "旧摘要不应优先展示。",
+            "published_at": "2026-07-09T08:00:00+00:00",
+            "article_review": {
+                "daily_summary": "旧 daily summary",
+                "analysis": {
+                    "core_content": "统一解读：Rubin 机架级平台强调液冷与高速互联。",
+                    "related_targets": [{"name": "液冷", "relation": "产业链环节"}],
+                    "_decision_result": {
+                        "brief_reason": "公司官网硬变量规则命中。",
+                        "rule_hits": [
+                            {
+                                "rule_id": "official_company_hard_variable",
+                                "affected_targets": ["AI/半导体产业链"],
+                            }
+                        ],
+                    },
+                },
+            },
+        },
+    )
+    text = flatten_card_text(card)
+    assert "统一解读：Rubin 机架级平台强调液冷与高速互联。" in text
+    assert "公司官网硬变量规则命中。" in text
+    assert "液冷" in text
+    assert "AI/半导体产业链" in text
+    assert "旧 daily summary" not in text
+
+
 def test_compact_event_analysis_lines_only_keep_core_and_targets() -> None:
     lines = compact_event_analysis_lines(
         {
@@ -94,10 +127,34 @@ def test_compact_event_analysis_lines_only_keep_core_and_targets() -> None:
     assert "模型：" not in joined
 
 
+def test_compact_event_analysis_lines_prefers_unified_metadata_reason_and_targets() -> None:
+    lines = compact_event_analysis_lines(
+        {
+            "core_content": "美国CPI大幅低于预期。",
+            "related_holdings": [{"name": "A股风险偏好"}],
+            "_decision_result": {
+                "brief_reason": "宏观政策线规则命中。",
+                "rule_hits": [
+                    {
+                        "rule_id": "macro_policy_line",
+                        "affected_targets": ["成长股估值"],
+                    }
+                ],
+            },
+        }
+    )
+    joined = "\n".join(lines)
+    assert "核心内容：美国CPI大幅低于预期。" in joined
+    assert "为什么推送：宏观政策线规则命中。" in joined
+    assert "相关标的：A股风险偏好；成长股估值" in joined
+
+
 def main() -> int:
     test_thin_article_card_keeps_llm_gate_reason_out_of_default_push_reason()
     test_thin_article_card_shows_deterministic_push_reason_when_present()
+    test_thin_article_card_prefers_unified_decision_and_interpretation_metadata()
     test_compact_event_analysis_lines_only_keep_core_and_targets()
+    test_compact_event_analysis_lines_prefers_unified_metadata_reason_and_targets()
     print("thin push card checks passed")
     return 0
 

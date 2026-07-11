@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Monitor domestic finance media sources with a shared gate/push pipeline."""
+"""Monitor domestic finance media sources with a shared decision/delivery flow."""
 
 from __future__ import annotations
 
@@ -664,7 +664,7 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
                 try:
                     review = review_article(source, enriched)
                 except Exception as exc:  # noqa: BLE001
-                    print(f"{source} 文章门控失败：{exc}", flush=True)
+                    print(f"{source} 薄解读失败：{exc}", flush=True)
                     review = failed_review(enriched, exc)
             with connect_db() as conn:
                 review = apply_macro_override(enriched, review)
@@ -682,7 +682,7 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
             with connect_db() as conn:
                 save_article_review(conn, source, enriched, review)
         print(
-            f"{source} 文章门控：importance={review.get('importance')} push={review.get('push_now')} title={enriched.get('title', '')}",
+            f"{source} 决策层：importance={review.get('importance')} push={review.get('push_now')} title={enriched.get('title', '')}",
             flush=True,
         )
         if not review.get("push_now") or review.get("pushed_at"):

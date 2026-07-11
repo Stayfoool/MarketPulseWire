@@ -208,7 +208,7 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "name": "量化产业硬变量",
         "group": "研究机构/行业媒体",
         "description": "SEMI、TrendForce、DIGITIMES、The Elec、Nikkei xTECH 的设备、材料、产能、资本开支、涨价、管制、订单等量化硬变量即时提醒。",
-        "runtime": "industry_hardline / article + event-first",
+        "runtime": "industry_hardline / 规则快判 + article_reviews 兼容存储",
         "hit_markers": ("industry_hardline_override", "event_first_hardline"),
         "priority": 0,
         "fields": (

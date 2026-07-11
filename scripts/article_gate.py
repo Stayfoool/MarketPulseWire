@@ -1,4 +1,4 @@
-"""LLM importance gate for RSS and TrendForce article notifications."""
+"""Legacy article review storage with rule-first decisions and thin LLM interpretation."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from typing import Any
 from llm_analysis import call_chat_completion_with_prompts, llm_config
 from industry_hardline import apply_hardline_review_override, explain_hardline
 from macro_policy import apply_macro_review_override, macro_prompt_note
+from decision_engine import attach_decision_to_article_review, ensure_article_decision_audit
+from market_interpreter import thin_system_prompt, thin_user_prompt_template
 from push_rules import (
     apply_article_push_rules,
     first_matching_push_rule,
@@ -20,42 +22,15 @@ from push_rules import (
 from skeptic_evaluator import skeptic_lines
 
 
-GATE_SYSTEM_PROMPT = """你是半导体、AI 基础设施和二级市场研究助理。
-任务：为一条已通过规则预筛的资讯/报告生成极简实时摘要。
-
-当前系统的实时推送开关优先由确定性规则、来源权重、持仓/观察名单、关系映射和 Web 反馈控制；不要把自己当成最终裁判。
-
-只做三件事：
-- 用一句到两句中文写清核心内容。
-- 用一句短句说明为什么这条可能值得关注；如果信息不足，就说明“规则命中/来源命中，影响待确认”。
-- 只列原文明确涉及、或输入提示明确给出的股票/公司/产业链环节；不要自由扩散。
-
-不要输出：股价方向、影响幅度、持续时间、完整 A 股/美股利好利空列表、tracking points、risks、watchlist、price-in 判断、surprise_level、confidence、长篇 market impact。
-
-只输出 JSON，不要 Markdown。"""
+GATE_SYSTEM_PROMPT = thin_system_prompt(task="为一条已通过规则预筛的资讯/报告生成极简实时摘要。")
 
 
-GATE_USER_PROMPT = """请判断以下内容是否需要第一时间推送，输出 JSON：
-{
-  "core_content": "一句到两句中文核心内容",
-  "brief_reason": "一句简短关注原因；不要写长篇门控理由",
-  "related_targets": [
-    {"name": "股票/公司/环节", "code": "可选代码", "relation": "持仓/观察/上游/下游/竞争/主题/来源提及", "direction": "positive/negative/neutral/uncertain"}
-  ]
-}
-
-注意：
-- 不要输出 importance/push_now/market_impact/price_impact/a_share/global_equity/tracking_points/risks/watchlist_view。
-- 国际投行目标价/评级、SemiAnalysis、SEMI/TrendForce/DIGITIMES/The Elec/Nikkei xTECH、持仓硬变量、美国核心宏观变量等是否即时推送，由规则层决定。
-- 对“星际之门/Stargate-like”超大资本开支预告，只需在 core_content/brief_reason 中标注“待确认/预告性质”和涉及环节，如设备、材料、存储、光通信、PCB、先进封装、电力、液冷。
-
-来源：{source}
-来源模块：{source_module}
-标题：{title}
-发布时间：{published_at}
-正文/摘要：
-{content}
-"""
+GATE_USER_PROMPT = thin_user_prompt_template(
+    intro="请分析以下资讯/报告",
+    mode="targets",
+    forbidden_mode="article",
+    include_source_module=True,
+)
 
 
 def ensure_article_reviews_table(conn: sqlite3.Connection) -> None:
@@ -198,6 +173,7 @@ def review_article(source: str, item: dict[str, Any]) -> dict[str, Any]:
 
 def save_review(conn: sqlite3.Connection, source: str, item: dict[str, Any], review: dict[str, Any]) -> None:
     ensure_article_reviews_table(conn)
+    review = ensure_article_decision_audit(source, item, review, push_key="push_now")
     now = datetime.now(timezone.utc).isoformat()
     item_id = article_item_id(item)
     conn.execute(
@@ -261,7 +237,8 @@ def rule_first_review(source: str, item: dict[str, Any], *, push_key: str = "pus
     rule = first_matching_push_rule(source=source, item=item, holdings=holdings)
     if not rule:
         return None
-    return review_from_push_rule(rule, item, push_key=push_key)
+    review = review_from_push_rule(rule, item, push_key=push_key)
+    return attach_decision_to_article_review(source, item, review, holdings=holdings, push_key=push_key)
 
 
 def apply_push_rule_override(
@@ -272,7 +249,8 @@ def apply_push_rule_override(
     push_key: str = "push_now",
 ) -> dict[str, Any]:
     holdings = load_enabled_holdings_for_rules()
-    return apply_article_push_rules(source, item, review, holdings=holdings, push_key=push_key)
+    updated = apply_article_push_rules(source, item, review, holdings=holdings, push_key=push_key)
+    return attach_decision_to_article_review(source, item, updated, holdings=holdings, push_key=push_key)
 
 
 def review_exists(conn: sqlite3.Connection, source: str, item_id: str) -> dict[str, Any] | None:

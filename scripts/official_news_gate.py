@@ -1,4 +1,4 @@
-"""LLM importance gate for official core-company news."""
+"""Legacy official-news review storage with rule-first decisions and thin LLM interpretation."""
 
 from __future__ import annotations
 
@@ -10,6 +10,8 @@ from typing import Any
 
 from llm_analysis import call_chat_completion_with_prompts, format_llm_analysis, llm_config
 from industry_hardline import apply_hardline_review_override, explain_hardline
+from decision_engine import attach_decision_to_official_review, ensure_official_decision_audit
+from market_interpreter import thin_system_prompt, thin_user_prompt_template
 from push_rules import (
     apply_article_push_rules,
     first_matching_push_rule,
@@ -30,42 +32,20 @@ OFFICIAL_NEWS_SOURCES = {
 }
 
 
-GATE_SYSTEM_PROMPT = """你是半导体、AI 基础设施和二级市场研究助理。
-任务：为一条核心公司官网新闻生成极简实时摘要。
-核心公司包括 OpenAI、NVIDIA、Samsung Semiconductor、SK hynix、Micron 等。
-
-实时推送开关优先由确定性规则、来源权重和关系映射控制；不要把自己当成最终裁判。
-
-只做三件事：
-- 用一句到两句中文写清核心内容。
-- 用一句短句说明为什么值得关注；如果只是来源或规则命中，就写“核心公司官网硬变量，影响待确认”。
-- 只列原文明确涉及的公司/股票/产业链环节；不要自由扩散。
-
-不要输出：股价方向、影响幅度、持续时间、完整 A 股/美股利好利空列表、tracking points、risks、watchlist、price-in 判断、surprise_level、confidence、长篇 industry impact。
-
-只输出 JSON，不要 Markdown。"""
+GATE_SYSTEM_PROMPT = thin_system_prompt(
+    task="为一条核心公司官网新闻生成极简实时摘要。",
+    subject_note="核心公司包括 OpenAI、NVIDIA、Samsung Semiconductor、SK hynix、Micron 等。",
+)
 
 
-GATE_USER_PROMPT = """请分析以下官网新闻，输出 JSON：
-{
-  "core_content": "一句到两句中文核心内容",
-  "brief_reason": "一句简短关注原因；不要写长篇门控理由",
-  "related_targets": [
-    {"name": "股票/公司/环节", "code": "可选代码", "relation": "核心公司/上游/下游/竞争/主题/来源提及", "direction": "positive/negative/neutral/uncertain"}
-  ]
-}
-
-注意：
-- 不要输出 importance/should_push_now/industry_impact/a_share/global_equity/tracking_points/risks/watchlist_view。
-- 是否即时推送由规则层决定。新一代 GPU/ASIC/CPU/互联/液冷/服务器平台、HBM/DRAM/NAND、样品/量产/客户资格认证、大客户采购、资本开支、建厂、先进封装、数据中心扩张、星际之门/Stargate-like 超大资本开支预告等，规则层会优先处理。
-- 对超大资本开支“预告/据报/拟宣布/将公布”，只需在 core_content/brief_reason 中标注“待确认/预告性质”和涉及环节，如设备、材料、存储、光通信、PCB、先进封装、电力、液冷。
-
-来源：{source}
-标题：{title}
-发布时间：{published_at}
-正文：
-{content}
-"""
+GATE_USER_PROMPT = thin_user_prompt_template(
+    intro="请分析以下官网新闻",
+    mode="targets",
+    forbidden_mode="official",
+    extra_notes=[
+        "新一代 GPU/ASIC/CPU/互联/液冷/服务器平台、HBM/DRAM/NAND、样品/量产/客户资格认证、大客户采购、资本开支、建厂、先进封装和数据中心扩张等，只能围绕原文证据和规则上下文摘要。",
+    ],
+)
 
 
 def ensure_official_news_table(conn: sqlite3.Connection) -> None:
@@ -145,6 +125,7 @@ def review_exists(conn: sqlite3.Connection, source: str, item_id: str) -> dict[s
 
 def save_review(conn: sqlite3.Connection, source: str, item: dict[str, Any], review: dict[str, Any]) -> None:
     ensure_official_news_table(conn)
+    review = ensure_official_decision_audit(source, item, review)
     now = datetime.now(timezone.utc).isoformat()
     analysis_payload = review.get("analysis") if isinstance(review.get("analysis"), dict) else dict(review)
     analysis_payload = dict(analysis_payload)
@@ -264,12 +245,13 @@ def rule_first_official_review(source: str, item: dict[str, Any]) -> dict[str, A
         "related_targets": rule.get("related_targets") or [],
         "llm_mode": "rule_only",
     }
-    return review
+    return attach_decision_to_official_review(source, item, review, holdings=holdings)
 
 
 def apply_official_push_rule_override(source: str, item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
     holdings = load_enabled_holdings_for_rules()
-    return apply_article_push_rules(source, item, review, holdings=holdings, push_key="should_push_now")
+    updated = apply_article_push_rules(source, item, review, holdings=holdings, push_key="should_push_now")
+    return attach_decision_to_official_review(source, item, updated, holdings=holdings)
 
 
 def analysis_lines_from_review(review: dict[str, Any]) -> list[str]:

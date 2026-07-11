@@ -1,6 +1,6 @@
 # MarketPulseWire
 
-MarketPulseWire is an event-driven market and industry monitoring system for personal research. It watches holdings, watchlists, official company/news sources, filings/notices, RSS feeds, X accounts, and selected industry media; then uses an OpenAI-compatible LLM to gate importance, produce structured summaries, and deliver alerts to Feishu or a local Web workbench.
+MarketPulseWire is an event-driven market and industry monitoring system for personal research. It watches holdings, watchlists, official company/news sources, filings/notices, RSS feeds, X accounts, and selected industry media; then uses source profiles, deterministic rules, restricted LLM interpretation, and Skeptic checks to decide delivery, produce concise summaries, and send alerts to Feishu or a local Web workbench.
 
 MarketPulseWire is not an investment adviser and does not generate buy/sell recommendations.
 
@@ -10,7 +10,7 @@ Market-moving semiconductor and AI infrastructure signals are scattered across X
 
 - Track your own holdings and adjacent supply-chain names.
 - Watch high-signal sources such as Serenity on X, SEMI, TrendForce, DIGITIMES, Nikkei xTECH, The Elec, OpenAI, NVIDIA, Samsung, SK hynix, Micron, Sina Finance, iFinD, and JYGS.
-- Use an LLM to decide what deserves immediate attention and what can wait for a daily digest.
+- Use a rule-first decision layer to decide what deserves immediate attention and what can wait for a daily digest.
 - Keep credentials and personal research data on your own machine or server.
 
 ## Features
@@ -21,7 +21,7 @@ Market-moving semiconductor and AI infrastructure signals are scattered across X
 - X account monitoring through official API credentials
 - RSS/Atom/RDF monitoring for official company and industry sources
 - DIGITIMES, Nikkei xTECH, The Elec, TrendForce-style media adapters
-- LLM importance gate, freshness checks, and structured research summaries
+- Rule-first decision layer, freshness checks, and thin structured summaries
 - Feishu card delivery
 - Linux systemd deployment and macOS launchd templates
 - GitHub Actions CI and optional SSH deployment workflow

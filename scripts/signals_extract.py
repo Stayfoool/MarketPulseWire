@@ -14,6 +14,7 @@ from typing import Any
 from db_utils import connect_sqlite
 from env_utils import load_env
 from market_db import DEFAULT_DB_PATH, init_db
+from market_view import article_view_from_row, event_view_from_row, official_view_from_row
 from pipeline_health import record_pipeline_failure, record_pipeline_success
 from market_skills import evidence_from_matches, match_market_skills, targets_from_matches
 from signal_store import (
@@ -408,6 +409,7 @@ def event_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple[d
     analysis = json_loads(str(row["analysis_json"] or "{}"), {})
     if not isinstance(analysis, dict):
         return None
+    view = event_view_from_row(row)
     importance = normalize_importance(str(row["importance"] or analysis.get("importance") or ""))
     if not should_include(importance, bool(row["should_push"]) or bool(row["pushed_at"]), include_medium=True):
         return None
@@ -427,7 +429,7 @@ def event_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple[d
         "incremental_classification": str(row["classification"] or incremental.get("classification") or ""),
         "direction": str(row["direction"] or price.get("direction") or ""),
         "confidence": scalar_from_path(analysis, "confidence"),
-        "thesis": str(analysis.get("initial_impact") or analysis.get("core_content") or ""),
+        "thesis": view.core_content or str(analysis.get("initial_impact") or analysis.get("core_content") or ""),
         "invalidation": "; ".join(str(item) for item in analysis.get("risks", [])[:3])
         if isinstance(analysis.get("risks"), list)
         else "",
@@ -435,6 +437,7 @@ def event_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple[d
         "prompt_version": PROMPT_VERSION,
         "raw": {
             "analysis": analysis,
+            "market_view": view.to_web_row(),
             "event": {
                 "event_type": row["event_type"],
                 "summary": row["summary"],
@@ -476,9 +479,13 @@ def event_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple[d
             analysis.get("initial_impact"),
         ]
     )
+    view_targets = [
+        target_from_text(conn, target, role="market_view_target", direction=str(row["direction"] or ""), reason=view.decision_reason)
+        for target in view.related_targets
+    ]
     return signal, expand_related_targets(
         conn,
-        event_targets(conn, row["symbols_json"], analysis),
+        dedupe_targets([*event_targets(conn, row["symbols_json"], analysis), *[target for target in view_targets if target]]),
         context_text=event_context,
         extra_triggers=event_theme_triggers,
     ), evidence
@@ -495,6 +502,7 @@ def article_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple
     gate = json_loads(str(row["gate_json"] or "{}"), {})
     if not isinstance(gate, dict):
         gate = {}
+    view = article_view_from_row(row)
     targets: list[dict[str, Any]] = []
     affected = json_loads(str(row["affected_targets_json"] or "[]"), [])
     if isinstance(affected, list):
@@ -523,11 +531,11 @@ def article_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple
         "incremental_classification": str(row["incremental_classification"] or ""),
         "direction": str(row["incremental_classification"] or row["market_impact"] or ""),
         "confidence": str(row["confidence"] or ""),
-        "thesis": str(row["market_impact"] or row["reason"] or row["daily_summary"] or ""),
+        "thesis": view.core_content or str(row["market_impact"] or row["reason"] or row["daily_summary"] or ""),
         "invalidation": "",
         "model": str(gate.get("model") or ""),
         "prompt_version": PROMPT_VERSION,
-        "raw": {"gate": gate, "source_module": row["source_module"]},
+        "raw": {"gate": gate, "source_module": row["source_module"], "market_view": view.to_web_row()},
     }
     evidence = [
         {
@@ -548,11 +556,22 @@ def article_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple
             " ".join(str(item) for item in affected if isinstance(affected, list)),
         ]
     )
+    view_targets = [
+        target_from_text(
+            conn,
+            target,
+            role="market_view_target",
+            direction=str(row["incremental_classification"] or ""),
+            reason=view.decision_reason or str(row["reason"] or ""),
+            confidence=str(row["confidence"] or ""),
+        )
+        for target in view.related_targets
+    ]
     return signal, expand_related_targets(
         conn,
-        dedupe_targets([target for target in targets if target]),
+        dedupe_targets([*[target for target in targets if target], *[target for target in view_targets if target]]),
         context_text=article_context,
-        extra_triggers=[str(item) for item in affected] if isinstance(affected, list) else [],
+        extra_triggers=[*([str(item) for item in affected] if isinstance(affected, list) else []), *view.related_targets],
     ), evidence
 
 
@@ -565,6 +584,7 @@ def official_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tupl
     analysis = json_loads(str(row["analysis_json"] or "{}"), {})
     if not isinstance(analysis, dict):
         analysis = {}
+    view = official_view_from_row(row)
     incremental = analysis.get("incremental_view") if isinstance(analysis.get("incremental_view"), dict) else {}
     signal = {
         "source_table": "official_news_reviews",
@@ -581,15 +601,19 @@ def official_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tupl
         "direction": scalar_from_path(analysis, "price_impact", "direction")
         or str(incremental.get("classification") or ""),
         "confidence": str(analysis.get("confidence") or ""),
-        "thesis": str(analysis.get("initial_impact") or analysis.get("core_content") or row["reason"] or ""),
+        "thesis": view.core_content or str(analysis.get("initial_impact") or analysis.get("core_content") or row["reason"] or ""),
         "invalidation": "; ".join(str(item) for item in analysis.get("risks", [])[:3])
         if isinstance(analysis.get("risks"), list)
         else "",
         "model": str(analysis.get("_model") or ""),
         "prompt_version": PROMPT_VERSION,
-        "raw": {"analysis": analysis, "reason": row["reason"], "daily_summary": row["daily_summary"]},
+        "raw": {"analysis": analysis, "reason": row["reason"], "daily_summary": row["daily_summary"], "market_view": view.to_web_row()},
     }
-    targets = event_targets(conn, "[]", analysis)
+    view_targets = [
+        target_from_text(conn, target, role="market_view_target", reason=view.decision_reason or str(row["reason"] or ""))
+        for target in view.related_targets
+    ]
+    targets = dedupe_targets([*event_targets(conn, "[]", analysis), *[target for target in view_targets if target]])
     evidence = [
         {
             "evidence_type": "source",

@@ -108,7 +108,7 @@ def shadow_payload(entries: list[dict[str, Any]], *, started_at: str, source: Va
                 "summary": item.get("summary", ""),
                 "already_seen": item_id in seen,
                 "already_reviewed": item_id in reviewed,
-                "pipeline": "value_directory shadow -> rule-first article review planned",
+                "pipeline": "value_directory shadow -> decision layer / thin card planned",
             }
         )
     return {
