@@ -14,43 +14,24 @@ from db_utils import connect_sqlite
 from feishu import send_card_with_response
 from llm_analysis import call_chat_completion_with_prompts, format_llm_analysis
 from market_db import DEFAULT_DB_PATH, init_db
+from decision_engine import attach_decision_to_event_analysis
+from market_card_view import card_targets, decision_reason, interpretation_core, interpretation_reason
+from market_interpreter import thin_system_prompt, thin_user_prompt_template
 from push_rules import apply_event_push_rules
 from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert
 
 
-PORTFOLIO_EVENT_SYSTEM_PROMPT = """你是 A 股持仓监控系统的投研与风控助理。
-任务：为一条已通过规则预筛的公告、研报、快讯或异动信息生成极简实时摘要。
-要求：
-- 只输出 JSON，不要 Markdown，不要输出 JSON 外解释。
-- 不要给无条件买入/卖出指令，只能输出研究信号、观察建议和风险提示。
-- 实时推送开关优先由确定性规则、持仓、关系映射和宏观规则决定；不要把自己当成最终裁判。
-- 只做三件事：核心内容、简短关注原因、相关持仓/标的/环节。
-- 不要输出股价方向、影响幅度、持续时间、完整 A 股/美股扩散列表、tracking points、risks、watchlist、price-in 判断、surprise_level、confidence。
-- 如果输入 raw.freshness 显示旧闻或已反应，只能在 brief_reason 中简短备注；不能用它覆盖规则层强推。
-"""
+PORTFOLIO_EVENT_SYSTEM_PROMPT = thin_system_prompt(
+    task="为一条已通过规则预筛的公告、研报、快讯或异动信息生成极简实时摘要。"
+)
 
 
-PORTFOLIO_EVENT_USER_PROMPT = """请分析以下持仓事件，并输出 JSON。
-
-输出字段：
-{
-  "core_content": "一句到两句中文核心内容",
-  "brief_reason": "一句简短关注原因；不要写长篇门控理由",
-  "related_holdings": [
-    {
-      "name": "持仓简称",
-      "code": "持仓代码",
-      "relation": "直接相关/同行相关/上下游相关/竞争相关/主题相关/无明确关系",
-      "impact_direction": "positive/negative/neutral/uncertain"
-    }
-  ]
-}
-
-注意：不要输出 importance、incremental_view、price_impact、a_share、global_equity、tracking_points、risks、watchlist_view。是否推送由规则层决定。
-
-输入：
-{content}
-"""
+PORTFOLIO_EVENT_USER_PROMPT = thin_user_prompt_template(
+    intro="请分析以下持仓事件",
+    mode="holdings",
+    forbidden_mode="event",
+    extra_notes=["输入是包含事件、直接相关持仓和全部已配置持仓的 JSON；只可使用这些已给出的关系，不要自行扩展股票映射。"],
+)
 
 
 def utc_now() -> str:
@@ -239,7 +220,10 @@ def analyze_event(event_id: int, task: str = "portfolio_event", db_path: Path = 
     )
     parsed, model = call_chat_completion_with_prompts(
         PORTFOLIO_EVENT_SYSTEM_PROMPT,
-        PORTFOLIO_EVENT_USER_PROMPT.replace("{content}", text),
+        PORTFOLIO_EVENT_USER_PROMPT.replace("{source}", str(source or ""))
+        .replace("{title}", str(title or ""))
+        .replace("{published_at}", str(published_at or ""))
+        .replace("{content}", text),
         user_agent="surveil-portfolio-event-llm/0.1",
     )
     parsed["_model"] = model
@@ -326,7 +310,15 @@ def apply_event_rules_to_analysis(
         "raw": raw if isinstance(raw, dict) else {},
     }
     symbol_set = {str(symbol).upper() for symbol in symbols if str(symbol).strip()}
-    return apply_event_push_rules(event, analysis, holdings=load_enabled_holdings(db_path), symbols=symbol_set)
+    holdings = load_enabled_holdings(db_path)
+    updated = apply_event_push_rules(event, analysis, holdings=holdings, symbols=symbol_set)
+    return attach_decision_to_event_analysis(
+        str(event.get("source") or ""),
+        event,
+        updated,
+        holdings=holdings,
+        symbols=symbol_set,
+    )
 
 
 def build_portfolio_event_input(event: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> str:
@@ -463,16 +455,18 @@ def compact_targets(parsed: dict[str, Any]) -> list[str]:
 
 def compact_event_analysis_lines(parsed: dict[str, Any]) -> list[str]:
     lines: list[str] = []
-    core = str(parsed.get("core_content") or "").strip()
+    core = interpretation_core(parsed) or str(parsed.get("core_content") or "").strip()
     if core:
         lines.append(f"核心内容：{core}")
-    reason = str(parsed.get("brief_reason") or "").strip()
+    reason = interpretation_reason(parsed) or str(parsed.get("brief_reason") or "").strip()
     push_decision = parsed.get("push_decision")
     if not reason and isinstance(push_decision, dict):
         reason = str(push_decision.get("reason") or "").strip()
+    if not reason:
+        reason = decision_reason(parsed)
     if reason:
         lines.append("为什么推送：" + compact_text(reason, 260))
-    targets = compact_targets(parsed)
+    targets = card_targets(parsed, fallback_targets=compact_targets(parsed))
     if targets:
         lines.append("相关标的：" + "；".join(targets))
     if not lines:

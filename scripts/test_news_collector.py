@@ -127,7 +127,7 @@ def test_shadow_collect_does_not_write_prod_seen_reviews_or_source_state() -> No
     assert payload["wrote_production_reviews"] is False
     assert payload["touched_production_source_state"] is False
     assert payload["counts"]["candidates"] == 1
-    assert payload["sources"][0]["candidates"][0]["pipeline"] == "news_media shadow -> article_gate/event-first planned"
+    assert payload["sources"][0]["candidates"][0]["pipeline"] == "news_media shadow -> decision layer / thin interpretation planned"
     assert seen_count == 0
     assert review_count == 0
     assert state_count == 0

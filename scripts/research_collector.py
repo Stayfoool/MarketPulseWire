@@ -5,7 +5,8 @@ This is the first consolidation step for the research/industry-media source
 family. By default it runs in shadow mode: it does not send Feishu cards, does
 not run LLM review, and does not write production dedupe/review tables. The
 explicit ``--production`` mode delegates to the existing production RSS and
-page pipelines so the behavior stays aligned during the systemd migration.
+page compatibility paths so the behavior stays aligned during the systemd
+migration.
 """
 
 from __future__ import annotations
@@ -156,7 +157,7 @@ def candidate_from_item(source: str, item: dict[str, Any], seen_ids: set[tuple[s
         "published_at": str(item.get("published_at") or ""),
         "summary": summarize_text(item.get("summary") or item.get("content") or ""),
         "categories": list(item.get("categories") or []),
-        "pipeline": "article_gate shadow",
+        "pipeline": "research_media shadow -> decision layer / thin interpretation planned",
     }
 
 

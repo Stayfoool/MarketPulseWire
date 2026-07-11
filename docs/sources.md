@@ -40,7 +40,7 @@ These feeds are included in `scripts/trendforce_sources.py` through `DEFAULT_RSS
 | `skhynix_newsroom` | SK hynix Newsroom | `https://news.skhynix.com/feed/` | RSS |
 | `micron_news_releases` | Micron News Releases | `https://investors.micron.com/rss/news-releases.xml` | RSS |
 
-Official company news goes through an LLM importance gate. High-impact semiconductor/AI infrastructure items can be pushed immediately; lower-signal items can be collected into a daily digest.
+Official company news goes through the unified decision layer first. High-impact semiconductor/AI infrastructure items can be pushed immediately; lower-signal items can be collected into a daily digest, and the LLM only supplies thin interpretation or restricted supplemental judgement.
 
 ## TrendForce
 

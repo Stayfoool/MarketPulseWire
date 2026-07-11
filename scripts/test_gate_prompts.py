@@ -23,9 +23,13 @@ def main() -> int:
         assert_contains(prompt, "设备、材料、存储、光通信、PCB、先进封装、电力、液冷")
         assert_contains(prompt, "不要输出")
         assert_contains(prompt, "规则层决定")
+        assert_contains(prompt, "不要把自己当成最终裁判")
+        assert_contains(prompt, "只输出 JSON")
 
-    assert_contains(article_prompt, "是否即时推送，由规则层决定")
+    assert_contains(article_prompt, "是否即时推送由规则层决定")
+    assert_contains(article_prompt, "push_now")
     assert_contains(official_prompt, "是否即时推送由规则层决定")
+    assert_contains(official_prompt, "should_push_now")
     print("gate prompt guardrail checks passed")
     return 0
 

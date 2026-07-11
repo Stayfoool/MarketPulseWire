@@ -120,9 +120,10 @@ The installer also copies the production collector units:
 - `surveil-news-collector.timer`
 
 In production mode they write the normal `seen_items` / review tables and can
-send Feishu cards through the existing article/official-news pipelines. After
-cutover, keep the legacy guards below in `.env`: the installer will keep the
-old units disabled and enable the matching production collector timers.
+send Feishu cards through the unified decision / thin-interpretation adapters
+while preserving the legacy `article_reviews` / `official_news_reviews` stores.
+After cutover, keep the legacy guards below in `.env`: the installer will keep
+the old units disabled and enable the matching production collector timers.
 
 During the earlier research collector cutover, the old RSS monitor could be kept
 for official company feeds with:

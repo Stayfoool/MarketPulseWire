@@ -123,7 +123,7 @@ def test_shadow_collect_rss_does_not_write_prod_seen_or_reviews() -> None:
     assert payload["wrote_production_seen_items"] is False
     assert payload["wrote_production_reviews"] is False
     assert payload["counts"]["candidates"] == 1
-    assert payload["rss"][0]["candidates"][0]["pipeline"] == "official_news_gate shadow"
+    assert payload["rss"][0]["candidates"][0]["pipeline"] == "official_company shadow -> decision layer / thin interpretation planned"
     assert payload["rss"][0]["candidates"][0]["already_reviewed"] is False
     assert seen_count == 0
     assert review_count == 0

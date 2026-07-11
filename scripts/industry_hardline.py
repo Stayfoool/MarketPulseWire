@@ -282,7 +282,7 @@ def is_research_industry_source(source: str, item: dict | None = None) -> bool:
 
 
 def should_event_first_hardline_item(source: str, item: dict, *, max_chars: int | None = None) -> bool:
-    """Return whether a research/industry-media item should use fast event-first gating.
+    """Return whether a research/industry-media item should use the fast rule path.
 
     The fast path is intentionally narrow: short title/summary-level items only,
     and only for source-priority reports or quantified hard-variable items from
@@ -311,10 +311,10 @@ def should_event_first_hardline_item(source: str, item: dict, *, max_chars: int 
 
 
 def event_first_hardline_review(source: str, item: dict) -> dict | None:
-    """Build a high-importance article review for short hard-variable items.
+    """Build a high-importance legacy article review for short hard-variable items.
 
     This keeps storage/daily/signal extraction on the existing article review
-    path while applying an event-first decision policy for short hard variables.
+    path while applying a rule-quick-pass decision for short hard variables.
     """
     if not should_event_first_hardline_item(source, item):
         return None
@@ -323,8 +323,8 @@ def event_first_hardline_review(source: str, item: dict) -> dict | None:
     title = str(item.get("title") or "").strip()
     summary = str(item.get("summary") or item.get("content") or item.get("full_text") or "").strip()
     reason = (
-        f"event-first 快速门控：{family} 属于研究机构/行业媒体高价值来源，"
-        "且本条为短文本硬变量/标题级信号；先按事件流即时推送，后续可在日报或二次校验中补充完整文章分析。"
+        f"规则快判：{family} 属于研究机构/行业媒体高价值来源，"
+        "且本条为短文本硬变量/标题级信号；先即时推送，后续可在日报或二次校验中补充完整分析。"
     )
     review = {
         "importance": "high",

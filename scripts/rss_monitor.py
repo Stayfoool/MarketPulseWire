@@ -378,7 +378,7 @@ def notify_item(source: str, item: dict) -> None:
         else:
             review = event_first_hardline_review(source, item)
             if review:
-                print(f"{source} event-first 硬变量门控：title={item.get('title', '')}", flush=True)
+                print(f"{source} 规则快判硬变量：title={item.get('title', '')}", flush=True)
             else:
                 review = rule_first_review(source, item)
                 if review:
@@ -387,7 +387,7 @@ def notify_item(source: str, item: dict) -> None:
                     try:
                         review = review_article(source, item)
                     except Exception as exc:  # noqa: BLE001 - keep item in daily digest
-                        print(f"{source} 文章门控失败：{exc}", flush=True)
+                        print(f"{source} 薄解读失败：{exc}", flush=True)
                         review = failed_review(item, exc)
             with connect_db() as conn:
                 review = apply_source_priority_override(source, item, review)
@@ -397,7 +397,7 @@ def notify_item(source: str, item: dict) -> None:
                 review = apply_push_rule_override(source, item, review)
                 save_article_review(conn, source, item, review)
         print(
-            f"{source} 文章门控：importance={review.get('importance')} "
+            f"{source} 决策层：importance={review.get('importance')} "
             f"push={review.get('push_now')} title={item.get('title', '')}",
             flush=True,
         )

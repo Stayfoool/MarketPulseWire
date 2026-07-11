@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from feishu_image import image_key_from_url
 from link_enrichment import analysis_text_with_links, display_url
+from market_card_view import card_push_reason, card_targets, interpretation_core
 from media_sources import is_overseas_media_source, overseas_media_access_note, overseas_media_module
 from post_analysis import analyze_post, company_label, extract_tickers
 
@@ -100,7 +101,11 @@ def review_analysis(review: dict[str, Any]) -> dict[str, Any]:
 
 
 def target_names_from_review(review: dict[str, Any]) -> list[str]:
-    targets = [str(item).strip() for item in as_list(review.get("affected_targets")) if str(item).strip()]
+    fallback = [str(item).strip() for item in as_list(review.get("affected_targets")) if str(item).strip()]
+    unified = card_targets(review, fallback_targets=fallback)
+    if unified:
+        return unified
+    targets = list(fallback)
     analysis = review_analysis(review)
     for item in as_list(analysis.get("related_targets")):
         if isinstance(item, dict):
@@ -163,6 +168,9 @@ def jsonish_compact(value: Any) -> str:
 
 
 def thin_core_content(item: dict[str, Any], review: dict[str, Any]) -> str:
+    unified = interpretation_core(review)
+    if unified:
+        return truncate(unified, 700)
     analysis = review_analysis(review)
     for value in (
         analysis.get("core_content"),
@@ -205,12 +213,9 @@ def value_directory_preview_lines(item: dict[str, Any]) -> list[str]:
 
 
 def thin_push_reason(item: dict[str, Any], review: dict[str, Any]) -> str:
-    explicit = str(item.get("push_reason") or "").strip()
-    if explicit:
-        return explicit
-    brief = str(review.get("brief_reason") or "").strip()
-    if brief:
-        return brief
+    unified = card_push_reason(item, review)
+    if unified:
+        return unified
     raw = review.get("raw") if isinstance(review.get("raw"), dict) else {}
     if review.get("mandatory_push") == "yicai_morning_brief":
         return "每日固定栏目：第一财经券商晨会观点速递。"

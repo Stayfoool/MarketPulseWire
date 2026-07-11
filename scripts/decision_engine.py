@@ -1,0 +1,429 @@
+"""Unified deterministic decision wrapper for market items.
+
+This module is the second migration step toward the three-layer market flow.
+It is intentionally passive: it does not call LLMs, send Feishu cards, write
+SQLite, or reserve delivery dedup keys. It only evaluates the existing
+deterministic rule helpers and converts their legacy dict outputs into the
+shared DecisionResult shape.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from industry_hardline import (
+    apply_hardline_review_override,
+    apply_source_priority_override,
+    event_first_hardline_review,
+)
+from macro_policy import macro_policy_match
+from market_item import DecisionResult, NormalizedMarketItem, normalize_importance
+from push_rules import first_matching_push_rule
+
+
+ENGINE_VERSION = "decision_engine_v1"
+
+
+def _clean_text(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _item_source(item: NormalizedMarketItem | dict[str, Any], source: str | None) -> str:
+    if source is not None:
+        return _clean_text(source)
+    if isinstance(item, NormalizedMarketItem):
+        return item.source
+    return _clean_text(item.get("source"))
+
+
+def _legacy_item(item: NormalizedMarketItem | dict[str, Any]) -> dict[str, Any]:
+    """Convert a normalized item to the dict shape expected by legacy rules."""
+    if isinstance(item, NormalizedMarketItem):
+        raw = dict(item.raw)
+        legacy = dict(raw)
+        legacy.update(
+            {
+                "title": item.title,
+                "summary": item.summary,
+                "content": raw.get("content") or item.summary,
+                "full_text": item.full_text,
+                "url": item.url,
+                "published_at": item.published_at,
+                "first_seen_at": item.first_seen_at,
+                "symbols": list(item.symbols),
+                "themes": list(item.themes),
+                "raw": raw,
+                "dedupe_key": item.dedupe_key,
+                "access_note": item.access_note,
+            }
+        )
+        return legacy
+    return dict(item)
+
+
+def _symbol_set(
+    item: NormalizedMarketItem | dict[str, Any],
+    legacy_item: dict[str, Any],
+    symbols: set[str] | list[str] | tuple[str, ...] | None,
+) -> set[str]:
+    if symbols is not None:
+        return {str(symbol).upper() for symbol in symbols if str(symbol).strip()}
+    if isinstance(item, NormalizedMarketItem):
+        return {symbol.upper() for symbol in item.symbols if symbol}
+    raw_symbols = legacy_item.get("symbols") or legacy_item.get("related_symbols") or []
+    if isinstance(raw_symbols, list):
+        return {str(symbol).upper() for symbol in raw_symbols if str(symbol).strip()}
+    return set()
+
+
+def _audit_base(source: str, item: NormalizedMarketItem | dict[str, Any], legacy_item: dict[str, Any]) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "engine_version": ENGINE_VERSION,
+        "source": source,
+        "deterministic_push_match": False,
+        "legacy_entrypoints_wrapped": [
+            "industry_hardline.event_first_hardline_review",
+            "push_rules.first_matching_push_rule",
+            "industry_hardline.apply_source_priority_override",
+            "industry_hardline.apply_hardline_review_override",
+            "macro_policy.macro_policy_match",
+        ],
+    }
+    if isinstance(item, NormalizedMarketItem):
+        base.update(
+            {
+                "content_type": item.content_type,
+                "source_category": item.source_category,
+                "collector": item.collector,
+                "dedupe_key": item.dedupe_key,
+            }
+        )
+    else:
+        base.update(
+            {
+                "content_type": str(legacy_item.get("content_type") or legacy_item.get("event_type") or ""),
+                "dedupe_key": str(legacy_item.get("dedupe_key") or ""),
+            }
+        )
+    return base
+
+
+def _base_review() -> dict[str, Any]:
+    return {
+        "importance": "low",
+        "push_now": False,
+        "affected_targets": [],
+        "reason": "",
+        "daily_summary": "",
+        "raw": {},
+    }
+
+
+def _rule_dedup(rule: dict[str, Any]) -> dict[str, Any]:
+    dedup_key = str(rule.get("dedup_key") or "").strip()
+    if not dedup_key:
+        return {}
+    return {
+        "rule_alert_reservation_required": True,
+        "rule_id": str(rule.get("rule_id") or ""),
+        "dedup_key": dedup_key,
+        "dedup_lookback_days": rule.get("dedup_lookback_days"),
+        "note": "decision_engine only reports dedup metadata; reservation stays in the delivery layer.",
+    }
+
+
+def decision_metadata(decision: DecisionResult, *, final_fields: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "decision_engine_version": ENGINE_VERSION,
+        "decision_passthrough": True,
+        "decision_result": decision.to_dict(),
+        "decision_audit": dict(decision.audit_json),
+        "decision_final_fields": dict(final_fields or {}),
+    }
+
+
+def _article_final_fields(review: dict[str, Any], push_key: str) -> dict[str, Any]:
+    return {
+        "importance": review.get("importance"),
+        push_key: bool(review.get(push_key)),
+        "reason": review.get("reason"),
+    }
+
+
+def _official_final_fields(review: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "importance": review.get("importance"),
+        "should_push_now": bool(review.get("should_push_now")),
+        "reason": review.get("reason"),
+    }
+
+
+def _event_final_fields(analysis: dict[str, Any]) -> dict[str, Any]:
+    push_decision = analysis.get("push_decision") if isinstance(analysis.get("push_decision"), dict) else {}
+    return {
+        "importance": analysis.get("importance"),
+        "should_push": bool(push_decision.get("should_push") if push_decision else analysis.get("should_push")),
+        "reason": push_decision.get("reason") if push_decision else analysis.get("brief_reason"),
+    }
+
+
+def _has_article_decision(review: dict[str, Any]) -> bool:
+    raw = review.get("raw") if isinstance(review.get("raw"), dict) else {}
+    return isinstance(raw.get("decision_result"), dict)
+
+
+def attach_decision_to_article_review(
+    source: str,
+    item: NormalizedMarketItem | dict[str, Any],
+    review: dict[str, Any],
+    *,
+    holdings: list[dict[str, Any]] | None = None,
+    symbols: set[str] | list[str] | tuple[str, ...] | None = None,
+    push_key: str = "push_now",
+) -> dict[str, Any]:
+    """Attach DecisionResult audit metadata without changing legacy fields."""
+    decision = decide_market_item(item, source=source, holdings=holdings or [], symbols=symbols)
+    updated = dict(review)
+    raw = dict(updated.get("raw") or {})
+    raw.update(
+        decision_metadata(
+            decision,
+            final_fields=_article_final_fields(updated, push_key),
+        )
+    )
+    updated["raw"] = raw
+    return updated
+
+
+def ensure_article_decision_audit(
+    source: str,
+    item: NormalizedMarketItem | dict[str, Any],
+    review: dict[str, Any],
+    *,
+    push_key: str = "push_now",
+) -> dict[str, Any]:
+    if _has_article_decision(review):
+        updated = dict(review)
+        raw = dict(updated.get("raw") or {})
+        raw["decision_final_fields"] = _article_final_fields(updated, push_key)
+        updated["raw"] = raw
+        return updated
+    return attach_decision_to_article_review(source, item, review, holdings=[], push_key=push_key)
+
+
+def _prefixed_metadata(decision: DecisionResult, *, final_fields: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {f"_{key}": value for key, value in decision_metadata(decision, final_fields=final_fields).items()}
+
+
+def _has_payload_decision(payload: dict[str, Any]) -> bool:
+    return isinstance(payload.get("_decision_result"), dict)
+
+
+def attach_decision_to_official_review(
+    source: str,
+    item: NormalizedMarketItem | dict[str, Any],
+    review: dict[str, Any],
+    *,
+    holdings: list[dict[str, Any]] | None = None,
+    symbols: set[str] | list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    decision = decide_market_item(item, source=source, holdings=holdings or [], symbols=symbols)
+    updated = dict(review)
+    analysis = updated.get("analysis") if isinstance(updated.get("analysis"), dict) else {}
+    analysis = dict(analysis)
+    analysis.update(
+        _prefixed_metadata(
+            decision,
+            final_fields=_official_final_fields(updated),
+        )
+    )
+    updated["analysis"] = analysis
+    return updated
+
+
+def ensure_official_decision_audit(
+    source: str,
+    item: NormalizedMarketItem | dict[str, Any],
+    review: dict[str, Any],
+) -> dict[str, Any]:
+    analysis = review.get("analysis") if isinstance(review.get("analysis"), dict) else {}
+    if _has_payload_decision(analysis):
+        updated = dict(review)
+        refreshed = dict(analysis)
+        refreshed["_decision_final_fields"] = _official_final_fields(updated)
+        updated["analysis"] = refreshed
+        return updated
+    return attach_decision_to_official_review(source, item, review, holdings=[])
+
+
+def attach_decision_to_event_analysis(
+    source: str,
+    item: NormalizedMarketItem | dict[str, Any],
+    analysis: dict[str, Any],
+    *,
+    holdings: list[dict[str, Any]] | None = None,
+    symbols: set[str] | list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    if _has_payload_decision(analysis):
+        updated = dict(analysis)
+        updated["_decision_final_fields"] = _event_final_fields(updated)
+        return updated
+    decision = decide_market_item(item, source=source, holdings=holdings or [], symbols=symbols)
+    updated = dict(analysis)
+    updated.update(
+        _prefixed_metadata(
+            decision,
+            final_fields=_event_final_fields(updated),
+        )
+    )
+    return updated
+
+
+def _decision_from_rule(
+    rule: dict[str, Any],
+    *,
+    audit_json: dict[str, Any],
+    source_stage: str,
+) -> DecisionResult:
+    audit = dict(audit_json)
+    audit["deterministic_push_match"] = True
+    audit["source_stage"] = source_stage
+    audit["legacy_rule"] = dict(rule)
+    return DecisionResult(
+        action="push" if rule.get("push_now") or rule.get("should_push") else "archive",
+        importance=normalize_importance(rule.get("importance"), default="high"),
+        reason=str(rule.get("reason") or ""),
+        brief_reason=str(rule.get("brief_reason") or rule.get("reason") or ""),
+        rule_hits=[rule],
+        dedup=_rule_dedup(rule),
+        need_llm_interpretation=True,
+        need_limited_llm_judgement=False,
+        audit_json=audit,
+    )
+
+
+def _review_to_rule(review: dict[str, Any], *, source: str, rule_id: str, reason_fallback: str) -> dict[str, Any]:
+    reason = str(review.get("reason") or reason_fallback)
+    return {
+        "matched": True,
+        "rule_id": rule_id,
+        "importance": normalize_importance(review.get("importance"), default="high"),
+        "push_now": bool(review.get("push_now") or review.get("should_push_now")),
+        "should_push": bool(review.get("push_now") or review.get("should_push_now")),
+        "reason": reason,
+        "brief_reason": str(review.get("brief_reason") or reason),
+        "affected_targets": list(review.get("affected_targets") or [])[:5],
+        "related_targets": list(review.get("related_targets") or [])[:5],
+        "source": source,
+        "raw": dict(review.get("raw") or {}),
+    }
+
+
+def _macro_rule(source: str, match: dict[str, Any]) -> dict[str, Any]:
+    reason = str(match.get("reason") or "美国核心宏观/Fed 政策线命中。")
+    full_reason = f"宏观政策线规则：{reason}"
+    return {
+        "matched": True,
+        "rule_id": "macro_policy_line",
+        "importance": "high" if match.get("tier") == "primary" else "medium",
+        "push_now": match.get("tier") == "primary",
+        "should_push": match.get("tier") == "primary",
+        "reason": full_reason,
+        "brief_reason": full_reason,
+        "affected_targets": ["美债收益率/美元", "A股风险偏好", "成长股估值"],
+        "related_targets": [
+            {"name": "美债收益率/美元", "code": "", "relation": "美国宏观/Fed 政策线", "direction": "uncertain"},
+            {"name": "A股风险偏好", "code": "", "relation": "美国宏观/Fed 政策线", "direction": "uncertain"},
+            {"name": "成长股估值", "code": "", "relation": "美国宏观/Fed 政策线", "direction": "uncertain"},
+        ],
+        "macro_policy_line": dict(match),
+        "source": source,
+    }
+
+
+def decide_market_item(
+    item: NormalizedMarketItem | dict[str, Any],
+    *,
+    source: str | None = None,
+    holdings: list[dict[str, Any]] | None = None,
+    symbols: set[str] | list[str] | tuple[str, ...] | None = None,
+) -> DecisionResult:
+    """Evaluate existing deterministic rules and return a unified decision.
+
+    The returned DecisionResult is an audit-friendly wrapper. Production
+    article/event/official entrypoints are not changed by importing this
+    function; callers must explicitly opt in.
+    """
+    resolved_source = _item_source(item, source)
+    legacy_item = _legacy_item(item)
+    holdings = holdings or []
+    symbol_set = _symbol_set(item, legacy_item, symbols)
+    audit = _audit_base(resolved_source, item, legacy_item)
+
+    event_first_review = event_first_hardline_review(resolved_source, legacy_item)
+    if event_first_review:
+        rule = _review_to_rule(
+            event_first_review,
+            source=resolved_source,
+            rule_id="event_first_hardline",
+            reason_fallback="研究机构/行业媒体短硬变量规则快判命中。",
+        )
+        return _decision_from_rule(rule, audit_json=audit, source_stage="industry_hardline_event_first")
+
+    push_rule = first_matching_push_rule(
+        source=resolved_source,
+        item=legacy_item,
+        holdings=holdings,
+        symbols=symbol_set,
+    )
+    if push_rule:
+        return _decision_from_rule(push_rule, audit_json=audit, source_stage="push_rules_first_match")
+
+    source_priority = apply_source_priority_override(resolved_source, legacy_item, _base_review())
+    if source_priority.get("source_priority_override") and source_priority.get("push_now"):
+        rule = _review_to_rule(
+            source_priority,
+            source=resolved_source,
+            rule_id="source_priority_semianalysis",
+            reason_fallback="SemiAnalysis 来源优先级规则命中。",
+        )
+        return _decision_from_rule(rule, audit_json=audit, source_stage="industry_hardline_source_priority")
+
+    hardline = apply_hardline_review_override(resolved_source, legacy_item, _base_review())
+    if hardline.get("industry_hardline_override") and hardline.get("push_now"):
+        rule = _review_to_rule(
+            hardline,
+            source=resolved_source,
+            rule_id="industry_quantified_hardline",
+            reason_fallback="产业硬变量线规则命中。",
+        )
+        return _decision_from_rule(rule, audit_json=audit, source_stage="industry_hardline_review_override")
+
+    macro = macro_policy_match(legacy_item)
+    if macro.get("matched"):
+        rule = _macro_rule(resolved_source, macro)
+        if rule["should_push"]:
+            return _decision_from_rule(rule, audit_json=audit, source_stage="macro_policy_match")
+        audit["source_stage"] = "macro_policy_candidate"
+        audit["legacy_rule"] = dict(rule)
+        return DecisionResult(
+            action="daily",
+            importance="medium",
+            reason=str(rule.get("reason") or ""),
+            brief_reason=str(rule.get("brief_reason") or rule.get("reason") or ""),
+            candidate_rules=[rule],
+            need_llm_interpretation=False,
+            need_limited_llm_judgement=True,
+            audit_json=audit,
+        )
+
+    audit["source_stage"] = "no_deterministic_match"
+    return DecisionResult(
+        action="archive",
+        importance="unknown",
+        reason="未命中当前确定性规则快判；保持既有 article/event/official 入口继续处理。",
+        brief_reason="未命中确定性规则。",
+        need_llm_interpretation=False,
+        need_limited_llm_judgement=True,
+        audit_json=audit,
+    )

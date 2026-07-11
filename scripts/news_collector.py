@@ -147,7 +147,7 @@ def candidate_from_item(
         "summary": summarize_text(item.get("summary") or item.get("content") or ""),
         "source_module": str(item.get("source_module") or CHINA_MEDIA_LABELS.get(source, source)),
         "body_source": str(item.get("body_source") or ""),
-        "pipeline": "news_media shadow -> article_gate/event-first planned",
+        "pipeline": "news_media shadow -> decision layer / thin interpretation planned",
     }
 
 
