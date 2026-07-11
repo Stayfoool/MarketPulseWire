@@ -108,6 +108,33 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
+        "id": "value_directory_industry_macro_research",
+        "name": "价值目录投行行业宏观研报",
+        "group": "投行研究",
+        "description": "价值目录国际投行-行业宏观来源中，认可机构且命中半导体/AI 基础设施、持仓关联关键词或配置主题的研报即时提醒。",
+        "runtime": "push_rules / value_directory article",
+        "hit_markers": ("value_directory_industry_macro_research",),
+        "priority": 88,
+        "fields": (
+            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
+            {"key": "priority", "label": "规则顺序", "type": "int", "default": 88, "min": 1, "max": 999},
+            {
+                "key": "allowed_banks",
+                "label": "机构白名单",
+                "type": "list",
+                "default": [],
+                "help": "留空使用代码内置国际投行名单；填写后仅允许列表中的中文名或英文别名。",
+            },
+            {
+                "key": "extra_theme_keywords",
+                "label": "额外主题关键词",
+                "type": "list",
+                "default": [],
+                "help": "叠加到本项目投资宇宙之外、但你希望价值目录行业宏观研报即时提醒的主题。",
+            },
+        ),
+    },
+    {
         "id": "direct_holding_hard_variable",
         "name": "直接持仓硬变量",
         "group": "持仓与公司",

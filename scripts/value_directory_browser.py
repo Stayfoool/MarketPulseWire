@@ -21,6 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ID = "value_directory_ib_stocks"
 LIST_URL = "https://www.valuelist.cn/ib-research/global-investment-banks-stocks"
 SOURCE_MODULE = "价值目录 / 国际投行-个股"
+INDUSTRY_MACRO_SOURCE_ID = "value_directory_ib_industry_macro"
+INDUSTRY_MACRO_LIST_URL = "https://www.valuelist.cn/ib-research/global-investment-banks"
+INDUSTRY_MACRO_SOURCE_MODULE = "价值目录 / 国际投行-行业宏观"
 CN_TZ = timezone(timedelta(hours=8))
 
 WAF_PATTERNS = (
@@ -56,6 +59,46 @@ class BrowserConfig:
     executable_path: str | None
     headless: bool
     timeout_ms: int
+
+
+@dataclass(frozen=True)
+class ValueDirectorySource:
+    source_id: str
+    module: str
+    list_url: str
+    categories: tuple[str, ...]
+
+
+VALUE_DIRECTORY_SOURCES: dict[str, ValueDirectorySource] = {
+    SOURCE_ID: ValueDirectorySource(
+        source_id=SOURCE_ID,
+        module=SOURCE_MODULE,
+        list_url=LIST_URL,
+        categories=("国际投行-个股",),
+    ),
+    INDUSTRY_MACRO_SOURCE_ID: ValueDirectorySource(
+        source_id=INDUSTRY_MACRO_SOURCE_ID,
+        module=INDUSTRY_MACRO_SOURCE_MODULE,
+        list_url=INDUSTRY_MACRO_LIST_URL,
+        categories=("国际投行-行业宏观",),
+    ),
+}
+
+
+def source_config(source_id: str = SOURCE_ID) -> ValueDirectorySource:
+    try:
+        return VALUE_DIRECTORY_SOURCES[source_id]
+    except KeyError as exc:
+        allowed = ", ".join(sorted(VALUE_DIRECTORY_SOURCES))
+        raise ValueDirectoryError(f"未知价值目录来源：{source_id}；允许值：{allowed}") from exc
+
+
+def default_source_ids() -> list[str]:
+    raw = os.getenv("VALUE_DIRECTORY_SOURCES", "").strip()
+    if not raw:
+        return list(VALUE_DIRECTORY_SOURCES)
+    requested = [part.strip() for part in re.split(r"[,;\s]+", raw) if part.strip()]
+    return [source_config(source_id).source_id for source_id in requested]
 
 
 def private_profile_dir() -> Path:
@@ -165,7 +208,8 @@ def normalize_date(value: Any) -> str:
     return parse_datetime_to_utc_iso(raw)
 
 
-def normalize_entry(raw: dict[str, Any]) -> dict[str, Any] | None:
+def normalize_entry(raw: dict[str, Any], source: ValueDirectorySource | None = None) -> dict[str, Any] | None:
+    source = source or source_config()
     title = " ".join(str(raw.get("title") or "").split())
     url = str(raw.get("url") or "").strip()
     if not title or not url or not url.startswith("http"):
@@ -181,23 +225,24 @@ def normalize_entry(raw: dict[str, Any]) -> dict[str, Any] | None:
         "content": summary,
         "full_text": summary,
         "published_at": published_at,
-        "source_module": SOURCE_MODULE,
-        "source_display": SOURCE_MODULE,
+        "source_module": source.module,
+        "source_display": source.module,
         "body_source": "价值目录列表页",
-        "categories": ["国际投行-个股"],
+        "categories": list(source.categories),
         "raw": {
-            "source": SOURCE_ID,
-            "source_page": LIST_URL,
+            "source": source.source_id,
+            "source_page": source.list_url,
             "raw_published": str(raw.get("published") or raw.get("published_at") or ""),
         },
     }
 
 
-def dedupe_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def dedupe_entries(entries: list[dict[str, Any]], source: ValueDirectorySource | None = None) -> list[dict[str, Any]]:
+    source = source or source_config()
     seen: set[str] = set()
     result: list[dict[str, Any]] = []
     for raw in entries:
-        item = normalize_entry(raw)
+        item = normalize_entry(raw, source)
         if not item:
             continue
         key = str(item["id"])
@@ -219,8 +264,10 @@ def classify_page_state(text: str, *, article_count: int, url: str = "") -> str:
     return "ok"
 
 
-def collect_entries(limit: int = 30, url: str = LIST_URL) -> list[dict[str, Any]]:
+def collect_entries(limit: int = 30, url: str | None = None, source_id: str = SOURCE_ID) -> list[dict[str, Any]]:
     """Read visible list-page cards with a persistent server browser profile."""
+    source = source_config(source_id)
+    target_url = url or source.list_url
     try:
         from playwright.sync_api import sync_playwright
     except Exception as exc:  # noqa: BLE001 - provide actionable setup message
@@ -237,7 +284,7 @@ def collect_entries(limit: int = 30, url: str = LIST_URL) -> list[dict[str, Any]
             ) from exc
         try:
             page = context.pages[0] if context.pages else context.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=config.timeout_ms)
+            page.goto(target_url, wait_until="domcontentloaded", timeout=config.timeout_ms)
             page.wait_for_timeout(int(os.getenv("VALUE_DIRECTORY_WAF_SETTLE_MS", "6000") or "6000"))
             payload = evaluate_list_payload(page, safe_limit, config.timeout_ms)
         finally:
@@ -250,10 +297,108 @@ def collect_entries(limit: int = 30, url: str = LIST_URL) -> list[dict[str, Any]
     )
     if state != "ok":
         raise AccessBlocked(f"价值目录列表页不可用：state={state}")
-    entries = dedupe_entries(list(payload.get("entries") or []))
+    entries = dedupe_entries(list(payload.get("entries") or []), source)
     if not entries:
         raise AccessBlocked("价值目录列表页未解析到研报条目。")
     return entries
+
+
+def collect_entries_for_source(source_id: str, limit: int = 30) -> list[dict[str, Any]]:
+    return collect_entries(limit=limit, source_id=source_id)
+
+
+def classify_detail_page_state(text: str, *, preview_count: int, url: str = "") -> str:
+    haystack = " ".join(str(text or "").split()).lower()
+    if any(pattern.lower() in haystack for pattern in WAF_PATTERNS):
+        return "waf"
+    if "/login" in str(url).lower() or any(pattern.lower() in haystack for pattern in LOGIN_PATTERNS) and preview_count == 0:
+        return "login"
+    if preview_count <= 0:
+        return "empty"
+    return "ok"
+
+
+def collect_preview(url: str) -> dict[str, Any]:
+    """Read visible first-page preview assets from a ValueList detail page.
+
+    This reads only the page and image preview already visible in the user's
+    browser session. It does not click purchase/download controls and does not
+    retrieve report PDFs.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception as exc:  # noqa: BLE001
+        raise BrowserNotConfigured("缺少 Python Playwright 依赖。请先安装 requirements.txt。") from exc
+
+    config = browser_config()
+    with sync_playwright() as playwright:
+        try:
+            context = playwright.chromium.launch_persistent_context(**launch_kwargs(config))
+        except Exception as exc:  # noqa: BLE001
+            raise BrowserNotConfigured(
+                "浏览器启动失败。请安装系统 Chrome/Chromium，或运行 `python -m playwright install chromium`。"
+            ) from exc
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto(url, wait_until="domcontentloaded", timeout=config.timeout_ms)
+            page.wait_for_timeout(int(os.getenv("VALUE_DIRECTORY_WAF_SETTLE_MS", "6000") or "6000"))
+            payload = evaluate_detail_payload(page)
+        finally:
+            context.close()
+
+    state = classify_detail_page_state(
+        f"{payload.get('title', '')}\n{payload.get('articleText', '')}",
+        preview_count=len(payload.get("previewImages") or []) + (1 if payload.get("articleText") else 0),
+        url=str(payload.get("url") or ""),
+    )
+    payload["state"] = state
+    if state in {"waf", "login"}:
+        raise AccessBlocked(f"价值目录详情页不可用：state={state}")
+    return payload
+
+
+def evaluate_detail_payload(page: Any) -> dict[str, Any]:
+    script = """() => {
+        const visible = (el) => {
+            const rect = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            return rect.width > 20 && rect.height > 20 && style.display !== "none" && style.visibility !== "hidden";
+        };
+        const rectOf = (el) => {
+            const r = el.getBoundingClientRect();
+            return {x: r.x, y: r.y, width: r.width, height: r.height};
+        };
+        const article = document.querySelector("main article") || document.querySelector("article") || document.body;
+        const h1 = article?.querySelector("h1")?.innerText || document.querySelector("h1")?.innerText || "";
+        const articleText = (article?.innerText || "").trim();
+        const images = Array.from(article?.querySelectorAll("img") || [])
+            .filter(visible)
+            .map((img) => ({
+                src: img.currentSrc || img.src || "",
+                alt: img.alt || "",
+                naturalWidth: img.naturalWidth || 0,
+                naturalHeight: img.naturalHeight || 0,
+                rect: rectOf(img)
+            }))
+            .filter((img) => {
+                const src = String(img.src || "");
+                if (!src) return false;
+                if (src.includes("avatar") || src.includes("logo") || src.includes("thumb-ing")) return false;
+                if (img.naturalWidth < 500 || img.naturalHeight < 350) return false;
+                if (img.rect.width < 350 || img.rect.height < 250) return false;
+                return true;
+            });
+        return {
+            url: location.href,
+            title: document.title || h1,
+            heading: h1,
+            bodySample: (document.body?.innerText || "").slice(0, 1500),
+            articleText: articleText.slice(0, 3000),
+            previewImages: images.slice(0, 3),
+            hasPurchaseButton: /立即购买|购买|积分/.test(document.body?.innerText || ""),
+        };
+    }"""
+    return dict(page.evaluate(script))
 
 
 def evaluate_list_payload(page: Any, safe_limit: int, timeout_ms: int) -> dict[str, Any]:

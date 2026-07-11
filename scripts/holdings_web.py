@@ -3025,6 +3025,9 @@ function settingsRestartAdvice(changedItems) {{
   if (hasPrefix('LLM_') || hasPrefix('OPENAI_')) {{
     lines.push('大模型配置：重启常驻的 surveil-x-stream.service、surveil-sina-flash.service；研究机构/官网/新闻媒体 collector 下一轮自动读取，也可立即运行对应 timer。');
   }}
+  if (hasPrefix('VALUE_DIRECTORY_')) {{
+    lines.push('价值目录：下一次每天 08:00 timer 会读取新配置；如需马上验证，在任务健康页立即运行 surveil-value-directory.timer。');
+  }}
   if (hasPrefix('X_')) {{
     lines.push('X 配置：重启 surveil-x-stream.service。');
   }}

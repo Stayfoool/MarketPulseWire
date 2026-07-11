@@ -289,7 +289,15 @@ def test_source_profiles_group_six_categories() -> None:
         "5. iFinD 公司公告",
     ]
     profile_ids = {item["id"] for item in payload["profiles"]}
-    assert {"x_serenity", "semianalysis", "nvidia_blog", "cls_telegraph_api", "sina_stock_news", "ifind_notice"} <= profile_ids
+    assert {
+        "x_serenity",
+        "semianalysis",
+        "value_directory_ib_industry_macro",
+        "nvidia_blog",
+        "cls_telegraph_api",
+        "sina_stock_news",
+        "ifind_notice",
+    } <= profile_ids
     semianalysis = next(item for item in payload["profiles"] if item["id"] == "semianalysis")
     trendforce_page = next(item for item in payload["profiles"] if item["category"] == "research_industry_media" and item["source_type"] == "公开列表页")
     assert "surveil-research-collector.timer" in semianalysis["service_units"]

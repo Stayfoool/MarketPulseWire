@@ -24,7 +24,17 @@ from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rul
 from rss_monitor import DB_PATH, connect_db, save_new_items_with_retry
 from source_health import record_source_failure, record_source_success
 from source_profiles import source_profile_enabled
-from value_directory_browser import LIST_URL, SOURCE_ID, SOURCE_MODULE, collect_entries
+from value_directory_browser import (
+    LIST_URL,
+    SOURCE_ID,
+    VALUE_DIRECTORY_SOURCES,
+    ValueDirectorySource,
+    collect_entries_for_source,
+    collect_preview,
+    default_source_ids,
+    source_config,
+)
+from value_directory_preview import apply_preview_to_item, extract_preview_facts
 from x_check import load_env
 
 
@@ -43,7 +53,7 @@ def table_exists(conn: sqlite3.Connection, name: str) -> bool:
     return row is not None
 
 
-def load_seen_item_ids(db_path: Path | None = None) -> set[str]:
+def load_seen_item_ids(source_id: str = SOURCE_ID, db_path: Path | None = None) -> set[str]:
     db_path = db_path or DB_PATH
     if not db_path.exists():
         return set()
@@ -55,14 +65,14 @@ def load_seen_item_ids(db_path: Path | None = None) -> set[str]:
                 str(row[0] or "")
                 for row in conn.execute(
                     "SELECT item_id FROM seen_items WHERE source = ?",
-                    (SOURCE_ID,),
+                    (source_id,),
                 )
             }
     except sqlite3.Error:
         return set()
 
 
-def load_reviewed_item_ids(db_path: Path | None = None) -> set[str]:
+def load_reviewed_item_ids(source_id: str = SOURCE_ID, db_path: Path | None = None) -> set[str]:
     db_path = db_path or DB_PATH
     if not db_path.exists():
         return set()
@@ -74,22 +84,23 @@ def load_reviewed_item_ids(db_path: Path | None = None) -> set[str]:
                 str(row[0] or "")
                 for row in conn.execute(
                     "SELECT item_id FROM article_reviews WHERE source = ?",
-                    (SOURCE_ID,),
+                    (source_id,),
                 )
             }
     except sqlite3.Error:
         return set()
 
 
-def shadow_payload(entries: list[dict[str, Any]], *, started_at: str) -> dict[str, Any]:
-    seen = load_seen_item_ids()
-    reviewed = load_reviewed_item_ids()
+def shadow_payload(entries: list[dict[str, Any]], *, started_at: str, source: ValueDirectorySource | None = None) -> dict[str, Any]:
+    source = source or source_config()
+    seen = load_seen_item_ids(source.source_id)
+    reviewed = load_reviewed_item_ids(source.source_id)
     candidates = []
     for item in entries:
         item_id = article_item_id(item)
         candidates.append(
             {
-                "source": SOURCE_ID,
+                "source": source.source_id,
                 "id": item_id,
                 "url": item.get("url", ""),
                 "title": item.get("title", ""),
@@ -107,8 +118,8 @@ def shadow_payload(entries: list[dict[str, Any]], *, started_at: str) -> dict[st
         "ran_llm_review": False,
         "wrote_production_seen_items": False,
         "wrote_production_reviews": False,
-        "source": SOURCE_ID,
-        "url": LIST_URL,
+        "source": source.source_id,
+        "url": source.list_url,
         "started_at": started_at,
         "finished_at": utc_now(),
         "counts": {
@@ -122,7 +133,8 @@ def shadow_payload(entries: list[dict[str, Any]], *, started_at: str) -> dict[st
     }
 
 
-def rule_only_low_review(item: dict[str, Any]) -> dict[str, Any]:
+def rule_only_low_review(item: dict[str, Any], *, source: ValueDirectorySource | None = None) -> dict[str, Any]:
+    source = source or source_config()
     title = str(item.get("title") or "")
     return {
         "importance": "medium",
@@ -131,37 +143,121 @@ def rule_only_low_review(item: dict[str, Any]) -> dict[str, Any]:
         "incremental_classification": "规则未命中",
         "affected_targets": [],
         "daily_summary": title,
-        "reason": "价值目录国际投行个股研报索引已入库；未命中直接持仓/观察标的的投行评级/目标价或重大主题策略硬规则，不即时推送。",
+        "reason": f"{source.module} 已入库；未命中直接持仓/观察标的、持仓关联关键词、国际投行评级/目标价或重大主题策略硬规则，不即时推送。",
         "brief_reason": "未命中即时硬规则，仅入库观察。",
         "confidence": "规则",
         "model": "rule_only",
         "raw": {
             "llm_mode": "rule_only",
-            "source": SOURCE_ID,
-            "source_module": SOURCE_MODULE,
+            "source": source.source_id,
+            "source_module": source.module,
         },
     }
 
 
-def review_and_maybe_push(item: dict[str, Any], *, recheck_rules: bool = False) -> bool:
+def preview_enabled() -> bool:
+    return os.getenv("VALUE_DIRECTORY_PREVIEW_ENABLED", "1").strip() != "0"
+
+
+def push_on_preview_failure() -> bool:
+    return os.getenv("VALUE_DIRECTORY_PUSH_ON_PREVIEW_FAILURE", "1").strip() != "0"
+
+
+def enrich_item_with_preview(item: dict[str, Any]) -> dict[str, Any]:
+    if not preview_enabled():
+        return item
+    preview = collect_preview(str(item.get("url") or ""))
+    facts = extract_preview_facts(item, preview)
+    return apply_preview_to_item(item, preview, facts)
+
+
+def preview_failed(item: dict[str, Any]) -> bool:
+    raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+    preview = raw.get("value_directory_preview") if isinstance(raw.get("value_directory_preview"), dict) else {}
+    facts = preview.get("facts") if isinstance(preview.get("facts"), dict) else {}
+    return bool(facts and facts.get("status") != "ok")
+
+
+def has_preview_record(item: dict[str, Any]) -> bool:
+    raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+    preview = raw.get("value_directory_preview") if isinstance(raw.get("value_directory_preview"), dict) else {}
+    return bool(preview.get("facts"))
+
+
+def review_and_maybe_push(
+    item: dict[str, Any],
+    *,
+    source: ValueDirectorySource | None = None,
+    recheck_rules: bool = False,
+) -> bool:
+    source = source or source_config()
     item_id = article_item_id(item)
     with connect_db() as conn:
-        existing = article_review_exists(conn, SOURCE_ID, item_id)
+        existing = article_review_exists(conn, source.source_id, item_id)
     if existing:
         review = existing
         if recheck_rules and not review.get("pushed_at"):
-            refreshed = rule_first_review(SOURCE_ID, item)
+            refreshed = rule_first_review(source.source_id, item)
             if refreshed:
                 review = refreshed
                 with connect_db() as conn:
-                    save_article_review(conn, SOURCE_ID, item, review)
+                    save_article_review(conn, source.source_id, item, review)
     else:
-        review = rule_first_review(SOURCE_ID, item) or rule_only_low_review(item)
+        review = rule_first_review(source.source_id, item)
+        if review and preview_enabled():
+            try:
+                item = enrich_item_with_preview(item)
+                refreshed = rule_first_review(source.source_id, item)
+                if refreshed:
+                    review = refreshed
+                if preview_failed(item) and not push_on_preview_failure():
+                    review = dict(review)
+                    review["push_now"] = False
+                    review["reason"] = (
+                        f"{review.get('reason') or ''}\n第一页预览提取失败，按当前配置不发送标题兜底推送。"
+                    ).strip()
+            except Exception as exc:  # noqa: BLE001 - detail preview should not break the whole batch
+                item = dict(item)
+                raw = dict(item.get("raw") or {})
+                raw["value_directory_preview"] = {"facts": {"status": "failed", "error": str(exc)[:500]}}
+                item["raw"] = raw
+                item["preview_lines"] = [f"第一页提取：失败/不可用（{exc}）"]
+                if not push_on_preview_failure():
+                    review = dict(review)
+                    review["push_now"] = False
+                    review["reason"] = (
+                        f"{review.get('reason') or ''}\n第一页预览提取失败，按当前配置不发送标题兜底推送。"
+                    ).strip()
+        if not review:
+            review = rule_only_low_review(item, source=source)
         with connect_db() as conn:
-            save_article_review(conn, SOURCE_ID, item, review)
+            save_article_review(conn, source.source_id, item, review)
+
+    if review.get("push_now") and not review.get("pushed_at") and preview_enabled() and not has_preview_record(item):
+        try:
+            item = enrich_item_with_preview(item)
+            refreshed = rule_first_review(source.source_id, item)
+            if refreshed:
+                review = refreshed
+            with connect_db() as conn:
+                save_article_review(conn, source.source_id, item, review)
+        except Exception as exc:  # noqa: BLE001
+            item = dict(item)
+            raw = dict(item.get("raw") or {})
+            raw["value_directory_preview"] = {"facts": {"status": "failed", "error": str(exc)[:500]}}
+            item["raw"] = raw
+            item["preview_lines"] = [f"第一页提取：失败/不可用（{exc}）"]
+            if not push_on_preview_failure():
+                review = dict(review)
+                review["push_now"] = False
+                review["reason"] = (
+                    f"{review.get('reason') or ''}\n第一页预览提取失败，按当前配置不发送标题兜底推送。"
+                ).strip()
+            with connect_db() as conn:
+                save_article_review(conn, source.source_id, item, review)
 
     print(
-        f"{SOURCE_ID} 规则门控：importance={review.get('importance')} "
+        f"{source.source_id} 规则门控：importance={review.get('importance')} "
         f"push={review.get('push_now')} title={item.get('title', '')}",
         flush=True,
     )
@@ -170,7 +266,7 @@ def review_and_maybe_push(item: dict[str, Any], *, recheck_rules: bool = False) 
 
     reservation = reserve_rule_alert(
         review,
-        source=SOURCE_ID,
+        source=source.source_id,
         item_id=item_id,
         title=str(item.get("title") or ""),
         published_at=str(item.get("published_at") or ""),
@@ -188,20 +284,23 @@ def review_and_maybe_push(item: dict[str, Any], *, recheck_rules: bool = False) 
         raw["rule_alert_dedup"] = reservation
         review["raw"] = raw
         with connect_db() as conn:
-            save_article_review(conn, SOURCE_ID, item, review)
+            save_article_review(conn, source.source_id, item, review)
         return False
 
     item = dict(item)
     item["article_review"] = review
     item["analysis_lines_prefix"] = [
-        "来源：价值目录国际投行个股研报索引",
+        f"来源：{source.module}",
         str(review.get("brief_reason") or review.get("reason") or ""),
     ]
-    sent = send_card(build_article_card(SOURCE_ID, item))
+    for line in item.get("preview_lines") or []:
+        if line:
+            item["analysis_lines_prefix"].append(str(line))
+    sent = send_card(build_article_card(source.source_id, item))
     if sent:
         confirm_rule_alert(reservation, db_path=DB_PATH)
         with connect_db() as conn:
-            mark_article_pushed(conn, SOURCE_ID, item_id)
+            mark_article_pushed(conn, source.source_id, item_id)
         return True
     release_rule_alert(reservation, db_path=DB_PATH)
     return False
@@ -210,21 +309,23 @@ def review_and_maybe_push(item: dict[str, Any], *, recheck_rules: bool = False) 
 def collect_production(
     entries: list[dict[str, Any]],
     *,
+    source: ValueDirectorySource | None = None,
     notify_baseline: bool,
     started_at: str,
     recheck_item_id: str = "",
 ) -> dict[str, Any]:
+    source = source or source_config()
     new_items = save_new_items_with_retry(
-        SOURCE_ID,
+        source.source_id,
         entries,
         notify_baseline=notify_baseline,
-        source_label=SOURCE_MODULE,
+        source_label=source.module,
     )
     pushed = 0
     reviewed = 0
     for item in new_items:
         reviewed += 1
-        if review_and_maybe_push(item):
+        if review_and_maybe_push(item, source=source):
             pushed += 1
     rechecked = 0
     target_id = recheck_item_id.strip()
@@ -234,7 +335,7 @@ def collect_production(
                 continue
             rechecked = 1
             reviewed += 1
-            if review_and_maybe_push(item, recheck_rules=True):
+            if review_and_maybe_push(item, source=source, recheck_rules=True):
                 pushed += 1
             break
     return {
@@ -244,8 +345,8 @@ def collect_production(
         "ran_llm_review": False,
         "wrote_production_seen_items": True,
         "wrote_production_reviews": reviewed > 0,
-        "source": SOURCE_ID,
-        "url": LIST_URL,
+        "source": source.source_id,
+        "url": source.list_url,
         "started_at": started_at,
         "finished_at": utc_now(),
         "counts": {
@@ -282,18 +383,36 @@ def print_summary(payload: dict[str, Any]) -> None:
         for item in payload.get("candidates", [])[:5]:
             seen = "seen" if item.get("already_seen") else "new?"
             print(f"  - ({seen}) {item.get('title')}", flush=True)
+    for child in payload.get("sources", []):
+        child_counts = child.get("counts", {})
+        print(
+            f"  {child.get('source')}: raw={child_counts.get('raw_items', 0)} "
+            f"new={child_counts.get('new_items', '-')} reviewed={child_counts.get('reviewed_items', '-')} "
+            f"pushed={child_counts.get('pushed_items', '-')}",
+            flush=True,
+        )
     for error in payload.get("errors", []):
         print(f"[ERR] {error}", flush=True)
 
 
-def run(*, production: bool, limit: int, notify_baseline: bool, recheck_item_id: str = "") -> dict[str, Any]:
+def run_source(
+    source_id: str,
+    *,
+    production: bool,
+    limit: int,
+    notify_baseline: bool,
+    recheck_item_id: str = "",
+) -> dict[str, Any]:
     started_at = utc_now()
-    if not source_profile_enabled(SOURCE_ID):
+    source = source_config(source_id)
+    if not source_profile_enabled(source.source_id):
         payload = {
             "ok": True,
             "mode": "production" if production else "shadow_dry_run",
             "skipped": True,
             "reason": "source profile 已停用",
+            "source": source.source_id,
+            "url": source.list_url,
             "started_at": started_at,
             "finished_at": utc_now(),
             "counts": {"raw_items": 0},
@@ -301,30 +420,77 @@ def run(*, production: bool, limit: int, notify_baseline: bool, recheck_item_id:
         }
         return payload
     try:
-        entries = collect_entries(limit=limit)
+        entries = collect_entries_for_source(source.source_id, limit=limit)
         with connect_db() as conn:
-            record_source_success(conn, MONITOR, SOURCE_ID)
+            record_source_success(conn, MONITOR, source.source_id)
         if production:
             return collect_production(
                 entries,
+                source=source,
                 notify_baseline=notify_baseline,
                 started_at=started_at,
                 recheck_item_id=recheck_item_id,
             )
-        return shadow_payload(entries, started_at=started_at)
+        return shadow_payload(entries, started_at=started_at, source=source)
     except Exception as exc:  # noqa: BLE001 - health state should capture every collector failure
         with connect_db() as conn:
-            record_source_failure(conn, MONITOR, SOURCE_ID, exc)
+            record_source_failure(conn, MONITOR, source.source_id, exc)
         return {
             "ok": False,
             "mode": "production" if production else "shadow_dry_run",
-            "source": SOURCE_ID,
-            "url": LIST_URL,
+            "source": source.source_id,
+            "url": source.list_url,
             "started_at": started_at,
             "finished_at": utc_now(),
             "counts": {"raw_items": 0},
             "errors": [f"{type(exc).__name__}: {exc}"],
         }
+
+
+def run(
+    *,
+    production: bool,
+    limit: int,
+    notify_baseline: bool,
+    recheck_item_id: str = "",
+    source_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    started_at = utc_now()
+    sources = source_ids or default_source_ids()
+    payloads = [
+        run_source(
+            source_id,
+            production=production,
+            limit=limit,
+            notify_baseline=notify_baseline,
+            recheck_item_id=recheck_item_id,
+        )
+        for source_id in sources
+    ]
+    errors = [error for payload in payloads for error in payload.get("errors", [])]
+    counts = {
+        "raw_items": sum(int(payload.get("counts", {}).get("raw_items") or 0) for payload in payloads),
+        "new_items": sum(int(payload.get("counts", {}).get("new_items") or 0) for payload in payloads),
+        "reviewed_items": sum(int(payload.get("counts", {}).get("reviewed_items") or 0) for payload in payloads),
+        "rechecked_items": sum(int(payload.get("counts", {}).get("rechecked_items") or 0) for payload in payloads),
+        "pushed_items": sum(int(payload.get("counts", {}).get("pushed_items") or 0) for payload in payloads),
+    }
+    return {
+        "ok": all(payload.get("ok") for payload in payloads),
+        "mode": "production" if production else "shadow_dry_run",
+        "sent_feishu": any(payload.get("sent_feishu") for payload in payloads),
+        "ran_llm_review": False,
+        "wrote_production_seen_items": production,
+        "wrote_production_reviews": counts["reviewed_items"] > 0,
+        "source": "value_directory",
+        "url": LIST_URL,
+        "source_ids": sources,
+        "started_at": started_at,
+        "finished_at": utc_now(),
+        "counts": counts,
+        "sources": payloads,
+        "errors": errors,
+    }
 
 
 def main() -> int:
@@ -333,6 +499,12 @@ def main() -> int:
     parser.add_argument("--production", action="store_true", help="写入 seen_items/article_reviews 并按硬规则发送飞书。")
     parser.add_argument("--notify-baseline", action="store_true", help="首次建立基线时也处理旧条目。默认只建立基线。")
     parser.add_argument("--limit", type=int, default=30, help="读取列表页前 N 条。")
+    parser.add_argument(
+        "--source",
+        action="append",
+        choices=sorted(VALUE_DIRECTORY_SOURCES),
+        help="只运行指定价值目录来源；可重复。不传则读取 VALUE_DIRECTORY_SOURCES 或默认全部。",
+    )
     parser.add_argument(
         "--recheck-item-id",
         default="",
@@ -348,6 +520,7 @@ def main() -> int:
         limit=max(1, min(args.limit, 100)),
         notify_baseline=args.notify_baseline or os.getenv("SURVEIL_NOTIFY_BASELINE", "") == "1",
         recheck_item_id=args.recheck_item_id,
+        source_ids=args.source,
     )
     if args.write_report:
         payload["report_path"] = str(write_report(payload))

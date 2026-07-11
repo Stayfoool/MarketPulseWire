@@ -177,6 +177,33 @@ def thin_core_content(item: dict[str, Any], review: dict[str, Any]) -> str:
     return ""
 
 
+def value_directory_preview_lines(item: dict[str, Any]) -> list[str]:
+    lines = [str(line).strip() for line in as_list(item.get("preview_lines")) if str(line).strip()]
+    if lines:
+        return lines[:4]
+    raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+    preview = raw.get("value_directory_preview") if isinstance(raw.get("value_directory_preview"), dict) else {}
+    facts = preview.get("facts") if isinstance(preview.get("facts"), dict) else {}
+    if not facts:
+        return []
+    status = str(facts.get("status") or "")
+    if status == "ok" and facts.get("core_content"):
+        lines.append(f"第一页提取：{facts.get('core_content')}")
+    elif status:
+        lines.append(f"第一页提取：失败/不可用（{facts.get('error') or status}）")
+    meta_parts = []
+    for label, key in (("机构", "institution"), ("日期", "report_date"), ("方向", "stance"), ("动作", "action"), ("评级", "rating"), ("目标价", "target_price")):
+        value = str(facts.get(key) or "").strip()
+        if value and value.lower() != "unknown":
+            meta_parts.append(f"{label}：{value}")
+    if meta_parts:
+        lines.append("；".join(meta_parts))
+    points = [str(point).strip() for point in as_list(facts.get("key_points")) if str(point).strip()]
+    if points:
+        lines.append("要点：" + "；".join(points[:3]))
+    return lines[:4]
+
+
 def thin_push_reason(item: dict[str, Any], review: dict[str, Any]) -> str:
     explicit = str(item.get("push_reason") or "").strip()
     if explicit:
@@ -209,6 +236,7 @@ def build_thin_article_card(source: str, item: dict[str, Any], review: dict[str,
     targets = target_names_from_review(review)
     notes = compact_notes_from_review(review)
     core = thin_core_content(item, review)
+    preview_lines = value_directory_preview_lines(item)
     elements: list[dict[str, Any]] = [
         div_markdown(f"**发送时间**：{md_escape(now_beijing())}"),
         div_markdown(f"**来源模块**：{md_escape(source_label)}"),
@@ -218,6 +246,8 @@ def build_thin_article_card(source: str, item: dict[str, Any], review: dict[str,
     ]
     if core:
         elements.append(div_markdown(f"**核心内容**\n{md_escape(core)}"))
+    if preview_lines:
+        elements.append(div_markdown("**第一页提取**\n" + md_escape("\n".join(preview_lines))))
     if push_reason:
         elements.append(div_markdown(f"**为什么推送**\n{md_escape(truncate(push_reason, 260))}"))
     if targets:
