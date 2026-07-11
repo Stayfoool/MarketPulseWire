@@ -333,7 +333,7 @@ def event_center_where_clause(
     q_lower: str,
     q_fields: tuple[str, ...],
 ) -> tuple[str, list[str]]:
-    clauses = [f"{time_field} >= ?", f"{time_field} < ?"]
+    clauses = [f"datetime({time_field}) >= datetime(?)", f"datetime({time_field}) < datetime(?)"]
     params = [start_utc, end_utc]
     if source_lower and source_fields:
         clauses.append("(" + " OR ".join(f"LOWER(COALESCE({field}, '')) LIKE ?" for field in source_fields) + ")")
@@ -344,11 +344,29 @@ def event_center_where_clause(
     return " AND ".join(clauses), params
 
 
+def normalized_event_time_basis(value: str) -> str:
+    return "published" if str(value or "").strip().lower() == "published" else "seen"
+
+
+def event_time_field(*, basis: str, seen_field: str, published_field: str) -> str:
+    if basis == "published":
+        return f"COALESCE(NULLIF({published_field}, ''), {seen_field})"
+    return seen_field
+
+
+def displayed_event_time(item: dict[str, Any], basis: str) -> str:
+    if basis == "published":
+        return str(item.get("published_at") or item.get("seen_at") or "")
+    return str(item.get("seen_at") or item.get("published_at") or "")
+
+
 def fetch_events_rows(
     day: str = "",
     source: str = "",
     kind: str = "",
     q: str = "",
+    time_basis: str = "seen",
+    include_baseline: bool = False,
     limit: int = 100,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> list[dict[str, Any]]:
@@ -356,12 +374,17 @@ def fetch_events_rows(
     q_lower = q.strip().lower()
     source_lower = source.strip().lower()
     kind_lower = kind.strip().lower()
+    time_basis = normalized_event_time_basis(time_basis)
     rows: list[dict[str, Any]] = []
     with connect_sqlite(db_path) as conn:
         conn.row_factory = sqlite3.Row
         if table_exists(conn, "events"):
             where, params = event_center_where_clause(
-                time_field="e.first_seen_at",
+                time_field=event_time_field(
+                    basis=time_basis,
+                    seen_field="e.first_seen_at",
+                    published_field="e.published_at",
+                ),
                 start_utc=start_utc,
                 end_utc=end_utc,
                 source_lower=source_lower,
@@ -395,6 +418,7 @@ def fetch_events_rows(
                        ) AS delivery_status
                 FROM events e
                 WHERE {where}
+                  {" " if include_baseline else "AND COALESCE(e.baseline_only, 0) = 0"}
                 ORDER BY e.first_seen_at DESC
                 LIMIT 300
                 """,
@@ -404,6 +428,7 @@ def fetch_events_rows(
                     {
                         "kind": row["event_type"] or "event",
                         "source": row["source"],
+                        "source_id": row["source"],
                         "id": row["id"],
                         "title": row["title"],
                         "summary": row["summary"] or "",
@@ -419,7 +444,11 @@ def fetch_events_rows(
                 )
         if table_exists(conn, "article_reviews"):
             where, params = event_center_where_clause(
-                time_field="created_at",
+                time_field=event_time_field(
+                    basis=time_basis,
+                    seen_field="created_at",
+                    published_field="published_at",
+                ),
                 start_utc=start_utc,
                 end_utc=end_utc,
                 source_lower=source_lower,
@@ -442,6 +471,7 @@ def fetch_events_rows(
                     {
                         "kind": "article",
                         "source": row["source_module"] or row["source"],
+                        "source_id": row["source"],
                         "id": row["item_id"],
                         "title": row["title"],
                         "summary": row["daily_summary"] or row["reason"] or "",
@@ -457,7 +487,11 @@ def fetch_events_rows(
                 )
         if table_exists(conn, "official_news_reviews"):
             where, params = event_center_where_clause(
-                time_field="created_at",
+                time_field=event_time_field(
+                    basis=time_basis,
+                    seen_field="created_at",
+                    published_field="published_at",
+                ),
                 start_utc=start_utc,
                 end_utc=end_utc,
                 source_lower=source_lower,
@@ -480,6 +514,7 @@ def fetch_events_rows(
                     {
                         "kind": "official_news",
                         "source": row["source"],
+                        "source_id": row["source"],
                         "id": row["item_id"],
                         "title": row["title"],
                         "summary": row["daily_summary"] or row["reason"] or "",
@@ -493,11 +528,67 @@ def fetch_events_rows(
                         "baseline_only": False,
                     }
                 )
+        if include_baseline and table_exists(conn, "seen_items"):
+            where, params = event_center_where_clause(
+                time_field=event_time_field(
+                    basis=time_basis,
+                    seen_field="s.first_seen_at",
+                    published_field="s.published_at",
+                ),
+                start_utc=start_utc,
+                end_utc=end_utc,
+                source_lower=source_lower,
+                source_fields=("s.source",),
+                q_lower=q_lower,
+                q_fields=("s.title", "s.summary", "s.url"),
+            )
+            reviewed_clause = ""
+            if table_exists(conn, "article_reviews"):
+                reviewed_clause = """
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM article_reviews r
+                        WHERE r.source = s.source AND r.item_id = s.item_id
+                    )
+                """
+            for row in conn.execute(
+                f"""
+                SELECT s.source, s.item_id, s.url, s.title, s.summary, s.published_at, s.first_seen_at
+                FROM seen_items s
+                WHERE {where}
+                  {reviewed_clause}
+                ORDER BY s.first_seen_at DESC
+                LIMIT 300
+                """,
+                params,
+            ):
+                rows.append(
+                    {
+                        "kind": "baseline",
+                        "source": row["source"],
+                        "source_id": row["source"],
+                        "id": row["item_id"],
+                        "title": row["title"],
+                        "summary": row["summary"] or "首次采集建立去重基线，未进入文章门控。",
+                        "url": row["url"] or "",
+                        "published_at": normalize_time(row["published_at"]),
+                        "seen_at": normalize_time(row["first_seen_at"]),
+                        "importance": "",
+                        "classification": "仅建立去重基线",
+                        "push": False,
+                        "delivery_status": "baseline",
+                        "baseline_only": True,
+                    }
+                )
         if table_exists(conn, "seen_posts"):
             seen_columns = table_columns(conn, "seen_posts")
             delivery_expr = "delivery_status" if "delivery_status" in seen_columns else "'sent'"
             where, params = event_center_where_clause(
-                time_field="first_seen_at",
+                time_field=event_time_field(
+                    basis=time_basis,
+                    seen_field="first_seen_at",
+                    published_field="published_at",
+                ),
                 start_utc=start_utc,
                 end_utc=end_utc,
                 source_lower=source_lower,
@@ -521,6 +612,7 @@ def fetch_events_rows(
                     {
                         "kind": "x_post",
                         "source": row["source"],
+                        "source_id": row["source"],
                         "id": row["post_id"],
                         "title": text.splitlines()[0][:120] if text else f"X post {row['post_id']}",
                         "summary": text[:300],
@@ -535,21 +627,27 @@ def fetch_events_rows(
                     }
                 )
         if table_exists(conn, "jygs_events"):
+            jygs_time_field = event_time_field(
+                basis=time_basis,
+                seen_field="first_seen_at",
+                published_field="trade_date",
+            )
             for row in conn.execute(
-                """
+                f"""
                 SELECT id, trade_date, run_slot, symbol, name, themes, reason, url, first_seen_at
                 FROM jygs_events
-                WHERE (first_seen_at >= ? AND first_seen_at < ?)
-                   OR trade_date = ?
+                WHERE datetime({jygs_time_field}) >= datetime(?)
+                  AND datetime({jygs_time_field}) < datetime(?)
                 ORDER BY first_seen_at DESC
                 LIMIT 100
                 """,
-                (start_utc, end_utc, utc_window_for_day(day)[2]),
+                (start_utc, end_utc),
             ):
                 rows.append(
                     {
                         "kind": "jygs",
                         "source": f"jygs/{row['run_slot']}",
+                        "source_id": f"jygs/{row['run_slot']}",
                         "id": row["id"],
                         "title": f"{row['name']} {row['symbol'] or ''}".strip(),
                         "summary": row["reason"] or row["themes"] or "",
@@ -565,7 +663,9 @@ def fetch_events_rows(
                 )
 
     def matches(item: dict[str, Any]) -> bool:
-        if source_lower and source_lower not in str(item["source"]).lower():
+        if source_lower and source_lower not in str(item["source"]).lower() and source_lower not in str(
+            item.get("source_id") or ""
+        ).lower():
             return False
         if kind_lower and kind_lower != str(item["kind"]).lower():
             return False
@@ -576,7 +676,7 @@ def fetch_events_rows(
         return True
 
     rows = [item for item in rows if matches(item)]
-    rows.sort(key=lambda item: str(item.get("seen_at") or item.get("published_at") or ""), reverse=True)
+    rows.sort(key=lambda item: displayed_event_time(item, time_basis), reverse=True)
     return rows[: max(1, min(limit, 300))]
 
 
@@ -1252,9 +1352,14 @@ def html_page(token_required: bool) -> str:
     <section id="view-events" class="view">
       <div class="toolbar">
         <input id="eventDate" type="date" style="width:160px">
+        <select id="eventTimeBasis" aria-label="日期依据" style="width:170px" onchange="loadEvents()">
+          <option value="seen">按采集/处理日期</option>
+          <option value="published">按原文发布时间</option>
+        </select>
         <select id="eventSource" aria-label="来源过滤" style="width:320px" onchange="loadEvents()">
           <option value="">全部来源</option>
         </select>
+        <label class="source-checks"><input id="eventIncludeBaseline" type="checkbox" onchange="loadEvents()"> 显示基线条目</label>
         <input id="eventQuery" placeholder="搜索标题、摘要、标的" style="width:260px">
         <button class="primary" onclick="loadEvents()">查询</button>
       </div>
@@ -1263,7 +1368,7 @@ def html_page(token_required: bool) -> str:
           <table class="events-table">
             <thead>
               <tr>
-                <th style="width:130px">时间</th>
+                <th id="eventTimeHeader" style="width:150px">采集/处理时间</th>
                 <th style="width:130px">来源</th>
                 <th style="width:90px">类型</th>
                 <th>标题/摘要</th>
@@ -2051,18 +2156,22 @@ async function loadEvents() {{
   try {{
     const params = new URLSearchParams();
     const date = document.getElementById('eventDate').value;
+    const timeBasis = document.getElementById('eventTimeBasis').value;
     const source = document.getElementById('eventSource').value.trim();
     const q = document.getElementById('eventQuery').value.trim();
     if (date) params.set('date', date);
+    if (timeBasis !== 'seen') params.set('time_basis', timeBasis);
     if (source) params.set('source', source);
     if (q) params.set('q', q);
+    if (document.getElementById('eventIncludeBaseline').checked) params.set('include_baseline', '1');
     const data = await api('/api/events?' + params.toString());
+    document.getElementById('eventTimeHeader').textContent = timeBasis === 'published' ? '原文发布时间' : '采集/处理时间';
     const rows = document.getElementById('eventRows');
     rows.innerHTML = (data.events || []).map(item => `
       <tr>
-        <td>${{formatTime(item.seen_at || item.published_at)}}</td>
+        <td>${{formatTime(timeBasis === 'published' ? (item.published_at || item.seen_at) : (item.seen_at || item.published_at))}}${{item.published_at && timeBasis !== 'published' ? `<div class="hint">原文：${{formatTime(item.published_at)}}</div>` : ''}}${{item.seen_at && timeBasis === 'published' ? `<div class="hint">采集：${{formatTime(item.seen_at)}}</div>` : ''}}</td>
         <td>${{escapeHtml(item.source || '')}}</td>
-        <td>${{escapeHtml(item.kind || '')}}</td>
+        <td>${{escapeHtml(item.kind || '')}}${{item.baseline_only ? '<div class="hint">基线</div>' : ''}}</td>
         <td class="summary-cell">
           <div><strong>${{item.url ? `<a href="${{escapeHtml(item.url)}}" target="_blank" rel="noreferrer">${{escapeHtml(item.title || '')}}</a>` : escapeHtml(item.title || '')}}</strong></div>
           <div>${{escapeHtml(shortText(item.summary || '', 220))}}</div>
@@ -3292,6 +3401,9 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                     source=(qs.get("source") or [""])[0],
                     kind=(qs.get("kind") or [""])[0],
                     q=(qs.get("q") or [""])[0],
+                    time_basis=(qs.get("time_basis") or ["seen"])[0],
+                    include_baseline=(qs.get("include_baseline") or [""])[0].strip().lower()
+                    in {"1", "true", "yes", "on"},
                     limit=limit,
                 )
                 self.send_json({"ok": True, "events": events})
