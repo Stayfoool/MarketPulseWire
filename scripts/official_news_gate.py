@@ -8,12 +8,13 @@ from typing import Any
 from llm_analysis import call_chat_completion_with_prompts, format_llm_analysis, llm_config
 from industry_hardline import apply_hardline_review_override, explain_hardline
 from decision_engine import attach_decision_to_official_review
+from market_item import NormalizedMarketItem, item_from_article_mapping
 from market_interpreter import thin_system_prompt, thin_user_prompt_template
 from market_review_store import (
     ensure_official_news_table,
     mark_official_pushed as mark_pushed,
     official_review_exists as review_exists,
-    save_official_review as save_review,
+    save_official_review as _save_official_review,
 )
 from push_rules import (
     apply_article_push_rules,
@@ -22,6 +23,7 @@ from push_rules import (
     review_from_push_rule,
 )
 from skeptic_evaluator import skeptic_lines
+from source_profiles import runtime_source_profile
 
 
 OFFICIAL_NEWS_SOURCES = {
@@ -57,6 +59,24 @@ def official_news_enabled() -> bool:
 
 def is_official_news_source(source: str) -> bool:
     return source in OFFICIAL_NEWS_SOURCES
+
+
+def _source_profile(source: str) -> dict[str, Any]:
+    try:
+        return runtime_source_profile(source) or {}
+    except Exception:
+        return {}
+
+
+def normalized_official_item(source: str, item: dict[str, Any]) -> NormalizedMarketItem:
+    profile = _source_profile(source)
+    return item_from_article_mapping(
+        source,
+        item,
+        source_category=str(item.get("source_category") or profile.get("category") or "official_company"),
+        collector=str(item.get("collector") or profile.get("fetcher") or "official_news_gate"),
+        content_type=str(item.get("content_type") or "official_news"),
+    )
 
 
 def normalize_review(parsed: dict[str, Any]) -> dict[str, Any]:
@@ -109,6 +129,10 @@ def review_official_news(source: str, item: dict[str, Any]) -> dict[str, Any]:
     return review
 
 
+def save_review(conn, source: str, item: dict[str, Any], review: dict[str, Any]) -> None:
+    _save_official_review(conn, source, item, review, decision_item=normalized_official_item(source, item))
+
+
 def apply_official_hardline_override(source: str, item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
     updated = apply_hardline_review_override(source, item, review)
     if updated.get("push_now"):
@@ -127,13 +151,13 @@ def rule_first_official_review(source: str, item: dict[str, Any]) -> dict[str, A
         "related_targets": rule.get("related_targets") or [],
         "llm_mode": "rule_only",
     }
-    return attach_decision_to_official_review(source, item, review, holdings=holdings)
+    return attach_decision_to_official_review(source, normalized_official_item(source, item), review, holdings=holdings)
 
 
 def apply_official_push_rule_override(source: str, item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
     holdings = load_enabled_holdings_for_rules()
     updated = apply_article_push_rules(source, item, review, holdings=holdings, push_key="should_push_now")
-    return attach_decision_to_official_review(source, item, updated, holdings=holdings)
+    return attach_decision_to_official_review(source, normalized_official_item(source, item), updated, holdings=holdings)
 
 
 def analysis_lines_from_review(review: dict[str, Any]) -> list[str]:
