@@ -5,19 +5,26 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import sqlite3
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from db_utils import connect_sqlite
 from feishu import send_card_with_response
 from llm_analysis import call_chat_completion_with_prompts, format_llm_analysis
-from market_db import DEFAULT_DB_PATH, init_db
+from market_db import DEFAULT_DB_PATH
 from decision_engine import attach_decision_to_event_analysis
 from market_card_view import card_targets, decision_reason, interpretation_core, interpretation_reason
 from market_item import NormalizedMarketItem, item_from_event_mapping
 from market_interpreter import thin_system_prompt, thin_user_prompt_template
+from market_review_store import (
+    event_content_hash,
+    event_row_by_id,
+    insert_event_analysis,
+    latest_event_analysis,
+    load_enabled_holdings as store_load_enabled_holdings,
+    record_event_delivery,
+    update_event_analysis,
+    upsert_event_record,
+)
 from push_rules import apply_event_push_rules
 from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert
 
@@ -35,17 +42,8 @@ PORTFOLIO_EVENT_USER_PROMPT = thin_user_prompt_template(
 )
 
 
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def content_hash(*parts: str) -> str:
-    joined = "\n".join(part.strip() for part in parts if part and part.strip())
-    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
-
-
-def json_dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return event_content_hash(*parts)
 
 
 EVENT_SOURCE_CONTEXT: dict[str, dict[str, str]] = {
@@ -112,226 +110,74 @@ def event_with_normalized_market_item_audit(event: dict[str, Any]) -> dict[str, 
 
 
 def load_enabled_holdings(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
-    init_db(db_path).close()
-    with connect_sqlite(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT symbol, name, full_name, aliases_json, raw_json
-            FROM portfolio_holdings
-            WHERE enabled = 1
-            ORDER BY symbol
-            """
-        ).fetchall()
-    holdings = []
-    for symbol, name, full_name, aliases_json, raw_json in rows:
-        try:
-            aliases = json.loads(aliases_json or "[]")
-        except json.JSONDecodeError:
-            aliases = []
-        try:
-            raw = json.loads(raw_json or "{}")
-        except json.JSONDecodeError:
-            raw = {}
-        holdings.append(
-            {
-                "symbol": symbol,
-                "name": name,
-                "full_name": full_name or "",
-                "aliases": aliases,
-                "news_keywords": raw.get("news_keywords") if isinstance(raw.get("news_keywords"), list) else [],
-                "news_exclude_keywords": raw.get("news_exclude_keywords")
-                if isinstance(raw.get("news_exclude_keywords"), list)
-                else [],
-                "business_summary": str(raw.get("business_summary") or ""),
-                "raw": raw,
-            }
-        )
-    return holdings
+    return store_load_enabled_holdings(db_path)
 
 
 def upsert_event(event: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> tuple[int, bool]:
     """Insert an event and return (event_id, inserted)."""
-    init_db(db_path).close()
-    event = event_with_normalized_market_item_audit(event)
-    now = utc_now()
-    source = str(event["source"])
-    source_event_id = str(event["source_event_id"])
-    title = str(event.get("title") or "").strip()
-    summary = str(event.get("summary") or "").strip()
-    full_text = str(event.get("full_text") or "").strip()
-    digest = event.get("content_hash") or content_hash(source, source_event_id, title, summary, full_text)
-    payload = (
-        source,
-        source_event_id,
-        str(event.get("event_type") or "unknown"),
-        title,
-        summary,
-        full_text,
-        str(event.get("url") or ""),
-        str(event.get("published_at") or ""),
-        now,
-        json_dumps(event.get("symbols") or []),
-        json_dumps(event.get("themes") or []),
-        json_dumps(event.get("raw") or {}),
-        digest,
-        1 if event.get("baseline_only") else 0,
-    )
-    with connect_sqlite(db_path) as conn:
-        try:
-            cur = conn.execute(
-                """
-                INSERT INTO events (
-                    source, source_event_id, event_type, title, summary, full_text, url,
-                    published_at, first_seen_at, symbols_json, themes_json, raw_json,
-                    content_hash, baseline_only
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                payload,
-            )
-            conn.commit()
-            return int(cur.lastrowid), True
-        except sqlite3.IntegrityError:
-            row = conn.execute(
-                "SELECT id, full_text FROM events WHERE source = ? AND source_event_id = ?",
-                (source, source_event_id),
-            ).fetchone()
-            if not row:
-                raise
-            event_id = int(row[0])
-            existing_full_text = str(row[1] or "")
-            if full_text and len(full_text) > len(existing_full_text):
-                conn.execute(
-                    """
-                    UPDATE events
-                    SET summary = ?, full_text = ?, raw_json = ?, content_hash = ?
-                    WHERE id = ?
-                    """,
-                    (summary, full_text, json_dumps(event.get("raw") or {}), digest, event_id),
-                )
-                conn.commit()
-            return event_id, False
+    return upsert_event_record(event_with_normalized_market_item_audit(event), db_path)
 
 
 def analyze_event(event_id: int, task: str = "portfolio_event", db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
-    with connect_sqlite(db_path) as conn:
-        row = conn.execute(
-            """
-            SELECT source, event_type, title, summary, full_text, url, published_at, symbols_json, raw_json
-            FROM events
-            WHERE id = ?
-            """,
-            (event_id,),
-        ).fetchone()
-        if not row:
-            raise RuntimeError(f"事件不存在：{event_id}")
-        source, event_type, title, summary, full_text, url, published_at, symbols_json, raw_json = row
-        existing = conn.execute(
-            "SELECT id, analysis_json FROM event_analyses WHERE event_id = ? AND task = ? ORDER BY id DESC LIMIT 1",
-            (event_id, task),
-        ).fetchone()
-        if existing:
-            parsed = json.loads(existing[1])
-            updated = apply_event_rules_to_analysis(
-                {
-                    "source": source,
-                    "event_type": event_type,
-                    "title": title,
-                    "summary": summary,
-                    "full_text": full_text,
-                    "url": url,
-                    "published_at": published_at,
-                    "symbols_json": symbols_json,
-                    "raw_json": raw_json,
-                },
-                parsed,
+    event_row = event_row_by_id(event_id, db_path)
+    if not event_row:
+        raise RuntimeError(f"事件不存在：{event_id}")
+    existing = latest_event_analysis(event_id, task, db_path)
+    if existing:
+        parsed = existing["analysis"]
+        updated = apply_event_rules_to_analysis(event_row, parsed, db_path=db_path)
+        if updated != parsed:
+            importance, classification, direction, impact_duration, should_push = analysis_record_fields(updated)
+            update_event_analysis(
+                int(existing["id"]),
+                importance=importance,
+                classification=classification,
+                direction=direction,
+                impact_duration=impact_duration,
+                should_push=should_push,
+                analysis=updated,
                 db_path=db_path,
             )
-            if updated != parsed:
-                importance, classification, direction, impact_duration, should_push = analysis_record_fields(updated)
-                conn.execute(
-                    """
-                    UPDATE event_analyses
-                    SET importance = ?, classification = ?, direction = ?, impact_duration = ?,
-                        should_push = ?, analysis_json = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        importance,
-                        classification,
-                        direction,
-                        impact_duration,
-                        should_push,
-                        json_dumps(updated),
-                        existing[0],
-                    ),
-                )
-                conn.commit()
-            return updated
+        return updated
 
     text = build_portfolio_event_input(
         {
-            "source": source,
-            "event_type": event_type,
-            "title": title,
-            "published_at": published_at,
-            "url": url,
-            "summary": summary,
-            "full_text": full_text,
-            "symbols_json": symbols_json,
-            "raw_json": raw_json,
+            "source": event_row["source"],
+            "event_type": event_row["event_type"],
+            "title": event_row["title"],
+            "published_at": event_row["published_at"],
+            "url": event_row["url"],
+            "summary": event_row["summary"],
+            "full_text": event_row["full_text"],
+            "symbols_json": event_row["symbols_json"],
+            "raw_json": event_row["raw_json"],
         },
         db_path=db_path,
     )
     parsed, model = call_chat_completion_with_prompts(
         PORTFOLIO_EVENT_SYSTEM_PROMPT,
-        PORTFOLIO_EVENT_USER_PROMPT.replace("{source}", str(source or ""))
-        .replace("{title}", str(title or ""))
-        .replace("{published_at}", str(published_at or ""))
+        PORTFOLIO_EVENT_USER_PROMPT.replace("{source}", str(event_row["source"] or ""))
+        .replace("{title}", str(event_row["title"] or ""))
+        .replace("{published_at}", str(event_row["published_at"] or ""))
         .replace("{content}", text),
         user_agent="surveil-portfolio-event-llm/0.1",
     )
     parsed["_model"] = model
     parsed["llm_mode"] = "thin"
-    parsed = apply_event_rules_to_analysis(
-        {
-            "source": source,
-            "event_type": event_type,
-            "title": title,
-            "summary": summary,
-            "full_text": full_text,
-            "url": url,
-            "published_at": published_at,
-            "symbols_json": symbols_json,
-            "raw_json": raw_json,
-        },
-        parsed,
+    parsed = apply_event_rules_to_analysis(event_row, parsed, db_path=db_path)
+    importance, classification, direction, impact_duration, should_push = analysis_record_fields(parsed)
+    insert_event_analysis(
+        event_id,
+        task,
+        model,
+        importance=importance,
+        classification=classification,
+        direction=direction,
+        impact_duration=impact_duration,
+        should_push=should_push,
+        analysis=parsed,
         db_path=db_path,
     )
-    importance, classification, direction, impact_duration, should_push = analysis_record_fields(parsed)
-    with connect_sqlite(db_path) as conn:
-        conn.execute(
-            """
-            INSERT INTO event_analyses (
-                event_id, task, model, importance, classification, direction,
-                impact_duration, should_push, analysis_json, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                event_id,
-                task,
-                model,
-                importance,
-                classification,
-                direction,
-                impact_duration,
-                should_push,
-                json_dumps(parsed),
-                utc_now(),
-            ),
-        )
-        conn.commit()
     return parsed
 
 
@@ -541,29 +387,16 @@ def compact_event_analysis_lines(parsed: dict[str, Any]) -> list[str]:
 
 def maybe_deliver_event(event_id: int, analysis: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> str:
     """Deliver when Feishu is configured; otherwise record a skipped delivery."""
-    with connect_sqlite(db_path) as conn:
-        row = conn.execute(
-            "SELECT source, event_type, title, summary, full_text, url, published_at, symbols_json, raw_json FROM events WHERE id = ?",
-            (event_id,),
-        ).fetchone()
-    if not row:
+    event_row = event_row_by_id(event_id, db_path)
+    if not event_row:
         raise RuntimeError(f"事件不存在：{event_id}")
-    source, event_type, title, summary, full_text, url, published_at, symbols_json, raw_json = row
-    analysis = apply_event_rules_to_analysis(
-        {
-            "source": source,
-            "event_type": event_type,
-            "title": title,
-            "summary": summary,
-            "full_text": full_text,
-            "url": url,
-            "published_at": published_at,
-            "symbols_json": symbols_json,
-            "raw_json": raw_json,
-        },
-        analysis,
-        db_path=db_path,
-    )
+    source = str(event_row["source"] or "")
+    title = str(event_row["title"] or "")
+    summary = str(event_row["summary"] or "")
+    full_text = str(event_row["full_text"] or "")
+    url = str(event_row["url"] or "")
+    published_at = str(event_row["published_at"] or "")
+    analysis = apply_event_rules_to_analysis(event_row, analysis, db_path=db_path)
     if not should_push_analysis(analysis):
         record_delivery(event_id, "feishu", "skipped", {"reason": "未命中强推规则，不即时推送"}, db_path=db_path)
         return "skipped"
@@ -655,15 +488,7 @@ def record_delivery(
     error: str = "",
     db_path: Path = DEFAULT_DB_PATH,
 ) -> None:
-    with connect_sqlite(db_path) as conn:
-        conn.execute(
-            """
-            INSERT INTO deliveries (event_id, channel, status, sent_at, error, payload_json)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (event_id, channel, status, utc_now() if status == "sent" else "", error, json_dumps(payload)),
-        )
-        conn.commit()
+    record_event_delivery(event_id, channel, status, payload, error=error, db_path=db_path)
 
 
 def simple_event_card(
