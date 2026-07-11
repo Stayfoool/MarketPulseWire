@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import hashlib
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
+from db_utils import connect_sqlite
 from decision_engine import ensure_article_decision_audit, ensure_official_decision_audit
+from market_db import DEFAULT_DB_PATH, init_db
 from market_item import NormalizedMarketItem
 
 
@@ -19,6 +23,253 @@ def json_loads_dict(value: str | None) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def json_dumps(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def event_content_hash(*parts: str) -> str:
+    joined = "\n".join(part.strip() for part in parts if part and part.strip())
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def load_enabled_holdings(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+    init_db(db_path).close()
+    with connect_sqlite(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT symbol, name, full_name, aliases_json, raw_json
+            FROM portfolio_holdings
+            WHERE enabled = 1
+            ORDER BY symbol
+            """
+        ).fetchall()
+    holdings = []
+    for symbol, name, full_name, aliases_json, raw_json in rows:
+        try:
+            aliases = json.loads(aliases_json or "[]")
+        except json.JSONDecodeError:
+            aliases = []
+        try:
+            raw = json.loads(raw_json or "{}")
+        except json.JSONDecodeError:
+            raw = {}
+        holdings.append(
+            {
+                "symbol": symbol,
+                "name": name,
+                "full_name": full_name or "",
+                "aliases": aliases,
+                "news_keywords": raw.get("news_keywords") if isinstance(raw.get("news_keywords"), list) else [],
+                "news_exclude_keywords": raw.get("news_exclude_keywords")
+                if isinstance(raw.get("news_exclude_keywords"), list)
+                else [],
+                "business_summary": str(raw.get("business_summary") or ""),
+                "raw": raw,
+            }
+        )
+    return holdings
+
+
+def upsert_event_record(event: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> tuple[int, bool]:
+    init_db(db_path).close()
+    now = utc_now()
+    source = str(event["source"])
+    source_event_id = str(event["source_event_id"])
+    title = str(event.get("title") or "").strip()
+    summary = str(event.get("summary") or "").strip()
+    full_text = str(event.get("full_text") or "").strip()
+    digest = event.get("content_hash") or event_content_hash(source, source_event_id, title, summary, full_text)
+    payload = (
+        source,
+        source_event_id,
+        str(event.get("event_type") or "unknown"),
+        title,
+        summary,
+        full_text,
+        str(event.get("url") or ""),
+        str(event.get("published_at") or ""),
+        now,
+        json_dumps(event.get("symbols") or []),
+        json_dumps(event.get("themes") or []),
+        json_dumps(event.get("raw") or {}),
+        digest,
+        1 if event.get("baseline_only") else 0,
+    )
+    with connect_sqlite(db_path) as conn:
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO events (
+                    source, source_event_id, event_type, title, summary, full_text, url,
+                    published_at, first_seen_at, symbols_json, themes_json, raw_json,
+                    content_hash, baseline_only
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                payload,
+            )
+            conn.commit()
+            return int(cur.lastrowid), True
+        except sqlite3.IntegrityError:
+            row = conn.execute(
+                "SELECT id, full_text FROM events WHERE source = ? AND source_event_id = ?",
+                (source, source_event_id),
+            ).fetchone()
+            if not row:
+                raise
+            event_id = int(row[0])
+            existing_full_text = str(row[1] or "")
+            if full_text and len(full_text) > len(existing_full_text):
+                conn.execute(
+                    """
+                    UPDATE events
+                    SET summary = ?, full_text = ?, raw_json = ?, content_hash = ?
+                    WHERE id = ?
+                    """,
+                    (summary, full_text, json_dumps(event.get("raw") or {}), digest, event_id),
+                )
+                conn.commit()
+            return event_id, False
+
+
+def event_row_by_id(event_id: int, db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any] | None:
+    with connect_sqlite(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT source, event_type, title, summary, full_text, url, published_at, symbols_json, raw_json
+            FROM events
+            WHERE id = ?
+            """,
+            (event_id,),
+        ).fetchone()
+    if not row:
+        return None
+    source, event_type, title, summary, full_text, url, published_at, symbols_json, raw_json = row
+    return {
+        "source": source,
+        "event_type": event_type,
+        "title": title,
+        "summary": summary,
+        "full_text": full_text,
+        "url": url,
+        "published_at": published_at,
+        "symbols_json": symbols_json,
+        "raw_json": raw_json,
+    }
+
+
+def latest_event_analysis(event_id: int, task: str, db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any] | None:
+    with connect_sqlite(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT id, analysis_json
+            FROM event_analyses
+            WHERE event_id = ? AND task = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (event_id, task),
+        ).fetchone()
+    if not row:
+        return None
+    parsed = json.loads(row[1])
+    return {"id": int(row[0]), "analysis": parsed if isinstance(parsed, dict) else {}}
+
+
+def update_event_analysis(
+    analysis_id: int,
+    *,
+    importance: str,
+    classification: str,
+    direction: str,
+    impact_duration: str,
+    should_push: int,
+    analysis: dict[str, Any],
+    db_path: Path = DEFAULT_DB_PATH,
+) -> None:
+    with connect_sqlite(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE event_analyses
+            SET importance = ?, classification = ?, direction = ?, impact_duration = ?,
+                should_push = ?, analysis_json = ?
+            WHERE id = ?
+            """,
+            (
+                importance,
+                classification,
+                direction,
+                impact_duration,
+                should_push,
+                json_dumps(analysis),
+                analysis_id,
+            ),
+        )
+        conn.commit()
+
+
+def insert_event_analysis(
+    event_id: int,
+    task: str,
+    model: str,
+    *,
+    importance: str,
+    classification: str,
+    direction: str,
+    impact_duration: str,
+    should_push: int,
+    analysis: dict[str, Any],
+    db_path: Path = DEFAULT_DB_PATH,
+) -> None:
+    with connect_sqlite(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO event_analyses (
+                event_id, task, model, importance, classification, direction,
+                impact_duration, should_push, analysis_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                task,
+                model,
+                importance,
+                classification,
+                direction,
+                impact_duration,
+                should_push,
+                json_dumps(analysis),
+                utc_now(),
+            ),
+        )
+        conn.commit()
+
+
+def record_event_delivery(
+    event_id: int,
+    channel: str,
+    status: str,
+    payload: dict[str, Any],
+    *,
+    error: str = "",
+    db_path: Path = DEFAULT_DB_PATH,
+) -> None:
+    with connect_sqlite(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO deliveries (event_id, channel, status, sent_at, error, payload_json)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (event_id, channel, status, utc_now() if status == "sent" else "", error, json_dumps(payload)),
+        )
+        conn.commit()
 
 
 def article_item_id(item: dict[str, Any]) -> str:
