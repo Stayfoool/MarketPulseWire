@@ -129,6 +129,48 @@ def test_shadow_collect_rss_does_not_write_prod_seen_or_reviews() -> None:
     assert review_count == 0
 
 
+def test_shadow_collect_rss_can_attach_direct_decision() -> None:
+    original_fetch_feed = official_collector.fetch_feed
+
+    def fake_fetch_feed(source: str, url: str, state: dict | None = None):
+        return (
+            [
+                {
+                    "id": "official-ai-platform",
+                    "url": "https://example.com/official-ai-platform",
+                    "title": "NVIDIA announces rack-scale AI platform with liquid cooling",
+                    "summary": "NVIDIA details GPU, rack-scale systems, and liquid cooling for AI factories.",
+                    "published_at": "2026-07-08T00:00:00+00:00",
+                }
+            ],
+            {},
+            False,
+        )
+
+    try:
+        official_collector.fetch_feed = fake_fetch_feed
+        payload = official_collector.collect_shadow(
+            feeds={"nvidia_blog": "https://example.com/feed.xml"},
+            limit=5,
+            compare_seen=False,
+            compare_reviews=False,
+            save_shadow_state=False,
+            direct_shadow=True,
+            direct_shadow_holdings=[],
+        )
+    finally:
+        official_collector.fetch_feed = original_fetch_feed
+
+    candidate = payload["rss"][0]["candidates"][0]
+    decision = candidate["direct_shadow"]["decision"]
+    assert payload["ran_direct_decision_shadow"] is True
+    assert payload["counts"]["direct_shadow_candidates"] == 1
+    assert payload["counts"]["direct_shadow_push_candidates"] == 1
+    assert decision["action"] == "push"
+    assert decision["rule_hit_ids"] == ["official_company_hard_variable"]
+    assert candidate["direct_shadow"]["normalized_item"]["content_type"] == "official_news"
+
+
 def test_json_report_shape() -> None:
     payload = official_collector.collect_shadow(feeds={}, compare_seen=False, compare_reviews=False)
     assert payload["ok"] is True
@@ -175,6 +217,7 @@ def main() -> int:
     test_official_sources_include_expected_company_feeds()
     test_disabled_source_is_filtered()
     test_shadow_collect_rss_does_not_write_prod_seen_or_reviews()
+    test_shadow_collect_rss_can_attach_direct_decision()
     test_json_report_shape()
     test_production_collect_delegates_to_existing_rss_pipeline()
     print("official collector checks passed")

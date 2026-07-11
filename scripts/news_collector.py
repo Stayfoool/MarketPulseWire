@@ -24,6 +24,7 @@ from typing import Any, Iterable
 import china_finance_media_monitor as china_media
 from article_gate import article_item_id
 from china_media_sources import CHINA_MEDIA_FEEDS, CHINA_MEDIA_LABELS
+from collector_direct_shadow import attach_direct_decision_shadow, direct_shadow_counts, safe_load_shadow_holdings
 from collector_runtime import filter_enabled_mapping_for_run
 from rss_monitor import DB_PATH, strip_tags
 from source_profiles import SOURCE_PROFILE_CONFIG_PATH, runtime_profile_map
@@ -130,11 +131,14 @@ def candidate_from_item(
     item: dict[str, Any],
     seen_ids: set[tuple[str, str]],
     reviewed_ids: set[tuple[str, str]],
+    *,
+    direct_shadow: bool = False,
+    direct_shadow_holdings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     item_id = article_item_id(item)
     would_focus = china_media.should_focus_item(dict(item, full_text=item.get("content") or item.get("summary") or ""))
     mandatory_push = china_media.is_mandatory_yicai_morning_brief(source, item)
-    return {
+    candidate = {
         "source": source,
         "id": item_id,
         "already_seen": (source, item_id) in seen_ids,
@@ -149,6 +153,17 @@ def candidate_from_item(
         "body_source": str(item.get("body_source") or ""),
         "pipeline": "news_media shadow -> decision layer / thin interpretation planned",
     }
+    if not direct_shadow:
+        return candidate
+    return attach_direct_decision_shadow(
+        candidate,
+        source,
+        item,
+        source_category=NEWS_CATEGORY,
+        collector="news_collector",
+        content_type="article",
+        holdings=direct_shadow_holdings,
+    )
 
 
 def limited(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
@@ -171,10 +186,22 @@ def collect_source_shadow(
     seen_ids: set[tuple[str, str]],
     reviewed_ids: set[tuple[str, str]],
     respect_prod_cls_state: bool = False,
+    direct_shadow: bool = False,
+    direct_shadow_holdings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     try:
         raw_items = fetch_source_items(source, respect_prod_cls_state=respect_prod_cls_state)
-        candidates = [candidate_from_item(source, item, seen_ids, reviewed_ids) for item in raw_items]
+        candidates = [
+            candidate_from_item(
+                source,
+                item,
+                seen_ids,
+                reviewed_ids,
+                direct_shadow=direct_shadow,
+                direct_shadow_holdings=direct_shadow_holdings,
+            )
+            for item in raw_items
+        ]
         return {
             "source": source,
             "url": url,
@@ -209,11 +236,16 @@ def collect_shadow(
     compare_seen: bool = True,
     compare_reviews: bool = True,
     respect_prod_cls_state: bool = False,
+    direct_shadow: bool = False,
+    direct_shadow_holdings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     started_at = utc_now()
     source_ids = list(sources)
     seen_ids = load_seen_item_ids(source_ids) if compare_seen else set()
     reviewed_ids = load_reviewed_item_ids(source_ids) if compare_reviews else set()
+    holdings_error = ""
+    if direct_shadow and direct_shadow_holdings is None:
+        direct_shadow_holdings, holdings_error = safe_load_shadow_holdings(DB_PATH)
     max_workers = max(1, int(os.getenv("NEWS_COLLECTOR_MAX_WORKERS", os.getenv("CHINA_MEDIA_FETCH_MAX_WORKERS", "3")) or "3"))
     rows_by_source: dict[str, dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=min(max_workers, max(1, len(sources)))) as executor:
@@ -226,6 +258,8 @@ def collect_shadow(
                 seen_ids=seen_ids,
                 reviewed_ids=reviewed_ids,
                 respect_prod_cls_state=respect_prod_cls_state,
+                direct_shadow=direct_shadow,
+                direct_shadow_holdings=direct_shadow_holdings,
             ): source
             for source, url in sources.items()
         }
@@ -235,37 +269,42 @@ def collect_shadow(
 
     rows = [rows_by_source[source] for source in sources if source in rows_by_source]
     errors = [row for row in rows if not row.get("ok")]
+    counts = {
+        "sources": len(rows),
+        "failed_sources": len(errors),
+        "raw_items": sum(int(row.get("raw_count") or 0) for row in rows),
+        "candidates": sum(int(row.get("candidate_count") or 0) for row in rows),
+        "focus_candidates": sum(int(row.get("focus_count") or 0) for row in rows),
+        "mandatory_candidates": sum(int(row.get("mandatory_count") or 0) for row in rows),
+        "already_seen_candidates": sum(
+            1
+            for row in rows
+            for item in row.get("candidates", [])
+            if item.get("already_seen")
+        ),
+        "already_reviewed_candidates": sum(
+            1
+            for row in rows
+            for item in row.get("candidates", [])
+            if item.get("already_reviewed")
+        ),
+    }
+    if direct_shadow:
+        counts.update(direct_shadow_counts(rows))
     return {
         "ok": not errors,
         "mode": "shadow_dry_run",
         "sent_feishu": False,
         "ran_llm_review": False,
+        "ran_direct_decision_shadow": direct_shadow,
         "wrote_production_seen_items": False,
         "wrote_production_reviews": False,
         "touched_production_source_state": False,
         "respect_prod_cls_state": respect_prod_cls_state,
+        "direct_shadow_holdings_error": holdings_error,
         "started_at": started_at,
         "finished_at": utc_now(),
-        "counts": {
-            "sources": len(rows),
-            "failed_sources": len(errors),
-            "raw_items": sum(int(row.get("raw_count") or 0) for row in rows),
-            "candidates": sum(int(row.get("candidate_count") or 0) for row in rows),
-            "focus_candidates": sum(int(row.get("focus_count") or 0) for row in rows),
-            "mandatory_candidates": sum(int(row.get("mandatory_count") or 0) for row in rows),
-            "already_seen_candidates": sum(
-                1
-                for row in rows
-                for item in row.get("candidates", [])
-                if item.get("already_seen")
-            ),
-            "already_reviewed_candidates": sum(
-                1
-                for row in rows
-                for item in row.get("candidates", [])
-                if item.get("already_reviewed")
-            ),
-        },
+        "counts": counts,
         "sources": rows,
         "errors": errors,
     }
@@ -331,6 +370,11 @@ def print_text_summary(payload: dict[str, Any]) -> None:
         f"raw_items={counts.get('raw_items', 0)} "
         f"candidates={counts.get('candidates', 0)} "
         f"focus={counts.get('focus_candidates', 0)}"
+        + (
+            f" direct_push={counts.get('direct_shadow_push_candidates', 0)}"
+            if payload.get("ran_direct_decision_shadow")
+            else ""
+        )
     )
     for row in payload.get("sources", []):
         status = "OK" if row.get("ok") else "ERR"
@@ -345,7 +389,10 @@ def print_text_summary(payload: dict[str, Any]) -> None:
             seen = "seen" if item.get("already_seen") else "new?"
             reviewed = "reviewed" if item.get("already_reviewed") else "unreviewed"
             focus = "focus" if item.get("would_focus") else "non-focus"
-            print(f"  - ({seen}, {reviewed}, {focus}) {item.get('title')}")
+            direct = item.get("direct_shadow") if isinstance(item.get("direct_shadow"), dict) else {}
+            decision = direct.get("decision") if isinstance(direct.get("decision"), dict) else {}
+            action = f", direct={decision.get('action')}" if decision else ""
+            print(f"  - ({seen}, {reviewed}, {focus}{action}) {item.get('title')}")
 
 
 def main() -> int:
@@ -364,6 +411,7 @@ def main() -> int:
         action="store_true",
         help="让财联社 shadow 抓取尊重生产 CLS_MIN_POLL_SECONDS；默认不读写生产轮询状态。",
     )
+    parser.add_argument("--direct-shadow", action="store_true", help="在 shadow 报告中附加统一 decision_engine 直连决策结果；不写库、不发飞书。")
     parser.add_argument("--strict-exit", action="store_true", help="任一 source 失败时返回非 0；默认只在报告中记录错误。")
     args = parser.parse_args()
 
@@ -380,6 +428,7 @@ def main() -> int:
             compare_seen=not args.no_compare_seen,
             compare_reviews=not args.no_compare_reviews,
             respect_prod_cls_state=args.respect_prod_cls_state,
+            direct_shadow=args.direct_shadow,
         )
     if args.write_report:
         payload["report_path"] = str(write_report(payload))

@@ -9,6 +9,6 @@ User=surveil
 WorkingDirectory=/opt/surveil
 EnvironmentFile=-/opt/surveil/.env
 EnvironmentFile=-/opt/surveil/proxy.env
-ExecStart=/opt/surveil/.venv/bin/python /opt/surveil/scripts/news_collector.py --write-report --limit 5
+ExecStart=/opt/surveil/.venv/bin/python /opt/surveil/scripts/news_collector.py --write-report --limit 5 --direct-shadow
 StandardOutput=append:/opt/surveil/logs/news-collector-shadow.log
 StandardError=append:/opt/surveil/logs/news-collector-shadow.err.log

@@ -88,6 +88,8 @@ def sample_candidates(rows: list[dict[str, Any]], limit: int) -> list[dict[str, 
                 continue
             if item.get("already_seen") or item.get("already_reviewed"):
                 continue
+            direct = item.get("direct_shadow") if isinstance(item.get("direct_shadow"), dict) else {}
+            decision = direct.get("decision") if isinstance(direct.get("decision"), dict) else {}
             samples.append(
                 {
                     "source": source,
@@ -96,6 +98,9 @@ def sample_candidates(rows: list[dict[str, Any]], limit: int) -> list[dict[str, 
                     "published_at": str(item.get("published_at") or ""),
                     "would_focus": bool(item.get("would_focus")),
                     "mandatory_push": str(item.get("mandatory_push") or ""),
+                    "direct_action": str(decision.get("action") or ""),
+                    "direct_importance": str(decision.get("importance") or ""),
+                    "direct_rule_ids": list(decision.get("rule_hit_ids") or []),
                 }
             )
             if len(samples) >= limit:
@@ -220,10 +225,17 @@ def markdown_digest(payload: dict[str, Any]) -> str:
                 source = sample.get("source")
                 url = sample.get("url")
                 focus = " focus" if sample.get("would_focus") else ""
+                direct_action = str(sample.get("direct_action") or "")
+                direct_rules = sample.get("direct_rule_ids") if isinstance(sample.get("direct_rule_ids"), list) else []
+                direct = ""
+                if direct_action:
+                    direct = f" direct={direct_action}"
+                    if direct_rules:
+                        direct += f" rules={','.join(str(rule) for rule in direct_rules[:3])}"
                 if url:
-                    lines.append(f"- [{source}]{focus} [{title}]({url})")
+                    lines.append(f"- [{source}]{focus}{direct} [{title}]({url})")
                 else:
-                    lines.append(f"- [{source}]{focus} {title}")
+                    lines.append(f"- [{source}]{focus}{direct} {title}")
             lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

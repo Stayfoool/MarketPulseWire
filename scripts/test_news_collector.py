@@ -133,6 +133,48 @@ def test_shadow_collect_does_not_write_prod_seen_reviews_or_source_state() -> No
     assert state_count == 0
 
 
+def test_shadow_collect_can_attach_direct_decision() -> None:
+    original_source_items = news_collector.china_media.source_items
+
+    def fake_source_items(source: str, *, persist_state: bool = True, force: bool = False):
+        return [
+            {
+                "id": "cls-ai-theme",
+                "url": "https://example.com/cls-ai-theme",
+                "title": "高盛发布《投资策略：做多中国 AI 价值链》",
+                "summary": (
+                    "高盛认为中国 AI 公司市值与市场空间严重错配，资金正从韩国 AI 交易出现结构性资本轮动，"
+                    "建议做多中国 AI 价值链，覆盖算力、半导体和数据中心电力。"
+                ),
+                "content": "",
+                "published_at": "2026-07-08T00:00:00+00:00",
+                "source_module": source,
+            }
+        ]
+
+    try:
+        news_collector.china_media.source_items = fake_source_items
+        payload = news_collector.collect_shadow(
+            sources={"cls_telegraph_api": "https://example.com/cls"},
+            limit=5,
+            compare_seen=False,
+            compare_reviews=False,
+            direct_shadow=True,
+            direct_shadow_holdings=[],
+        )
+    finally:
+        news_collector.china_media.source_items = original_source_items
+
+    candidate = payload["sources"][0]["candidates"][0]
+    decision = candidate["direct_shadow"]["decision"]
+    assert payload["ran_direct_decision_shadow"] is True
+    assert payload["counts"]["direct_shadow_candidates"] == 1
+    assert payload["counts"]["direct_shadow_push_candidates"] == 1
+    assert decision["action"] == "push"
+    assert decision["rule_hit_ids"] == ["international_bank_theme_strategy"]
+    assert candidate["direct_shadow"]["normalized_item"]["source_category"] == "news_media"
+
+
 def test_respect_prod_cls_state_passes_force_false() -> None:
     calls: list[dict] = []
     original_source_items = news_collector.china_media.source_items
@@ -206,6 +248,7 @@ def main() -> int:
     test_news_sources_include_expected_batch_and_exclude_sina_flash()
     test_disabled_source_is_filtered()
     test_shadow_collect_does_not_write_prod_seen_reviews_or_source_state()
+    test_shadow_collect_can_attach_direct_decision()
     test_respect_prod_cls_state_passes_force_false()
     test_json_report_shape()
     test_production_collect_delegates_to_existing_china_media_pipeline()

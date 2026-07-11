@@ -107,8 +107,9 @@ The installer also enables shadow collector timers:
 - `surveil-collector-shadow-digest.timer`
 
 These shadow jobs are migration aids. They write JSON/Markdown reports under
-`reports/` and logs under `logs/`; they do not send Feishu messages, do not run
-LLM gates, and do not write production `seen_items` or review tables.
+`reports/` and logs under `logs/`; they can run report-only `decision_engine`
+direct-shadow checks, but they do not send Feishu messages, do not run LLM
+gates, and do not write production `seen_items` or review tables.
 
 The installer also copies the production collector units:
 

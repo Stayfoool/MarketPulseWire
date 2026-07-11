@@ -115,6 +115,48 @@ def test_shadow_collect_rss_does_not_write_prod_seen_items() -> None:
     assert count == 0
 
 
+def test_shadow_collect_rss_can_attach_direct_decision() -> None:
+    original_fetch_feed = research_collector.fetch_feed
+
+    def fake_fetch_feed(source: str, url: str, state: dict | None = None):
+        return (
+            [
+                {
+                    "id": "semi-1",
+                    "url": "https://example.com/semi-1",
+                    "title": "SemiAnalysis weekly AI infrastructure report",
+                    "summary": "Research note on AI accelerator supply chains.",
+                    "published_at": "2026-07-08T00:00:00+00:00",
+                }
+            ],
+            {},
+            False,
+        )
+
+    try:
+        research_collector.fetch_feed = fake_fetch_feed
+        payload = research_collector.collect_shadow(
+            feeds={"semianalysis": "https://example.com/feed.xml"},
+            page_sources=[],
+            limit=5,
+            compare_seen=False,
+            save_shadow_state=False,
+            direct_shadow=True,
+            direct_shadow_holdings=[],
+        )
+    finally:
+        research_collector.fetch_feed = original_fetch_feed
+
+    candidate = payload["rss"][0]["candidates"][0]
+    decision = candidate["direct_shadow"]["decision"]
+    assert payload["ran_direct_decision_shadow"] is True
+    assert payload["counts"]["direct_shadow_candidates"] == 1
+    assert payload["counts"]["direct_shadow_push_candidates"] == 1
+    assert decision["action"] == "push"
+    assert decision["rule_hit_ids"][0] in {"event_first_hardline", "source_priority_semianalysis"}
+    assert candidate["direct_shadow"]["normalized_item"]["source_category"] == "research_industry_media"
+
+
 def test_json_report_shape() -> None:
     payload = research_collector.collect_shadow(feeds={}, page_sources=[], compare_seen=False)
     assert payload["ok"] is True
@@ -195,6 +237,7 @@ def main() -> int:
     test_research_sources_include_expected_groups()
     test_disabled_source_is_filtered()
     test_shadow_collect_rss_does_not_write_prod_seen_items()
+    test_shadow_collect_rss_can_attach_direct_decision()
     test_json_report_shape()
     test_production_collect_delegates_to_existing_pipelines()
     print("research collector checks passed")

@@ -36,6 +36,14 @@ def test_shadow_digest_aggregates_reports_by_family_and_source() -> None:
                                 "url": "https://example.com/ai-rack",
                                 "already_seen": False,
                                 "already_reviewed": False,
+                                "direct_shadow": {
+                                    "ok": True,
+                                    "decision": {
+                                        "action": "push",
+                                        "importance": "high",
+                                        "rule_hit_ids": ["source_priority_semianalysis"],
+                                    },
+                                },
                             }
                         ],
                     }
@@ -76,6 +84,8 @@ def test_shadow_digest_aggregates_reports_by_family_and_source() -> None:
         assert research["sources"][0]["source"] == "semianalysis"
         assert research["sources"][0]["raw_items"] == 2
         assert research["sources"][0]["sample_new_candidates"] == 1
+        assert research["sample_new_candidates"][0]["direct_action"] == "push"
+        assert research["sample_new_candidates"][0]["direct_rule_ids"] == ["source_priority_semianalysis"]
         news = payload["families"]["news"]
         assert news["failed_reports"] == 1
         assert news["sources"][0]["last_error"] == "HTTP 503"
@@ -84,6 +94,8 @@ def test_shadow_digest_aggregates_reports_by_family_and_source() -> None:
         markdown = markdown_digest(payload)
         assert "Research / Industry Media" in markdown
         assert "semianalysis" in markdown
+        assert "direct=push" in markdown
+        assert "source_priority_semianalysis" in markdown
         assert "HTTP 503" in markdown
 
         output = write_digest(payload, report_dir)
