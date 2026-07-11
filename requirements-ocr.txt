@@ -1,5 +1,8 @@
 # Optional local OCR dependencies for ValueList first-page preview extraction.
 # Source: official PyPI packages from the PaddlePaddle/PaddleOCR maintainers.
 # Install on the production host only when VALUE_DIRECTORY_PREVIEW_OCR_ENABLED=1.
-paddlepaddle>=2.6.0
-paddleocr>=2.7.0
+# Keep this verified CPU combination pinned. PaddleOCR/PaddlePaddle 3.x currently
+# fails on the production CPU executor, and PaddleOCR 2.x requires NumPy 1.x.
+paddlepaddle==2.6.2
+paddleocr==2.7.3
+numpy==1.26.4

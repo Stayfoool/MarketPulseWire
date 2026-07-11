@@ -15,6 +15,7 @@ import value_directory_monitor
 from source_profiles import runtime_source_profile
 from value_directory_browser import classify_page_state, dedupe_entries, normalize_entry, source_config
 from value_directory_preview import (
+    apply_preview_llm_response_preferences,
     apply_preview_to_item,
     extract_preview_facts,
     fallback_facts,
@@ -207,6 +208,38 @@ def test_paddleocr_instance_retries_unknown_argument_errors() -> None:
     assert isinstance(engine, FakePaddleOCR)
     assert calls[0]["show_log"] is False
     assert calls[1]["use_textline_orientation"] is True
+
+
+def test_preview_llm_policy_disables_deepseek_thinking() -> None:
+    original_thinking = os.environ.get("LLM_THINKING_TYPE")
+    original_allow = os.environ.get("LLM_ALLOW_DEEPSEEK_THINKING")
+    original_json = os.environ.get("LLM_RESPONSE_FORMAT_JSON")
+    try:
+        os.environ["LLM_THINKING_TYPE"] = "enabled"
+        os.environ.pop("LLM_ALLOW_DEEPSEEK_THINKING", None)
+        os.environ.pop("LLM_RESPONSE_FORMAT_JSON", None)
+        payload: dict[str, object] = {}
+        apply_preview_llm_response_preferences(
+            payload,
+            base_url="https://api.deepseek.com",
+            model="deepseek-v4-pro",
+        )
+    finally:
+        if original_thinking is None:
+            os.environ.pop("LLM_THINKING_TYPE", None)
+        else:
+            os.environ["LLM_THINKING_TYPE"] = original_thinking
+        if original_allow is None:
+            os.environ.pop("LLM_ALLOW_DEEPSEEK_THINKING", None)
+        else:
+            os.environ["LLM_ALLOW_DEEPSEEK_THINKING"] = original_allow
+        if original_json is None:
+            os.environ.pop("LLM_RESPONSE_FORMAT_JSON", None)
+        else:
+            os.environ["LLM_RESPONSE_FORMAT_JSON"] = original_json
+
+    assert payload["thinking"] == {"type": "disabled"}
+    assert payload["response_format"] == {"type": "json_object"}
 
 
 def test_preview_ocr_text_path_uses_text_llm_without_vision() -> None:
@@ -434,6 +467,7 @@ def main() -> int:
     test_preview_failure_is_recorded_without_fake_summary()
     test_paddleocr_result_flatten_supports_common_shapes()
     test_paddleocr_instance_retries_unknown_argument_errors()
+    test_preview_llm_policy_disables_deepseek_thinking()
     test_preview_ocr_text_path_uses_text_llm_without_vision()
     test_preview_ocr_failure_falls_back_without_blocking()
     test_recheck_keeps_existing_review_without_new_rule()

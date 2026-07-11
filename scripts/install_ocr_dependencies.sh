@@ -10,7 +10,22 @@ if [ ! -x "$PYTHON_BIN" ]; then
   exit 1
 fi
 
-echo "Installing optional OCR dependencies from official PyPI packages..."
-"$PYTHON_BIN" -m pip install -r "$ROOT_DIR/requirements-ocr.txt"
+echo "Installing version-pinned optional OCR dependencies..."
+"$PYTHON_BIN" -m pip install --upgrade -r "$ROOT_DIR/requirements-ocr.txt"
+
+"$PYTHON_BIN" - <<'PY'
+import cv2
+import numpy
+import paddle
+import paddleocr
+
+print(
+    "OCR runtime:",
+    f"paddlepaddle={paddle.__version__}",
+    f"paddleocr={getattr(paddleocr, '__version__', 'unknown')}",
+    f"numpy={numpy.__version__}",
+    f"opencv={cv2.__version__}",
+)
+PY
 
 echo "OCR dependencies installed. First PaddleOCR run may download official OCR model files into the runtime cache."
