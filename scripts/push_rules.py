@@ -291,6 +291,22 @@ def holding_tokens(holding: dict[str, Any]) -> list[str]:
     return tokens
 
 
+def holding_news_keywords(holding: dict[str, Any], key: str) -> list[str]:
+    values = holding.get(key)
+    if not isinstance(values, list):
+        raw = holding.get("raw") if isinstance(holding.get("raw"), dict) else {}
+        values = raw.get(key) if isinstance(raw.get(key), list) else []
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        keyword = str(value or "").strip()
+        if not keyword or keyword.casefold() in seen:
+            continue
+        seen.add(keyword.casefold())
+        result.append(keyword)
+    return result
+
+
 def matched_holdings(text: str, holdings: list[dict[str, Any]], symbols: set[str] | None = None) -> list[dict[str, Any]]:
     lowered = text.lower()
     symbols = {symbol.upper() for symbol in symbols or set() if symbol}
@@ -311,6 +327,25 @@ def matched_holdings(text: str, holdings: list[dict[str, Any]], symbols: set[str
         seen.add(key)
         deduped.append(holding)
     return deduped
+
+
+def matched_holding_news_keywords(text: str, holdings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return configured holding-specific related keywords that match text.
+
+    These terms are deliberately separate from aliases: a peer or industry
+    keyword should trigger an alert for the holding without being represented
+    as a direct company mention.
+    """
+    matches: list[dict[str, Any]] = []
+    for holding in holdings:
+        excludes = holding_news_keywords(holding, "news_exclude_keywords")
+        if any(keyword_matches_text(keyword, text) for keyword in excludes):
+            continue
+        keywords = holding_news_keywords(holding, "news_keywords")
+        matched = [keyword for keyword in keywords if keyword_matches_text(keyword, text)]
+        if matched:
+            matches.append({"holding": holding, "keywords": matched})
+    return matches
 
 
 def load_enabled_holdings_for_rules(db_path: Path | None = None) -> list[dict[str, Any]]:
@@ -351,6 +386,10 @@ def load_enabled_holdings_for_rules(db_path: Path | None = None) -> list[dict[st
                 "name": name,
                 "full_name": full_name or "",
                 "aliases": aliases if isinstance(aliases, list) else [],
+                "news_keywords": raw.get("news_keywords") if isinstance(raw.get("news_keywords"), list) else [],
+                "news_exclude_keywords": (
+                    raw.get("news_exclude_keywords") if isinstance(raw.get("news_exclude_keywords"), list) else []
+                ),
                 "raw": raw if isinstance(raw, dict) else {},
             }
         )
@@ -658,6 +697,96 @@ def _holding_label(holding: dict[str, Any]) -> str:
     )
 
 
+def holding_keyword_immediate_alert_rule(
+    *,
+    source: str,
+    item: dict[str, Any],
+    holdings: list[dict[str, Any]],
+    symbols: set[str] | None = None,
+) -> dict[str, Any] | None:
+    """Push any monitored article/event tied to a holding or its attention terms."""
+    if not rule_enabled("holding_keyword_immediate_alert"):
+        return None
+    text = compact_text(
+        item.get("title"),
+        item.get("summary"),
+        item.get("content"),
+        item.get("full_text"),
+        item.get("source_module"),
+        item.get("source_display"),
+    )
+    if not text:
+        return None
+    direct_holdings = matched_holdings(text, holdings, symbols=symbols)
+    keyword_matches = matched_holding_news_keywords(text, holdings)
+    if not direct_holdings and not keyword_matches:
+        return None
+
+    related_targets: list[dict[str, Any]] = []
+    labels: list[str] = []
+    reason_parts: list[str] = []
+    seen_symbols: set[str] = set()
+    if direct_holdings:
+        direct_labels = [_holding_label(holding) for holding in direct_holdings]
+        direct_labels = [label for label in direct_labels if label]
+        if direct_labels:
+            reason_parts.append(f"直接持仓命中：{'、'.join(direct_labels[:5])}")
+        for holding in direct_holdings:
+            symbol = str(holding.get("symbol") or "").strip()
+            name = str(holding.get("name") or "").strip()
+            label = _holding_label(holding)
+            if label:
+                labels.append(label)
+            if symbol.upper() not in seen_symbols:
+                related_targets.append(
+                    {"name": name, "code": symbol, "relation": "直接持仓", "direction": "uncertain"}
+                )
+                seen_symbols.add(symbol.upper())
+
+    keyword_labels: list[str] = []
+    for match in keyword_matches:
+        holding = match["holding"]
+        symbol = str(holding.get("symbol") or "").strip()
+        name = str(holding.get("name") or "").strip()
+        keywords = [str(keyword).strip() for keyword in match.get("keywords") or [] if str(keyword).strip()]
+        if not keywords:
+            continue
+        label = _holding_label(holding)
+        if label:
+            labels.append(label)
+        keyword_labels.append(f"{'、'.join(keywords[:3])} -> {name or symbol}")
+        if symbol.upper() not in seen_symbols:
+            related_targets.append(
+                {
+                    "name": name,
+                    "code": symbol,
+                    "relation": f"关联关键词：{'、'.join(keywords[:3])}",
+                    "direction": "uncertain",
+                }
+            )
+            seen_symbols.add(symbol.upper())
+    if keyword_labels:
+        reason_parts.append(f"关联关键词命中：{'；'.join(keyword_labels[:5])}")
+
+    reason = (
+        "持仓/关联关键词即时提醒："
+        + "；".join(reason_parts)
+        + "。该规则读取当前运行环境的持仓配置，不由 LLM 决定是否推送。"
+    )
+    return {
+        "matched": True,
+        "rule_id": "holding_keyword_immediate_alert",
+        "importance": "high",
+        "push_now": True,
+        "should_push": True,
+        "reason": reason,
+        "brief_reason": reason,
+        "affected_targets": list(dict.fromkeys(labels))[:5],
+        "related_targets": related_targets[:5],
+        "source": source,
+    }
+
+
 def value_directory_portfolio_relation_rule(
     *,
     source: str,
@@ -904,6 +1033,7 @@ def first_matching_push_rule(
 ) -> dict[str, Any] | None:
     matchers = (
         ("investment_bank_rating_target_direct_holding", investment_bank_research_rule),
+        ("holding_keyword_immediate_alert", holding_keyword_immediate_alert_rule),
         ("investment_bank_portfolio_relation", value_directory_portfolio_relation_rule),
         ("international_bank_theme_strategy", international_bank_theme_strategy_rule),
         ("direct_holding_hard_variable", direct_holding_hard_variable_rule),

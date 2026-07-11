@@ -28,6 +28,11 @@ def test_rule_registry_payload_has_all_current_hard_rules() -> None:
     assert any(field["key"] == "min_evidence_score" for field in theme["fields"])
     relation = next(item for item in payload["rules"] if item["id"] == "investment_bank_portfolio_relation")
     assert any(field["key"] == "max_relation_matches" for field in relation["fields"])
+    relation_enabled = next(field for field in relation["fields"] if field["key"] == "enabled")
+    assert relation_enabled["default"] is False
+    keyword_alert = next(item for item in payload["rules"] if item["id"] == "holding_keyword_immediate_alert")
+    assert keyword_alert["group"] == "持仓与公司"
+    assert any(field["key"] == "enabled" and field["default"] is True for field in keyword_alert["fields"])
 
 
 def test_private_config_normalizes_and_preserves_explicit_fields() -> None:

@@ -7,6 +7,7 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import holdings_web
 from holdings_web import RUN_ONCE_TARGETS, fetch_events_rows, html_page, unit_actions, unit_display_metadata
 from source_profiles import (
     filter_enabled_named_sources,
@@ -64,6 +65,19 @@ def test_rule_center_view_is_exposed() -> None:
     assert "showView('rules')" in html
     assert "/api/rule-center" in html
     assert "runRuleSimulation" in html
+
+
+def test_holdings_page_marks_environment_and_related_keywords() -> None:
+    html = html_page(token_required=False)
+    assert "环境：本地开发配置" in html
+    assert "关联新闻关键词" in html
+
+    original_root = holdings_web.ROOT
+    try:
+        holdings_web.ROOT = Path("/opt/surveil")
+        assert holdings_web.workbench_environment_label() == "服务器生产配置"
+    finally:
+        holdings_web.ROOT = original_root
 
 
 def test_event_center_search_filters_before_per_pipeline_limit() -> None:
@@ -390,6 +404,7 @@ def main() -> int:
     test_source_profile_view_is_exposed()
     test_investment_bank_theme_rule_configuration_is_exposed()
     test_rule_center_view_is_exposed()
+    test_holdings_page_marks_environment_and_related_keywords()
     test_event_center_source_filter_uses_grouped_dropdown()
     test_source_profiles_group_six_categories()
     test_source_profiles_aggregate_wildcard_health()

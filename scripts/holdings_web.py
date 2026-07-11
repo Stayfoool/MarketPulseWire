@@ -264,6 +264,14 @@ def env_flag(name: str, default: bool = False) -> bool:
     return raw.lower() in {"1", "true", "yes", "y", "on", "是"}
 
 
+def workbench_environment_label() -> str:
+    """Return an explicit label so private local and server portfolios are not confused."""
+    configured = os.getenv("HOLDINGS_WEB_ENV_LABEL", "").strip()
+    if configured:
+        return configured
+    return "服务器生产配置" if ROOT == Path("/opt/surveil") else "本地开发配置"
+
+
 def utc_window_for_day(day: str = "") -> tuple[str, str, str]:
     if day:
         start_local = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=BJ)
@@ -1101,6 +1109,7 @@ def health_payload() -> dict[str, Any]:
 
 def html_page(token_required: bool) -> str:
     token_hint = "需要访问令牌" if token_required else "未配置访问令牌，仅限 SSH 隧道使用"
+    environment_label = workbench_environment_label()
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -1123,6 +1132,7 @@ def html_page(token_required: bool) -> str:
     body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }}
     header {{ height: 56px; display: flex; align-items: center; gap: 16px; padding: 0 20px; background: #102a43; color: white; }}
     header h1 {{ font-size: 18px; margin: 0; font-weight: 650; }}
+    .environment-label {{ color: #d9f5ec; border-color: #6cc9b2; background: rgba(15, 118, 110, .35); }}
     nav.tabs {{ display: flex; gap: 8px; padding: 10px 20px 0; background: var(--bg); }}
     nav.tabs button {{ background: transparent; border-color: transparent; border-radius: 6px 6px 0 0; }}
     nav.tabs button.active {{ background: white; border-color: var(--line); border-bottom-color: white; color: var(--accent); }}
@@ -1206,6 +1216,7 @@ def html_page(token_required: bool) -> str:
 <body>
   <header>
     <h1>Surveil 工作台</h1>
+    <span class="badge environment-label">环境：{html.escape(environment_label)}</span>
     <span class="hint">{html.escape(token_hint)}</span>
   </header>
   <nav class="tabs">
@@ -1635,7 +1646,7 @@ def html_page(token_required: bool) -> str:
                 <th style="width:190px">全称</th>
                 <th>别名</th>
                 <th>业务简介</th>
-                <th>新闻关键词</th>
+                <th>关联新闻关键词</th>
                 <th>排除关键词</th>
                 <th style="width:86px">操作</th>
               </tr>
