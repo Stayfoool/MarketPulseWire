@@ -18,7 +18,13 @@ import urllib.request
 from typing import Any
 
 from env_utils import get_env
-from llm_analysis import chat_completions_url, llm_config, parse_json_object
+from llm_analysis import (
+    chat_completions_url,
+    json_response_format_enabled,
+    llm_config,
+    parse_json_object,
+    thinking_type,
+)
 
 
 SYSTEM_PROMPT = """你是投资研报第一页预览的信息抽取器。
@@ -369,6 +375,17 @@ def request_preview_llm(payload: dict[str, Any], *, base_url: str, api_key: str)
     return json.loads(body)
 
 
+def apply_preview_llm_response_preferences(payload: dict[str, Any], *, base_url: str, model: str) -> None:
+    """Mirror the shared LLM client's JSON/thinking policy for preview extraction."""
+    thinking = thinking_type(base_url, model).strip().lower()
+    if "deepseek" in base_url.lower() and thinking == "enabled" and os.getenv("LLM_ALLOW_DEEPSEEK_THINKING", "").strip() != "1":
+        thinking = "disabled"
+    if thinking in {"enabled", "disabled"}:
+        payload["thinking"] = {"type": thinking}
+    if json_response_format_enabled(base_url):
+        payload["response_format"] = {"type": "json_object"}
+
+
 def parse_preview_llm_result(result: dict[str, Any]) -> dict[str, Any]:
     choices = result.get("choices") or []
     if not choices:
@@ -376,6 +393,8 @@ def parse_preview_llm_result(result: dict[str, Any]) -> dict[str, Any]:
     message = choices[0].get("message") or {}
     raw = str(message.get("content") or message.get("output_text") or "").strip()
     if not raw:
+        if str(message.get("reasoning_content") or "").strip():
+            raise RuntimeError("LLM 未返回最终 content（仅返回 reasoning_content）；请检查模型 thinking 配置。")
         raise RuntimeError("LLM 响应为空")
     return parse_json_object(raw)
 
@@ -396,8 +415,8 @@ def call_preview_text_llm(item: dict[str, Any], preview: dict[str, Any], *, ocr_
         ],
         "temperature": 0.1,
         "max_tokens": int(os.getenv("VALUE_DIRECTORY_PREVIEW_MAX_OUTPUT_TOKENS", "700") or "700"),
-        "response_format": {"type": "json_object"},
     }
+    apply_preview_llm_response_preferences(payload, base_url=base_url, model=model)
     attempts = max(1, min(3, int(os.getenv("VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT", "1") or "1") + 1))
     last_error: Exception | None = None
     for attempt in range(attempts):
@@ -443,8 +462,8 @@ def call_preview_vision_llm(item: dict[str, Any], preview: dict[str, Any]) -> tu
         ],
         "temperature": 0.1,
         "max_tokens": int(os.getenv("VALUE_DIRECTORY_PREVIEW_MAX_OUTPUT_TOKENS", "700") or "700"),
-        "response_format": {"type": "json_object"},
     }
+    apply_preview_llm_response_preferences(payload, base_url=base_url, model=model)
     attempts = max(1, min(3, int(os.getenv("VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT", "1") or "1") + 1))
     last_error: Exception | None = None
     for attempt in range(attempts):

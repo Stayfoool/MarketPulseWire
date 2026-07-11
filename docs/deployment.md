@@ -239,7 +239,7 @@ Install the optional OCR packages on the runtime host after the normal Python vi
 ./scripts/install_ocr_dependencies.sh
 ```
 
-The script installs official PyPI packages listed in `requirements-ocr.txt`. If OCR is not installed, ValueList hard-rule pushes still work; the preview extraction section will record the OCR failure instead of blocking delivery.
+The script installs the version-pinned CPU-compatible packages listed in `requirements-ocr.txt` and prints the installed PaddlePaddle, PaddleOCR, NumPy, and OpenCV versions. It defaults to official PyPI; where official downloads are repeatedly slow or unavailable, set `PIP_INDEX_URL` to an approved mainstream mirror for the same package versions. If OCR is not installed, ValueList hard-rule pushes still work; the preview extraction section will record the OCR failure instead of blocking delivery.
 
 ## Optional Proxy
 
