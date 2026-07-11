@@ -1,5 +1,5 @@
 [Unit]
-Description=MarketPulseWire ValueList investment-bank stock research collector
+Description=MarketPulseWire ValueList investment-bank research collector
 After=network-online.target surveil-db-init.service
 Wants=network-online.target
 

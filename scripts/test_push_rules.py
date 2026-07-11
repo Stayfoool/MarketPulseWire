@@ -100,6 +100,28 @@ def test_value_directory_strategy_title_is_index_evidence() -> None:
     assert any(item["kind"] == "价值目录策略研报标题" for item in rule["evidence"])
 
 
+def test_value_directory_industry_macro_strategy_source() -> None:
+    item = {
+        "title": "瑞银-亚太科技策略板块要点：智能体AI将进一步带动半导体与硬件上行-APAC Tech Strategy Sector Keys：Agentic AI to carry Semis&Hardware further-20260701【198页】",
+        "summary": "第一页提取：瑞银认为智能体 AI 将继续推动半导体与硬件上行，覆盖半导体、硬件、数据中心等多环节。",
+        "published_at": "2026-07-11T00:00:00+00:00",
+        "raw": {
+            "value_directory_preview": {
+                "facts": {
+                    "status": "ok",
+                    "core_content": "瑞银认为智能体 AI 将继续推动半导体与硬件上行。",
+                    "key_points": ["多环节主题覆盖", "半导体与硬件"],
+                }
+            }
+        },
+    }
+    rule = first_matching_push_rule(source="value_directory_ib_industry_macro", item=item, holdings=[])
+    assert rule is not None
+    assert rule["should_push"] is True
+    assert rule["rule_id"] == "value_directory_industry_macro_research"
+    assert "AI/算力价值链" in rule["affected_targets"]
+
+
 def test_international_bank_multi_leg_strategy_rule() -> None:
     item = {
         "title": "摩根士丹利策略报告：超配 HBM、半导体设备与数据中心电力",
@@ -226,6 +248,7 @@ def main() -> int:
     test_international_bank_theme_strategy_rule()
     test_international_bank_theme_strategy_requires_action_and_evidence()
     test_value_directory_strategy_title_is_index_evidence()
+    test_value_directory_industry_macro_strategy_source()
     test_international_bank_multi_leg_strategy_rule()
     test_value_directory_peer_or_industry_relation_rule()
     test_holding_keyword_rule_pushes_direct_holding_without_hard_variable()

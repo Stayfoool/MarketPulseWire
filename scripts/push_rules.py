@@ -240,6 +240,7 @@ OFFICIAL_COMPANY_HARD_VARIABLE_KEYWORDS = (
 
 MACRO_TARGETS = ("美债收益率/美元", "A股风险偏好", "成长股估值")
 VALUE_DIRECTORY_SOURCE = "value_directory_ib_stocks"
+VALUE_DIRECTORY_SOURCES = {"value_directory_ib_stocks", "value_directory_ib_industry_macro"}
 
 
 def compact_text(*values: object) -> str:
@@ -493,7 +494,12 @@ def _report_reference(text: str) -> str:
 
 
 def _source_tier(source: str, item: dict[str, Any]) -> str:
-    if source == "value_directory_ib_stocks":
+    if source in VALUE_DIRECTORY_SOURCES:
+        raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+        preview = raw.get("value_directory_preview") if isinstance(raw.get("value_directory_preview"), dict) else {}
+        facts = preview.get("facts") if isinstance(preview.get("facts"), dict) else {}
+        if facts.get("status") == "ok":
+            return "价值目录研报索引（含可见第一页预览）"
         return "价值目录研报索引（仅标题元数据）"
     source_text = compact_text(source, item.get("source_module"), item.get("source_display"), item.get("url"))
     if any(token in source_text.casefold() for token in ("goldmansachs.com", "morganstanley.com", "jpmorgan.com", "citigroup.com")):
@@ -531,12 +537,20 @@ def _value_directory_strategy_title_evidence(source: str, item: dict[str, Any]) 
     rather than a generic opinion. It still has to pass the bank, action, and
     investment-universe checks in the caller.
     """
-    if source != "value_directory_ib_stocks":
+    if source not in VALUE_DIRECTORY_SOURCES:
         return []
     title = compact_text(item.get("title"))
     for marker in VALUE_DIRECTORY_STRATEGY_TITLE_MARKERS:
         if keyword_matches_text(marker, title):
             return [{"kind": "价值目录策略研报标题", "score": 2, "snippet": marker}]
+    raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+    preview = raw.get("value_directory_preview") if isinstance(raw.get("value_directory_preview"), dict) else {}
+    facts = preview.get("facts") if isinstance(preview.get("facts"), dict) else {}
+    if facts.get("status") == "ok" and any(
+        keyword_matches_text(marker, compact_text(facts.get("core_content"), " ".join(facts.get("key_points") or [])))
+        for marker in VALUE_DIRECTORY_STRATEGY_TITLE_MARKERS
+    ):
+        return [{"kind": "价值目录第一页策略证据", "score": 2, "snippet": "visible_first_page_only"}]
     return []
 
 
@@ -796,7 +810,7 @@ def value_directory_portfolio_relation_rule(
 ) -> dict[str, Any] | None:
     """Push ValueList bank-stock reports linked to a holding through one-hop maps."""
     del symbols
-    if source != VALUE_DIRECTORY_SOURCE or not rule_enabled("investment_bank_portfolio_relation"):
+    if source not in VALUE_DIRECTORY_SOURCES or not rule_enabled("investment_bank_portfolio_relation"):
         return None
     text = compact_text(
         item.get("title"),
@@ -881,6 +895,88 @@ def value_directory_portfolio_relation_rule(
         "related_targets": related_targets[:5],
         "banks": banks,
         "relation_matches": relation_matches,
+        "source": source,
+    }
+
+
+def value_directory_industry_macro_research_rule(
+    *,
+    source: str,
+    item: dict[str, Any],
+    holdings: list[dict[str, Any]],
+    symbols: set[str] | None = None,
+) -> dict[str, Any] | None:
+    """Push relevant ValueList international-bank industry/macro reports.
+
+    Unlike the major theme-strategy rule, this does not require an explicit
+    action word such as long/overweight. The source itself is a curated
+    investment-bank research index, so the guardrails are: ValueList industry
+    macro source, recognized bank, and the project's investment universe or
+    holding keywords.
+    """
+    del symbols
+    if source != "value_directory_ib_industry_macro" or not rule_enabled("value_directory_industry_macro_research"):
+        return None
+    text = compact_text(
+        item.get("title"),
+        item.get("summary"),
+        item.get("content"),
+        item.get("full_text"),
+        item.get("source_module"),
+        item.get("source_display"),
+    )
+    if not text:
+        return None
+    allowed_banks = {
+        item.casefold()
+        for item in effective_list("value_directory_industry_macro_research", "allowed_banks", ())
+    }
+    banks = matched_bank_names(text, allowed_banks=allowed_banks or None)
+    if not banks:
+        return None
+    universe = investment_universe_match(source, item)
+    keyword_matches = matched_holding_news_keywords(text, holdings)
+    if not universe.get("matched") and not keyword_matches:
+        return None
+    themes = _strategy_themes(
+        text,
+        list(effective_list("value_directory_industry_macro_research", "extra_theme_keywords", ())),
+    )
+    labels = list(dict.fromkeys([*themes, *(str(match.get("holding", {}).get("name") or "") for match in keyword_matches)]))
+    labels = [label for label in labels if label][:5]
+    if not labels:
+        labels = ["半导体/AI 基础设施"]
+    keyword_text = ""
+    if keyword_matches:
+        pairs = []
+        for match in keyword_matches[:3]:
+            holding = match.get("holding") or {}
+            keywords = "、".join(str(keyword) for keyword in match.get("keywords") or [] if str(keyword))[:80]
+            holding_name = str(holding.get("name") or holding.get("symbol") or "").strip()
+            if keywords and holding_name:
+                pairs.append(f"{keywords} -> {holding_name}")
+        if pairs:
+            keyword_text = f"；持仓关联关键词命中：{'；'.join(pairs)}"
+    reason = (
+        f"价值目录国际投行行业宏观规则：{banks[0]} 行业/宏观研报命中本项目投资宇宙"
+        f"（{universe.get('reason') or '价值目录行业宏观来源'}）{keyword_text}。"
+        "先发送标题与可见第一页提取，完整研报不下载。"
+    )
+    return {
+        "matched": True,
+        "rule_id": "value_directory_industry_macro_research",
+        "importance": "high",
+        "push_now": True,
+        "should_push": True,
+        "reason": reason,
+        "brief_reason": reason,
+        "affected_targets": labels,
+        "related_targets": [
+            {"name": label, "code": "", "relation": "国际投行行业/宏观研报", "direction": "uncertain"}
+            for label in labels
+        ],
+        "banks": banks,
+        "themes": themes,
         "source": source,
     }
 
@@ -1036,6 +1132,7 @@ def first_matching_push_rule(
         ("holding_keyword_immediate_alert", holding_keyword_immediate_alert_rule),
         ("investment_bank_portfolio_relation", value_directory_portfolio_relation_rule),
         ("international_bank_theme_strategy", international_bank_theme_strategy_rule),
+        ("value_directory_industry_macro_research", value_directory_industry_macro_research_rule),
         ("direct_holding_hard_variable", direct_holding_hard_variable_rule),
         ("official_company_hard_variable", official_company_hard_variable_rule),
         ("macro_policy_line", macro_policy_event_rule),

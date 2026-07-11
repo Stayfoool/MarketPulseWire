@@ -9,7 +9,8 @@ from tempfile import TemporaryDirectory
 
 import value_directory_monitor
 from source_profiles import runtime_source_profile
-from value_directory_browser import classify_page_state, dedupe_entries, normalize_entry
+from value_directory_browser import classify_page_state, dedupe_entries, normalize_entry, source_config
+from value_directory_preview import apply_preview_to_item, fallback_facts
 
 
 def test_normalize_entry_extracts_stable_id_and_utc_date() -> None:
@@ -25,6 +26,23 @@ def test_normalize_entry_extracts_stable_id_and_utc_date() -> None:
     assert item["published_at"] == "2026-07-09T16:00:00+00:00"
     assert item["source_module"] == "价值目录 / 国际投行-个股"
     assert item["full_text"].startswith("高盛-宁德时代")
+
+
+def test_normalize_entry_supports_industry_macro_source() -> None:
+    source = source_config("value_directory_ib_industry_macro")
+    item = normalize_entry(
+        {
+            "published": "2026-07-11",
+            "title": "瑞银-亚太科技策略：Agentic AI to carry Semis&Hardware further-20260701【198页】",
+            "url": "https://www.valuelist.cn/862079.html",
+        },
+        source,
+    )
+    assert item is not None
+    assert item["id"] == "862079"
+    assert item["source_module"] == "价值目录 / 国际投行-行业宏观"
+    assert item["categories"] == ["国际投行-行业宏观"]
+    assert item["raw"]["source"] == "value_directory_ib_industry_macro"
 
 
 def test_page_state_detection_separates_waf_login_and_empty() -> None:
@@ -114,6 +132,26 @@ def test_source_profile_registers_value_directory() -> None:
     assert profile["category"] == "research_industry_media"
     assert "surveil-value-directory.timer" in profile["service_units"]
     assert profile["skeptic_enabled"] is False
+    macro = runtime_source_profile("value_directory_ib_industry_macro")
+    assert macro is not None
+    assert macro["name"] == "价值目录 / 国际投行-行业宏观"
+    assert "第一页预览" in macro["fetch_range"]
+
+
+def test_preview_failure_is_recorded_without_fake_summary() -> None:
+    item = {
+        "id": "862592",
+        "url": "https://www.valuelist.cn/862592.html",
+        "title": "高盛-交易思路：做多中国人工智能价值链（GSXACART）-[GSX] Trade Idea：Long China AI Value Chain(GSXACART)-20260626【1页】",
+        "summary": "title only",
+        "raw": {},
+    }
+    preview = {"state": "ok", "previewImages": [{"src": "https://img.valuelist.cn/demo.jpg"}]}
+    facts = fallback_facts(item, preview, RuntimeError("vision unavailable"))
+    enriched = apply_preview_to_item(item, preview, facts)
+    assert enriched["summary"] == "title only"
+    assert enriched["raw"]["value_directory_preview"]["facts"]["status"] == "failed"
+    assert "失败/不可用" in enriched["preview_lines"][0]
 
 
 class _DummyContext:
@@ -149,10 +187,12 @@ def test_recheck_keeps_existing_review_without_new_rule() -> None:
 
 def main() -> int:
     test_normalize_entry_extracts_stable_id_and_utc_date()
+    test_normalize_entry_supports_industry_macro_source()
     test_page_state_detection_separates_waf_login_and_empty()
     test_dedupe_entries_keeps_first_valid_url()
     test_shadow_payload_marks_seen_and_reviewed_without_delivery()
     test_source_profile_registers_value_directory()
+    test_preview_failure_is_recorded_without_fake_summary()
     test_recheck_keeps_existing_review_without_new_rule()
     print("value directory monitor checks passed")
     return 0

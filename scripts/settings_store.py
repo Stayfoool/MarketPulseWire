@@ -51,6 +51,23 @@ SETTING_GROUPS: list[dict[str, Any]] = [
         ],
     },
     {
+        "id": "value_directory",
+        "title": "价值目录",
+        "restart_hint": "保存后价值目录 timer 下一次运行会读取新配置；如需马上验证，可在任务健康页立即运行 surveil-value-directory.timer。",
+        "fields": [
+            SettingField("VALUE_DIRECTORY_SOURCES", "启用来源", "value_directory", placeholder="value_directory_ib_stocks,value_directory_ib_industry_macro"),
+            SettingField("VALUE_DIRECTORY_PREVIEW_ENABLED", "启用第一页预览", "value_directory", placeholder="1"),
+            SettingField("VALUE_DIRECTORY_PREVIEW_LLM_ENABLED", "启用第一页视觉提取", "value_directory", placeholder="1"),
+            SettingField("VALUE_DIRECTORY_PREVIEW_BASE_URL", "视觉模型 Base URL", "value_directory", placeholder="留空复用 LLM_BASE_URL"),
+            SettingField("VALUE_DIRECTORY_PREVIEW_MODEL", "视觉模型名称", "value_directory", placeholder="留空复用 LLM_MODEL；需支持 image_url"),
+            SettingField("VALUE_DIRECTORY_PREVIEW_API_KEY", "视觉模型 API Key", "value_directory", sensitive=True, help="留空表示复用 LLM_API_KEY 或保留现有覆盖。"),
+            SettingField("VALUE_DIRECTORY_PREVIEW_LLM_TIMEOUT_SECONDS", "第一页提取超时秒数", "value_directory", placeholder="45"),
+            SettingField("VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT", "第一页提取重试次数", "value_directory", placeholder="1"),
+            SettingField("VALUE_DIRECTORY_PUSH_ON_PREVIEW_FAILURE", "提取失败仍推送硬规则", "value_directory", placeholder="1"),
+            SettingField("VALUE_DIRECTORY_BROWSER_TIMEOUT_MS", "浏览器超时毫秒", "value_directory", placeholder="45000"),
+        ],
+    },
+    {
         "id": "skeptic",
         "title": "Skeptic Evaluator",
         "restart_hint": "保存后建议重启 RSS/TrendForce/中国财经媒体/X stream 等分析服务，使二次复核配置立即生效。",
