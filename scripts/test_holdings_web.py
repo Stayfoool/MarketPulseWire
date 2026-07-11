@@ -162,12 +162,117 @@ def test_event_center_search_filters_before_per_pipeline_limit() -> None:
     assert rows[0]["kind"] == "article"
 
 
+def test_event_center_can_show_baselines_and_filter_by_published_time() -> None:
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE seen_items (
+                source TEXT,
+                item_id TEXT,
+                url TEXT,
+                title TEXT,
+                summary TEXT,
+                published_at TEXT,
+                first_seen_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE article_reviews (
+                source TEXT,
+                item_id TEXT,
+                url TEXT,
+                title TEXT,
+                source_module TEXT,
+                published_at TEXT,
+                importance TEXT,
+                push_now INTEGER,
+                incremental_classification TEXT,
+                affected_targets_json TEXT,
+                daily_summary TEXT,
+                reason TEXT,
+                pushed_at TEXT,
+                created_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO seen_items VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "value_directory_ib_stocks",
+                "baseline-1",
+                "https://example.com/baseline",
+                "价值目录首次基线研报",
+                "首次采集",
+                "2026-07-09T16:00:00+00:00",
+                "2026-07-10T08:52:24+00:00",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO article_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "value_directory_ib_stocks",
+                "reviewed-1",
+                "https://example.com/reviewed",
+                "价值目录后续研报",
+                "价值目录 / 国际投行-个股",
+                "2026-07-10T15:00:00+00:00",
+                "medium",
+                0,
+                "规则未命中",
+                "[]",
+                "后续采集",
+                "",
+                "",
+                "2026-07-11T00:00:10+00:00",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        default_rows = fetch_events_rows(
+            day="2026-07-10",
+            source="value_directory_ib_stocks",
+            db_path=db_path,
+        )
+        baseline_rows = fetch_events_rows(
+            day="2026-07-10",
+            source="value_directory_ib_stocks",
+            include_baseline=True,
+            db_path=db_path,
+        )
+        published_rows = fetch_events_rows(
+            day="2026-07-10",
+            source="value_directory_ib_stocks",
+            time_basis="published",
+            db_path=db_path,
+        )
+
+    assert default_rows == []
+    assert len(baseline_rows) == 1
+    assert baseline_rows[0]["id"] == "baseline-1"
+    assert baseline_rows[0]["kind"] == "baseline"
+    assert baseline_rows[0]["baseline_only"] is True
+    assert len(published_rows) == 1
+    assert published_rows[0]["id"] == "reviewed-1"
+    assert published_rows[0]["published_at"].startswith("2026-07-10")
+    assert published_rows[0]["source_id"] == "value_directory_ib_stocks"
+
+
 def test_event_center_source_filter_uses_grouped_dropdown() -> None:
     html = html_page(token_required=False)
     assert '<select id="eventSource"' in html
     assert '全部来源' in html
     assert 'loadEventSourceOptions' in html
     assert 'eventSourceFilterValue' in html
+    assert 'eventTimeBasis' in html
+    assert 'eventIncludeBaseline' in html
+    assert '显示基线条目' in html
     assert "x:serenity" in html
 
 
@@ -405,6 +510,8 @@ def main() -> int:
     test_investment_bank_theme_rule_configuration_is_exposed()
     test_rule_center_view_is_exposed()
     test_holdings_page_marks_environment_and_related_keywords()
+    test_event_center_search_filters_before_per_pipeline_limit()
+    test_event_center_can_show_baselines_and_filter_by_published_time()
     test_event_center_source_filter_uses_grouped_dropdown()
     test_source_profiles_group_six_categories()
     test_source_profiles_aggregate_wildcard_health()
