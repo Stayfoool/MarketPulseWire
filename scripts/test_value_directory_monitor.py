@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
+import types
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -12,7 +14,13 @@ import value_directory_preview
 import value_directory_monitor
 from source_profiles import runtime_source_profile
 from value_directory_browser import classify_page_state, dedupe_entries, normalize_entry, source_config
-from value_directory_preview import apply_preview_to_item, extract_preview_facts, fallback_facts, flatten_paddleocr_result
+from value_directory_preview import (
+    apply_preview_to_item,
+    extract_preview_facts,
+    fallback_facts,
+    flatten_paddleocr_result,
+    paddle_ocr_instance,
+)
 
 
 def test_normalize_entry_extracts_stable_id_and_utc_date() -> None:
@@ -172,6 +180,33 @@ def test_paddleocr_result_flatten_supports_common_shapes() -> None:
         ("Nomura", 0.99),
         ("Implied upside +20.6%", 0.95),
     ]
+
+
+def test_paddleocr_instance_retries_unknown_argument_errors() -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+            if "show_log" in kwargs:
+                raise ValueError("Unknown argument: show_log")
+            self.kwargs = kwargs
+
+    original_module = sys.modules.get("paddleocr")
+    original_instance = value_directory_preview._PADDLE_OCR
+    try:
+        sys.modules["paddleocr"] = types.SimpleNamespace(PaddleOCR=FakePaddleOCR)
+        value_directory_preview._PADDLE_OCR = None
+        engine = paddle_ocr_instance()
+    finally:
+        value_directory_preview._PADDLE_OCR = original_instance
+        if original_module is None:
+            sys.modules.pop("paddleocr", None)
+        else:
+            sys.modules["paddleocr"] = original_module
+    assert isinstance(engine, FakePaddleOCR)
+    assert calls[0]["show_log"] is False
+    assert calls[1]["use_textline_orientation"] is True
 
 
 def test_preview_ocr_text_path_uses_text_llm_without_vision() -> None:
@@ -398,6 +433,7 @@ def main() -> int:
     test_source_profile_registers_value_directory()
     test_preview_failure_is_recorded_without_fake_summary()
     test_paddleocr_result_flatten_supports_common_shapes()
+    test_paddleocr_instance_retries_unknown_argument_errors()
     test_preview_ocr_text_path_uses_text_llm_without_vision()
     test_preview_ocr_failure_falls_back_without_blocking()
     test_recheck_keeps_existing_review_without_new_rule()

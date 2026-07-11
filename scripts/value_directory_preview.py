@@ -230,9 +230,15 @@ def paddle_ocr_instance() -> Any:
         try:
             _PADDLE_OCR = PaddleOCR(**kwargs)
             return _PADDLE_OCR
-        except TypeError as exc:
+        except (TypeError, ValueError) as exc:
             last_error = exc
             continue
+        except Exception as exc:  # noqa: BLE001 - PaddleOCR versions differ in config validation error types
+            text = str(exc).lower()
+            if "unknown argument" in text or "unexpected keyword" in text:
+                last_error = exc
+                continue
+            raise
     raise RuntimeError(f"PaddleOCR 初始化失败：{last_error}")
 
 
