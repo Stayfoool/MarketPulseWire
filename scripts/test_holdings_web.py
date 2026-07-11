@@ -148,6 +148,15 @@ def test_event_center_search_filters_before_per_pipeline_limit() -> None:
     assert rows[0]["kind"] == "article"
 
 
+def test_event_center_source_filter_uses_grouped_dropdown() -> None:
+    html = html_page(token_required=False)
+    assert '<select id="eventSource"' in html
+    assert '全部来源' in html
+    assert 'loadEventSourceOptions' in html
+    assert 'eventSourceFilterValue' in html
+    assert "x:serenity" in html
+
+
 def test_source_profiles_group_six_categories() -> None:
     with TemporaryDirectory() as tmpdir:
         payload = source_profiles_payload(Path(tmpdir) / "surveil.sqlite3")
@@ -381,6 +390,7 @@ def main() -> int:
     test_source_profile_view_is_exposed()
     test_investment_bank_theme_rule_configuration_is_exposed()
     test_rule_center_view_is_exposed()
+    test_event_center_source_filter_uses_grouped_dropdown()
     test_source_profiles_group_six_categories()
     test_source_profiles_aggregate_wildcard_health()
     test_source_profile_local_config_roundtrip()
