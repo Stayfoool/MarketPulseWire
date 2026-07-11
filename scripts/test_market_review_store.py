@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 import article_gate
@@ -13,12 +14,10 @@ import official_news_gate
 def test_gate_modules_reexport_store_functions() -> None:
     assert article_gate.article_item_id is market_review_store.article_item_id
     assert article_gate.ensure_article_reviews_table is market_review_store.ensure_article_reviews_table
-    assert article_gate.save_review is market_review_store.save_article_review
     assert article_gate.review_exists is market_review_store.article_review_exists
     assert article_gate.mark_pushed is market_review_store.mark_article_pushed
 
     assert official_news_gate.ensure_official_news_table is market_review_store.ensure_official_news_table
-    assert official_news_gate.save_review is market_review_store.save_official_review
     assert official_news_gate.review_exists is market_review_store.official_review_exists
     assert official_news_gate.mark_pushed is market_review_store.mark_official_pushed
 
@@ -99,10 +98,78 @@ def test_official_review_store_round_trip_and_mark_pushed() -> None:
         conn.close()
 
 
+def test_article_gate_save_uses_normalized_market_item_audit() -> None:
+    conn = sqlite3.connect(":memory:")
+    try:
+        item = {
+            "id": "cls-ai-theme",
+            "url": "https://example.com/cls-ai-theme",
+            "title": "高盛发布投资策略：做多中国 AI 价值链",
+            "summary": "高盛建议做多中国 AI 价值链，覆盖半导体、算力和数据中心电力。",
+            "published_at": "2026-07-11T00:00:00+00:00",
+        }
+        review = {
+            "importance": "low",
+            "push_now": False,
+            "affected_targets": [],
+            "reason": "旧链路暂不推送。",
+            "daily_summary": item["title"],
+            "confidence": "低",
+            "raw": {},
+        }
+        article_gate.save_review(conn, "cls_telegraph_api", item, review)
+        row = conn.execute(
+            "SELECT gate_json FROM article_reviews WHERE source = ? AND item_id = ?",
+            ("cls_telegraph_api", "cls-ai-theme"),
+        ).fetchone()
+        payload = json.loads(row[0])
+        audit = payload["raw"]["decision_audit"]
+        assert audit["source_category"] == "news_media"
+        assert audit["content_type"] == "article"
+        assert "news_collector.py" in audit["collector"]
+        assert audit["dedupe_key"] == "cls_telegraph_api:cls-ai-theme"
+    finally:
+        conn.close()
+
+
+def test_official_gate_save_uses_normalized_market_item_audit() -> None:
+    conn = sqlite3.connect(":memory:")
+    try:
+        item = {
+            "id": "nvidia-platform",
+            "url": "https://example.com/nvidia-platform",
+            "title": "NVIDIA announces rack-scale AI platform",
+            "summary": "NVIDIA details liquid cooling and rack-scale AI systems.",
+            "published_at": "2026-07-11T00:00:00+00:00",
+        }
+        review = {
+            "importance": "low",
+            "should_push_now": False,
+            "reason": "旧链路暂不推送。",
+            "daily_summary": item["title"],
+            "analysis": {"core_content": item["summary"]},
+        }
+        official_news_gate.save_review(conn, "nvidia_blog", item, review)
+        row = conn.execute(
+            "SELECT analysis_json FROM official_news_reviews WHERE source = ? AND item_id = ?",
+            ("nvidia_blog", "nvidia-platform"),
+        ).fetchone()
+        payload = json.loads(row[0])
+        audit = payload["_decision_audit"]
+        assert audit["source_category"] == "official_company"
+        assert audit["content_type"] == "official_news"
+        assert "official_collector.py" in audit["collector"]
+        assert audit["dedupe_key"] == "nvidia_blog:nvidia-platform"
+    finally:
+        conn.close()
+
+
 def main() -> int:
     test_gate_modules_reexport_store_functions()
     test_article_review_store_round_trip_and_mark_pushed()
     test_official_review_store_round_trip_and_mark_pushed()
+    test_article_gate_save_uses_normalized_market_item_audit()
+    test_official_gate_save_uses_normalized_market_item_audit()
     print("market review store tests OK")
     return 0
 

@@ -9,12 +9,13 @@ from llm_analysis import call_chat_completion_with_prompts, llm_config
 from industry_hardline import apply_hardline_review_override, explain_hardline
 from macro_policy import apply_macro_review_override, macro_prompt_note
 from decision_engine import attach_decision_to_article_review
+from market_item import NormalizedMarketItem, item_from_article_mapping
 from market_review_store import (
     article_item_id,
     article_review_exists as review_exists,
     ensure_article_reviews_table,
     mark_article_pushed as mark_pushed,
-    save_article_review as save_review,
+    save_article_review as _save_article_review,
 )
 from market_interpreter import thin_system_prompt, thin_user_prompt_template
 from push_rules import (
@@ -24,6 +25,7 @@ from push_rules import (
     review_from_push_rule,
 )
 from skeptic_evaluator import skeptic_lines
+from source_profiles import runtime_source_profile
 
 
 GATE_SYSTEM_PROMPT = thin_system_prompt(task="为一条已通过规则预筛的资讯/报告生成极简实时摘要。")
@@ -35,6 +37,35 @@ GATE_USER_PROMPT = thin_user_prompt_template(
     forbidden_mode="article",
     include_source_module=True,
 )
+
+ARTICLE_COMPAT_SOURCE_CATEGORIES = {
+    "trendforce_page": "research_industry_media",
+    "value_directory_ib_stocks": "research_industry_media",
+    "value_directory_ib_industry_macro": "research_industry_media",
+}
+
+
+def _source_profile(source: str) -> dict[str, Any]:
+    try:
+        return runtime_source_profile(source) or {}
+    except Exception:
+        return {}
+
+
+def normalized_article_item(source: str, item: dict[str, Any]) -> NormalizedMarketItem:
+    profile = _source_profile(source)
+    default_content_type = "research_index" if source.startswith("value_directory_") else "article"
+    return item_from_article_mapping(
+        source,
+        item,
+        source_category=str(
+            item.get("source_category")
+            or profile.get("category")
+            or ARTICLE_COMPAT_SOURCE_CATEGORIES.get(source, "")
+        ),
+        collector=str(item.get("collector") or profile.get("fetcher") or "article_gate"),
+        content_type=str(item.get("content_type") or default_content_type),
+    )
 
 
 def article_gate_enabled() -> bool:
@@ -125,6 +156,10 @@ def review_article(source: str, item: dict[str, Any]) -> dict[str, Any]:
     return review
 
 
+def save_review(conn, source: str, item: dict[str, Any], review: dict[str, Any]) -> None:
+    _save_article_review(conn, source, item, review, decision_item=normalized_article_item(source, item))
+
+
 def apply_hardline_override(source: str, item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
     return apply_hardline_review_override(source, item, review)
 
@@ -139,7 +174,13 @@ def rule_first_review(source: str, item: dict[str, Any], *, push_key: str = "pus
     if not rule:
         return None
     review = review_from_push_rule(rule, item, push_key=push_key)
-    return attach_decision_to_article_review(source, item, review, holdings=holdings, push_key=push_key)
+    return attach_decision_to_article_review(
+        source,
+        normalized_article_item(source, item),
+        review,
+        holdings=holdings,
+        push_key=push_key,
+    )
 
 
 def apply_push_rule_override(
@@ -151,7 +192,13 @@ def apply_push_rule_override(
 ) -> dict[str, Any]:
     holdings = load_enabled_holdings_for_rules()
     updated = apply_article_push_rules(source, item, review, holdings=holdings, push_key=push_key)
-    return attach_decision_to_article_review(source, item, updated, holdings=holdings, push_key=push_key)
+    return attach_decision_to_article_review(
+        source,
+        normalized_article_item(source, item),
+        updated,
+        holdings=holdings,
+        push_key=push_key,
+    )
 
 
 def gate_lines(review: dict[str, Any]) -> list[str]:

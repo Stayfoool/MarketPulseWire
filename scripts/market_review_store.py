@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from decision_engine import ensure_article_decision_audit, ensure_official_decision_audit
+from market_item import NormalizedMarketItem
 
 
 def json_loads_dict(value: str | None) -> dict[str, Any]:
@@ -60,9 +61,16 @@ def ensure_article_reviews_table(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def save_article_review(conn: sqlite3.Connection, source: str, item: dict[str, Any], review: dict[str, Any]) -> None:
+def save_article_review(
+    conn: sqlite3.Connection,
+    source: str,
+    item: dict[str, Any],
+    review: dict[str, Any],
+    *,
+    decision_item: NormalizedMarketItem | dict[str, Any] | None = None,
+) -> None:
     ensure_article_reviews_table(conn)
-    review = ensure_article_decision_audit(source, item, review, push_key="push_now")
+    review = ensure_article_decision_audit(source, decision_item or item, review, push_key="push_now")
     now = datetime.now(timezone.utc).isoformat()
     item_id = article_item_id(item)
     conn.execute(
@@ -242,9 +250,16 @@ def official_review_exists(conn: sqlite3.Connection, source: str, item_id: str) 
     return review
 
 
-def save_official_review(conn: sqlite3.Connection, source: str, item: dict[str, Any], review: dict[str, Any]) -> None:
+def save_official_review(
+    conn: sqlite3.Connection,
+    source: str,
+    item: dict[str, Any],
+    review: dict[str, Any],
+    *,
+    decision_item: NormalizedMarketItem | dict[str, Any] | None = None,
+) -> None:
     ensure_official_news_table(conn)
-    review = ensure_official_decision_audit(source, item, review)
+    review = ensure_official_decision_audit(source, decision_item or item, review)
     now = datetime.now(timezone.utc).isoformat()
     analysis_payload = review.get("analysis") if isinstance(review.get("analysis"), dict) else dict(review)
     analysis_payload = dict(analysis_payload)
