@@ -11,6 +11,7 @@ import base64
 import json
 import os
 import re
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -22,7 +23,7 @@ from llm_analysis import chat_completions_url, llm_config, parse_json_object
 
 SYSTEM_PROMPT = """你是投资研报第一页预览的信息抽取器。
 
-你只能根据用户提供的研报标题、价值目录页面可见文字，以及第一页预览图中能直接看见的信息输出 JSON。
+你只能根据用户提供的研报标题、价值目录页面可见文字，以及第一页预览 OCR 文字输出 JSON。
 不要猜测未展示的 PDF 正文，不要补充外部知识，不要写投资建议。
 
 输出必须简短，重点提取：
@@ -56,7 +57,13 @@ USER_PROMPT = """请提取这份价值目录研报可见第一页预览中的关
 发布时间：{published_at}
 页面可见文字：
 {visible_text}
+
+第一页 OCR 文字：
+{ocr_text}
 """
+
+
+_PADDLE_OCR: Any | None = None
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -80,6 +87,26 @@ def preview_llm_config() -> tuple[str, str, str] | None:
     if not api_key or not base_url or not model:
         return None
     return api_key, base_url, model
+
+
+def ocr_enabled() -> bool:
+    return env_bool("VALUE_DIRECTORY_PREVIEW_OCR_ENABLED", True)
+
+
+def vision_fallback_enabled() -> bool:
+    return env_bool("VALUE_DIRECTORY_PREVIEW_VISION_FALLBACK_ENABLED", False)
+
+
+def ocr_min_chars() -> int:
+    raw = os.getenv("VALUE_DIRECTORY_PREVIEW_OCR_MIN_CHARS", "").strip()
+    try:
+        return max(0, min(1000, int(raw))) if raw else 40
+    except ValueError:
+        return 40
+
+
+def ocr_lang() -> str:
+    return os.getenv("VALUE_DIRECTORY_PREVIEW_OCR_LANG", "ch").strip() or "ch"
 
 
 def preview_timeout_seconds() -> int:
@@ -152,7 +179,7 @@ def title_metadata(title: str) -> dict[str, Any]:
     }
 
 
-def download_preview_image(url: str) -> tuple[str, str]:
+def download_preview_image_bytes(url: str) -> tuple[bytes, str]:
     request = urllib.request.Request(
         url,
         headers={
@@ -167,11 +194,224 @@ def download_preview_image(url: str) -> tuple[str, str]:
         raise RuntimeError(f"预览图 content-type 不是图片：{content_type}")
     if len(data) > max_image_bytes():
         raise RuntimeError(f"预览图过大：{len(data)} bytes")
+    return data, content_type
+
+
+def download_preview_image(url: str) -> tuple[str, str]:
+    data, content_type = download_preview_image_bytes(url)
     encoded = base64.b64encode(data).decode("ascii")
     return f"data:{content_type};base64,{encoded}", content_type
 
 
-def call_preview_llm(item: dict[str, Any], preview: dict[str, Any]) -> tuple[dict[str, Any], str]:
+def image_suffix(content_type: str) -> str:
+    lower = content_type.lower()
+    if "png" in lower:
+        return ".png"
+    if "webp" in lower:
+        return ".webp"
+    return ".jpg"
+
+
+def paddle_ocr_instance() -> Any:
+    global _PADDLE_OCR
+    if _PADDLE_OCR is not None:
+        return _PADDLE_OCR
+    try:
+        from paddleocr import PaddleOCR
+    except Exception as exc:  # noqa: BLE001 - optional dependency
+        raise RuntimeError("PaddleOCR 未安装；请安装 requirements-ocr.txt") from exc
+    candidates = [
+        {"lang": ocr_lang(), "use_angle_cls": True, "use_gpu": False, "show_log": False},
+        {"lang": ocr_lang(), "use_textline_orientation": True, "device": "cpu"},
+        {"lang": ocr_lang()},
+    ]
+    last_error: Exception | None = None
+    for kwargs in candidates:
+        try:
+            _PADDLE_OCR = PaddleOCR(**kwargs)
+            return _PADDLE_OCR
+        except TypeError as exc:
+            last_error = exc
+            continue
+    raise RuntimeError(f"PaddleOCR 初始化失败：{last_error}")
+
+
+def flatten_paddleocr_result(result: Any) -> list[tuple[str, float | None]]:
+    lines: list[tuple[str, float | None]] = []
+
+    def add(text: Any, score: Any = None) -> None:
+        cleaned = compact(text, 400)
+        if not cleaned:
+            return
+        try:
+            confidence = float(score) if score is not None else None
+        except (TypeError, ValueError):
+            confidence = None
+        lines.append((cleaned, confidence))
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            texts = node.get("rec_texts") or node.get("texts")
+            scores = node.get("rec_scores") or node.get("scores") or []
+            if isinstance(texts, list):
+                for index, text in enumerate(texts):
+                    score = scores[index] if isinstance(scores, list) and index < len(scores) else None
+                    add(text, score)
+                return
+            if node.get("text") or node.get("transcription"):
+                add(node.get("text") or node.get("transcription"), node.get("confidence") or node.get("score"))
+                return
+            for value in node.values():
+                walk(value)
+            return
+        if isinstance(node, (list, tuple)):
+            if (
+                len(node) >= 2
+                and isinstance(node[1], (list, tuple))
+                and len(node[1]) >= 2
+                and isinstance(node[1][0], str)
+            ):
+                add(node[1][0], node[1][1])
+                return
+            for value in node:
+                walk(value)
+
+    walk(result)
+    deduped: list[tuple[str, float | None]] = []
+    seen: set[str] = set()
+    for text, score in lines:
+        if text in seen:
+            continue
+        seen.add(text)
+        deduped.append((text, score))
+    return deduped
+
+
+def paddle_ocr_image_bytes(data: bytes, content_type: str) -> dict[str, Any]:
+    engine = paddle_ocr_instance()
+    suffix = image_suffix(content_type)
+    with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
+        tmp.write(data)
+        tmp.flush()
+        if hasattr(engine, "ocr"):
+            try:
+                result = engine.ocr(tmp.name, cls=True)
+            except TypeError:
+                if hasattr(engine, "predict"):
+                    result = engine.predict(tmp.name)
+                else:
+                    result = engine.ocr(tmp.name)
+        else:
+            if hasattr(engine, "predict"):
+                result = engine.predict(tmp.name)
+            else:
+                raise RuntimeError("PaddleOCR 对象缺少 ocr/predict 方法")
+    lines = flatten_paddleocr_result(result)
+    text = "\n".join(line for line, _score in lines)
+    scores = [score for _line, score in lines if score is not None]
+    confidence = sum(scores) / len(scores) if scores else None
+    return {
+        "engine": "paddleocr",
+        "status": "ok" if text else "empty",
+        "text": text,
+        "line_count": len(lines),
+        "avg_confidence": confidence,
+    }
+
+
+def extract_ocr_text(image_url: str) -> dict[str, Any]:
+    if not ocr_enabled():
+        return {"engine": "disabled", "status": "disabled", "text": ""}
+    if not image_url:
+        return {"engine": "paddleocr", "status": "unavailable", "text": "", "error": "详情页没有可见第一页预览图"}
+    data, content_type = download_preview_image_bytes(image_url)
+    started = time.monotonic()
+    result = paddle_ocr_image_bytes(data, content_type)
+    result["elapsed_seconds"] = round(time.monotonic() - started, 3)
+    if len(compact(result.get("text"), 10000)) < ocr_min_chars():
+        result = dict(result)
+        result["status"] = "too_short" if result.get("text") else result.get("status", "empty")
+        result["error"] = f"OCR 文字过短：{len(compact(result.get('text'), 10000))} chars"
+    return result
+
+
+def preview_prompt(item: dict[str, Any], preview: dict[str, Any], *, ocr_text: str = "") -> str:
+    visible_text = compact(preview.get("articleText") or preview.get("bodySample"), 1600)
+    return (
+        USER_PROMPT.replace("{title}", str(item.get("title") or ""))
+        .replace("{source_module}", str(item.get("source_module") or ""))
+        .replace("{published_at}", str(item.get("published_at") or ""))
+        .replace("{visible_text}", visible_text)
+        .replace("{ocr_text}", compact(ocr_text, 5000))
+    )
+
+
+def request_preview_llm(payload: dict[str, Any], *, base_url: str, api_key: str) -> dict[str, Any]:
+    request = urllib.request.Request(
+        chat_completions_url(base_url),
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept": "application/json",
+            "User-Agent": "market-pulse-wire-value-directory-preview/0.1",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=preview_timeout_seconds()) as response:
+        body = response.read().decode("utf-8", errors="replace")
+    return json.loads(body)
+
+
+def parse_preview_llm_result(result: dict[str, Any]) -> dict[str, Any]:
+    choices = result.get("choices") or []
+    if not choices:
+        raise RuntimeError(f"LLM 响应缺少 choices：{json.dumps(result, ensure_ascii=False)[:400]}")
+    message = choices[0].get("message") or {}
+    raw = str(message.get("content") or message.get("output_text") or "").strip()
+    if not raw:
+        raise RuntimeError("LLM 响应为空")
+    return parse_json_object(raw)
+
+
+def call_preview_text_llm(item: dict[str, Any], preview: dict[str, Any], *, ocr_text: str = "") -> tuple[dict[str, Any], str]:
+    if not env_bool("VALUE_DIRECTORY_PREVIEW_LLM_ENABLED", True):
+        raise RuntimeError("VALUE_DIRECTORY_PREVIEW_LLM_ENABLED=0")
+    config = preview_llm_config()
+    if not config:
+        raise RuntimeError("LLM 未配置")
+    api_key, base_url, model = config
+    prompt = preview_prompt(item, preview, ocr_text=ocr_text)
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.1,
+        "max_tokens": int(os.getenv("VALUE_DIRECTORY_PREVIEW_MAX_OUTPUT_TOKENS", "700") or "700"),
+        "response_format": {"type": "json_object"},
+    }
+    attempts = max(1, min(3, int(os.getenv("VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT", "1") or "1") + 1))
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return parse_preview_llm_result(request_preview_llm(payload, base_url=base_url, api_key=api_key)), model
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            last_error = RuntimeError(f"HTTP {exc.code}: {detail[:500]}")
+        except (urllib.error.URLError, TimeoutError, RuntimeError, json.JSONDecodeError) as exc:
+            last_error = exc
+        if attempt < attempts - 1:
+            time.sleep(2 + attempt * 3)
+            continue
+        raise RuntimeError(f"第一页 OCR 文本 LLM 提取失败：{last_error}") from last_error
+    raise RuntimeError(f"第一页 OCR 文本 LLM 提取失败：{last_error}")
+
+
+def call_preview_vision_llm(item: dict[str, Any], preview: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    if not vision_fallback_enabled():
+        raise RuntimeError("VALUE_DIRECTORY_PREVIEW_VISION_FALLBACK_ENABLED=0")
     if not env_bool("VALUE_DIRECTORY_PREVIEW_LLM_ENABLED", True):
         raise RuntimeError("VALUE_DIRECTORY_PREVIEW_LLM_ENABLED=0")
     config = preview_llm_config()
@@ -182,13 +422,7 @@ def call_preview_llm(item: dict[str, Any], preview: dict[str, Any]) -> tuple[dic
     if not image_url:
         raise RuntimeError("详情页没有可见第一页预览图")
     data_url, _content_type = download_preview_image(image_url)
-    visible_text = compact(preview.get("articleText") or preview.get("bodySample"), 1600)
-    prompt = (
-        USER_PROMPT.replace("{title}", str(item.get("title") or ""))
-        .replace("{source_module}", str(item.get("source_module") or ""))
-        .replace("{published_at}", str(item.get("published_at") or ""))
-        .replace("{visible_text}", visible_text)
-    )
+    prompt = preview_prompt(item, preview)
     payload = {
         "model": model,
         "messages": [
@@ -205,38 +439,20 @@ def call_preview_llm(item: dict[str, Any], preview: dict[str, Any]) -> tuple[dic
         "max_tokens": int(os.getenv("VALUE_DIRECTORY_PREVIEW_MAX_OUTPUT_TOKENS", "700") or "700"),
         "response_format": {"type": "json_object"},
     }
-    request = urllib.request.Request(
-        chat_completions_url(base_url),
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json; charset=utf-8",
-            "Accept": "application/json",
-            "User-Agent": "market-pulse-wire-value-directory-preview/0.1",
-        },
-        method="POST",
-    )
     attempts = max(1, min(3, int(os.getenv("VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT", "1") or "1") + 1))
     last_error: Exception | None = None
     for attempt in range(attempts):
         try:
-            with urllib.request.urlopen(request, timeout=preview_timeout_seconds()) as response:
-                body = response.read().decode("utf-8", errors="replace")
-            result = json.loads(body)
-            choices = result.get("choices") or []
-            if not choices:
-                raise RuntimeError(f"LLM 响应缺少 choices：{body[:400]}")
-            message = choices[0].get("message") or {}
-            raw = str(message.get("content") or message.get("output_text") or "").strip()
-            if not raw:
-                raise RuntimeError("LLM 响应为空")
-            return parse_json_object(raw), model
+            return parse_preview_llm_result(request_preview_llm(payload, base_url=base_url, api_key=api_key)), model
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            last_error = RuntimeError(f"HTTP {exc.code}: {detail[:500]}")
         except (urllib.error.URLError, TimeoutError, RuntimeError, json.JSONDecodeError) as exc:
             last_error = exc
-            if attempt < attempts - 1:
-                time.sleep(2 + attempt * 3)
-                continue
-            raise RuntimeError(f"第一页预览 LLM 提取失败：{exc}") from exc
+        if attempt < attempts - 1:
+            time.sleep(2 + attempt * 3)
+            continue
+        raise RuntimeError(f"第一页视觉 LLM 提取失败：{last_error}") from last_error
     raise RuntimeError(f"第一页预览 LLM 提取失败：{last_error}")
 
 
@@ -253,7 +469,14 @@ def first_preview_image_url(preview: dict[str, Any]) -> str:
     return ""
 
 
-def normalize_facts(parsed: dict[str, Any], item: dict[str, Any], preview: dict[str, Any], model: str) -> dict[str, Any]:
+def normalize_facts(
+    parsed: dict[str, Any],
+    item: dict[str, Any],
+    preview: dict[str, Any],
+    model: str,
+    *,
+    ocr: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     meta = title_metadata(str(item.get("title") or ""))
     key_points = parsed.get("key_points")
     if not isinstance(key_points, list):
@@ -280,11 +503,18 @@ def normalize_facts(parsed: dict[str, Any], item: dict[str, Any], preview: dict[
         "model": model,
         "preview_image_url": first_preview_image_url(preview),
         "title_metadata": meta,
+        "ocr": ocr or {},
     }
     return facts
 
 
-def fallback_facts(item: dict[str, Any], preview: dict[str, Any], error: Exception | None = None) -> dict[str, Any]:
+def fallback_facts(
+    item: dict[str, Any],
+    preview: dict[str, Any],
+    error: Exception | None = None,
+    *,
+    ocr: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     meta = title_metadata(str(item.get("title") or ""))
     status = "unavailable" if not first_preview_image_url(preview) else "failed"
     return {
@@ -303,16 +533,26 @@ def fallback_facts(item: dict[str, Any], preview: dict[str, Any], error: Excepti
         "model": "preview_failed",
         "preview_image_url": first_preview_image_url(preview),
         "title_metadata": meta,
+        "ocr": ocr or {},
         "error": str(error or "第一页预览不可用")[:500],
     }
 
 
 def extract_preview_facts(item: dict[str, Any], preview: dict[str, Any]) -> dict[str, Any]:
+    ocr: dict[str, Any] | None = None
     try:
-        parsed, model = call_preview_llm(item, preview)
-        return normalize_facts(parsed, item, preview, model)
+        if ocr_enabled():
+            ocr = extract_ocr_text(first_preview_image_url(preview))
+            if ocr.get("status") == "ok" and compact(ocr.get("text")):
+                parsed, model = call_preview_text_llm(item, preview, ocr_text=str(ocr.get("text") or ""))
+                return normalize_facts(parsed, item, preview, model, ocr=ocr)
+        if vision_fallback_enabled():
+            parsed, model = call_preview_vision_llm(item, preview)
+            return normalize_facts(parsed, item, preview, model, ocr=ocr)
+        error = ocr.get("error") if ocr else "OCR 未启用或不可用"
+        return fallback_facts(item, preview, RuntimeError(str(error or "OCR 未能提取有效文字")), ocr=ocr)
     except Exception as exc:  # noqa: BLE001 - preview extraction must not fabricate facts.
-        return fallback_facts(item, preview, exc)
+        return fallback_facts(item, preview, exc, ocr=ocr)
 
 
 def preview_lines(facts: dict[str, Any]) -> list[str]:

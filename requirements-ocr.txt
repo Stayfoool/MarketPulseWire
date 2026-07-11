@@ -1,0 +1,5 @@
+# Optional local OCR dependencies for ValueList first-page preview extraction.
+# Source: official PyPI packages from the PaddlePaddle/PaddleOCR maintainers.
+# Install on the production host only when VALUE_DIRECTORY_PREVIEW_OCR_ENABLED=1.
+paddlepaddle>=2.6.0
+paddleocr>=2.7.0

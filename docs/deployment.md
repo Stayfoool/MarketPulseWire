@@ -229,6 +229,18 @@ just remote-timers
 just remote-revision
 ```
 
+## Optional OCR
+
+ValueList first-page previews can use local PaddleOCR to read visible screenshot text before sending the extracted text to the configured text LLM. This is optional and uses CPU only; it does not require a paid OCR API or GPU.
+
+Install the optional OCR packages on the runtime host after the normal Python virtualenv exists:
+
+```bash
+./scripts/install_ocr_dependencies.sh
+```
+
+The script installs official PyPI packages listed in `requirements-ocr.txt`. If OCR is not installed, ValueList hard-rule pushes still work; the preview extraction section will record the OCR failure instead of blocking delivery.
+
 ## Optional Proxy
 
 Some overseas media may be unreachable from certain cloud regions. Surveil supports a local-only Mihomo/Clash proxy for selected monitors.
