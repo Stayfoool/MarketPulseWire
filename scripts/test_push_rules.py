@@ -118,6 +118,7 @@ def test_value_directory_peer_or_industry_relation_rule() -> None:
         "published_at": "2026-07-11T00:00:00+00:00",
     }
     original_matches = push_rules.portfolio_relation_matches
+    original_enabled = push_rules.rule_enabled
     try:
         push_rules.portfolio_relation_matches = lambda *_args, **_kwargs: [
             {
@@ -130,15 +131,66 @@ def test_value_directory_peer_or_industry_relation_rule() -> None:
                 "theme": "人造金刚石",
             }
         ]
+        push_rules.rule_enabled = lambda rule_id: rule_id == "investment_bank_portfolio_relation"
         rule = first_matching_push_rule(source="value_directory_ib_stocks", item=item, holdings=[SIFANGDA])
     finally:
         push_rules.portfolio_relation_matches = original_matches
+        push_rules.rule_enabled = original_enabled
     assert rule is not None
     assert rule["rule_id"] == "investment_bank_portfolio_relation"
     assert rule["should_push"] is True
     assert rule["affected_targets"] == ["四方达 300179.SZ"]
     assert "黄河旋风 -> 人造金刚石/超硬材料同业 -> 四方达" in rule["reason"]
     assert "LLM" in rule["reason"]
+
+
+def test_holding_keyword_rule_pushes_direct_holding_without_hard_variable() -> None:
+    item = {"title": "绿的谐波召开投资者交流会", "summary": "公司介绍近期业务进展。"}
+    rule = first_matching_push_rule(source="news_media", item=item, holdings=[GREEN])
+    assert rule is not None
+    assert rule["rule_id"] == "holding_keyword_immediate_alert"
+    assert rule["affected_targets"] == ["绿的谐波 688017.SH"]
+    assert "直接持仓命中" in rule["reason"]
+
+
+def test_holding_keyword_rule_pushes_related_holding_keyword() -> None:
+    holding = {
+        **SIFANGDA,
+        "news_keywords": ["黄河旋风", "人造金刚石"],
+        "news_exclude_keywords": [],
+    }
+    item = {
+        "title": "高盛-黄河旋风(600172.SH)：人造金刚石需求与产能展望",
+        "summary": "国际投行个股研报索引。",
+    }
+    rule = first_matching_push_rule(source="value_directory_ib_stocks", item=item, holdings=[holding])
+    assert rule is not None
+    assert rule["rule_id"] == "holding_keyword_immediate_alert"
+    assert rule["affected_targets"] == ["四方达 300179.SZ"]
+    assert "关联关键词命中：黄河旋风、人造金刚石 -> 四方达" in rule["reason"]
+
+
+def test_holding_keyword_exclusion_only_blocks_keyword_association() -> None:
+    holding = {
+        **SIFANGDA,
+        "news_keywords": ["黄河旋风"],
+        "news_exclude_keywords": ["例行转载"],
+    }
+    keyword_only = first_matching_push_rule(
+        source="news_media",
+        item={"title": "黄河旋风例行转载行业新闻", "summary": ""},
+        holdings=[holding],
+    )
+    assert keyword_only is None
+
+    direct_holding = first_matching_push_rule(
+        source="news_media",
+        item={"title": "四方达例行转载行业新闻", "summary": ""},
+        holdings=[holding],
+    )
+    assert direct_holding is not None
+    assert direct_holding["rule_id"] == "holding_keyword_immediate_alert"
+    assert "直接持仓命中" in direct_holding["reason"]
 
 
 def test_direct_holding_hard_variable_rule() -> None:
@@ -176,6 +228,9 @@ def main() -> int:
     test_value_directory_strategy_title_is_index_evidence()
     test_international_bank_multi_leg_strategy_rule()
     test_value_directory_peer_or_industry_relation_rule()
+    test_holding_keyword_rule_pushes_direct_holding_without_hard_variable()
+    test_holding_keyword_rule_pushes_related_holding_keyword()
+    test_holding_keyword_exclusion_only_blocks_keyword_association()
     test_direct_holding_hard_variable_rule()
     test_official_company_hard_variable_rule()
     test_macro_policy_rule_from_raw()

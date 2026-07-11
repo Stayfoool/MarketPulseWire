@@ -8,10 +8,14 @@
       "extra_keywords": []
     },
     "investment_bank_portfolio_relation": {
-      "enabled": true,
+      "enabled": false,
       "priority": 95,
       "allowed_banks": [],
       "max_relation_matches": 3
+    },
+    "holding_keyword_immediate_alert": {
+      "enabled": true,
+      "priority": 98
     },
     "international_bank_theme_strategy": {
       "enabled": true,

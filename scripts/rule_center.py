@@ -47,14 +47,14 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "investment_bank_portfolio_relation",
-        "name": "国际投行持仓关联个股",
+        "name": "国际投行高级关系映射（暂不实时启用）",
         "group": "投行研究",
-        "description": "价值目录的国际投行个股研报命中直接持仓、已配置同业或行业主题关系时即时提醒；只使用一跳关系映射。",
+        "description": "保留给未来的上下游、多对多和方向传导关系映射；当前日常实时提醒优先使用持仓管理中的“关联新闻关键词”。",
         "runtime": "push_rules / value directory article",
         "hit_markers": ("investment_bank_portfolio_relation",),
         "priority": 95,
         "fields": (
-            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
+            {"key": "enabled", "label": "启用", "type": "bool", "default": False},
             {"key": "priority", "label": "规则顺序", "type": "int", "default": 95, "min": 1, "max": 999},
             {
                 "key": "allowed_banks",
@@ -72,6 +72,19 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
                 "max": 5,
                 "help": "限制单条研报展示的持仓关系数量，避免同一行业报告推送过长。",
             },
+        ),
+    },
+    {
+        "id": "holding_keyword_immediate_alert",
+        "name": "持仓/关联关键词即时提醒",
+        "group": "持仓与公司",
+        "description": "任一已接入文章或事件命中直接持仓名称/别名，或该持仓配置的“关联新闻关键词”时即时薄推送；不由 LLM 决定。",
+        "runtime": "push_rules / article + event",
+        "hit_markers": ("holding_keyword_immediate_alert",),
+        "priority": 98,
+        "fields": (
+            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
+            {"key": "priority", "label": "规则顺序", "type": "int", "default": 98, "min": 1, "max": 999},
         ),
     },
     {

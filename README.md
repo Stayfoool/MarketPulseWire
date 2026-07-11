@@ -159,6 +159,17 @@ Deploy and install services:
 ./scripts/install_remote_systemd.sh
 ```
 
+Pull the private portfolio from the server when the server Web workbench is
+your production source of truth:
+
+```bash
+./scripts/pull_remote_portfolio.sh
+```
+
+This is deliberately one-way (server to local): it validates the downloaded
+JSON, backs up the local private file, then imports it into local SQLite. It
+does not upload or overwrite the server portfolio.
+
 Open the Web workbench through an SSH tunnel:
 
 ```bash
