@@ -16,6 +16,7 @@ from llm_analysis import call_chat_completion_with_prompts, format_llm_analysis
 from market_db import DEFAULT_DB_PATH, init_db
 from decision_engine import attach_decision_to_event_analysis
 from market_card_view import card_targets, decision_reason, interpretation_core, interpretation_reason
+from market_item import NormalizedMarketItem, item_from_event_mapping
 from market_interpreter import thin_system_prompt, thin_user_prompt_template
 from push_rules import apply_event_push_rules
 from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert
@@ -45,6 +46,69 @@ def content_hash(*parts: str) -> str:
 
 def json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+EVENT_SOURCE_CONTEXT: dict[str, dict[str, str]] = {
+    "sina_flash": {"source_category": "news_media", "collector": "sina_flash"},
+    "sina_stock_news": {"source_category": "portfolio_stock_news", "collector": "sina_stock_news"},
+    "ifind_notice": {"source_category": "company_disclosures", "collector": "ifind_batch"},
+    "ifind_report": {"source_category": "company_disclosures", "collector": "ifind_batch"},
+}
+
+
+def event_source_context(source: str) -> dict[str, str]:
+    source = str(source or "").strip()
+    return dict(EVENT_SOURCE_CONTEXT.get(source, {"source_category": "", "collector": source}))
+
+
+def _event_without_normalized_audit(event: dict[str, Any]) -> dict[str, Any]:
+    updated = dict(event)
+    raw = dict(updated.get("raw") or {})
+    raw.pop("_normalized_market_item", None)
+    updated["raw"] = raw
+    return updated
+
+
+def normalized_event_item(event: dict[str, Any]) -> NormalizedMarketItem:
+    base = _event_without_normalized_audit(event)
+    context = event_source_context(str(base.get("source") or ""))
+    return item_from_event_mapping(
+        base,
+        source_category=context.get("source_category", ""),
+        collector=context.get("collector", ""),
+    )
+
+
+def normalized_event_audit_payload(item: NormalizedMarketItem) -> dict[str, Any]:
+    """Return a compact audit payload without duplicating raw/full_text."""
+    raw_keys = sorted(str(key) for key in item.raw if key != "_normalized_market_item")
+    return {
+        "schema": "NormalizedMarketItem/v1",
+        "source": item.source,
+        "source_category": item.source_category,
+        "collector": item.collector,
+        "content_type": item.content_type,
+        "title": item.title,
+        "summary": item.summary,
+        "url": item.url,
+        "published_at": item.published_at,
+        "first_seen_at": item.first_seen_at,
+        "symbols": list(item.symbols),
+        "themes": list(item.themes),
+        "dedupe_key": item.dedupe_key,
+        "source_event_id": str(item.raw.get("source_event_id") or ""),
+        "access_note": item.access_note,
+        "full_text_chars": len(item.full_text),
+        "raw_keys": raw_keys,
+    }
+
+
+def event_with_normalized_market_item_audit(event: dict[str, Any]) -> dict[str, Any]:
+    updated = _event_without_normalized_audit(event)
+    raw = dict(updated.get("raw") or {})
+    raw["_normalized_market_item"] = normalized_event_audit_payload(normalized_event_item(updated))
+    updated["raw"] = raw
+    return updated
 
 
 def load_enabled_holdings(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
@@ -88,6 +152,7 @@ def load_enabled_holdings(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any
 def upsert_event(event: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> tuple[int, bool]:
     """Insert an event and return (event_id, inserted)."""
     init_db(db_path).close()
+    event = event_with_normalized_market_item_audit(event)
     now = utc_now()
     source = str(event["source"])
     source_event_id = str(event["source_event_id"])
