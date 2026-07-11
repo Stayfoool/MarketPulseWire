@@ -85,6 +85,19 @@ def test_international_bank_theme_strategy_requires_action_and_evidence() -> Non
     assert weak_evidence is None
 
 
+def test_value_directory_strategy_title_is_index_evidence() -> None:
+    item = {
+        "title": "高盛-交易思路：做多中国人工智能价值链（GSXACART）",
+        "summary": "高盛 Trade Idea: Long China AI Value Chain。",
+        "published_at": "2026-07-09T16:00:00+00:00",
+    }
+    rule = international_bank_theme_strategy_rule(source="value_directory_ib_stocks", item=item, holdings=[])
+    assert rule is not None
+    assert rule["should_push"] is True
+    assert rule["source_tier"] == "价值目录研报索引（仅标题元数据）"
+    assert any(item["kind"] == "价值目录策略研报标题" for item in rule["evidence"])
+
+
 def test_international_bank_multi_leg_strategy_rule() -> None:
     item = {
         "title": "摩根士丹利策略报告：超配 HBM、半导体设备与数据中心电力",
@@ -128,6 +141,7 @@ def main() -> int:
     test_event_rule_overrides_model_skip()
     test_international_bank_theme_strategy_rule()
     test_international_bank_theme_strategy_requires_action_and_evidence()
+    test_value_directory_strategy_title_is_index_evidence()
     test_international_bank_multi_leg_strategy_rule()
     test_direct_holding_hard_variable_rule()
     test_official_company_hard_variable_rule()

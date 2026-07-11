@@ -118,6 +118,14 @@ THEME_EVIDENCE_PATTERNS: tuple[tuple[str, int, tuple[str, ...]], ...] = (
     ),
 )
 
+VALUE_DIRECTORY_STRATEGY_TITLE_MARKERS = (
+    "交易思路",
+    "trade idea",
+    "投资策略",
+    "investment strategy",
+    "策略报告",
+)
+
 GENERIC_VALUATION_PATTERNS = (
     "估值上行空间",
     "估值偏低",
@@ -444,6 +452,8 @@ def _report_reference(text: str) -> str:
 
 
 def _source_tier(source: str, item: dict[str, Any]) -> str:
+    if source == "value_directory_ib_stocks":
+        return "价值目录研报索引（仅标题元数据）"
     source_text = compact_text(source, item.get("source_module"), item.get("source_display"), item.get("url"))
     if any(token in source_text.casefold() for token in ("goldmansachs.com", "morganstanley.com", "jpmorgan.com", "citigroup.com")):
         return "机构公开材料"
@@ -469,6 +479,24 @@ def _theme_dedup_key(bank: str, report_title: str, themes: list[str], action: st
     normalized = re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", identity.casefold())
     digest = hashlib.sha256(f"{bank}|{_published_day(published_at)}|{normalized}|{action}".encode("utf-8")).hexdigest()[:20]
     return f"ib_theme:{digest}"
+
+
+def _value_directory_strategy_title_evidence(source: str, item: dict[str, Any]) -> list[dict[str, Any]]:
+    """Treat an explicit strategy-report title as auditable index metadata.
+
+    ValueList is intentionally collected as title/date/URL metadata only. For
+    this one designated index source, a title such as "Trade Idea: Long
+    China AI Value Chain" identifies a concrete multi-leg strategy report,
+    rather than a generic opinion. It still has to pass the bank, action, and
+    investment-universe checks in the caller.
+    """
+    if source != "value_directory_ib_stocks":
+        return []
+    title = compact_text(item.get("title"))
+    for marker in VALUE_DIRECTORY_STRATEGY_TITLE_MARKERS:
+        if keyword_matches_text(marker, title):
+            return [{"kind": "价值目录策略研报标题", "score": 2, "snippet": marker}]
+    return []
 
 
 def international_bank_theme_strategy_rule(
@@ -505,6 +533,7 @@ def international_bank_theme_strategy_rule(
     if not themes and not universe.get("matched"):
         return None
     evidence = _strategy_evidence(text, themes)
+    evidence.extend(_value_directory_strategy_title_evidence(source, item))
     evidence_score = sum(int(item["score"]) for item in evidence)
     if evidence_score < config["min_evidence_score"]:
         return None
