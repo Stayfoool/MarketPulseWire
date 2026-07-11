@@ -89,7 +89,12 @@ def decision_targets(payload: dict[str, Any]) -> list[str]:
 def interpretation_payload(review_or_analysis: dict[str, Any]) -> dict[str, Any]:
     analysis = review_analysis(review_or_analysis)
     raw = review_or_analysis.get("raw") if isinstance(review_or_analysis.get("raw"), dict) else {}
-    source_base = raw if raw.get("core_content") or raw.get("related_targets") else analysis
+    unified = analysis.get("_interpretation_result")
+    if not isinstance(unified, dict):
+        unified = review_or_analysis.get("_interpretation_result")
+    if not isinstance(unified, dict):
+        unified = {}
+    source_base = unified or (raw if raw.get("core_content") or raw.get("related_targets") else analysis)
     source = {
         "core_content": source_base.get("core_content"),
         "brief_reason": source_base.get("brief_reason"),

@@ -234,6 +234,39 @@ class DecisionResult:
         }
 
 
+def decision_result_from_payload(payload: Any) -> DecisionResult | None:
+    """Read a DecisionResult from unified metadata, or return None for legacy data."""
+    if not isinstance(payload, dict):
+        return None
+    candidates = [payload.get("decision_result"), payload.get("_decision_result")]
+    raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
+    analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}
+    candidates.extend(
+        [
+            raw.get("decision_result"),
+            analysis.get("decision_result"),
+            analysis.get("_decision_result"),
+        ]
+    )
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or "action" not in candidate:
+            continue
+        return DecisionResult(
+            action=candidate.get("action", "archive"),
+            importance=candidate.get("importance", "unknown"),
+            reason=candidate.get("reason", ""),
+            brief_reason=candidate.get("brief_reason", ""),
+            rule_hits=candidate.get("rule_hits") or [],
+            candidate_rules=candidate.get("candidate_rules") or [],
+            skeptic=candidate.get("skeptic") or {},
+            dedup=candidate.get("dedup") or {},
+            need_llm_interpretation=bool(candidate.get("need_llm_interpretation")),
+            need_limited_llm_judgement=bool(candidate.get("need_limited_llm_judgement")),
+            audit_json=candidate.get("audit_json") or {},
+        )
+    return None
+
+
 @dataclass
 class InterpretationResult:
     core_content: str = ""
