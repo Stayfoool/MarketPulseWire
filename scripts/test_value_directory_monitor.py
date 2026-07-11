@@ -8,10 +8,11 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import value_directory_preview
 import value_directory_monitor
 from source_profiles import runtime_source_profile
 from value_directory_browser import classify_page_state, dedupe_entries, normalize_entry, source_config
-from value_directory_preview import apply_preview_to_item, fallback_facts
+from value_directory_preview import apply_preview_to_item, extract_preview_facts, fallback_facts, flatten_paddleocr_result
 
 
 def test_normalize_entry_extracts_stable_id_and_utc_date() -> None:
@@ -155,6 +156,139 @@ def test_preview_failure_is_recorded_without_fake_summary() -> None:
     assert "失败/不可用" in enriched["preview_lines"][0]
 
 
+def test_paddleocr_result_flatten_supports_common_shapes() -> None:
+    v2_result = [
+        [
+            [[[0, 0], [1, 0], [1, 1], [0, 1]], ("Rating Buy", 0.98)],
+            [[[0, 2], [1, 2], [1, 3], [0, 3]], ("Target price CNY 1,325.00", 0.96)],
+        ]
+    ]
+    v3_result = [{"rec_texts": ["Nomura", "Implied upside +20.6%"], "rec_scores": [0.99, 0.95]}]
+    assert flatten_paddleocr_result(v2_result) == [
+        ("Rating Buy", 0.98),
+        ("Target price CNY 1,325.00", 0.96),
+    ]
+    assert flatten_paddleocr_result(v3_result) == [
+        ("Nomura", 0.99),
+        ("Implied upside +20.6%", 0.95),
+    ]
+
+
+def test_preview_ocr_text_path_uses_text_llm_without_vision() -> None:
+    item = {
+        "id": "862591",
+        "url": "https://www.valuelist.cn/862591.html",
+        "title": "野村-中际旭创(300308.SZ)：我们预计2027年后将实现长期增长-20260706【10页】",
+        "summary": "title only",
+        "source_module": "价值目录 / 国际投行-个股",
+        "published_at": "2026-07-10T00:00:00+00:00",
+    }
+    preview = {
+        "state": "ok",
+        "articleText": "页面可见标题",
+        "previewImages": [{"src": "https://img.valuelist.cn/862591.jpg"}],
+    }
+    original_ocr = value_directory_preview.extract_ocr_text
+    original_text_llm = value_directory_preview.call_preview_text_llm
+    original_vision_llm = value_directory_preview.call_preview_vision_llm
+    original_ocr_env = os.environ.get("VALUE_DIRECTORY_PREVIEW_OCR_ENABLED")
+    original_vision_env = os.environ.get("VALUE_DIRECTORY_PREVIEW_VISION_FALLBACK_ENABLED")
+    try:
+        os.environ["VALUE_DIRECTORY_PREVIEW_OCR_ENABLED"] = "1"
+        os.environ["VALUE_DIRECTORY_PREVIEW_VISION_FALLBACK_ENABLED"] = "0"
+        value_directory_preview.extract_ocr_text = lambda _url: {
+            "engine": "paddleocr",
+            "status": "ok",
+            "text": "Action: Maintain Buy; raise TP to CNY 1,325, implying 20.6% upside\nRating Buy\nTarget price CNY 1,325.00",
+            "line_count": 3,
+        }
+
+        def fake_text_llm(_item, _preview, *, ocr_text=""):
+            assert "CNY 1,325" in ocr_text
+            return (
+                {
+                    "core_content": "野村维持中际旭创买入评级并上调目标价至 CNY 1,325。",
+                    "stance": "bullish",
+                    "action": "buy",
+                    "institution": "野村",
+                    "report_date": "2026-07-06",
+                    "rating": "Buy",
+                    "target_price": "CNY 1,325.00",
+                    "targets": ["中际旭创", "2.4T/3.2T 光模块", "NPO/CPO"],
+                    "key_points": ["维持 Buy", "目标价上调至 CNY 1,325", "隐含 20.6% 上行空间"],
+                    "preview_basis": "visible_first_page_ocr",
+                    "confidence": "high",
+                },
+                "deepseek-v4-pro",
+            )
+
+        value_directory_preview.call_preview_text_llm = fake_text_llm
+        value_directory_preview.call_preview_vision_llm = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("vision fallback should stay disabled")
+        )
+        facts = extract_preview_facts(item, preview)
+    finally:
+        value_directory_preview.extract_ocr_text = original_ocr
+        value_directory_preview.call_preview_text_llm = original_text_llm
+        value_directory_preview.call_preview_vision_llm = original_vision_llm
+        if original_ocr_env is None:
+            os.environ.pop("VALUE_DIRECTORY_PREVIEW_OCR_ENABLED", None)
+        else:
+            os.environ["VALUE_DIRECTORY_PREVIEW_OCR_ENABLED"] = original_ocr_env
+        if original_vision_env is None:
+            os.environ.pop("VALUE_DIRECTORY_PREVIEW_VISION_FALLBACK_ENABLED", None)
+        else:
+            os.environ["VALUE_DIRECTORY_PREVIEW_VISION_FALLBACK_ENABLED"] = original_vision_env
+
+    assert facts["status"] == "ok"
+    assert facts["model"] == "deepseek-v4-pro"
+    assert facts["target_price"] == "CNY 1,325.00"
+    assert facts["ocr"]["engine"] == "paddleocr"
+    assert facts["preview_basis"] == "visible_first_page_ocr"
+
+
+def test_preview_ocr_failure_falls_back_without_blocking() -> None:
+    item = {
+        "id": "862591",
+        "title": "野村-中际旭创(300308.SZ)：我们预计2027年后将实现长期增长-20260706【10页】",
+        "summary": "title only",
+    }
+    preview = {"state": "ok", "previewImages": [{"src": "https://img.valuelist.cn/862591.jpg"}]}
+    original_ocr = value_directory_preview.extract_ocr_text
+    original_vision_llm = value_directory_preview.call_preview_vision_llm
+    original_ocr_env = os.environ.get("VALUE_DIRECTORY_PREVIEW_OCR_ENABLED")
+    original_vision_env = os.environ.get("VALUE_DIRECTORY_PREVIEW_VISION_FALLBACK_ENABLED")
+    try:
+        os.environ["VALUE_DIRECTORY_PREVIEW_OCR_ENABLED"] = "1"
+        os.environ["VALUE_DIRECTORY_PREVIEW_VISION_FALLBACK_ENABLED"] = "0"
+        value_directory_preview.extract_ocr_text = lambda _url: {
+            "engine": "paddleocr",
+            "status": "too_short",
+            "text": "",
+            "error": "OCR 文字过短：0 chars",
+        }
+        value_directory_preview.call_preview_vision_llm = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("vision fallback should stay disabled")
+        )
+        facts = extract_preview_facts(item, preview)
+    finally:
+        value_directory_preview.extract_ocr_text = original_ocr
+        value_directory_preview.call_preview_vision_llm = original_vision_llm
+        if original_ocr_env is None:
+            os.environ.pop("VALUE_DIRECTORY_PREVIEW_OCR_ENABLED", None)
+        else:
+            os.environ["VALUE_DIRECTORY_PREVIEW_OCR_ENABLED"] = original_ocr_env
+        if original_vision_env is None:
+            os.environ.pop("VALUE_DIRECTORY_PREVIEW_VISION_FALLBACK_ENABLED", None)
+        else:
+            os.environ["VALUE_DIRECTORY_PREVIEW_VISION_FALLBACK_ENABLED"] = original_vision_env
+
+    assert facts["status"] == "failed"
+    assert facts["model"] == "preview_failed"
+    assert facts["ocr"]["status"] == "too_short"
+    assert "OCR 文字过短" in facts["error"]
+
+
 class _DummyContext:
     def __enter__(self):
         return object()
@@ -263,6 +397,9 @@ def main() -> int:
     test_shadow_payload_marks_seen_and_reviewed_without_delivery()
     test_source_profile_registers_value_directory()
     test_preview_failure_is_recorded_without_fake_summary()
+    test_paddleocr_result_flatten_supports_common_shapes()
+    test_preview_ocr_text_path_uses_text_llm_without_vision()
+    test_preview_ocr_failure_falls_back_without_blocking()
     test_recheck_keeps_existing_review_without_new_rule()
     test_collect_production_rechecks_current_unpushed_reviews()
     print("value directory monitor checks passed")
