@@ -263,8 +263,9 @@ def attach_decision_to_event_analysis(
     *,
     holdings: list[dict[str, Any]] | None = None,
     symbols: set[str] | list[str] | tuple[str, ...] | None = None,
+    refresh: bool = False,
 ) -> dict[str, Any]:
-    if _has_payload_decision(analysis):
+    if _has_payload_decision(analysis) and not refresh:
         updated = dict(analysis)
         updated["_decision_final_fields"] = _event_final_fields(updated)
         return updated
@@ -273,7 +274,11 @@ def attach_decision_to_event_analysis(
     updated.update(
         _prefixed_metadata(
             decision,
-            final_fields=_event_final_fields(updated),
+            final_fields={
+                "importance": decision.importance,
+                "should_push": decision.should_push,
+                "reason": decision.brief_reason or decision.reason,
+            },
         )
     )
     return updated

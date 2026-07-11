@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import market_interpreter
 from market_interpreter import (
     LLM_JUDGEMENT_ENUM,
     forbidden_field_line,
@@ -12,7 +13,7 @@ from market_interpreter import (
     thin_system_prompt,
     thin_user_prompt_template,
 )
-from market_item import DecisionResult
+from market_item import DecisionResult, NormalizedMarketItem
 
 
 def test_thin_prompt_schema_keeps_push_fields_out_of_output() -> None:
@@ -75,12 +76,52 @@ def test_system_prompt_states_llm_is_not_final_push_judge() -> None:
     assert "不能自由扩散主题" in prompt
 
 
+def test_interpret_market_item_passes_decision_context_and_ignores_push_fields() -> None:
+    original = market_interpreter.call_chat_completion_with_prompts
+    captured: dict[str, str] = {}
+
+    def fake_call(system_prompt: str, user_prompt: str, *, user_agent: str):
+        captured.update(system=system_prompt, user=user_prompt, user_agent=user_agent)
+        return (
+            {
+                "core_content": "美国 CPI 低于预期。",
+                "brief_reason": "宏观硬规则已命中。",
+                "related_holdings": [{"name": "A股风险偏好"}],
+                "should_push": False,
+            },
+            "fake-model",
+        )
+
+    try:
+        market_interpreter.call_chat_completion_with_prompts = fake_call
+        result = market_interpreter.interpret_market_item(
+            NormalizedMarketItem(source="sina_flash", title="美国 CPI 低于预期"),
+            DecisionResult(
+                action="push",
+                importance="high",
+                brief_reason="宏观政策线规则命中。",
+                rule_hits=[{"rule_id": "macro_policy_line"}],
+            ),
+            mode="holdings",
+            forbidden_mode="event",
+        )
+    finally:
+        market_interpreter.call_chat_completion_with_prompts = original
+    assert result.core_content == "美国 CPI 低于预期。"
+    assert result.related_targets == [{"name": "A股风险偏好"}]
+    assert "should_push" not in result.to_dict()
+    assert '"action": "push"' in captured["user"]
+    assert "macro_policy_line" in captured["user"]
+    assert "不能覆盖硬规则强推" in captured["user"]
+
+
 def main() -> int:
     test_thin_prompt_schema_keeps_push_fields_out_of_output()
     test_event_prompt_uses_related_holdings_schema()
     test_restricted_judgement_instruction_includes_rule_context_and_enum()
     test_normalize_interpretation_payload_accepts_related_holdings_and_restricts_judgement()
     test_system_prompt_states_llm_is_not_final_push_judge()
+    test_interpret_market_item_passes_decision_context_and_ignores_push_fields()
     print("market interpreter checks passed")
     return 0
 

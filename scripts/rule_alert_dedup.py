@@ -20,7 +20,14 @@ def utc_now() -> str:
 
 def rule_hit(payload: dict[str, Any]) -> dict[str, Any] | None:
     raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
-    candidates = list(raw.get("rule_hits") or []) + list(payload.get("rule_hits") or [])
+    decision = payload.get("_decision_result")
+    if not isinstance(decision, dict):
+        decision = payload.get("decision_result") if isinstance(payload.get("decision_result"), dict) else {}
+    candidates = (
+        list(decision.get("rule_hits") or [])
+        + list(raw.get("rule_hits") or [])
+        + list(payload.get("rule_hits") or [])
+    )
     for candidate in candidates:
         if isinstance(candidate, dict) and candidate.get("rule_id") == RULE_ID and candidate.get("dedup_key"):
             return candidate

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
+from llm_analysis import call_chat_completion_with_prompts
 from market_item import DecisionResult, InterpretationResult, NormalizedMarketItem, normalize_llm_judgement
 
 
@@ -231,3 +232,44 @@ def item_context(item: NormalizedMarketItem | dict[str, Any]) -> dict[str, Any]:
         "dedupe_key": _clean_text(item.get("dedupe_key")),
         "access_note": _clean_text(item.get("access_note")),
     }
+
+
+def interpret_market_item(
+    item: NormalizedMarketItem | dict[str, Any],
+    decision: DecisionResult,
+    *,
+    content: str = "",
+    task: str = "为一条已完成规则决策的市场信息生成极简实时摘要。",
+    intro: str = "请解读以下市场信息",
+    mode: RelationMode = "targets",
+    forbidden_mode: ForbiddenFieldMode = "article",
+    extra_notes: list[str] | None = None,
+    user_agent: str = "surveil-market-interpreter/0.1",
+) -> InterpretationResult:
+    """Generate a thin interpretation constrained by an existing decision."""
+    system_prompt = thin_system_prompt(task=task)
+    user_template = thin_user_prompt_template(
+        intro=intro,
+        mode=mode,
+        forbidden_mode=forbidden_mode,
+        extra_notes=extra_notes,
+    )
+    context = item_context(item)
+    guarded_content = "\n\n".join(
+        part
+        for part in (
+            restricted_judgement_instruction(decision),
+            "标准化信息：\n" + _json_block(context),
+            str(content or "").strip(),
+        )
+        if part
+    )
+    parsed, model = call_chat_completion_with_prompts(
+        system_prompt,
+        user_template.replace("{source}", str(context.get("source") or ""))
+        .replace("{title}", str(context.get("title") or ""))
+        .replace("{published_at}", str(context.get("published_at") or ""))
+        .replace("{content}", guarded_content),
+        user_agent=user_agent,
+    )
+    return normalize_interpretation_payload(parsed, model=model)
