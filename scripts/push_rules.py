@@ -16,7 +16,8 @@ from typing import Any
 from investment_bank_theme_config import load_config
 from investment_universe import investment_universe_match
 from media_keyword_config import keyword_matches_text
-from rule_center import effective_list, rule_enabled, rule_priority
+from rule_center import effective_list, rule_enabled, rule_priority, rule_settings
+from stock_relations import portfolio_relation_matches
 
 
 INTERNATIONAL_BANK_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -238,6 +239,7 @@ OFFICIAL_COMPANY_HARD_VARIABLE_KEYWORDS = (
 )
 
 MACRO_TARGETS = ("美债收益率/美元", "A股风险偏好", "成长股估值")
+VALUE_DIRECTORY_SOURCE = "value_directory_ib_stocks"
 
 
 def compact_text(*values: object) -> str:
@@ -648,6 +650,112 @@ def investment_bank_research_rule(
     }
 
 
+def _holding_label(holding: dict[str, Any]) -> str:
+    return " ".join(
+        part
+        for part in (str(holding.get("name") or "").strip(), str(holding.get("symbol") or "").strip())
+        if part
+    )
+
+
+def value_directory_portfolio_relation_rule(
+    *,
+    source: str,
+    item: dict[str, Any],
+    holdings: list[dict[str, Any]],
+    symbols: set[str] | None = None,
+) -> dict[str, Any] | None:
+    """Push ValueList bank-stock reports linked to a holding through one-hop maps."""
+    del symbols
+    if source != VALUE_DIRECTORY_SOURCE or not rule_enabled("investment_bank_portfolio_relation"):
+        return None
+    text = compact_text(
+        item.get("title"),
+        item.get("summary"),
+        item.get("content"),
+        item.get("full_text"),
+        item.get("source_module"),
+        item.get("source_display"),
+    )
+    if not text:
+        return None
+    allowed_banks = {
+        item.casefold()
+        for item in effective_list("investment_bank_portfolio_relation", "allowed_banks", ())
+    }
+    banks = matched_bank_names(text, allowed_banks=allowed_banks or None)
+    if not banks:
+        return None
+
+    direct_holdings = matched_holdings(text, holdings)
+    max_relations = int(rule_settings("investment_bank_portfolio_relation").get("max_relation_matches") or 3)
+    relation_matches = portfolio_relation_matches(text, holdings, max_matches=max(1, min(max_relations, 5)))
+    if not direct_holdings and not relation_matches:
+        return None
+
+    related_targets: list[dict[str, Any]] = []
+    labels: list[str] = []
+    for holding in direct_holdings:
+        label = _holding_label(holding)
+        if label:
+            labels.append(label)
+        related_targets.append(
+            {
+                "name": str(holding.get("name") or "").strip(),
+                "code": str(holding.get("symbol") or "").strip(),
+                "relation": "直接持仓/观察",
+                "direction": "uncertain",
+            }
+        )
+    paths: list[str] = []
+    seen_symbols = {str(item.get("code") or "").upper() for item in related_targets}
+    for match in relation_matches:
+        holding_name = str(match.get("holding_name") or "").strip()
+        holding_symbol = str(match.get("holding_symbol") or "").strip()
+        label = " ".join(part for part in (holding_name, holding_symbol) if part)
+        if label:
+            labels.append(label)
+        if holding_symbol.upper() not in seen_symbols:
+            related_targets.append(
+                {
+                    "name": holding_name,
+                    "code": holding_symbol,
+                    "relation": str(match.get("relation_type") or "持仓关联"),
+                    "direction": str(match.get("impact_direction") or "uncertain"),
+                }
+            )
+            seen_symbols.add(holding_symbol.upper())
+        trigger = str(match.get("trigger_name") or match.get("matched_term") or "").strip()
+        relation_type = str(match.get("relation_type") or "持仓关联").strip()
+        if trigger and holding_name:
+            paths.append(f"{trigger} -> {relation_type} -> {holding_name}")
+
+    labels = list(dict.fromkeys(label for label in labels if label))[:5]
+    paths = list(dict.fromkeys(path for path in paths if path))[:3]
+    bank_label = "、".join(banks[:3])
+    reason = (
+        f"价值目录国际投行持仓关联规则：{bank_label}个股研报命中"
+        f"{'直接持仓或' if direct_holdings else ''}已配置的一跳同业/行业关系，必须即时提醒。"
+    )
+    if paths:
+        reason += f" 关联路径：{'；'.join(paths)}。"
+    reason += " 该判断只使用用户维护的关系映射，不由 LLM 自行推断。"
+    return {
+        "matched": True,
+        "rule_id": "investment_bank_portfolio_relation",
+        "importance": "high",
+        "push_now": True,
+        "should_push": True,
+        "reason": reason,
+        "brief_reason": reason,
+        "affected_targets": labels,
+        "related_targets": related_targets[:5],
+        "banks": banks,
+        "relation_matches": relation_matches,
+        "source": source,
+    }
+
+
 def direct_holding_hard_variable_rule(
     *,
     source: str,
@@ -796,6 +904,7 @@ def first_matching_push_rule(
 ) -> dict[str, Any] | None:
     matchers = (
         ("investment_bank_rating_target_direct_holding", investment_bank_research_rule),
+        ("investment_bank_portfolio_relation", value_directory_portfolio_relation_rule),
         ("international_bank_theme_strategy", international_bank_theme_strategy_rule),
         ("direct_holding_hard_variable", direct_holding_hard_variable_rule),
         ("official_company_hard_variable", official_company_hard_variable_rule),

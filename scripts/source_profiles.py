@@ -222,7 +222,7 @@ def build_profiles() -> list[SourceProfile]:
             name="价值目录 / 国际投行-个股",
             source_type="登录授权列表页",
             fetch_range="用户账号正常可访问的国际投行个股研报索引标题、日期和详情 URL；不下载 PDF，不访问积分/VIP内容",
-            filter_policy="只读列表页元数据；命中直接持仓/观察标的的国际投行评级/目标价，或明确策略标题的核心产业主题硬规则才即时推送",
+            filter_policy="只读列表页元数据；国际投行个股研报命中直接持仓、已启用同业/行业主题关系，或明确策略标题的核心产业主题硬规则时即时推送",
             frequency="每天 08:00 timer；首次登录后手动启用",
             runtime_shape="timer one-shot / server browser profile",
             pipeline="value_directory_monitor.py -> rule-first article review",

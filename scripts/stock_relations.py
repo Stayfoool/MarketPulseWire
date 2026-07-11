@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -616,6 +617,171 @@ def related_targets_for_context(
             }
         )
     return targets
+
+
+def _holding_side_match(
+    holding: dict[str, Any],
+    *,
+    symbol: str,
+    name: str,
+) -> bool:
+    """Return whether one side of a relation identifies a configured holding."""
+    values = (
+        str(holding.get("symbol") or ""),
+        str(holding.get("name") or ""),
+        str(holding.get("full_name") or ""),
+        *(str(item) for item in holding.get("aliases") or []),
+    )
+    probes = {value.strip().casefold() for value in values if value and value.strip()}
+    side = {str(symbol or "").strip().casefold(), str(name or "").strip().casefold()}
+    return bool(probes & {value for value in side if value})
+
+
+def _relation_text_terms(
+    *,
+    symbol: str,
+    name: str,
+    theme: str,
+) -> list[str]:
+    terms = [str(symbol or "").strip(), str(name or "").strip()]
+    terms.extend(part.strip() for part in re.split(r"[\s,，、;/|]+", str(theme or "")) if part.strip())
+    seen: set[str] = set()
+    result: list[str] = []
+    for term in terms:
+        key = term.casefold()
+        if len(term) < 2 or key in seen:
+            continue
+        seen.add(key)
+        result.append(term)
+    return result
+
+
+def _relation_term_matches(text: str, term: str) -> bool:
+    lowered = text.casefold()
+    normalized = term.casefold().strip()
+    if not normalized:
+        return False
+    if re.fullmatch(r"[a-z0-9][a-z0-9+._-]*", normalized):
+        return re.search(rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])", lowered) is not None
+    return normalized in lowered
+
+
+def portfolio_relation_matches(
+    text: str,
+    holdings: list[dict[str, Any]],
+    *,
+    db_path: Path = DEFAULT_DB_PATH,
+    max_matches: int = 5,
+) -> list[dict[str, Any]]:
+    """Find one-hop, enabled relation paths from report text to portfolio holdings.
+
+    This deliberately uses only user-maintained ``stock_relations`` rows. It
+    does not infer peers from an LLM or broad sector labels, so alert rules can
+    explain the exact path that justified a push.
+    """
+    if not str(text or "").strip() or not holdings:
+        return []
+    init_db(db_path).close()
+    with connect_sqlite(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, symbol, symbol_name, related_symbol, related_name,
+                   relation_type, impact_direction, theme, reason, confidence
+            FROM stock_relations
+            WHERE enabled = 1
+              AND (COALESCE(valid_to, '') = '' OR valid_to >= DATE('now'))
+            ORDER BY
+              CASE confidence WHEN '高' THEN 0 WHEN 'high' THEN 0
+                              WHEN '中' THEN 1 WHEN 'medium' THEN 1 ELSE 2 END,
+              updated_at DESC, id DESC
+            LIMIT 2000
+            """
+        ).fetchall()
+
+    matches: list[dict[str, Any]] = []
+    seen: set[tuple[str, int, str]] = set()
+    for row in rows:
+        left_holding = next(
+            (
+                holding
+                for holding in holdings
+                if _holding_side_match(
+                    holding,
+                    symbol=str(row["symbol"] or ""),
+                    name=str(row["symbol_name"] or ""),
+                )
+            ),
+            None,
+        )
+        right_holding = next(
+            (
+                holding
+                for holding in holdings
+                if _holding_side_match(
+                    holding,
+                    symbol=str(row["related_symbol"] or ""),
+                    name=str(row["related_name"] or ""),
+                )
+            ),
+            None,
+        )
+        directions: list[tuple[dict[str, Any], str, str, str, str]] = []
+        if right_holding:
+            directions.append(
+                (
+                    right_holding,
+                    str(row["symbol"] or ""),
+                    str(row["symbol_name"] or ""),
+                    "同行/行业/主题 -> 持仓",
+                    str(row["related_name"] or right_holding.get("name") or ""),
+                )
+            )
+        if left_holding:
+            directions.append(
+                (
+                    left_holding,
+                    str(row["related_symbol"] or ""),
+                    str(row["related_name"] or ""),
+                    "持仓 -> 同行/行业/主题",
+                    str(row["symbol_name"] or left_holding.get("name") or ""),
+                )
+            )
+        for holding, trigger_symbol, trigger_name, path_direction, holding_side_name in directions:
+            terms = _relation_text_terms(
+                symbol=trigger_symbol,
+                name=trigger_name,
+                theme=str(row["theme"] or ""),
+            )
+            matched_term = next((term for term in terms if _relation_term_matches(text, term)), "")
+            if not matched_term:
+                continue
+            holding_symbol = str(holding.get("symbol") or "").strip()
+            identity = (holding_symbol, int(row["id"]), matched_term.casefold())
+            if identity in seen:
+                continue
+            seen.add(identity)
+            holding_name = str(holding.get("name") or holding_side_name or holding_symbol).strip()
+            trigger_label = trigger_name.strip() or trigger_symbol.strip() or matched_term
+            matches.append(
+                {
+                    "holding_symbol": holding_symbol,
+                    "holding_name": holding_name,
+                    "trigger_symbol": trigger_symbol,
+                    "trigger_name": trigger_label,
+                    "matched_term": matched_term,
+                    "relation_type": str(row["relation_type"] or "related"),
+                    "impact_direction": normalize_direction(str(row["impact_direction"] or "")),
+                    "theme": str(row["theme"] or ""),
+                    "reason": str(row["reason"] or ""),
+                    "confidence": str(row["confidence"] or ""),
+                    "path_direction": path_direction,
+                    "relation_id": int(row["id"]),
+                }
+            )
+            if len(matches) >= max(1, max_matches):
+                return matches
+    return matches
 
 
 def parse_args() -> argparse.Namespace:
