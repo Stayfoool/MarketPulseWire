@@ -3,8 +3,8 @@
 
 By default this collector runs in shadow mode: it does not send Feishu cards,
 run LLM interpretation, or write production seen/review tables. The explicit
-``--production`` mode runs the RSS collector; ``content_runtime`` selects the
-unified content spine or the compatibility path for the whole batch.
+``--production`` mode runs the RSS collector; every item then enters the shared
+``process_market_item`` runtime facade.
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ from typing import Any, Iterable
 from collector_runtime import filter_enabled_mapping_for_run, load_source_states, save_source_state
 from collector_direct_shadow import attach_direct_decision_shadow, direct_shadow_counts, safe_load_shadow_holdings
 from db_utils import connect_sqlite, ensure_source_state_table
-from market_content_flow import OFFICIAL_NEWS_SOURCES
 from rss_monitor import DB_PATH, fetch_feed, filter_items, run_once as run_rss_once, strip_tags
 from source_profiles import SOURCE_PROFILE_CONFIG_PATH, runtime_profile_map
 from trendforce_sources import DEFAULT_RSS_FEEDS
@@ -45,8 +44,7 @@ def official_rss_feeds(config_path: Path = SOURCE_PROFILE_CONFIG_PATH) -> dict[s
     feeds = {
         source: url
         for source, url in DEFAULT_RSS_FEEDS.items()
-        if source in OFFICIAL_NEWS_SOURCES
-        and profiles.get(source, {}).get("category") == OFFICIAL_CATEGORY
+        if profiles.get(source, {}).get("category") == OFFICIAL_CATEGORY
     }
     return filter_enabled_mapping_for_run(feeds, label="公司官网 RSS", config_path=config_path)
 

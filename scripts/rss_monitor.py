@@ -18,31 +18,6 @@ from typing import Iterable
 import feedparser
 import trafilatura
 
-from content_runtime import (
-    analysis_lines_from_review,
-    apply_article_hardline_override,
-    apply_official_hardline_override,
-    apply_official_push_rule_override,
-    apply_push_rule_override,
-    article_gate_enabled,
-    article_item_id,
-    article_review_exists,
-    content_direct_path_enabled,
-    failed_review,
-    gate_lines,
-    is_official_news_source,
-    official_news_enabled,
-    official_review_exists as review_exists,
-    process_article_review,
-    process_official_review,
-    review_article,
-    review_official_news,
-    rule_first_review,
-    rule_first_official_review,
-    save_article_review,
-    save_official_review as save_review,
-)
-from cards import build_article_card
 from collector_runtime import (
     filter_enabled_mapping_for_run,
     load_source_state as runtime_load_source_state,
@@ -52,14 +27,11 @@ from collector_runtime import (
     split_sources_by_backoff,
 )
 from db_utils import connect_sqlite, ensure_seen_tables, ensure_source_state_table, retry_on_locked
-from feishu import send_card
 from http_utils import http_get
-from industry_hardline import apply_source_priority_override, event_first_hardline_review
 from llm_analysis import llm_config
-from market_delivery import deliver_article_review, deliver_official_review
+from market_flow import is_official_news_source, normalize_market_item, process_market_item
 from media_sources import is_overseas_media_source, overseas_media_access_note, overseas_media_module
 from media_keyword_config import is_media_focus_item
-from skeptic_evaluator import apply_skeptic_review
 from trendforce_sources import DEFAULT_RSS_FEEDS
 from x_check import load_env
 from source_backoff import backoff_state_after_failure, clear_backoff_state
@@ -368,108 +340,39 @@ def enrich_item(source: str, item: dict) -> dict:
 
 def notify_item(source: str, item: dict) -> None:
     item = enrich_item(source, item)
-    if article_gate_enabled():
-        item_id = article_item_id(item)
-        with connect_db() as conn:
-            existing = article_review_exists(conn, source, item_id)
-        if existing:
-            review = existing
-        elif content_direct_path_enabled():
-            with connect_db() as conn:
-                review = process_article_review(conn, source, item, source_profile_id=source)
-        else:
-            review = event_first_hardline_review(source, item)
-            if review:
-                print(f"{source} 规则快判硬变量：title={item.get('title', '')}", flush=True)
-            else:
-                review = rule_first_review(source, item)
-                if review:
-                    print(f"{source} 规则优先门控：title={item.get('title', '')}", flush=True)
-                else:
-                    try:
-                        review = review_article(source, item)
-                    except Exception as exc:  # noqa: BLE001 - keep item in daily digest
-                        print(f"{source} 薄解读失败：{exc}", flush=True)
-                        review = failed_review(item, exc)
-            with connect_db() as conn:
-                review = apply_source_priority_override(source, item, review)
-                review = apply_article_hardline_override(source, item, review)
-                review = apply_skeptic_review(conn, source=source, item=item, review=review, push_key="push_now")
-                review = apply_source_priority_override(source, item, review)
-                review = apply_push_rule_override(source, item, review)
-                save_article_review(conn, source, item, review)
-        print(
-            f"{source} 决策层：importance={review.get('importance')} "
-            f"push={review.get('push_now')} title={item.get('title', '')}",
-            flush=True,
-        )
-        if not review.get("push_now") or review.get("pushed_at"):
-            return
-        delivery_status = deliver_article_review(
-            source,
-            item,
-            review,
-            db_path=DB_PATH,
-            analysis_lines_prefix=gate_lines(review),
-            use_rule_dedup=True,
-        )
-        if delivery_status == "duplicate":
-            print(f"{source} 国际投行主题策略去重：title={item.get('title', '')}", flush=True)
-        return
-    send_card(build_article_card(source, item))
+    normalized = normalize_market_item(source, item, store_kind="article", source_profile_id=source)
+    outcome = process_market_item(
+        normalized,
+        item,
+        store_kind="article",
+        source_profile_id=source,
+        db_path=DB_PATH,
+    )
+    review = outcome.payload
+    print(
+        f"{source} 决策层：importance={review.get('importance')} "
+        f"push={review.get('push_now')} title={item.get('title', '')}",
+        flush=True,
+    )
+    if outcome.delivery_status == "duplicate":
+        print(f"{source} 国际投行主题策略去重：title={item.get('title', '')}", flush=True)
 
 
 def handle_official_news_item(source: str, item: dict) -> None:
     enriched = enrich_item(source, item)
-    item_id = str(enriched.get("id") or enriched.get("url") or enriched.get("title") or "")
-    with connect_db() as conn:
-        existing = review_exists(conn, source, item_id)
-    if existing:
-        review = existing
-    elif content_direct_path_enabled():
-        with connect_db() as conn:
-            review = process_official_review(conn, source, enriched, source_profile_id=source)
-    elif not official_news_enabled():
-        review = {
-            "importance": "medium",
-            "should_push_now": False,
-            "reason": "LLM 未配置，无法判定是否需要即时推送；先进入日报池。",
-            "daily_summary": str(enriched.get("title") or ""),
-            "analysis": {},
-        }
-        with connect_db() as conn:
-            save_review(conn, source, enriched, review)
-    else:
-        review = rule_first_official_review(source, enriched)
-        if review:
-            print(f"{source} 官网新闻规则优先门控：title={enriched.get('title', '')}", flush=True)
-        else:
-            review = review_official_news(source, enriched)
-        with connect_db() as conn:
-            review = apply_official_hardline_override(source, enriched, review)
-            review = apply_skeptic_review(
-                conn,
-                source=source,
-                item=enriched,
-                review=review,
-                push_key="should_push_now",
-            )
-            review = apply_official_push_rule_override(source, enriched, review)
-            save_review(conn, source, enriched, review)
-
+    normalized = normalize_market_item(source, enriched, store_kind="official", source_profile_id=source)
+    outcome = process_market_item(
+        normalized,
+        enriched,
+        store_kind="official",
+        source_profile_id=source,
+        db_path=DB_PATH,
+    )
+    review = outcome.payload
     print(
         f"{source} 官网新闻分流：importance={review.get('importance')} "
         f"push={review.get('should_push_now')} title={enriched.get('title', '')}",
         flush=True,
-    )
-    if not review.get("should_push_now") or review.get("pushed_at"):
-        return
-    deliver_official_review(
-        source,
-        enriched,
-        review,
-        analysis_lines=analysis_lines_from_review(review),
-        db_path=DB_PATH,
     )
 
 

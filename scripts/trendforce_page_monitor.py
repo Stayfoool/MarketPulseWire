@@ -13,31 +13,13 @@ import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from content_runtime import (
-    apply_article_hardline_override,
-    apply_push_rule_override,
-    article_gate_enabled,
-    article_item_id,
-    article_review_exists,
-    content_direct_path_enabled,
-    failed_review,
-    gate_lines,
-    process_article_review,
-    review_article,
-    rule_first_review,
-    save_article_review,
-)
-from cards import build_article_card
 from collector_runtime import filter_enabled_named_for_run
 from db_utils import ensure_trendforce_page_seen_table, retry_on_locked
-from feishu import send_card
 from http_utils import http_get
-from industry_hardline import event_first_hardline_review
 from llm_analysis import llm_config
-from market_delivery import deliver_article_review
+from market_flow import normalize_market_item, process_market_item
 from rss_monitor import DB_PATH, connect_db, fetch_article_body, parse_date, strip_tags
 from source_health import record_source_failure, record_source_success
-from skeptic_evaluator import apply_skeptic_review
 from trendforce_sources import PageSource, TREND_FORCE_PAGE_SOURCES, is_focus_item
 from x_check import load_env
 
@@ -407,71 +389,27 @@ def enrich_item(item: dict) -> dict:
 
 def notify_item(item: dict) -> None:
     enriched = enrich_item(item)
-    if article_gate_enabled():
-        item_id = article_item_id(enriched)
-        with connect_db() as conn:
-            existing = article_review_exists(conn, PAGE_SOURCE_KEY, item_id)
-        if existing:
-            review = existing
-        elif content_direct_path_enabled():
-            with connect_db() as conn:
-                review = process_article_review(
-                    conn,
-                    PAGE_SOURCE_KEY,
-                    enriched,
-                    source_profile_id=str(enriched.get("page_source") or PAGE_SOURCE_KEY),
-                )
-        else:
-            review = event_first_hardline_review(PAGE_SOURCE_KEY, enriched)
-            if review:
-                print(
-                    f"{enriched.get('page_source') or PAGE_SOURCE_KEY} 规则快判硬变量："
-                    f"title={enriched.get('title', '')}",
-                    flush=True,
-                )
-            else:
-                review = rule_first_review(PAGE_SOURCE_KEY, enriched)
-                if review:
-                    print(
-                        f"{enriched.get('page_source') or PAGE_SOURCE_KEY} 规则优先门控："
-                        f"title={enriched.get('title', '')}",
-                        flush=True,
-                    )
-                else:
-                    try:
-                        review = review_article(PAGE_SOURCE_KEY, enriched)
-                    except Exception as exc:  # noqa: BLE001 - keep item in daily digest
-                        print(f"{enriched.get('page_source') or PAGE_SOURCE_KEY} 薄解读失败：{exc}", flush=True)
-                        review = failed_review(enriched, exc)
-            with connect_db() as conn:
-                review = apply_article_hardline_override(PAGE_SOURCE_KEY, enriched, review)
-                review = apply_skeptic_review(
-                    conn,
-                    source=PAGE_SOURCE_KEY,
-                    source_profile_id=str(enriched.get("page_source") or PAGE_SOURCE_KEY),
-                    item=enriched,
-                    review=review,
-                    push_key="push_now",
-                )
-                review = apply_push_rule_override(PAGE_SOURCE_KEY, enriched, review)
-                save_article_review(conn, PAGE_SOURCE_KEY, enriched, review)
-        print(
-            f"{enriched.get('page_source') or PAGE_SOURCE_KEY} 决策层：importance={review.get('importance')} "
-            f"push={review.get('push_now')} title={enriched.get('title', '')}",
-            flush=True,
-        )
-        if not review.get("push_now") or review.get("pushed_at"):
-            return
-        deliver_article_review(
-            PAGE_SOURCE_KEY,
-            enriched,
-            review,
-            db_path=DB_PATH,
-            analysis_lines_prefix=gate_lines(review),
-            use_rule_dedup=False,
-        )
-        return
-    send_card(build_article_card(PAGE_SOURCE_KEY, enriched))
+    profile_id = str(enriched.get("page_source") or PAGE_SOURCE_KEY)
+    normalized = normalize_market_item(
+        PAGE_SOURCE_KEY,
+        enriched,
+        store_kind="article",
+        source_profile_id=profile_id,
+    )
+    outcome = process_market_item(
+        normalized,
+        enriched,
+        store_kind="article",
+        source_profile_id=profile_id,
+        db_path=DB_PATH,
+        use_rule_dedup=False,
+    )
+    review = outcome.payload
+    print(
+        f"{profile_id} 决策层：importance={review.get('importance')} "
+        f"push={review.get('push_now')} title={enriched.get('title', '')}",
+        flush=True,
+    )
 
 
 def run_once(sources: list[PageSource], notify_baseline: bool = False) -> int:

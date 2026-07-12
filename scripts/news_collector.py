@@ -6,8 +6,8 @@ This consolidates the current first batch of news-media feeds
 `jin10_rsshub_important`). By default it runs in shadow mode: it does not send
 Feishu cards, does not run LLM interpretation, and does not write production
 seen/review tables. The explicit ``--production`` mode runs the domestic media
-collector; ``content_runtime`` selects the unified content spine or the
-compatibility path for the whole batch.
+collector; every item then enters the shared ``process_market_item`` runtime
+facade.
 """
 
 from __future__ import annotations

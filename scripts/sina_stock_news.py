@@ -16,10 +16,11 @@ from typing import Any
 
 from db_utils import connect_sqlite
 from env_utils import load_env
-from event_runtime import analyze_event, content_hash, load_enabled_holdings, maybe_deliver_event, upsert_event
 from http_utils import http_get
 from llm_analysis import call_chat_completion_with_prompts
 from market_db import DEFAULT_DB_PATH, init_db
+from market_flow import normalize_market_item, process_market_item
+from market_review_store import event_content_hash as content_hash, load_enabled_holdings
 from portfolio_import import import_holdings
 from sina_zy_client import client_from_env, result_data
 from source_health import record_source_failure, record_source_success
@@ -1151,8 +1152,17 @@ def run_once(
                 )
                 print(f"seen article event #{existing_event_id}: {event['title']}", flush=True)
                 continue
-            event_id, inserted = upsert_event(event, DEFAULT_DB_PATH)
-            if not inserted:
+            normalized = normalize_market_item(SOURCE, event, store_kind="event")
+            outcome = process_market_item(
+                normalized,
+                event,
+                store_kind="event",
+                task="sina_stock_news_portfolio",
+                db_path=DEFAULT_DB_PATH,
+                baseline_only=baseline_only,
+            )
+            event_id = outcome.event_id
+            if not outcome.inserted:
                 merge_holding_into_event(event_id, holding, item=item, reason=relevance_reason)
                 print(f"seen event #{event_id}: {event['title']}", flush=True)
                 continue
@@ -1161,10 +1171,9 @@ def run_once(
                 print(f"baseline event #{event_id}: {event['title']}", flush=True)
                 continue
             print(f"new event #{event_id}: {event['title']}", flush=True)
-            analysis = analyze_event(event_id, task="sina_stock_news_portfolio", db_path=DEFAULT_DB_PATH)
+            analysis = outcome.payload
             print(f"analysis #{event_id}: {analysis.get('core_content', '')}", flush=True)
-            status = maybe_deliver_event(event_id, analysis, db_path=DEFAULT_DB_PATH)
-            print(f"delivery #{event_id}: {status}", flush=True)
+            print(f"delivery #{event_id}: {outcome.delivery_status}", flush=True)
         if sleep_seconds:
             time.sleep(sleep_seconds)
 

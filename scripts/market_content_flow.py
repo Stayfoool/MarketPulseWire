@@ -295,10 +295,11 @@ def process_article_review(
     item: dict[str, Any],
     *,
     source_profile_id: str | None = None,
+    normalized_item: NormalizedMarketItem | None = None,
 ) -> dict[str, Any]:
     """Run the production article/news spine and persist its compatibility review."""
     holdings = load_enabled_holdings_for_rules()
-    normalized = normalized_article_item(source, item)
+    normalized = normalized_item or normalized_article_item(source, item)
     flow_result = _evaluate_content_item(source, item, normalized, holdings)
     review = _article_review_from_results(item, flow_result.decision, flow_result.interpretation)
     review = apply_skeptic_review(
@@ -422,10 +423,11 @@ def process_official_review(
     item: dict[str, Any],
     *,
     source_profile_id: str | None = None,
+    normalized_item: NormalizedMarketItem | None = None,
 ) -> dict[str, Any]:
     """Run the production official-news spine and persist its compatibility review."""
     holdings = load_enabled_holdings_for_rules()
-    normalized = normalized_official_item(source, item)
+    normalized = normalized_item or normalized_official_item(source, item)
     flow_result = _evaluate_content_item(source, item, normalized, holdings, official=True)
     review = _official_review_from_results(item, flow_result.decision, flow_result.interpretation)
     review = apply_skeptic_review(

@@ -12,12 +12,13 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from env_utils import get_env, load_env
-from event_runtime import analyze_event, content_hash, load_enabled_holdings, maybe_deliver_event, upsert_event
 from feishu import send_card
 from ifind_client import IfindClient, IfindNoDataError
 from ifind_notice_pdf import parse_notice_pdf
 from llm_analysis import LLMBalanceInsufficientError
 from market_db import DEFAULT_DB_PATH, init_db
+from market_flow import MarketItemProcessingError, normalize_market_item, process_market_item
+from market_review_store import event_content_hash as content_hash, load_enabled_holdings
 from portfolio_import import import_holdings
 from source_profiles import source_profile_enabled
 
@@ -501,15 +502,30 @@ def run_batch(
                     pdf_status = f" pdf={pdf_meta.get('status')} chars={pdf_meta.get('extracted_chars', 0)}"
                 print(f"[dry-run] {event['source']} {event['source_event_id']} {event['title']} text={text_len}{pdf_status}")
                 continue
-            event_id, inserted = upsert_event(event, DEFAULT_DB_PATH)
-            if inserted:
+            normalized = normalize_market_item(str(event.get("source") or ""), event, store_kind="event")
+            processing_error: Exception | None = None
+            try:
+                outcome = process_market_item(
+                    normalized,
+                    event,
+                    store_kind="event",
+                    task=f"{kind}_portfolio",
+                    db_path=DEFAULT_DB_PATH,
+                    analyze=analyze and not llm_balance_exhausted,
+                    deliver=deliver,
+                )
+            except MarketItemProcessingError as exc:
+                outcome = exc.outcome
+                processing_error = exc.__cause__ or exc
+            event_id = outcome.event_id
+            if outcome.inserted:
                 total_new += 1
                 print(f"new event #{event_id}: {event['title']}")
-                analysis: dict[str, Any] = {}
-                delivery_status = "not_sent"
-                if analyze and not llm_balance_exhausted:
+                analysis: dict[str, Any] = outcome.payload
+                delivery_status = outcome.delivery_status if analyze else "not_sent"
+                if processing_error is not None:
                     try:
-                        analysis = analyze_event(event_id, task=f"{kind}_portfolio", db_path=DEFAULT_DB_PATH)
+                        raise processing_error
                     except LLMBalanceInsufficientError as exc:
                         llm_balance_exhausted = True
                         batch_warning = "大模型余额不足，后续公告已跳过模型分析。"
@@ -522,14 +538,13 @@ def run_batch(
                         analysis = failed_analysis_payload(exc)
                         delivery_status = "analysis_failed"
                         print(f"analysis #{event_id} failed: {exc}", flush=True)
+                elif analyze and not llm_balance_exhausted:
+                    print(f"analysis #{event_id}: {analysis.get('core_content', '')}")
+                if deliver and analyze:
+                    if analysis.get("_analysis_failed"):
+                        print(f"delivery #{event_id}: skipped_analysis_failed")
                     else:
-                        print(f"analysis #{event_id}: {analysis.get('core_content', '')}")
-                    if deliver:
-                        if analysis.get("_analysis_failed"):
-                            print(f"delivery #{event_id}: skipped_analysis_failed")
-                        else:
-                            delivery_status = maybe_deliver_event(event_id, analysis, db_path=DEFAULT_DB_PATH)
-                            print(f"delivery #{event_id}: {delivery_status}")
+                        print(f"delivery #{event_id}: {delivery_status}")
                 elif analyze and llm_balance_exhausted:
                     analysis_skipped_count += 1
                     analysis = failed_analysis_payload(RuntimeError("LLM 余额不足"))

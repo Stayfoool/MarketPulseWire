@@ -27,21 +27,14 @@ SETTING_GROUPS: list[dict[str, Any]] = [
     {
         "id": "pipeline",
         "title": "处理链路",
-        "restart_hint": "事件 direct path 变更后重启新浪快讯常驻服务；新浪个股新闻和 iFinD timer 下一轮自动读取。",
+        "restart_hint": "统一链路变更后重启新浪快讯常驻服务；其余 collector timer 下一轮自动读取。X/Serenity 与价值目录不受此开关影响。",
         "fields": [
             SettingField(
-                "SURVEIL_EVENT_DIRECT_PATH",
-                "事件统一 direct path",
+                "SURVEIL_MARKET_FLOW_DIRECT_PATH",
+                "通用信息统一 market flow",
                 "pipeline",
-                help="1=四类事件来源统一 direct flow；0=回退 event_pipeline 兼容 wrapper。",
-                placeholder="1",
-            ),
-            SettingField(
-                "SURVEIL_CONTENT_DIRECT_PATH",
-                "通用资讯统一 direct path",
-                "pipeline",
-                help="1=research/news/official 使用 market_content_flow；0=回退 gate 兼容入口。",
-                placeholder="1",
+                help="1=research/news/official/Sina/iFinD 共用 direct flow；0=全部走兼容 wrapper。X/Serenity 与价值目录保持独立。",
+                placeholder="0",
             ),
         ],
     },
