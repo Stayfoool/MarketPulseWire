@@ -36,6 +36,13 @@ SETTING_GROUPS: list[dict[str, Any]] = [
                 help="1=四类事件来源统一 direct flow；0=回退 event_pipeline 兼容 wrapper。",
                 placeholder="1",
             ),
+            SettingField(
+                "SURVEIL_CONTENT_DIRECT_PATH",
+                "通用资讯统一 direct path",
+                "pipeline",
+                help="1=research/news/official 使用 market_content_flow；0=回退 gate 兼容入口。",
+                placeholder="1",
+            ),
         ],
     },
     {

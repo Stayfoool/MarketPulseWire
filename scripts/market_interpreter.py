@@ -81,12 +81,18 @@ def relation_schema(mode: RelationMode = "targets") -> dict[str, Any]:
     }
 
 
-def interpretation_schema(mode: RelationMode = "targets") -> dict[str, Any]:
+def interpretation_schema(
+    mode: RelationMode = "targets",
+    *,
+    include_limited_judgement: bool = False,
+) -> dict[str, Any]:
     payload = {
         "core_content": "一句到两句中文核心内容",
         "brief_reason": "一句简短关注原因；不要写长篇门控理由",
     }
     payload.update(relation_schema(mode))
+    if include_limited_judgement:
+        payload["llm_judgement"] = "仅从规则允许的有限枚举中选择"
     return payload
 
 
@@ -131,6 +137,7 @@ def thin_user_prompt_template(
     forbidden_mode: ForbiddenFieldMode = "article",
     extra_notes: list[str] | None = None,
     include_source_module: bool = False,
+    include_limited_judgement: bool = False,
 ) -> str:
     source_module = "来源模块：{source_module}\n" if include_source_module else ""
     notes = [
@@ -144,7 +151,7 @@ def thin_user_prompt_template(
             notes.append(cleaned)
     return (
         f"{intro}，输出 JSON：\n"
-        f"{_json_block(interpretation_schema(mode))}\n\n"
+        f"{_json_block(interpretation_schema(mode, include_limited_judgement=include_limited_judgement))}\n\n"
         "注意：\n- "
         + "\n- ".join(notes)
         + "\n\n"
@@ -253,6 +260,7 @@ def interpret_market_item(
         mode=mode,
         forbidden_mode=forbidden_mode,
         extra_notes=extra_notes,
+        include_limited_judgement=decision.need_limited_llm_judgement,
     )
     context = item_context(item)
     guarded_content = "\n\n".join(

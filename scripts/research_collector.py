@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """Collector for research institutions and industry media.
 
-This is the first consolidation step for the research/industry-media source
-family. By default it runs in shadow mode: it does not send Feishu cards, does
-not run LLM review, and does not write production dedupe/review tables. The
-explicit ``--production`` mode delegates to the existing production RSS and
-page compatibility paths so the behavior stays aligned during the systemd
-migration.
+By default this collector runs in shadow mode: it does not send Feishu cards,
+run LLM interpretation, or write production dedupe/review tables. The explicit
+``--production`` mode runs the RSS/page collectors; ``content_runtime`` selects
+the unified content spine or the compatibility path for the whole batch.
 """
 
 from __future__ import annotations
@@ -552,7 +550,7 @@ def main() -> int:
     parser.add_argument("--source", action="append", default=[], help="只跑指定 source id，可重复。")
     parser.add_argument("--rss-only", action="store_true", help="只跑 RSS/RDF 源。")
     parser.add_argument("--pages-only", action="store_true", help="只跑页面源。")
-    parser.add_argument("--production", action="store_true", help="运行生产链路：入库、门控、Skeptic/Tavily、飞书推送。")
+    parser.add_argument("--production", action="store_true", help="运行生产链路：入库、统一决策/解读、Skeptic/Tavily、飞书推送。")
     parser.add_argument("--notify-baseline", action="store_true", help="生产模式下首次建立基线时也发送通知。默认不发送旧条目。")
     parser.add_argument(
         "--page-min-interval",

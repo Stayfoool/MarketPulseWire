@@ -18,20 +18,32 @@ from typing import Iterable
 import feedparser
 import trafilatura
 
-from article_gate import (
-    apply_hardline_override as apply_article_hardline_override,
+from content_runtime import (
+    analysis_lines_from_review,
+    apply_article_hardline_override,
+    apply_official_hardline_override,
+    apply_official_push_rule_override,
+    apply_push_rule_override,
     article_gate_enabled,
     article_item_id,
+    article_review_exists,
+    content_direct_path_enabled,
     failed_review,
     gate_lines,
-    mark_pushed as mark_article_pushed,
-    apply_push_rule_override,
+    is_official_news_source,
+    mark_article_pushed,
+    mark_official_pushed as mark_pushed,
+    official_news_enabled,
+    official_review_exists as review_exists,
+    process_article_review,
+    process_official_review,
     review_article,
-    review_exists as article_review_exists,
+    review_official_news,
     rule_first_review,
-    save_review as save_article_review,
+    rule_first_official_review,
+    save_article_review,
+    save_official_review as save_review,
 )
-from official_news_gate import apply_official_hardline_override
 from cards import build_article_card
 from collector_runtime import (
     filter_enabled_mapping_for_run,
@@ -48,17 +60,6 @@ from industry_hardline import apply_source_priority_override, event_first_hardli
 from llm_analysis import llm_config
 from media_sources import is_overseas_media_source, overseas_media_access_note, overseas_media_module
 from media_keyword_config import is_media_focus_item
-from official_news_gate import (
-    analysis_lines_from_review,
-    apply_official_push_rule_override,
-    is_official_news_source,
-    mark_pushed,
-    official_news_enabled,
-    review_exists,
-    review_official_news,
-    rule_first_official_review,
-    save_review,
-)
 from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert
 from skeptic_evaluator import apply_skeptic_review
 from trendforce_sources import DEFAULT_RSS_FEEDS
@@ -375,6 +376,9 @@ def notify_item(source: str, item: dict) -> None:
             existing = article_review_exists(conn, source, item_id)
         if existing:
             review = existing
+        elif content_direct_path_enabled():
+            with connect_db() as conn:
+                review = process_article_review(conn, source, item, source_profile_id=source)
         else:
             review = event_first_hardline_review(source, item)
             if review:
@@ -449,6 +453,9 @@ def handle_official_news_item(source: str, item: dict) -> None:
         existing = review_exists(conn, source, item_id)
     if existing:
         review = existing
+    elif content_direct_path_enabled():
+        with connect_db() as conn:
+            review = process_official_review(conn, source, enriched, source_profile_id=source)
     elif not official_news_enabled():
         review = {
             "importance": "medium",
