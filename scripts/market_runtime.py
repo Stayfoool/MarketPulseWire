@@ -130,9 +130,9 @@ def normalize_market_item(
 def _selected_module(store_kind: StoreKind) -> ModuleType:
     direct = market_flow_direct_path_enabled()
     if store_kind == "event":
-        return importlib.import_module("market_event_flow" if direct else "event_pipeline")
+        return importlib.import_module("market_event_adapter" if direct else "event_pipeline")
     if direct:
-        return importlib.import_module("market_content_flow")
+        return importlib.import_module("market_content_adapter")
     return importlib.import_module("official_news_gate" if store_kind == "official" else "article_gate")
 
 

@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import inspect
 
+import market_content_adapter
 import market_content_flow
+import market_event_adapter
 import market_event_flow
 import market_flow
 from market_flow import evaluate_market_item, finalize_market_flow_result
@@ -151,12 +153,18 @@ def test_post_decision_finalization_updates_one_decision_result() -> None:
 
 
 def test_existing_wrappers_delegate_to_shared_core() -> None:
-    content_source = inspect.getsource(market_content_flow)
-    event_source = inspect.getsource(market_event_flow)
-    assert "from market_flow import" in content_source
-    assert "from market_flow import" in event_source
-    assert "from market_interpreter import interpret_market_item" not in content_source
-    assert "from market_interpreter import interpret_market_item" not in event_source
+    content_adapter_source = inspect.getsource(market_content_adapter)
+    event_adapter_source = inspect.getsource(market_event_adapter)
+    content_wrapper_source = inspect.getsource(market_content_flow)
+    event_wrapper_source = inspect.getsource(market_event_flow)
+    assert "from market_flow import" in content_adapter_source
+    assert "from market_flow import" in event_adapter_source
+    assert "from market_content_adapter import" in content_wrapper_source
+    assert "from market_event_adapter import" in event_wrapper_source
+    for wrapper_source in (content_wrapper_source, event_wrapper_source):
+        assert "from decision_engine import" not in wrapper_source
+        assert "from market_interpreter import" not in wrapper_source
+        assert "def process_" not in wrapper_source
 
 
 def main() -> int:

@@ -1,27 +1,24 @@
-"""Runtime selector for direct versus compatibility event flow entrypoints."""
+"""Legacy event API selector backed by the global market-flow route."""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 from market_db import DEFAULT_DB_PATH
-
-
-DIRECT_PATH_ENV = "SURVEIL_EVENT_DIRECT_PATH"
+from market_runtime import DIRECT_PATH_ENV, market_flow_direct_path_enabled
 
 
 def event_direct_path_enabled() -> bool:
-    return os.getenv(DIRECT_PATH_ENV, "0").strip().lower() in {"1", "true", "yes", "on"}
+    return market_flow_direct_path_enabled()
 
 
 def selected_event_module() -> ModuleType:
     if event_direct_path_enabled():
-        import market_event_flow
+        import market_event_adapter
 
-        return market_event_flow
+        return market_event_adapter
     import event_pipeline
 
     return event_pipeline

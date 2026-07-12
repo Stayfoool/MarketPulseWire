@@ -10,6 +10,8 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import content_runtime
+import event_runtime
 import ifind_batch
 import market_runtime
 import sina_flash
@@ -25,8 +27,16 @@ def test_global_switch_selects_exactly_one_runtime_module() -> None:
         os.environ["SURVEIL_CONTENT_DIRECT_PATH"] = "1"
         os.environ["SURVEIL_EVENT_DIRECT_PATH"] = "0"
         assert market_runtime.runtime_path_name() == "compat"
+        assert market_runtime._selected_module("article").__name__ == "article_gate"
+        assert market_runtime._selected_module("event").__name__ == "event_pipeline"
         os.environ[market_runtime.DIRECT_PATH_ENV] = "1"
         assert market_runtime.runtime_path_name() == "direct"
+        assert market_runtime._selected_module("article").__name__ == "market_content_adapter"
+        assert market_runtime._selected_module("official").__name__ == "market_content_adapter"
+        assert market_runtime._selected_module("event").__name__ == "market_event_adapter"
+        assert content_runtime.selected_article_module().__name__ == "market_content_adapter"
+        assert content_runtime.selected_official_module().__name__ == "market_content_adapter"
+        assert event_runtime.selected_event_module().__name__ == "market_event_adapter"
     finally:
         for key, value in original.items():
             if value is None:
