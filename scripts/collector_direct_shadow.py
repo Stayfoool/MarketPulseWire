@@ -9,6 +9,7 @@ from typing import Any
 
 from decision_engine import decide_market_item
 from market_db import DEFAULT_DB_PATH
+from event_pipeline import normalized_event_item
 from market_item import NormalizedMarketItem, item_from_article_mapping
 
 
@@ -108,6 +109,90 @@ def direct_decision_payload(
             "audit": dict(decision.audit_json),
         },
     }
+
+
+def _target_labels(rules: list[dict[str, Any]]) -> list[str]:
+    labels: list[str] = []
+    for rule in rules:
+        for target in rule.get("affected_targets") or []:
+            label = str(target or "").strip()
+            if label:
+                labels.append(label)
+        for target in rule.get("related_targets") or []:
+            if not isinstance(target, dict):
+                continue
+            name = str(target.get("name") or "").strip()
+            code = str(target.get("code") or "").strip()
+            label = " ".join(part for part in (name, code) if part)
+            if label:
+                labels.append(label)
+    return list(dict.fromkeys(labels))[:10]
+
+
+def _compact_rule(rule: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "rule_id": str(rule.get("rule_id") or ""),
+        "importance": str(rule.get("importance") or ""),
+        "brief_reason": str(rule.get("brief_reason") or rule.get("reason") or ""),
+        "targets": _target_labels([rule]),
+        "dedup_key": str(rule.get("dedup_key") or ""),
+        "dedup_lookback_days": rule.get("dedup_lookback_days"),
+    }
+
+
+def direct_event_decision_payload(
+    event: dict[str, Any],
+    *,
+    holdings: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Evaluate an event without LLM, delivery, dedup reservation, or writes."""
+    normalized = normalized_event_item(event)
+    decision = decide_market_item(normalized, holdings=holdings or [])
+    would_send = decision.action == "push"
+    return {
+        "ok": True,
+        "normalized_item": compact_normalized_item(normalized),
+        "decision": {
+            "action": decision.action,
+            "importance": decision.importance,
+            "brief_reason": decision.brief_reason,
+            "reason": decision.reason,
+            "rule_hit_ids": rule_ids(decision.rule_hits),
+            "candidate_rule_ids": rule_ids(decision.candidate_rules),
+            "matched_rules": [_compact_rule(rule) for rule in decision.rule_hits],
+            "targets": _target_labels(decision.rule_hits),
+            "symbols": list(normalized.symbols),
+            "need_llm_interpretation": decision.need_llm_interpretation,
+            "need_limited_llm_judgement": decision.need_limited_llm_judgement,
+            "audit": dict(decision.audit_json),
+        },
+        "delivery_intent": {
+            "would_send": would_send,
+            "would_skip": not would_send,
+            "reason": "DecisionResult.action == push" if would_send else f"DecisionResult.action == {decision.action}",
+        },
+        "dedup_intent": {
+            **dict(decision.dedup),
+            "reservation_attempted": False,
+            "reservation_reason": "event direct dry-run never reserves delivery dedup keys",
+        },
+    }
+
+
+def safe_direct_event_decision_payload(
+    event: dict[str, Any],
+    *,
+    holdings: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    try:
+        return direct_event_decision_payload(event, holdings=holdings)
+    except Exception as exc:  # noqa: BLE001 - keep the remaining dry-run report auditable.
+        return {
+            "ok": False,
+            "source": str(event.get("source") or ""),
+            "source_event_id": str(event.get("source_event_id") or ""),
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def safe_direct_decision_payload(
