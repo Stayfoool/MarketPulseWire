@@ -6,10 +6,11 @@ This document summarizes the current project structure, information sources, pro
 
 All general research, news-media, official-company, flash, portfolio-news, notice, and report sources use the same production contract:
 
-`collector -> NormalizedMarketItem -> decision_engine -> market_interpreter -> market_review_store -> delivery/view`
+`collector -> NormalizedMarketItem -> market_flow -> decision_engine -> market_interpreter -> store adapter -> market_delivery -> view`
 
 - `DecisionResult.action` is the push intent source. LLM output is normalized to `InterpretationResult` and cannot freely set or replace the push action.
 - Research/news/official sources still enter through `market_content_flow`, while event-family sources still enter through `market_event_flow`; both wrappers now delegate decision and interpretation orchestration to the shared `market_flow` core. The wrappers adapt source shapes and legacy tables, not separate decision policies.
+- `market_flow_adapters` owns raw event ingestion and explicit article/official/event compatibility-store writes. `market_delivery` owns article/official/event reservation, send execution, delivery status, and legacy pushed markers. Neither layer evaluates rules or calls the interpreter.
 - `article_reviews`, `official_news_reviews`, and `events/event_analyses` remain compatibility storage truth for existing daily, Web, and signal readers.
 - `SURVEIL_CONTENT_DIRECT_PATH` switches research/news/official production collectors as one group. `SURVEIL_EVENT_DIRECT_PATH` switches the four event-family sources as one group.
 - X/Serenity intentionally stays on its `seen_posts` and direct-card route because media/thread semantics are source-specific.

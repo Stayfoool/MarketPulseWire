@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from market_db import DEFAULT_DB_PATH, init_db
+from market_item import decision_result_from_payload
 
 
 RULE_ID = "international_bank_theme_strategy"
@@ -20,11 +21,13 @@ def utc_now() -> str:
 
 def rule_hit(payload: dict[str, Any]) -> dict[str, Any] | None:
     raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
+    structured_decision = decision_result_from_payload(payload)
     decision = payload.get("_decision_result")
     if not isinstance(decision, dict):
         decision = payload.get("decision_result") if isinstance(payload.get("decision_result"), dict) else {}
     candidates = (
-        list(decision.get("rule_hits") or [])
+        list(structured_decision.rule_hits if structured_decision else [])
+        + list(decision.get("rule_hits") or [])
         + list(raw.get("rule_hits") or [])
         + list(payload.get("rule_hits") or [])
     )

@@ -22,7 +22,6 @@ from content_runtime import (
     content_direct_path_enabled,
     failed_review,
     gate_lines,
-    mark_article_pushed,
     process_article_review,
     review_article,
     rule_first_review,
@@ -35,7 +34,8 @@ from feishu import send_card
 from http_utils import http_get
 from industry_hardline import event_first_hardline_review
 from llm_analysis import llm_config
-from rss_monitor import connect_db, fetch_article_body, parse_date, strip_tags
+from market_delivery import deliver_article_review
+from rss_monitor import DB_PATH, connect_db, fetch_article_body, parse_date, strip_tags
 from source_health import record_source_failure, record_source_success
 from skeptic_evaluator import apply_skeptic_review
 from trendforce_sources import PageSource, TREND_FORCE_PAGE_SOURCES, is_focus_item
@@ -462,14 +462,16 @@ def notify_item(item: dict) -> None:
         )
         if not review.get("push_now") or review.get("pushed_at"):
             return
-        enriched["article_review"] = review
-        enriched["analysis_thinking"] = "enabled"
-        enriched["analysis_max_tokens"] = int(os.getenv("LLM_HIGH_IMPORTANCE_MAX_OUTPUT_TOKENS", "1800"))
-        enriched["analysis_lines_prefix"] = gate_lines(review)
-    sent = send_card(build_article_card(PAGE_SOURCE_KEY, enriched))
-    if sent and article_gate_enabled():
-        with connect_db() as conn:
-            mark_article_pushed(conn, PAGE_SOURCE_KEY, article_item_id(enriched))
+        deliver_article_review(
+            PAGE_SOURCE_KEY,
+            enriched,
+            review,
+            db_path=DB_PATH,
+            analysis_lines_prefix=gate_lines(review),
+            use_rule_dedup=False,
+        )
+        return
+    send_card(build_article_card(PAGE_SOURCE_KEY, enriched))
 
 
 def run_once(sources: list[PageSource], notify_baseline: bool = False) -> int:
