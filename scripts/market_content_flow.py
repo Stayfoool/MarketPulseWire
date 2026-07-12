@@ -10,13 +10,13 @@ from decision_engine import (
     attach_decision_result_to_official_review,
     attach_decision_to_article_review,
     attach_decision_to_official_review,
-    decide_market_item,
 )
 from industry_hardline import apply_hardline_review_override, explain_hardline
 from llm_analysis import format_llm_analysis
 from macro_policy import apply_macro_review_override, macro_prompt_note
-from market_item import DecisionResult, InterpretationResult, NormalizedMarketItem, item_from_article_mapping
-from market_interpreter import interpret_market_item, thin_system_prompt, thin_user_prompt_template
+from market_flow import evaluate_market_item, finalize_market_flow_result
+from market_item import DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem, item_from_article_mapping
+from market_interpreter import thin_system_prompt, thin_user_prompt_template
 from market_review_store import (
     article_item_id,
     article_review_exists,
@@ -149,17 +149,17 @@ def _interpretation_content(source: str, item: dict[str, Any]) -> str:
     return "\n\n".join(note for note in notes if note)[:12000]
 
 
-def _interpret_article(
+def _evaluate_content_item(
     source: str,
     item: dict[str, Any],
     normalized: NormalizedMarketItem,
-    decision: DecisionResult,
+    holdings: list[dict[str, Any]],
     *,
     official: bool = False,
-) -> InterpretationResult:
-    return interpret_market_item(
+) -> MarketFlowResult:
+    return evaluate_market_item(
         normalized,
-        decision,
+        holdings=holdings,
         content=_interpretation_content(source, item),
         task=(
             "为一条已完成规则决策的核心产业链公司官网新闻生成极简实时摘要。"
@@ -171,60 +171,29 @@ def _interpret_article(
         forbidden_mode="official" if official else "article",
         extra_notes=["只可围绕 DecisionResult 的规则上下文解释，不得输出或改写推送开关。"],
         user_agent="surveil-official-content-flow/0.1" if official else "surveil-article-content-flow/0.1",
+        force_interpretation=True,
+        storage_ref={
+            "store_kind": "official_news_reviews" if official else "article_reviews",
+            "source": source,
+            "item_id": article_item_id(item),
+        },
     )
 
 
-def _finalize_decision(
-    decision: DecisionResult,
-    review: dict[str, Any],
-    *,
-    push_key: str,
-) -> DecisionResult:
-    final_push = bool(review.get(push_key))
-    action = decision.action
-    if final_push:
-        action = "push"
-    elif decision.should_push:
-        if review.get("skeptic_blocked"):
-            action = "ignore"
-        elif review.get("skeptic_downgraded"):
-            action = "daily"
-        else:
-            action = "archive"
-    audit = dict(decision.audit_json)
-    audit["content_flow_finalization"] = {
-        "initial_action": decision.action,
-        "final_action": action,
-        "push_key": push_key,
-        "final_push": final_push,
-        "skeptic_downgraded": bool(review.get("skeptic_downgraded")),
-        "skeptic_blocked": bool(review.get("skeptic_blocked")),
-    }
-    importance = str(review.get("importance") or decision.importance or "unknown")
-    return DecisionResult(
-        action=action,
-        importance=importance,
-        reason=str(review.get("reason") or decision.reason),
-        brief_reason=str(review.get("brief_reason") or decision.brief_reason or review.get("reason") or ""),
-        rule_hits=list(decision.rule_hits),
-        candidate_rules=list(decision.candidate_rules),
-        skeptic=dict(review.get("skeptic") or decision.skeptic),
-        dedup=dict(decision.dedup),
-        need_llm_interpretation=decision.need_llm_interpretation,
-        need_limited_llm_judgement=decision.need_limited_llm_judgement,
-        audit_json=audit,
-    )
+def _attach_article_flow_audit(review: dict[str, Any], flow_result: MarketFlowResult) -> dict[str, Any]:
+    updated = dict(review)
+    raw = dict(updated.get("raw") or {})
+    raw["_market_flow_result"] = flow_result.audit_payload()
+    updated["raw"] = raw
+    return updated
 
 
-def _interpretation_failure(error: Exception) -> InterpretationResult:
-    reason = str(error).strip()[:500]
-    return InterpretationResult(
-        brief_reason=f"薄解读失败：{reason}",
-        notes=[reason] if reason else [],
-        llm_judgement="failed",
-        model="interpretation_failed",
-        prompt_version="market_interpreter_v1",
-    )
+def _attach_official_flow_audit(review: dict[str, Any], flow_result: MarketFlowResult) -> dict[str, Any]:
+    updated = dict(review)
+    analysis = dict(updated.get("analysis") or {})
+    analysis["_market_flow_result"] = flow_result.audit_payload()
+    updated["analysis"] = analysis
+    return updated
 
 
 def _article_review_from_results(
@@ -315,13 +284,10 @@ def normalize_review(parsed: dict[str, Any]) -> dict[str, Any]:
 def review_article(source: str, item: dict[str, Any]) -> dict[str, Any]:
     holdings = load_enabled_holdings_for_rules()
     normalized = normalized_article_item(source, item)
-    decision = decide_market_item(normalized, holdings=holdings)
-    try:
-        interpretation = _interpret_article(source, item, normalized, decision)
-    except Exception as exc:  # noqa: BLE001 - interpretation failure must not erase a hard rule decision
-        interpretation = _interpretation_failure(exc)
-    review = _article_review_from_results(item, decision, interpretation)
-    return attach_decision_result_to_article_review(decision, review)
+    flow_result = _evaluate_content_item(source, item, normalized, holdings)
+    review = _article_review_from_results(item, flow_result.decision, flow_result.interpretation)
+    review = _attach_article_flow_audit(review, flow_result)
+    return attach_decision_result_to_article_review(flow_result.decision, review)
 
 
 def process_article_review(
@@ -334,12 +300,8 @@ def process_article_review(
     """Run the production article/news spine and persist its compatibility review."""
     holdings = load_enabled_holdings_for_rules()
     normalized = normalized_article_item(source, item)
-    decision = decide_market_item(normalized, holdings=holdings)
-    try:
-        interpretation = _interpret_article(source, item, normalized, decision)
-    except Exception as exc:  # noqa: BLE001 - a failed summary must not suppress deterministic push intent
-        interpretation = _interpretation_failure(exc)
-    review = _article_review_from_results(item, decision, interpretation)
+    flow_result = _evaluate_content_item(source, item, normalized, holdings)
+    review = _article_review_from_results(item, flow_result.decision, flow_result.interpretation)
     review = apply_skeptic_review(
         conn,
         source=source,
@@ -348,8 +310,18 @@ def process_article_review(
         review=review,
         push_key="push_now",
     )
-    final_decision = _finalize_decision(decision, review, push_key="push_now")
-    review = attach_decision_result_to_article_review(final_decision, review)
+    flow_result = finalize_market_flow_result(
+        flow_result,
+        final_push=bool(review.get("push_now")),
+        importance=str(review.get("importance") or ""),
+        reason=str(review.get("reason") or ""),
+        brief_reason=str(review.get("brief_reason") or review.get("reason") or ""),
+        skeptic=dict(review.get("skeptic") or {}),
+        downgraded=bool(review.get("skeptic_downgraded")),
+        blocked=bool(review.get("skeptic_blocked")),
+    )
+    review = _attach_article_flow_audit(review, flow_result)
+    review = attach_decision_result_to_article_review(flow_result.decision, review)
     store_article_review(conn, source, item, review, decision_item=normalized)
     return review
 
@@ -439,13 +411,10 @@ def normalize_official_review(parsed: dict[str, Any]) -> dict[str, Any]:
 def review_official_news(source: str, item: dict[str, Any]) -> dict[str, Any]:
     holdings = load_enabled_holdings_for_rules()
     normalized = normalized_official_item(source, item)
-    decision = decide_market_item(normalized, holdings=holdings)
-    try:
-        interpretation = _interpret_article(source, item, normalized, decision, official=True)
-    except Exception as exc:  # noqa: BLE001 - interpretation failure must not erase a hard rule decision
-        interpretation = _interpretation_failure(exc)
-    review = _official_review_from_results(item, decision, interpretation)
-    return attach_decision_result_to_official_review(decision, review)
+    flow_result = _evaluate_content_item(source, item, normalized, holdings, official=True)
+    review = _official_review_from_results(item, flow_result.decision, flow_result.interpretation)
+    review = _attach_official_flow_audit(review, flow_result)
+    return attach_decision_result_to_official_review(flow_result.decision, review)
 
 
 def process_official_review(
@@ -458,12 +427,8 @@ def process_official_review(
     """Run the production official-news spine and persist its compatibility review."""
     holdings = load_enabled_holdings_for_rules()
     normalized = normalized_official_item(source, item)
-    decision = decide_market_item(normalized, holdings=holdings)
-    try:
-        interpretation = _interpret_article(source, item, normalized, decision, official=True)
-    except Exception as exc:  # noqa: BLE001 - a failed summary must not suppress deterministic push intent
-        interpretation = _interpretation_failure(exc)
-    review = _official_review_from_results(item, decision, interpretation)
+    flow_result = _evaluate_content_item(source, item, normalized, holdings, official=True)
+    review = _official_review_from_results(item, flow_result.decision, flow_result.interpretation)
     review = apply_skeptic_review(
         conn,
         source=source,
@@ -472,8 +437,18 @@ def process_official_review(
         review=review,
         push_key="should_push_now",
     )
-    final_decision = _finalize_decision(decision, review, push_key="should_push_now")
-    review = attach_decision_result_to_official_review(final_decision, review)
+    flow_result = finalize_market_flow_result(
+        flow_result,
+        final_push=bool(review.get("should_push_now")),
+        importance=str(review.get("importance") or ""),
+        reason=str(review.get("reason") or ""),
+        brief_reason=str(review.get("brief_reason") or review.get("reason") or ""),
+        skeptic=dict(review.get("skeptic") or {}),
+        downgraded=bool(review.get("skeptic_downgraded")),
+        blocked=bool(review.get("skeptic_blocked")),
+    )
+    review = _attach_official_flow_audit(review, flow_result)
+    review = attach_decision_result_to_official_review(flow_result.decision, review)
     store_official_review(conn, source, item, review, decision_item=normalized)
     return review
 

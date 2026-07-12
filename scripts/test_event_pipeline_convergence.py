@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 
 import event_pipeline
 import market_event_flow
+import market_flow
 from market_db import init_db
 from market_item import InterpretationResult
 
@@ -38,7 +39,7 @@ def test_legacy_analysis_without_decision_result_still_uses_compatibility_helper
 
 
 def test_analyze_event_writes_interpretation_result_and_legacy_fields() -> None:
-    original = market_event_flow.interpret_market_item
+    original = market_flow.interpret_market_item
 
     def fake_interpret(*args, **kwargs):
         decision = args[1]
@@ -69,10 +70,10 @@ def test_analyze_event_writes_interpretation_result_and_legacy_fields() -> None:
             db_path,
         )
         try:
-            market_event_flow.interpret_market_item = fake_interpret
+            market_flow.interpret_market_item = fake_interpret
             analysis = event_pipeline.analyze_event(event_id, db_path=db_path)
         finally:
-            market_event_flow.interpret_market_item = original
+            market_flow.interpret_market_item = original
 
         conn = sqlite3.connect(db_path)
         try:

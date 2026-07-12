@@ -10,6 +10,7 @@ import sqlite3
 import article_gate
 import china_finance_media_monitor
 import content_runtime
+import market_flow
 import market_content_flow
 import official_news_gate
 import rss_monitor
@@ -41,9 +42,9 @@ def test_gate_modules_are_thin_compatibility_exports() -> None:
 
 
 def test_article_interpretation_cannot_override_decision_action() -> None:
-    original = market_content_flow.interpret_market_item
+    original = market_flow.interpret_market_item
     try:
-        market_content_flow.interpret_market_item = fake_interpretation
+        market_flow.interpret_market_item = fake_interpretation
         review = market_content_flow.review_article(
             "cls_telegraph_api",
             {
@@ -54,7 +55,7 @@ def test_article_interpretation_cannot_override_decision_action() -> None:
             },
         )
     finally:
-        market_content_flow.interpret_market_item = original
+        market_flow.interpret_market_item = original
     assert review["push_now"] is True
     assert review["raw"]["decision_result"]["action"] == "push"
     assert review["raw"]["_interpretation_result"]["model"] == "fake-model"
@@ -62,9 +63,9 @@ def test_article_interpretation_cannot_override_decision_action() -> None:
 
 
 def test_official_flow_uses_same_decision_and_interpretation_contract() -> None:
-    original = market_content_flow.interpret_market_item
+    original = market_flow.interpret_market_item
     try:
-        market_content_flow.interpret_market_item = fake_interpretation
+        market_flow.interpret_market_item = fake_interpretation
         review = market_content_flow.review_official_news(
             "nvidia_blog",
             {
@@ -75,7 +76,7 @@ def test_official_flow_uses_same_decision_and_interpretation_contract() -> None:
             },
         )
     finally:
-        market_content_flow.interpret_market_item = original
+        market_flow.interpret_market_item = original
     assert review["should_push_now"] is True
     assert review["analysis"]["_decision_result"]["action"] == "push"
     assert review["analysis"]["_interpretation_result"]["core_content"] == "统一薄解读核心内容。"
@@ -96,12 +97,12 @@ def test_yicai_morning_brief_is_auditable_decision_rule() -> None:
 
 
 def test_interpretation_failure_does_not_cancel_hard_rule_push() -> None:
-    original_interpreter = market_content_flow.interpret_market_item
+    original_interpreter = market_flow.interpret_market_item
     original_skeptic = market_content_flow.apply_skeptic_review
     conn = sqlite3.connect(":memory:")
     market_content_flow.ensure_article_reviews_table(conn)
     try:
-        market_content_flow.interpret_market_item = lambda *args, **kwargs: (_ for _ in ()).throw(
+        market_flow.interpret_market_item = lambda *args, **kwargs: (_ for _ in ()).throw(
             RuntimeError("test interpreter failure")
         )
         market_content_flow.apply_skeptic_review = lambda conn, **kwargs: kwargs["review"]
@@ -115,7 +116,7 @@ def test_interpretation_failure_does_not_cancel_hard_rule_push() -> None:
             },
         )
     finally:
-        market_content_flow.interpret_market_item = original_interpreter
+        market_flow.interpret_market_item = original_interpreter
         market_content_flow.apply_skeptic_review = original_skeptic
         conn.close()
     assert review["push_now"] is True
@@ -125,7 +126,7 @@ def test_interpretation_failure_does_not_cancel_hard_rule_push() -> None:
 
 
 def test_skeptic_final_action_is_persisted_in_decision_result() -> None:
-    original_interpreter = market_content_flow.interpret_market_item
+    original_interpreter = market_flow.interpret_market_item
     original_skeptic = market_content_flow.apply_skeptic_review
     conn = sqlite3.connect(":memory:")
     market_content_flow.ensure_article_reviews_table(conn)
@@ -139,7 +140,7 @@ def test_skeptic_final_action_is_persisted_in_decision_result() -> None:
         return review
 
     try:
-        market_content_flow.interpret_market_item = fake_interpretation
+        market_flow.interpret_market_item = fake_interpretation
         market_content_flow.apply_skeptic_review = block_review
         review = market_content_flow.process_article_review(
             conn,
@@ -152,7 +153,7 @@ def test_skeptic_final_action_is_persisted_in_decision_result() -> None:
         )
         stored = market_content_flow.article_review_exists(conn, "yicai_brief", "morning-blocked-1")
     finally:
-        market_content_flow.interpret_market_item = original_interpreter
+        market_flow.interpret_market_item = original_interpreter
         market_content_flow.apply_skeptic_review = original_skeptic
         conn.close()
     assert review["push_now"] is False
