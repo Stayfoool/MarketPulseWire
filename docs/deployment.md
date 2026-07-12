@@ -120,22 +120,24 @@ The installer also copies the production collector units:
 - `surveil-news-collector.service`
 - `surveil-news-collector.timer`
 
-In production mode they write the normal `seen_items` / review tables and can
-send Feishu cards through `market_content_flow` while preserving the compatible
-`article_reviews` / `official_news_reviews` stores. The global runtime switches
-are configured from the server Web panel:
+In production mode all general collectors construct `NormalizedMarketItem` and
+call `process_market_item(...)`, while preserving the compatible
+`article_reviews`, `official_news_reviews`, and `events/event_analyses` stores.
+The global runtime switch is configured from the server Web panel:
 
 ```bash
-SURVEIL_CONTENT_DIRECT_PATH=1
-SURVEIL_EVENT_DIRECT_PATH=1
+SURVEIL_MARKET_FLOW_DIRECT_PATH=0
 ```
 
-`SURVEIL_CONTENT_DIRECT_PATH` atomically selects the unified production flow for
-research, news-media, and official-company collectors. `SURVEIL_EVENT_DIRECT_PATH`
-does the same for Sina flash, Sina portfolio news, and iFinD notice/report. Set a
-switch to `0` only for rollback to the compatibility wrapper; never run both
-paths for the same source. X/Serenity and `value_directory_monitor` are deliberate
-independent routes and do not use these switches.
+`SURVEIL_MARKET_FLOW_DIRECT_PATH` atomically selects one route for research,
+news-media, official-company, Sina flash/portfolio news, and iFinD notice/report.
+Use `0` while compatibility wrappers remain active; stage 28 changes it once to
+`1` for the all-source direct cutover. `SURVEIL_CONTENT_DIRECT_PATH` and
+`SURVEIL_EVENT_DIRECT_PATH` are read-only compatibility aliases for one release
+when the new variable is absent. If their values conflict, all general sources
+resolve to compatibility mode; they can no longer create a mixed runtime state.
+X/Serenity and `value_directory_monitor` are deliberate independent routes and
+do not use this switch.
 
 When changing settings programmatically on the server, invoke `settings_store`
 as the `surveil` service user. Do not write `/opt/surveil/.env` as root, because

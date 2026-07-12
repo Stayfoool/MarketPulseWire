@@ -74,10 +74,15 @@ def load_enabled_holdings(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any
     return store_load_enabled_holdings(db_path)
 
 
-def upsert_event(event: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> tuple[int, bool]:
+def upsert_event(
+    event: dict[str, Any],
+    db_path: Path = DEFAULT_DB_PATH,
+    *,
+    normalized_item: NormalizedMarketItem | None = None,
+) -> tuple[int, bool]:
     """Insert a normalized event audit record and return (event_id, inserted)."""
     updated = _event_without_normalized_audit(event)
-    return ingest_event_item(updated, normalized_event_item(updated), db_path)
+    return ingest_event_item(updated, normalized_item or normalized_event_item(updated), db_path)
 
 
 def analyze_event(event_id: int, task: str = "portfolio_event", db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:

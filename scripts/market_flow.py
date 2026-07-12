@@ -7,6 +7,15 @@ from typing import Any, Literal
 from decision_engine import decide_market_item
 from market_item import DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem
 from market_interpreter import interpret_market_item
+from market_runtime import (
+    MarketItemProcessingError,
+    MarketProcessOutcome,
+    is_official_news_source,
+    market_flow_direct_path_enabled,
+    normalize_market_item,
+    process_market_item,
+    runtime_path_name,
+)
 
 
 FLOW_VERSION = "market_flow_v1"

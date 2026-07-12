@@ -3016,11 +3016,8 @@ function settingsRestartAdvice(changedItems) {{
   if (hasPrefix('IFIND_')) {{
     lines.push('iFinD 配置：公告/研报 timer 下一轮自动读取；如需马上验证，立即运行对应 timer 或 smoke service。');
   }}
-  if (hasAny(['SURVEIL_EVENT_DIRECT_PATH'])) {{
-    lines.push('事件统一链路：重启 surveil-sina-flash.service；新浪个股新闻和 iFinD timer 下一轮自动读取，也可在任务健康页立即运行。');
-  }}
-  if (hasAny(['SURVEIL_CONTENT_DIRECT_PATH'])) {{
-    lines.push('通用资讯统一链路：research、official、news collector 为 timer one-shot，下一轮自动读取；如需马上验证可立即运行对应 timer。');
+  if (hasAny(['SURVEIL_MARKET_FLOW_DIRECT_PATH'])) {{
+    lines.push('通用信息统一链路：重启 surveil-sina-flash.service；research、official、news、Sina 个股新闻和 iFinD timer 下一轮自动读取。X/Serenity 与价值目录不受影响。');
   }}
   if (hasAny(['SURVEIL_HTTP_PROXY', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'])) {{
     lines.push('代理环境：重启使用代理的常驻服务；collector timer 下一轮自动读取。若修改 mihomo 配置，重启 surveil-proxy.service。');

@@ -48,6 +48,10 @@ jobs:
           python scripts/test_rule_alert_dedup.py
           python scripts/test_rule_center.py
           python scripts/test_gate_prompts.py
+          python scripts/test_content_flow.py
+          python scripts/test_event_runtime.py
+          python scripts/test_market_flow.py
+          python scripts/test_market_flow_adapters.py
           python scripts/test_sina_zy_client.py
           python scripts/test_industry_hardline.py
           python scripts/test_macro_policy.py

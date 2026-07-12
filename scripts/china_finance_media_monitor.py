@@ -19,21 +19,6 @@ from typing import Any, Iterable
 
 import feedparser
 
-from content_runtime import (
-    apply_macro_override,
-    apply_push_rule_override,
-    article_gate_enabled,
-    article_item_id,
-    article_review_exists,
-    content_direct_path_enabled,
-    failed_review,
-    gate_lines,
-    process_article_review,
-    review_article,
-    rule_first_review,
-    save_article_review,
-)
-from cards import build_article_card
 from china_media_sources import (
     CHINA_MEDIA_ACCESS_NOTES,
     CHINA_MEDIA_FEEDS,
@@ -50,17 +35,15 @@ from collector_runtime import (
 )
 from db_utils import connect_sqlite, ensure_seen_tables, retry_on_locked
 from env_utils import load_env
-from feishu import send_card
 from http_utils import http_get
 from investment_universe import investment_universe_match, relevant_digest_for_mixed_item
 from llm_analysis import llm_config
 from macro_policy import is_macro_event
-from market_delivery import deliver_article_review
+from market_flow import normalize_market_item, process_market_item
 from media_keyword_config import is_media_focus_item
 from rss_monitor import DB_PATH, fetch_article_body, parse_date, strip_tags
 from source_backoff import backoff_state_after_failure, clear_backoff_state
 from source_health import record_source_failure, record_source_success
-from skeptic_evaluator import apply_skeptic_review
 from time_utils import parse_datetime_to_utc_iso, timestamp_to_utc_iso
 
 
@@ -651,58 +634,21 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
         if mandatory_morning
         else str(universe_match.get("reason") or "")
     )
-    if article_gate_enabled():
-        item_id = article_item_id(enriched)
-        with connect_db() as conn:
-            existing = article_review_exists(conn, source, item_id)
-        if existing:
-            review = existing
-        elif content_direct_path_enabled():
-            with connect_db() as conn:
-                review = process_article_review(conn, source, enriched, source_profile_id=source)
-        else:
-            review = rule_first_review(source, enriched)
-            if review:
-                print(f"{source} 规则优先门控：title={enriched.get('title', '')}", flush=True)
-            else:
-                try:
-                    review = review_article(source, enriched)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"{source} 薄解读失败：{exc}", flush=True)
-                    review = failed_review(enriched, exc)
-            with connect_db() as conn:
-                review = apply_macro_override(enriched, review)
-                review = apply_skeptic_review(
-                    conn,
-                    source=source,
-                    item=enriched,
-                    review=review,
-                    push_key="push_now",
-                )
-                review = apply_push_rule_override(source, enriched, review)
-                save_article_review(conn, source, enriched, review)
-        if mandatory_morning and not content_direct_path_enabled():
-            review = force_mandatory_morning_review(review, enriched)
-            with connect_db() as conn:
-                save_article_review(conn, source, enriched, review)
-        print(
-            f"{source} 决策层：importance={review.get('importance')} push={review.get('push_now')} title={enriched.get('title', '')}",
-            flush=True,
-        )
-        if not review.get("push_now") or review.get("pushed_at"):
-            return
-        delivery_status = deliver_article_review(
-            source,
-            enriched,
-            review,
-            db_path=DB_PATH,
-            analysis_lines_prefix=gate_lines(review),
-            use_rule_dedup=True,
-        )
-        if delivery_status == "duplicate":
-            print(f"{source} 国际投行主题策略去重：title={enriched.get('title', '')}", flush=True)
-        return
-    send_card(build_article_card(source, enriched))
+    normalized = normalize_market_item(source, enriched, store_kind="article", source_profile_id=source)
+    outcome = process_market_item(
+        normalized,
+        enriched,
+        store_kind="article",
+        source_profile_id=source,
+        db_path=DB_PATH,
+    )
+    review = outcome.payload
+    print(
+        f"{source} 决策层：importance={review.get('importance')} push={review.get('push_now')} title={enriched.get('title', '')}",
+        flush=True,
+    )
+    if outcome.delivery_status == "duplicate":
+        print(f"{source} 国际投行主题策略去重：title={enriched.get('title', '')}", flush=True)
 
 
 def run_once(sources: list[str], notify_baseline: bool = False) -> int:

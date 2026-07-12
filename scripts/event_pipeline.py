@@ -7,6 +7,7 @@ from typing import Any
 
 from market_db import DEFAULT_DB_PATH
 from market_delivery import compact_event_analysis_lines, feishu_webhook_fingerprint, record_delivery, simple_event_card
+from market_item import NormalizedMarketItem
 from market_event_flow import (
     EVENT_SOURCE_CONTEXT,
     analysis_record_fields,
@@ -29,8 +30,13 @@ from market_event_flow import upsert_event as _upsert_event
 from market_review_store import json_dumps, utc_now
 
 
-def upsert_event(event: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> tuple[int, bool]:
-    return _upsert_event(event, db_path)
+def upsert_event(
+    event: dict[str, Any],
+    db_path: Path = DEFAULT_DB_PATH,
+    *,
+    normalized_item: NormalizedMarketItem | None = None,
+) -> tuple[int, bool]:
+    return _upsert_event(event, db_path, normalized_item=normalized_item)
 
 
 def analyze_event(event_id: int, task: str = "portfolio_event", db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:

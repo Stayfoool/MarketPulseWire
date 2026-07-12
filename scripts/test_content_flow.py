@@ -9,9 +9,9 @@ import sqlite3
 
 import article_gate
 import china_finance_media_monitor
-import content_runtime
 import market_flow
 import market_content_flow
+import market_runtime
 import official_news_gate
 import rss_monitor
 import trendforce_page_monitor
@@ -164,30 +164,32 @@ def test_skeptic_final_action_is_persisted_in_decision_result() -> None:
 
 
 def test_runtime_switch_and_monitor_imports() -> None:
-    original = os.environ.get(content_runtime.DIRECT_PATH_ENV)
+    original = os.environ.get(market_runtime.DIRECT_PATH_ENV)
     try:
-        os.environ[content_runtime.DIRECT_PATH_ENV] = "0"
-        assert content_runtime.runtime_path_name() == "compat"
-        assert content_runtime.selected_article_module().__name__ == "article_gate"
-        os.environ[content_runtime.DIRECT_PATH_ENV] = "1"
-        assert content_runtime.runtime_path_name() == "direct"
-        assert content_runtime.selected_article_module().__name__ == "market_content_flow"
-        assert content_runtime.selected_official_module().__name__ == "market_content_flow"
+        os.environ[market_runtime.DIRECT_PATH_ENV] = "0"
+        assert market_runtime.runtime_path_name() == "compat"
+        os.environ[market_runtime.DIRECT_PATH_ENV] = "1"
+        assert market_runtime.runtime_path_name() == "direct"
     finally:
         if original is None:
-            os.environ.pop(content_runtime.DIRECT_PATH_ENV, None)
+            os.environ.pop(market_runtime.DIRECT_PATH_ENV, None)
         else:
-            os.environ[content_runtime.DIRECT_PATH_ENV] = original
+            os.environ[market_runtime.DIRECT_PATH_ENV] = original
     for module in (rss_monitor, china_finance_media_monitor, trendforce_page_monitor):
-        assert module.review_article.__module__ == "content_runtime"
-        assert module.process_article_review.__module__ == "content_runtime"
-    assert FIELDS_BY_KEY[content_runtime.DIRECT_PATH_ENV].group == "pipeline"
+        assert module.process_market_item.__module__ == "market_runtime"
+        source = inspect.getsource(module)
+        for forbidden in ("content_runtime", "market_content_flow", "market_event_flow", "event_runtime"):
+            assert f"from {forbidden} import" not in source
+            assert f"import {forbidden}" not in source
+    assert FIELDS_BY_KEY[market_runtime.DIRECT_PATH_ENV].group == "pipeline"
+    assert "SURVEIL_CONTENT_DIRECT_PATH" not in FIELDS_BY_KEY
+    assert "SURVEIL_EVENT_DIRECT_PATH" not in FIELDS_BY_KEY
 
 
 def test_value_directory_remains_outside_content_runtime_route() -> None:
     source = inspect.getsource(value_directory_monitor)
     assert "from article_gate import" in source
-    assert "from content_runtime import" not in source
+    assert "process_market_item" not in source
 
 
 def main() -> int:
