@@ -16,7 +16,7 @@ from typing import Any
 
 from db_utils import connect_sqlite
 from env_utils import load_env
-from event_pipeline import analyze_event, content_hash, load_enabled_holdings, maybe_deliver_event, upsert_event
+from event_runtime import analyze_event, content_hash, load_enabled_holdings, maybe_deliver_event, upsert_event
 from http_utils import http_get
 from llm_analysis import call_chat_completion_with_prompts
 from market_db import DEFAULT_DB_PATH, init_db
