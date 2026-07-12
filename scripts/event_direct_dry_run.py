@@ -16,7 +16,7 @@ from market_db import DEFAULT_DB_PATH
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORT_DIR = ROOT / "reports"
-EVENT_SOURCES = ("sina_flash", "sina_stock_news", "ifind_notice", "ifind_report")
+EVENT_SOURCES = ("sina_flash", "sina_stock_news", "ifind_notice")
 
 
 def utc_now() -> str:
@@ -55,17 +55,6 @@ def canonical_self_check_events() -> list[dict[str, Any]]:
             "event_type": "announcement",
             "title": "iFinD 公司公告链路自检",
             "summary": "只验证公告标准化和决策入口。",
-            "published_at": published_at,
-            "symbols": ["SELF_CHECK"],
-            "themes": [],
-            "raw": {"self_check": True},
-        },
-        {
-            "source": "ifind_report",
-            "source_event_id": "self-check:ifind-report",
-            "event_type": "research_report",
-            "title": "iFinD 研究报告链路自检",
-            "summary": "只验证研报标准化和决策入口。",
             "published_at": published_at,
             "symbols": ["SELF_CHECK"],
             "themes": [],

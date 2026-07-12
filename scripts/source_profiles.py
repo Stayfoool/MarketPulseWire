@@ -373,27 +373,10 @@ def build_profiles() -> list[SourceProfile]:
                 pipeline="公告采集 -> NormalizedMarketItem -> 正式披露优先决策/解读 -> delivery/view",
                 service_units=("surveil-ifind-notice.timer", "surveil-ifind-notice.service"),
                 health_keys=(("ifind_notice", "notice"), ("signal_pipeline", "ifind_notice")),
-                fetcher="scripts/ifind_batch.py --kind notice",
+                fetcher="scripts/ifind_batch.py",
                 skeptic_enabled=False,
                 web_evidence_enabled=False,
                 notes="正式披露以公告原文和 iFinD 数据为准。",
-            ),
-            SourceProfile(
-                id="ifind_report",
-                category="company_disclosures",
-                name="iFinD 研报/数据池（可选）",
-                source_type="iFinD report/data pool",
-                fetch_range="账号权限允许时读取配置研报/数据池",
-                filter_policy="当前权限不足时保持关闭；未来按持仓和配置公式筛选",
-                frequency="每天 08:00 / 20:00 timer（启用时）",
-                runtime_shape="timer one-shot",
-                pipeline="研报适配器 -> NormalizedMarketItem -> 统一决策/解读 -> delivery/view",
-                service_units=("surveil-ifind-report.timer", "surveil-ifind-report.service"),
-                health_keys=(("ifind_report", "report"),),
-                fetcher="scripts/ifind_batch.py --kind report",
-                skeptic_enabled=False,
-                web_evidence_enabled=False,
-                notes="当前部署可保留为关闭状态，待权限具备后再启用。",
             ),
         ]
     )
@@ -535,7 +518,7 @@ def apply_local_config(profile: SourceProfile, config: dict[str, Any]) -> dict[s
     payload["overrides"] = overrides
     payload["config_modified"] = (not payload["enabled"]) or bool(overrides)
     payload["runtime_effective"] = True
-    payload["runtime_note"] = "enabled/Skeptic/Tavily 覆盖已接入运行时；频率/代理暂仅记录。"
+    payload["runtime_note"] = "来源开关由运行时读取；频率和代理暂仅记录。"
     return payload
 
 
@@ -734,6 +717,37 @@ def source_profiles_payload(
         }
         for category in CATEGORY_ORDER
     ]
+    enabled_profiles = [profile for profile in profiles if profile.get("enabled", True)]
+    skeptic_source_count = sum(bool(profile.get("skeptic_enabled")) for profile in enabled_profiles)
+    evidence_source_count = sum(
+        bool(profile.get("skeptic_enabled")) and bool(profile.get("web_evidence_enabled"))
+        for profile in enabled_profiles
+    )
+    skeptic_global_enabled = normalize_bool(os.getenv("SKEPTIC_EVALUATOR_ENABLED", "1"), True)
+    evidence_global_enabled = normalize_bool(os.getenv("WEB_EVIDENCE_ENABLED", "0"), False)
+    evidence_api_configured = bool(
+        os.getenv("WEB_EVIDENCE_API_KEY", "").strip()
+        or os.getenv("TAVILY_API_KEY", "").strip()
+        or os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
+    )
+    effective_skeptic_count = skeptic_source_count if skeptic_global_enabled else 0
+    effective_evidence_count = evidence_source_count if evidence_global_enabled and evidence_api_configured else 0
+    runtime_status = {
+        "enabled_sources": len(enabled_profiles),
+        "total_sources": len(profiles),
+        "skeptic_sources": effective_skeptic_count,
+        "skeptic_source_selections": skeptic_source_count,
+        "skeptic_global_enabled": skeptic_global_enabled,
+        "web_evidence_sources": effective_evidence_count,
+        "web_evidence_source_selections": evidence_source_count,
+        "web_evidence_global_enabled": evidence_global_enabled,
+        "web_evidence_api_configured": evidence_api_configured,
+    }
+    runtime_note = (
+        f"当前启用 {len(enabled_profiles)}/{len(profiles)} 个来源；"
+        f"Skeptic 实际启用 {effective_skeptic_count} 个；"
+        f"Tavily/Web Evidence 实际可触发 {effective_evidence_count} 个。"
+    )
     return {
         "ok": True,
         "categories": categories,
@@ -742,5 +756,6 @@ def source_profiles_payload(
         "config_exists": config_exists(config_path),
         "override_config": config,
         "runtime_effective": True,
-        "runtime_note": "enabled/Skeptic/Tavily 覆盖已接入实际采集；生产入口按 6 类 collector 展示，底层健康记录仍沿用原 monitor/source 标签。",
+        "runtime_status": runtime_status,
+        "runtime_note": runtime_note,
     }

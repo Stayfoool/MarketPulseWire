@@ -73,7 +73,6 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-review.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-digest.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-ifind-notice.timer, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-ifind-report.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-jygs-actions.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector.timer, \\
@@ -92,7 +91,6 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block start surveil-signal-review.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-signal-digest.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-ifind-notice.service, \\
-    \$SYSTEMCTL_BIN --no-block start surveil-ifind-report.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-jygs-actions.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-research-collector.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-official-collector.service, \\
@@ -152,12 +150,9 @@ if grep -Eq '^DISABLE_LEGACY_RESEARCH_MONITORS=1$' '$REMOTE_DIR/.env' 2>/dev/nul
 else
   systemctl enable --now surveil-trendforce-page-monitor.service
 fi
-if grep -Eq '^(IFIND_RESEARCH_FORMULA|IFIND_REPORT_FORMULA|IFIND_RESEARCH_REPORTNAME|IFIND_REPORT_REPORTNAME|IFIND_RESEARCH_REPORT_TYPE|IFIND_REPORT_REPORT_TYPE)=[^[:space:]]+' '$REMOTE_DIR/.env' 2>/dev/null; then
-  systemctl enable --now surveil-ifind-report.timer
-else
-  systemctl disable --now surveil-ifind-report.timer >/dev/null 2>&1 || true
-  echo 'iFinD 研报配置为空，保持 surveil-ifind-report.timer 停用。'
-fi
+systemctl disable --now surveil-ifind-report.timer >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/surveil-ifind-report.timer /etc/systemd/system/surveil-ifind-report.service
+systemctl daemon-reload
 if grep -Eq '^ENABLE_JYGS_TIMER=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
   systemctl enable --now surveil-jygs-actions.timer
 else

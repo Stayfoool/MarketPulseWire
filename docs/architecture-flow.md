@@ -38,7 +38,7 @@ flowchart TD
         NewsCollector["surveil-news-collector<br/>scripts/news_collector.py"]
         SinaFlash["surveil-sina-flash<br/>scripts/sina_flash.py"]
         SinaStock["surveil-sina-stock-news<br/>scripts/sina_stock_news.py"]
-        Ifind["surveil-ifind-notice/report<br/>scripts/ifind_batch.py"]
+        Ifind["surveil-ifind-notice<br/>scripts/ifind_batch.py"]
         JYGSJob["surveil-jygs-actions<br/>scripts/jygs_actions.py"]
         WebWorkbench["surveil-holdings-web<br/>scripts/holdings_web.py"]
     end
@@ -145,7 +145,7 @@ flowchart LR
         NewsProd["surveil-news-collector<br/>oneshot timer / 2 min<br/>news_collector.py"]
         SinaFlashSvc["surveil-sina-flash<br/>simple / high-frequency loop<br/>sina_flash.py"]
         SinaStockSvc["surveil-sina-stock-news<br/>oneshot timer / 30 min<br/>sina_stock_news.py"]
-        IfindSvc["surveil-ifind-notice/report<br/>oneshot timer<br/>ifind_batch.py"]
+        IfindSvc["surveil-ifind-notice<br/>oneshot timer<br/>ifind_batch.py"]
         JYGSSvc["surveil-jygs-actions<br/>oneshot timer<br/>jygs_actions.py"]
     end
 
@@ -216,7 +216,6 @@ The health page uses the same high-level grouping: fetching services are separat
 | `surveil-sina-flash.service` | Sina Finance 7x24 flash API or optional Sina ZY provider | All fetched flash rows for configured tags/provider page | Match enabled holdings by code/name/aliases or macro policy line; dedupe into `events` | `simple` persistent | Script loop, default `SINA_FLASH_POLL_SECONDS=15` seconds | `news_media + flash` item -> `process_market_item` -> compatible `events/event_analyses` -> delivery/view | No | No |
 | `surveil-sina-stock-news.timer` -> `.service` | Sina per-stock public news page or optional Sina ZY stock news provider | For each enabled holding, latest `SINA_STOCK_NEWS_PER_STOCK_LIMIT` items, default 12 | Filter announcement-like items, AI-generated pages, holding exclude keywords; direct mention/business keyword pass; ambiguous items use relevance LLM | `oneshot` batch | Every 30 minutes | Collector relevance filter -> `NormalizedMarketItem` -> `process_market_item` -> compatible `events/event_analyses` -> delivery/view | No; current guard is relevance LLM + freshness hint | No |
 | `surveil-ifind-notice.timer` -> `.service` | iFinD notices/filings for enabled holdings | Recent notices over the configured lookback window | Holdings universe, iFinD notice kind, event dedupe; PDF text extraction when available | `oneshot` batch | 08:00 and 20:00 | `NormalizedMarketItem` -> `process_market_item` with disclosure context -> compatible `events/event_analyses` -> delivery/view | No | No |
-| `surveil-ifind-report.timer` -> `.service` | iFinD research/report data pool, if account permissions allow | Recent configured report formulas/report names | Disabled unless report env config is present; current deployment keeps it off when iFinD permission has no report data | `oneshot` batch | 08:00 and 20:00 when enabled | Optional report adapter -> `NormalizedMarketItem` -> `process_market_item` -> compatible `events/event_analyses` -> delivery/view | No | No |
 | `surveil-jygs-actions.timer` -> `.service` | JYGS action/limit-up feed, currently low priority | Intraday action pool entries when enabled | Requires valid login cookie/API state; `ENABLE_JYGS_TIMER=1` gates the timer; LLM prediction path for selected events | `oneshot` batch | 12:30 and 16:00 when enabled | JYGS-specific event/prediction path, not article gate | No | No |
 | `surveil-research-collector-shadow.timer` -> `.service` | SemiAnalysis, TrendForce RSS/pages, SEMI/PRNewswire, DIGITIMES, Nikkei xTECH, The Elec | Same source family as the target research/industry-media collector | Source profile enabled filtering; writes JSON shadow reports only | `oneshot` shadow batch | Every 15 minutes | Report-only direct decision shadow; no production review write or delivery | No | No |
 | `surveil-official-collector-shadow.timer` -> `.service` | OpenAI, NVIDIA, Samsung, SK hynix, Micron official feeds | Official RSS/Atom feed candidates | Source profile enabled filtering; compares sampled candidates to existing `seen_items` / `official_news_reviews` | `oneshot` shadow batch | Every 30 minutes | Report-only direct decision shadow; no production review write or delivery | No | No |

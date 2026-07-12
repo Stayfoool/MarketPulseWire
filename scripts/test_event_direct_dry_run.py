@@ -60,7 +60,6 @@ def test_canonical_report_covers_all_event_sources_and_declares_no_side_effects(
     assert contexts["sina_flash"]["source_category"] == "news_media"
     assert contexts["sina_stock_news"]["source_category"] == "portfolio_stock_news"
     assert contexts["ifind_notice"]["collector"] == "ifind_batch"
-    assert contexts["ifind_report"]["content_type"] == "research_report"
 
 
 def test_recent_database_scan_is_read_only_and_report_write_only_creates_report() -> None:
