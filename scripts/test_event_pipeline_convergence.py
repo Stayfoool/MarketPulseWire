@@ -9,10 +9,21 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import event_pipeline
+import market_event_adapter
 import market_event_flow
 import market_flow
 from market_db import init_db
 from market_item import InterpretationResult
+
+
+def test_event_compatibility_modules_are_thin_exports() -> None:
+    assert event_pipeline.analyze_event.__module__ == "market_event_adapter"
+    assert market_event_flow.analyze_event.__module__ == "market_event_adapter"
+    assert "from market_event_adapter import" in Path(market_event_flow.__file__).read_text(encoding="utf-8")
+    pipeline_source = Path(event_pipeline.__file__).read_text(encoding="utf-8")
+    assert "from decision_engine import" not in pipeline_source
+    assert "from market_interpreter import" not in pipeline_source
+    assert "def analyze_event" not in pipeline_source
 
 
 def test_decision_result_action_precedes_legacy_push_fields() -> None:
@@ -157,6 +168,7 @@ def test_event_entry_applies_direct_holding_rating_target_decision() -> None:
 
 
 def main() -> int:
+    test_event_compatibility_modules_are_thin_exports()
     test_decision_result_action_precedes_legacy_push_fields()
     test_legacy_analysis_without_decision_result_still_uses_compatibility_helper()
     test_analyze_event_writes_interpretation_result_and_legacy_fields()

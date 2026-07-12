@@ -1,24 +1,22 @@
-"""Runtime selector for article/news/official unified content flow."""
+"""Legacy content API selector backed by the global market-flow route."""
 
 from __future__ import annotations
 
-import os
 from types import ModuleType
 from typing import Any
 
-
-DIRECT_PATH_ENV = "SURVEIL_CONTENT_DIRECT_PATH"
+from market_runtime import DIRECT_PATH_ENV, market_flow_direct_path_enabled
 
 
 def content_direct_path_enabled() -> bool:
-    return os.getenv(DIRECT_PATH_ENV, "0").strip().lower() in {"1", "true", "yes", "on"}
+    return market_flow_direct_path_enabled()
 
 
 def selected_article_module() -> ModuleType:
     if content_direct_path_enabled():
-        import market_content_flow
+        import market_content_adapter
 
-        return market_content_flow
+        return market_content_adapter
     import article_gate
 
     return article_gate
@@ -26,9 +24,9 @@ def selected_article_module() -> ModuleType:
 
 def selected_official_module() -> ModuleType:
     if content_direct_path_enabled():
-        import market_content_flow
+        import market_content_adapter
 
-        return market_content_flow
+        return market_content_adapter
     import official_news_gate
 
     return official_news_gate

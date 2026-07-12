@@ -126,13 +126,13 @@ call `process_market_item(...)`, while preserving the compatible
 The global runtime switch is configured from the server Web panel:
 
 ```bash
-SURVEIL_MARKET_FLOW_DIRECT_PATH=0
+SURVEIL_MARKET_FLOW_DIRECT_PATH=1
 ```
 
 `SURVEIL_MARKET_FLOW_DIRECT_PATH` atomically selects one route for research,
 news-media, official-company, Sina flash/portfolio news, and iFinD notice/report.
-Use `0` while compatibility wrappers remain active; stage 28 changes it once to
-`1` for the all-source direct cutover. `SURVEIL_CONTENT_DIRECT_PATH` and
+Use `1` for the all-source direct route; set it to `0` only for an atomic rollback
+through the compatibility wrappers. `SURVEIL_CONTENT_DIRECT_PATH` and
 `SURVEIL_EVENT_DIRECT_PATH` are read-only compatibility aliases for one release
 when the new variable is absent. If their values conflict, all general sources
 resolve to compatibility mode; they can no longer create a mixed runtime state.

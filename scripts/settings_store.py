@@ -34,7 +34,7 @@ SETTING_GROUPS: list[dict[str, Any]] = [
                 "通用信息统一 market flow",
                 "pipeline",
                 help="1=research/news/official/Sina/iFinD 共用 direct flow；0=全部走兼容 wrapper。X/Serenity 与价值目录保持独立。",
-                placeholder="0",
+                placeholder="1",
             ),
         ],
     },
