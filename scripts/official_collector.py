@@ -2,9 +2,9 @@
 """Collector for official core-company news feeds.
 
 By default this collector runs in shadow mode: it does not send Feishu cards,
-does not run LLM review, and does not write production seen/review tables. The
-explicit ``--production`` mode delegates to the existing RSS production path so
-the official_news_gate behavior stays identical during systemd migration.
+run LLM interpretation, or write production seen/review tables. The explicit
+``--production`` mode runs the RSS collector; ``content_runtime`` selects the
+unified content spine or the compatibility path for the whole batch.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from typing import Any, Iterable
 from collector_runtime import filter_enabled_mapping_for_run, load_source_states, save_source_state
 from collector_direct_shadow import attach_direct_decision_shadow, direct_shadow_counts, safe_load_shadow_holdings
 from db_utils import connect_sqlite, ensure_source_state_table
-from official_news_gate import OFFICIAL_NEWS_SOURCES
+from market_content_flow import OFFICIAL_NEWS_SOURCES
 from rss_monitor import DB_PATH, fetch_feed, filter_items, run_once as run_rss_once, strip_tags
 from source_profiles import SOURCE_PROFILE_CONFIG_PATH, runtime_profile_map
 from trendforce_sources import DEFAULT_RSS_FEEDS
@@ -389,7 +389,7 @@ def main() -> int:
     load_env(ENV_PATH)
     parser = argparse.ArgumentParser(description="Run official company news collector.")
     parser.add_argument("--source", action="append", default=[], help="只跑指定 source id，可重复。")
-    parser.add_argument("--production", action="store_true", help="运行生产链路：入库、official gate、Skeptic/Tavily、飞书推送。")
+    parser.add_argument("--production", action="store_true", help="运行生产链路：入库、统一决策/解读、Skeptic/Tavily、飞书推送。")
     parser.add_argument("--notify-baseline", action="store_true", help="生产模式下首次建立基线时也发送通知。默认不发送旧条目。")
     parser.add_argument("--limit", type=int, default=5, help="每个 source 输出候选条数；0 表示不限制。")
     parser.add_argument("--json", action="store_true", help="输出完整 JSON。")

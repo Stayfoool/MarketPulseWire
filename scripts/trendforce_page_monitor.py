@@ -13,18 +13,20 @@ import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from article_gate import (
-    apply_hardline_override as apply_article_hardline_override,
+from content_runtime import (
+    apply_article_hardline_override,
+    apply_push_rule_override,
     article_gate_enabled,
     article_item_id,
+    article_review_exists,
+    content_direct_path_enabled,
     failed_review,
     gate_lines,
-    mark_pushed as mark_article_pushed,
-    apply_push_rule_override,
+    mark_article_pushed,
+    process_article_review,
     review_article,
-    review_exists as article_review_exists,
     rule_first_review,
-    save_review as save_article_review,
+    save_article_review,
 )
 from cards import build_article_card
 from collector_runtime import filter_enabled_named_for_run
@@ -411,6 +413,14 @@ def notify_item(item: dict) -> None:
             existing = article_review_exists(conn, PAGE_SOURCE_KEY, item_id)
         if existing:
             review = existing
+        elif content_direct_path_enabled():
+            with connect_db() as conn:
+                review = process_article_review(
+                    conn,
+                    PAGE_SOURCE_KEY,
+                    enriched,
+                    source_profile_id=str(enriched.get("page_source") or PAGE_SOURCE_KEY),
+                )
         else:
             review = event_first_hardline_review(PAGE_SOURCE_KEY, enriched)
             if review:

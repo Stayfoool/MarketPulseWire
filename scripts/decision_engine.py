@@ -183,6 +183,16 @@ def attach_decision_to_article_review(
 ) -> dict[str, Any]:
     """Attach DecisionResult audit metadata without changing legacy fields."""
     decision = decide_market_item(item, source=source, holdings=holdings or [], symbols=symbols)
+    return attach_decision_result_to_article_review(decision, review, push_key=push_key)
+
+
+def attach_decision_result_to_article_review(
+    decision: DecisionResult,
+    review: dict[str, Any],
+    *,
+    push_key: str = "push_now",
+) -> dict[str, Any]:
+    """Attach an already-finalized decision without recomputing the rules."""
     updated = dict(review)
     raw = dict(updated.get("raw") or {})
     raw.update(
@@ -228,6 +238,14 @@ def attach_decision_to_official_review(
     symbols: set[str] | list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     decision = decide_market_item(item, source=source, holdings=holdings or [], symbols=symbols)
+    return attach_decision_result_to_official_review(decision, review)
+
+
+def attach_decision_result_to_official_review(
+    decision: DecisionResult,
+    review: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach an already-finalized decision without recomputing the rules."""
     updated = dict(review)
     analysis = updated.get("analysis") if isinstance(updated.get("analysis"), dict) else {}
     analysis = dict(analysis)

@@ -19,18 +19,20 @@ from typing import Any, Iterable
 
 import feedparser
 
-from article_gate import (
+from content_runtime import (
     apply_macro_override,
+    apply_push_rule_override,
     article_gate_enabled,
     article_item_id,
+    article_review_exists,
+    content_direct_path_enabled,
     failed_review,
     gate_lines,
-    mark_pushed as mark_article_pushed,
-    apply_push_rule_override,
+    mark_article_pushed,
+    process_article_review,
     review_article,
-    review_exists as article_review_exists,
     rule_first_review,
-    save_review as save_article_review,
+    save_article_review,
 )
 from cards import build_article_card
 from china_media_sources import (
@@ -656,6 +658,9 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
             existing = article_review_exists(conn, source, item_id)
         if existing:
             review = existing
+        elif content_direct_path_enabled():
+            with connect_db() as conn:
+                review = process_article_review(conn, source, enriched, source_profile_id=source)
         else:
             review = rule_first_review(source, enriched)
             if review:
@@ -677,7 +682,7 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
                 )
                 review = apply_push_rule_override(source, enriched, review)
                 save_article_review(conn, source, enriched, review)
-        if mandatory_morning:
+        if mandatory_morning and not content_direct_path_enabled():
             review = force_mandatory_morning_review(review, enriched)
             with connect_db() as conn:
                 save_article_review(conn, source, enriched, review)

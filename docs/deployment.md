@@ -121,8 +121,27 @@ The installer also copies the production collector units:
 - `surveil-news-collector.timer`
 
 In production mode they write the normal `seen_items` / review tables and can
-send Feishu cards through the unified decision / thin-interpretation adapters
-while preserving the legacy `article_reviews` / `official_news_reviews` stores.
+send Feishu cards through `market_content_flow` while preserving the compatible
+`article_reviews` / `official_news_reviews` stores. The global runtime switches
+are configured from the server Web panel:
+
+```bash
+SURVEIL_CONTENT_DIRECT_PATH=1
+SURVEIL_EVENT_DIRECT_PATH=1
+```
+
+`SURVEIL_CONTENT_DIRECT_PATH` atomically selects the unified production flow for
+research, news-media, and official-company collectors. `SURVEIL_EVENT_DIRECT_PATH`
+does the same for Sina flash, Sina portfolio news, and iFinD notice/report. Set a
+switch to `0` only for rollback to the compatibility wrapper; never run both
+paths for the same source. X/Serenity and `value_directory_monitor` are deliberate
+independent routes and do not use these switches.
+
+When changing settings programmatically on the server, invoke `settings_store`
+as the `surveil` service user. Do not write `/opt/surveil/.env` as root, because
+an atomic replacement would change file ownership and prevent services from
+reading the production configuration.
+
 After cutover, keep the legacy guards below in `.env`: the installer will keep
 the old units disabled and enable the matching production collector timers.
 

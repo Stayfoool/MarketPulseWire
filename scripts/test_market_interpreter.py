@@ -54,6 +54,17 @@ def test_restricted_judgement_instruction_includes_rule_context_and_enum() -> No
         assert value in instruction
 
 
+def test_limited_judgement_is_only_requested_for_candidate_decisions() -> None:
+    ordinary = thin_user_prompt_template(intro="请解读", mode="targets")
+    limited = thin_user_prompt_template(
+        intro="请解读",
+        mode="targets",
+        include_limited_judgement=True,
+    )
+    assert '"llm_judgement"' not in ordinary
+    assert '"llm_judgement"' in limited
+
+
 def test_normalize_interpretation_payload_accepts_related_holdings_and_restricts_judgement() -> None:
     result = normalize_interpretation_payload(
         {
@@ -115,13 +126,41 @@ def test_interpret_market_item_passes_decision_context_and_ignores_push_fields()
     assert "不能覆盖硬规则强推" in captured["user"]
 
 
+def test_interpret_market_item_requests_limited_judgement_when_flagged() -> None:
+    original = market_interpreter.call_chat_completion_with_prompts
+    captured: dict[str, str] = {}
+
+    def fake_call(system_prompt: str, user_prompt: str, *, user_agent: str):
+        captured["user"] = user_prompt
+        return ({"core_content": "候选宏观信息。", "llm_judgement": "weak_confirm"}, "fake-model")
+
+    try:
+        market_interpreter.call_chat_completion_with_prompts = fake_call
+        result = market_interpreter.interpret_market_item(
+            NormalizedMarketItem(source="cls_telegraph_api", title="美国 ADP 低于预期"),
+            DecisionResult(
+                action="daily",
+                importance="medium",
+                candidate_rules=[{"rule_id": "macro_policy_line"}],
+                need_limited_llm_judgement=True,
+            ),
+        )
+    finally:
+        market_interpreter.call_chat_completion_with_prompts = original
+    assert '"llm_judgement"' in captured["user"]
+    assert result.llm_judgement == "weak_confirm"
+    assert result.to_dict().get("should_push") is None
+
+
 def main() -> int:
     test_thin_prompt_schema_keeps_push_fields_out_of_output()
     test_event_prompt_uses_related_holdings_schema()
     test_restricted_judgement_instruction_includes_rule_context_and_enum()
+    test_limited_judgement_is_only_requested_for_candidate_decisions()
     test_normalize_interpretation_payload_accepts_related_holdings_and_restricts_judgement()
     test_system_prompt_states_llm_is_not_final_push_judge()
     test_interpret_market_item_passes_decision_context_and_ignores_push_fields()
+    test_interpret_market_item_requests_limited_judgement_when_flagged()
     print("market interpreter checks passed")
     return 0
 
