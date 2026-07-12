@@ -12,7 +12,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from env_utils import get_env, load_env
-from event_pipeline import analyze_event, content_hash, load_enabled_holdings, maybe_deliver_event, upsert_event
+from event_runtime import analyze_event, content_hash, load_enabled_holdings, maybe_deliver_event, upsert_event
 from feishu import send_card
 from ifind_client import IfindClient, IfindNoDataError
 from ifind_notice_pdf import parse_notice_pdf

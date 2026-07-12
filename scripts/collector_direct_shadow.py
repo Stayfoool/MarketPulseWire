@@ -9,7 +9,7 @@ from typing import Any
 
 from decision_engine import decide_market_item
 from market_db import DEFAULT_DB_PATH
-from event_pipeline import normalized_event_item
+from market_event_flow import normalized_event_item
 from market_item import NormalizedMarketItem, item_from_article_mapping
 
 

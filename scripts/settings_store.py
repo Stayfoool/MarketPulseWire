@@ -25,6 +25,20 @@ class SettingField:
 
 SETTING_GROUPS: list[dict[str, Any]] = [
     {
+        "id": "pipeline",
+        "title": "处理链路",
+        "restart_hint": "事件 direct path 变更后重启新浪快讯常驻服务；新浪个股新闻和 iFinD timer 下一轮自动读取。",
+        "fields": [
+            SettingField(
+                "SURVEIL_EVENT_DIRECT_PATH",
+                "事件统一 direct path",
+                "pipeline",
+                help="1=四类事件来源统一 direct flow；0=回退 event_pipeline 兼容 wrapper。",
+                placeholder="1",
+            ),
+        ],
+    },
+    {
         "id": "llm",
         "title": "大模型",
         "restart_hint": "保存后建议重启 X/RSS/TrendForce/海外媒体等常驻分析服务，使新模型配置立即生效。",
