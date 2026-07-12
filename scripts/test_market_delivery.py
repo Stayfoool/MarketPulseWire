@@ -12,7 +12,13 @@ from tempfile import TemporaryDirectory
 import market_delivery
 from feishu import FeishuResponse
 from market_db import init_db
-from market_review_store import upsert_event_record
+from market_review_store import (
+    article_review_exists,
+    official_review_exists,
+    save_article_review,
+    save_official_review,
+    upsert_event_record,
+)
 
 
 def insert_event(db_path: Path, source_event_id: str, title: str = "测试事件") -> int:
@@ -46,6 +52,28 @@ def decision_analysis(action: str = "push", *, rule_hits: list[dict] | None = No
 def delivery_rows(db_path: Path) -> list[tuple]:
     with sqlite3.connect(db_path) as conn:
         return conn.execute("SELECT status, error, payload_json FROM deliveries ORDER BY id").fetchall()
+
+
+def content_review(action: str = "push", *, rule_hits: list[dict] | None = None, official: bool = False) -> dict:
+    decision = {
+        "action": action,
+        "importance": "high" if action == "push" else "low",
+        "reason": "确定性规则命中。",
+        "rule_hits": rule_hits or [],
+    }
+    review = {
+        "importance": decision["importance"],
+        "push_now": True,
+        "should_push_now": True,
+        "reason": decision["reason"],
+        "daily_summary": "测试摘要。",
+        "affected_targets": [],
+        "raw": {"decision_result": decision},
+        "analysis": {"_decision_result": decision},
+    }
+    if official:
+        review.pop("push_now")
+    return review
 
 
 def test_archive_and_missing_webhook_are_recorded_without_sending() -> None:
@@ -130,10 +158,106 @@ def test_success_confirms_rule_dedup_and_duplicate_skips_second_send() -> None:
             os.environ["FEISHU_WEBHOOK"] = original_webhook
 
 
+def test_content_delivery_uses_decision_action_and_marks_legacy_rows() -> None:
+    original_send = market_delivery.send_card
+    try:
+        market_delivery.send_card = lambda card: True
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            article_item = {"id": "article-1", "title": "测试文章"}
+            archive_review = content_review("archive")
+            push_review = content_review("push")
+            official_item = {"id": "official-1", "title": "测试官网新闻"}
+            official_push = content_review("push", official=True)
+            with sqlite3.connect(db_path) as conn:
+                save_article_review(conn, "cls_telegraph_api", article_item, push_review)
+                save_official_review(conn, "nvidia_blog", official_item, official_push)
+            assert (
+                market_delivery.deliver_article_review(
+                    "cls_telegraph_api",
+                    article_item,
+                    archive_review,
+                    db_path=db_path,
+                    use_rule_dedup=False,
+                )
+                == "skipped"
+            )
+            assert (
+                market_delivery.deliver_article_review(
+                    "cls_telegraph_api",
+                    article_item,
+                    push_review,
+                    db_path=db_path,
+                    use_rule_dedup=False,
+                )
+                == "sent"
+            )
+            assert (
+                market_delivery.deliver_official_review(
+                    "nvidia_blog",
+                    official_item,
+                    official_push,
+                    analysis_lines=["核心内容：测试"],
+                    db_path=db_path,
+                )
+                == "sent"
+            )
+            with sqlite3.connect(db_path) as conn:
+                stored_article = article_review_exists(conn, "cls_telegraph_api", "article-1")
+                stored_official = official_review_exists(conn, "nvidia_blog", "official-1")
+        assert stored_article is not None and stored_article["pushed_at"]
+        assert stored_official is not None and stored_official["pushed_at"]
+    finally:
+        market_delivery.send_card = original_send
+
+
+def test_article_delivery_dedup_skips_without_changing_decision_action() -> None:
+    original_send = market_delivery.send_card
+    calls: list[dict] = []
+    rule_hit = {
+        "rule_id": "international_bank_theme_strategy",
+        "dedup_key": "ib_theme:article-adapter",
+        "dedup_lookback_days": 14,
+    }
+    try:
+        market_delivery.send_card = lambda card: calls.append(card) or True
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            first_item = {"id": "article-dedup-1", "title": "高盛做多 AI 价值链"}
+            second_item = {"id": "article-dedup-2", "title": "同一报告再次传播"}
+            review = content_review("push", rule_hits=[rule_hit])
+            with sqlite3.connect(db_path) as conn:
+                save_article_review(conn, "cls_telegraph_api", first_item, review)
+                save_article_review(conn, "jin10_rsshub_important", second_item, review)
+            assert (
+                market_delivery.deliver_article_review(
+                    "cls_telegraph_api", first_item, review, db_path=db_path
+                )
+                == "sent"
+            )
+            assert (
+                market_delivery.deliver_article_review(
+                    "jin10_rsshub_important", second_item, review, db_path=db_path
+                )
+                == "duplicate"
+            )
+            with sqlite3.connect(db_path) as conn:
+                stored = article_review_exists(conn, "jin10_rsshub_important", "article-dedup-2")
+        assert len(calls) == 1
+        assert stored is not None and stored["push_now"] is False
+        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
+    finally:
+        market_delivery.send_card = original_send
+
+
 def main() -> int:
     test_archive_and_missing_webhook_are_recorded_without_sending()
     test_send_failure_releases_reservation_and_records_failure()
     test_success_confirms_rule_dedup_and_duplicate_skips_second_send()
+    test_content_delivery_uses_decision_action_and_marks_legacy_rows()
+    test_article_delivery_dedup_skips_without_changing_decision_action()
     print("market delivery checks passed")
     return 0
 

@@ -31,8 +31,6 @@ from content_runtime import (
     failed_review,
     gate_lines,
     is_official_news_source,
-    mark_article_pushed,
-    mark_official_pushed as mark_pushed,
     official_news_enabled,
     official_review_exists as review_exists,
     process_article_review,
@@ -58,9 +56,9 @@ from feishu import send_card
 from http_utils import http_get
 from industry_hardline import apply_source_priority_override, event_first_hardline_review
 from llm_analysis import llm_config
+from market_delivery import deliver_article_review, deliver_official_review
 from media_sources import is_overseas_media_source, overseas_media_access_note, overseas_media_module
 from media_keyword_config import is_media_focus_item
-from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert
 from skeptic_evaluator import apply_skeptic_review
 from trendforce_sources import DEFAULT_RSS_FEEDS
 from x_check import load_env
@@ -407,43 +405,18 @@ def notify_item(source: str, item: dict) -> None:
         )
         if not review.get("push_now") or review.get("pushed_at"):
             return
-        reservation = reserve_rule_alert(
+        delivery_status = deliver_article_review(
+            source,
+            item,
             review,
-            source=source,
-            item_id=item_id,
-            title=str(item.get("title") or ""),
-            published_at=str(item.get("published_at") or ""),
             db_path=DB_PATH,
+            analysis_lines_prefix=gate_lines(review),
+            use_rule_dedup=True,
         )
-        if reservation.get("duplicate"):
-            first = reservation.get("first") or {}
-            note = (
-                "同一国际投行主题报告跨来源去重：已由 "
-                f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
-            )
-            review = dict(review)
-            review["push_now"] = False
-            review["reason"] = f"{review.get('reason') or ''}\n{note}".strip()
-            raw = dict(review.get("raw") or {})
-            raw["rule_alert_dedup"] = reservation
-            review["raw"] = raw
-            with connect_db() as conn:
-                save_article_review(conn, source, item, review)
+        if delivery_status == "duplicate":
             print(f"{source} 国际投行主题策略去重：title={item.get('title', '')}", flush=True)
-            return
-        item["article_review"] = review
-        item["analysis_thinking"] = "enabled"
-        item["analysis_max_tokens"] = int(os.getenv("LLM_HIGH_IMPORTANCE_MAX_OUTPUT_TOKENS", "1800"))
-        item["analysis_lines_prefix"] = gate_lines(review)
-    sent = send_card(build_article_card(source, item))
-    if article_gate_enabled():
-        if sent:
-            confirm_rule_alert(reservation, db_path=DB_PATH)
-        else:
-            release_rule_alert(reservation, db_path=DB_PATH)
-    if sent and article_gate_enabled():
-        with connect_db() as conn:
-            mark_article_pushed(conn, source, article_item_id(item))
+        return
+    send_card(build_article_card(source, item))
 
 
 def handle_official_news_item(source: str, item: dict) -> None:
@@ -491,12 +464,13 @@ def handle_official_news_item(source: str, item: dict) -> None:
     )
     if not review.get("should_push_now") or review.get("pushed_at"):
         return
-    enriched["article_review"] = review
-    enriched["analysis_lines"] = analysis_lines_from_review(review)
-    sent = send_card(build_article_card(source, enriched))
-    if sent:
-        with connect_db() as conn:
-            mark_pushed(conn, source, item_id)
+    deliver_official_review(
+        source,
+        enriched,
+        review,
+        analysis_lines=analysis_lines_from_review(review),
+        db_path=DB_PATH,
+    )
 
 
 def filter_items(source: str, items: list[dict]) -> list[dict]:

@@ -8,17 +8,20 @@ from typing import Any
 
 from decision_engine import attach_decision_to_event_analysis
 from market_flow import evaluate_market_item
+from market_flow_adapters import (
+    event_with_ingestion_audit,
+    ingest_event_item,
+    normalized_item_audit_payload,
+    store_event_flow_analysis,
+)
 from market_db import DEFAULT_DB_PATH
 from market_delivery import deliver_event
 from market_item import NormalizedMarketItem, decision_result_from_payload, item_from_event_mapping
 from market_review_store import (
     event_content_hash,
     event_row_by_id,
-    insert_event_analysis,
     latest_event_analysis,
     load_enabled_holdings as store_load_enabled_holdings,
-    update_event_analysis,
-    upsert_event_record,
 )
 from push_rules import apply_event_push_rules
 
@@ -59,35 +62,12 @@ def normalized_event_item(event: dict[str, Any]) -> NormalizedMarketItem:
 
 
 def normalized_event_audit_payload(item: NormalizedMarketItem) -> dict[str, Any]:
-    """Return a compact audit payload without duplicating raw/full_text."""
-    raw_keys = sorted(str(key) for key in item.raw if key != "_normalized_market_item")
-    return {
-        "schema": "NormalizedMarketItem/v1",
-        "source": item.source,
-        "source_category": item.source_category,
-        "collector": item.collector,
-        "content_type": item.content_type,
-        "title": item.title,
-        "summary": item.summary,
-        "url": item.url,
-        "published_at": item.published_at,
-        "first_seen_at": item.first_seen_at,
-        "symbols": list(item.symbols),
-        "themes": list(item.themes),
-        "dedupe_key": item.dedupe_key,
-        "source_event_id": str(item.raw.get("source_event_id") or ""),
-        "access_note": item.access_note,
-        "full_text_chars": len(item.full_text),
-        "raw_keys": raw_keys,
-    }
+    return normalized_item_audit_payload(item)
 
 
 def event_with_normalized_market_item_audit(event: dict[str, Any]) -> dict[str, Any]:
     updated = _event_without_normalized_audit(event)
-    raw = dict(updated.get("raw") or {})
-    raw["_normalized_market_item"] = normalized_event_audit_payload(normalized_event_item(updated))
-    updated["raw"] = raw
-    return updated
+    return event_with_ingestion_audit(updated, normalized_event_item(updated))
 
 
 def load_enabled_holdings(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
@@ -96,7 +76,8 @@ def load_enabled_holdings(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any
 
 def upsert_event(event: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> tuple[int, bool]:
     """Insert a normalized event audit record and return (event_id, inserted)."""
-    return upsert_event_record(event_with_normalized_market_item_audit(event), db_path)
+    updated = _event_without_normalized_audit(event)
+    return ingest_event_item(updated, normalized_event_item(updated), db_path)
 
 
 def analyze_event(event_id: int, task: str = "portfolio_event", db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
@@ -109,14 +90,17 @@ def analyze_event(event_id: int, task: str = "portfolio_event", db_path: Path = 
         updated = apply_event_rules_to_analysis(event_row, parsed, db_path=db_path)
         if updated != parsed:
             importance, classification, direction, impact_duration, should_push = analysis_record_fields(updated)
-            update_event_analysis(
-                int(existing["id"]),
+            store_event_flow_analysis(
+                event_id,
+                task,
+                str(parsed.get("_model") or ""),
+                updated,
                 importance=importance,
                 classification=classification,
                 direction=direction,
                 impact_duration=impact_duration,
                 should_push=should_push,
-                analysis=updated,
+                existing_analysis_id=int(existing["id"]),
                 db_path=db_path,
             )
         return updated
@@ -153,16 +137,16 @@ def analyze_event(event_id: int, task: str = "portfolio_event", db_path: Path = 
         "llm_mode": "thin",
     }
     importance, classification, direction, impact_duration, should_push = analysis_record_fields(parsed)
-    insert_event_analysis(
+    store_event_flow_analysis(
         event_id,
         task,
         interpretation.model,
+        parsed,
         importance=importance,
         classification=classification,
         direction=direction,
         impact_duration=impact_duration,
         should_push=should_push,
-        analysis=parsed,
         db_path=db_path,
     )
     return parsed

@@ -15,6 +15,7 @@ from industry_hardline import apply_hardline_review_override, explain_hardline
 from llm_analysis import format_llm_analysis
 from macro_policy import apply_macro_review_override, macro_prompt_note
 from market_flow import evaluate_market_item, finalize_market_flow_result
+from market_flow_adapters import store_article_flow_review, store_official_flow_review
 from market_item import DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem, item_from_article_mapping
 from market_interpreter import thin_system_prompt, thin_user_prompt_template
 from market_review_store import (
@@ -25,8 +26,6 @@ from market_review_store import (
     mark_article_pushed,
     mark_official_pushed,
     official_review_exists,
-    save_article_review as store_article_review,
-    save_official_review as store_official_review,
 )
 from push_rules import apply_article_push_rules, first_matching_push_rule, load_enabled_holdings_for_rules, review_from_push_rule
 from skeptic_evaluator import apply_skeptic_review, skeptic_lines
@@ -322,7 +321,7 @@ def process_article_review(
     )
     review = _attach_article_flow_audit(review, flow_result)
     review = attach_decision_result_to_article_review(flow_result.decision, review)
-    store_article_review(conn, source, item, review, decision_item=normalized)
+    store_article_flow_review(conn, source, item, review, normalized)
     return review
 
 
@@ -343,7 +342,7 @@ def failed_review(item: dict[str, Any], error: Exception) -> dict[str, Any]:
 
 
 def save_review(conn, source: str, item: dict[str, Any], review: dict[str, Any]) -> None:
-    store_article_review(conn, source, item, review, decision_item=normalized_article_item(source, item))
+    store_article_flow_review(conn, source, item, review, normalized_article_item(source, item))
 
 
 def apply_hardline_override(source: str, item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
@@ -449,12 +448,12 @@ def process_official_review(
     )
     review = _attach_official_flow_audit(review, flow_result)
     review = attach_decision_result_to_official_review(flow_result.decision, review)
-    store_official_review(conn, source, item, review, decision_item=normalized)
+    store_official_flow_review(conn, source, item, review, normalized)
     return review
 
 
 def save_official_review(conn, source: str, item: dict[str, Any], review: dict[str, Any]) -> None:
-    store_official_review(conn, source, item, review, decision_item=normalized_official_item(source, item))
+    store_official_flow_review(conn, source, item, review, normalized_official_item(source, item))
 
 
 def apply_official_hardline_override(source: str, item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:

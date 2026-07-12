@@ -1,7 +1,8 @@
-"""Delivery execution for decision-ready market events.
+"""Delivery execution for decision-ready market information.
 
-This module sends and records deliveries. It never evaluates market rules: a
-unified DecisionResult must already be present before delivery execution.
+This module handles article, official-news, and event delivery state. It never
+evaluates market rules: a unified DecisionResult must already be present before
+delivery execution.
 """
 
 from __future__ import annotations
@@ -11,12 +12,22 @@ import os
 from pathlib import Path
 from typing import Any
 
-from feishu import send_card_with_response
+from cards import build_article_card
+from db_utils import connect_sqlite
+from feishu import send_card, send_card_with_response
 from llm_analysis import format_llm_analysis
 from market_card_view import card_targets, decision_reason, interpretation_core, interpretation_reason
 from market_db import DEFAULT_DB_PATH
 from market_item import decision_result_from_payload
-from market_review_store import event_row_by_id, record_event_delivery
+from market_review_store import (
+    article_item_id,
+    event_row_by_id,
+    mark_article_pushed,
+    mark_official_pushed,
+    official_news_item_id,
+    record_event_delivery,
+    save_article_review,
+)
 from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert
 
 
@@ -114,6 +125,96 @@ def record_delivery(
     db_path: Path = DEFAULT_DB_PATH,
 ) -> None:
     record_event_delivery(event_id, channel, status, payload, error=error, db_path=db_path)
+
+
+def _duplicate_article_review(
+    source: str,
+    item: dict[str, Any],
+    review: dict[str, Any],
+    reservation: dict[str, Any],
+    db_path: Path,
+) -> None:
+    first = reservation.get("first") or {}
+    note = (
+        "同一国际投行主题报告跨来源去重：已由 "
+        f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
+    )
+    updated = dict(review)
+    updated["push_now"] = False
+    updated["reason"] = f"{updated.get('reason') or ''}\n{note}".strip()
+    raw = dict(updated.get("raw") or {})
+    raw["rule_alert_dedup"] = reservation
+    updated["raw"] = raw
+    with connect_sqlite(db_path) as conn:
+        save_article_review(conn, source, item, updated)
+
+
+def deliver_article_review(
+    source: str,
+    item: dict[str, Any],
+    review: dict[str, Any],
+    *,
+    db_path: Path = DEFAULT_DB_PATH,
+    analysis_lines_prefix: list[str] | None = None,
+    use_rule_dedup: bool = True,
+) -> str:
+    """Deliver a pre-decided article review and update compatibility state."""
+    decision = decision_result_from_payload(review)
+    should_push = decision.should_push if decision is not None else bool(review.get("push_now"))
+    if not should_push or review.get("pushed_at"):
+        return "skipped"
+    item_id = article_item_id(item)
+    reservation: dict[str, Any] = {}
+    if use_rule_dedup:
+        reservation = reserve_rule_alert(
+            review,
+            source=source,
+            item_id=item_id,
+            title=str(item.get("title") or ""),
+            published_at=str(item.get("published_at") or ""),
+            db_path=db_path,
+        )
+        if reservation.get("duplicate"):
+            _duplicate_article_review(source, item, review, reservation, db_path)
+            return "duplicate"
+    prepared = dict(item)
+    prepared["article_review"] = review
+    prepared["analysis_thinking"] = "enabled"
+    prepared["analysis_max_tokens"] = int(os.getenv("LLM_HIGH_IMPORTANCE_MAX_OUTPUT_TOKENS", "1800"))
+    if analysis_lines_prefix:
+        prepared["analysis_lines_prefix"] = list(analysis_lines_prefix)
+    sent = send_card(build_article_card(source, prepared))
+    if sent:
+        confirm_rule_alert(reservation, db_path=db_path)
+        with connect_sqlite(db_path) as conn:
+            mark_article_pushed(conn, source, item_id)
+        return "sent"
+    release_rule_alert(reservation, db_path=db_path)
+    return "skipped"
+
+
+def deliver_official_review(
+    source: str,
+    item: dict[str, Any],
+    review: dict[str, Any],
+    *,
+    analysis_lines: list[str],
+    db_path: Path = DEFAULT_DB_PATH,
+) -> str:
+    """Deliver a pre-decided official-news review and update compatibility state."""
+    decision = decision_result_from_payload(review)
+    should_push = decision.should_push if decision is not None else bool(review.get("should_push_now"))
+    if not should_push or review.get("pushed_at"):
+        return "skipped"
+    prepared = dict(item)
+    prepared["article_review"] = review
+    prepared["analysis_lines"] = list(analysis_lines)
+    sent = send_card(build_article_card(source, prepared))
+    if not sent:
+        return "skipped"
+    with connect_sqlite(db_path) as conn:
+        mark_official_pushed(conn, source, official_news_item_id(item))
+    return "sent"
 
 
 def simple_event_card(
