@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from decision_engine import attach_decision_to_event_analysis
+from market_flow import evaluate_market_item
 from market_db import DEFAULT_DB_PATH
 from market_delivery import deliver_event
 from market_item import NormalizedMarketItem, decision_result_from_payload, item_from_event_mapping
-from market_interpreter import interpret_market_item
 from market_review_store import (
     event_content_hash,
     event_row_by_id,
@@ -126,9 +126,9 @@ def analyze_event(event_id: int, task: str = "portfolio_event", db_path: Path = 
     decision = decision_result_from_payload(decision_fields)
     if decision is None:
         raise RuntimeError(f"事件决策结果缺失：{event_id}")
-    interpretation = interpret_market_item(
+    flow_result = evaluate_market_item(
         normalized_event_item(event),
-        decision,
+        decision=decision,
         content=build_portfolio_event_input(event_row, db_path=db_path),
         task="为一条已完成规则决策的公告、研报、快讯或异动信息生成极简实时摘要。",
         intro="请解读以下持仓事件",
@@ -136,7 +136,10 @@ def analyze_event(event_id: int, task: str = "portfolio_event", db_path: Path = 
         forbidden_mode="event",
         extra_notes=["输入包含直接相关持仓和全部已配置持仓；只可使用给定关系，不要自行扩展股票映射。"],
         user_agent="surveil-portfolio-event-llm/0.2",
+        force_interpretation=True,
+        storage_ref={"store_kind": "event_analyses", "event_id": event_id, "task": task},
     )
+    interpretation = flow_result.interpretation
     parsed = {
         **decision_fields,
         "core_content": interpretation.core_content,
@@ -146,6 +149,7 @@ def analyze_event(event_id: int, task: str = "portfolio_event", db_path: Path = 
         "llm_judgement": interpretation.llm_judgement,
         "_interpretation_result": interpretation.to_dict(),
         "_model": interpretation.model,
+        "_market_flow_result": flow_result.audit_payload(),
         "llm_mode": "thin",
     }
     importance, classification, direction, impact_duration, should_push = analysis_record_fields(parsed)

@@ -298,6 +298,63 @@ class InterpretationResult:
         }
 
 
+@dataclass
+class MarketFlowResult:
+    item: NormalizedMarketItem
+    decision: DecisionResult
+    interpretation: InterpretationResult
+    storage_ref: dict[str, Any] = field(default_factory=dict)
+    delivery_intent: dict[str, Any] = field(default_factory=dict)
+    audit_json: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.storage_ref = dict(_dict_value(self.storage_ref))
+        self.delivery_intent = dict(_dict_value(self.delivery_intent))
+        self.audit_json = dict(_dict_value(self.audit_json))
+        if not self.delivery_intent:
+            self.delivery_intent = {
+                "action": self.decision.action,
+                "should_deliver": self.decision.should_push,
+                "dedup": dict(self.decision.dedup),
+            }
+
+    def audit_payload(self) -> dict[str, Any]:
+        return {
+            "schema": "MarketFlowResult/v1",
+            "item": {
+                "source": self.item.source,
+                "source_category": self.item.source_category,
+                "collector": self.item.collector,
+                "content_type": self.item.content_type,
+                "dedupe_key": self.item.dedupe_key,
+            },
+            "decision": {
+                "action": self.decision.action,
+                "importance": self.decision.importance,
+                "rule_ids": [
+                    str(rule.get("rule_id") or "")
+                    for rule in self.decision.rule_hits
+                    if rule.get("rule_id")
+                ],
+                "candidate_rule_ids": [
+                    str(rule.get("rule_id") or "")
+                    for rule in self.decision.candidate_rules
+                    if rule.get("rule_id")
+                ],
+                "need_llm_interpretation": self.decision.need_llm_interpretation,
+                "need_limited_llm_judgement": self.decision.need_limited_llm_judgement,
+            },
+            "interpretation": {
+                "llm_judgement": self.interpretation.llm_judgement,
+                "model": self.interpretation.model,
+                "prompt_version": self.interpretation.prompt_version,
+            },
+            "storage_ref": dict(self.storage_ref),
+            "delivery_intent": dict(self.delivery_intent),
+            "audit": dict(self.audit_json),
+        }
+
+
 def item_from_article_mapping(
     source: str,
     item: dict[str, Any],
