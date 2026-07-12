@@ -8,6 +8,6 @@ Type=oneshot
 User=surveil
 WorkingDirectory=/opt/surveil
 EnvironmentFile=-/opt/surveil/.env
-ExecStart=/opt/surveil/.venv/bin/python /opt/surveil/scripts/ifind_batch.py --kind notice --days 2 --deliver
+ExecStart=/opt/surveil/.venv/bin/python /opt/surveil/scripts/ifind_batch.py --days 2 --deliver
 StandardOutput=append:/opt/surveil/logs/ifind-notice.log
 StandardError=append:/opt/surveil/logs/ifind-notice.err.log

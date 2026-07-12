@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Batch import iFinD notices/reports for configured portfolio holdings."""
+"""Batch import iFinD notices for configured portfolio holdings."""
 
 from __future__ import annotations
 
@@ -29,10 +29,6 @@ BJ = ZoneInfo("Asia/Shanghai")
 
 
 DEFAULT_NOTICE_OUTPUT = "reportDate:Y,thscode:Y,secName:Y,ctime:Y,reportTitle:Y,pdfURL:Y,seq:Y"
-DEFAULT_RESEARCH_OUTPUT = (
-    "9926116a34:Y,affac2ba88:Y,bfe68d5844:Y,f100fdf0e8:Y,"
-    "915a23893e:Y,383a6d166f:Y,dab16cb859:Y,e8d7b618b1:Y,029d48543d:Y"
-)
 
 
 def date_range(days: int) -> tuple[str, str]:
@@ -101,37 +97,15 @@ def empty_rows_for_no_data(exc: IfindNoDataError, label: str) -> list[dict[str, 
     return []
 
 
-def parse_json_object_env(name: str) -> dict[str, Any]:
-    raw = get_env(name, default="")
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{name} 必须是 JSON object") from exc
-    if not isinstance(parsed, dict):
-        raise ValueError(f"{name} 必须是 JSON object")
-    return parsed
-
-
-def parse_json_object_env_any(*names: str) -> dict[str, Any]:
-    for name in names:
-        if get_env(name, default=""):
-            return parse_json_object_env(name)
-    return {}
-
-
-def safe_raw_row(kind: str, row: dict[str, Any]) -> dict[str, Any]:
+def safe_raw_row(row: dict[str, Any]) -> dict[str, Any]:
     safe = dict(row)
-    if kind == "notice":
-        for key in ("pdfURL", "pdfUrl", "PDFURL", "url", "URL", "link", "链接", "bfe68d5844"):
-            if key in safe:
-                safe[key] = "<ifind_notice_url_redacted>"
+    for key in ("pdfURL", "pdfUrl", "PDFURL", "url", "URL", "link", "链接"):
+        if key in safe:
+            safe[key] = "<ifind_notice_url_redacted>"
     return safe
 
 
-def event_from_report_row(
-    kind: str,
+def event_from_notice_row(
     row: dict[str, Any],
     holding_by_symbol: dict[str, dict[str, Any]],
     *,
@@ -141,7 +115,6 @@ def event_from_report_row(
         row.get("thscode")
         or row.get("THSCODE")
         or row.get("code")
-        or row.get("e8d7b618b1")
         or row.get("证券代码")
         or ""
     ).strip().upper()
@@ -151,7 +124,6 @@ def event_from_report_row(
         or row.get("annTitle")
         or row.get("noticeTitle")
         or row.get("report_title")
-        or row.get("affac2ba88")
         or row.get("报告名称")
         or ""
     ).strip()
@@ -161,59 +133,49 @@ def event_from_report_row(
         or row.get("reportDate")
         or row.get("publishDate")
         or row.get("date")
-        or row.get("9926116a34")
         or row.get("研报发布日期")
         or ""
     ).strip()
-    url = str(row.get("pdfURL") or row.get("url") or row.get("URL") or row.get("bfe68d5844") or row.get("链接") or "").strip()
-    name = str(row.get("secName") or row.get("name") or row.get("SECNAME") or row.get("029d48543d") or row.get("证券名称") or "").strip()
+    name = str(row.get("secName") or row.get("name") or row.get("SECNAME") or row.get("证券名称") or "").strip()
     holding = holding_by_symbol.get(symbol, {})
-    research_summary = str(row.get("f100fdf0e8") or row.get("研究摘要") or row.get("summary") or "").strip()
     summary = "；".join(
         part
         for part in [
             f"股票：{name or holding.get('name', '')} {symbol}".strip(),
             f"标题：{title}".strip(),
             f"发布时间：{published_at}".strip(),
-            f"摘要：{research_summary}".strip(),
         ]
         if part and not part.endswith("：")
     )
-    source = "ifind_notice" if kind == "notice" else "ifind_report"
-    event_type = "announcement" if kind == "notice" else "research_report"
     full_text = ""
-    raw = safe_raw_row(kind, row)
-    if kind == "notice" and parse_pdf:
+    raw = safe_raw_row(row)
+    if parse_pdf:
         full_text, pdf_meta = parse_notice_pdf(row)
         raw["_pdf_parse"] = pdf_meta
         if not full_text:
             raw["_text_quality"] = "公告 PDF 正文未抽取成功，模型只能基于标题/元数据保守判断。"
     return {
-        "source": source,
+        "source": "ifind_notice",
         "source_event_id": f"{symbol}:{seq}",
-        "event_type": event_type,
-        "title": title or f"{name or symbol} {event_type}",
+        "event_type": "announcement",
+        "title": title or f"{name or symbol} announcement",
         "summary": summary,
         "full_text": full_text,
-        "url": "" if kind == "notice" else url,
+        "url": "",
         "published_at": published_at,
         "symbols": [symbol] if symbol else [],
         "themes": [],
         "raw": raw,
-        "content_hash": content_hash(source, symbol, seq, title, published_at, full_text[:2000]),
+        "content_hash": content_hash("ifind_notice", symbol, seq, title, published_at, full_text[:2000]),
     }
 
 
-def report_type_for(kind: str) -> str:
-    if kind == "notice":
-        return get_env("IFIND_NOTICE_REPORT_TYPE", default="")
-    return get_env("IFIND_RESEARCH_REPORT_TYPE", "IFIND_REPORT_REPORT_TYPE", default="")
+def notice_report_type() -> str:
+    return get_env("IFIND_NOTICE_REPORT_TYPE", default="")
 
 
-def outputpara_for(kind: str) -> str:
-    if kind == "notice":
-        return get_env("IFIND_NOTICE_OUTPUTPARA", default=DEFAULT_NOTICE_OUTPUT)
-    return get_env("IFIND_RESEARCH_OUTPUTPARA", "IFIND_REPORT_OUTPUTPARA", default=DEFAULT_RESEARCH_OUTPUT)
+def notice_outputpara() -> str:
+    return get_env("IFIND_NOTICE_OUTPUTPARA", default=DEFAULT_NOTICE_OUTPUT)
 
 
 def markdown_escape(value: str) -> str:
@@ -275,7 +237,6 @@ def failed_analysis_payload(exc: Exception) -> dict[str, Any]:
 
 def send_batch_summary_card(
     *,
-    kind: str,
     start_date: str,
     end_date: str,
     fetched: int,
@@ -286,7 +247,7 @@ def send_batch_summary_card(
     batch_warning: str = "",
     analysis_skipped_count: int = 0,
 ) -> None:
-    if kind != "notice" or not deliver:
+    if not deliver:
         return
     if os.getenv("IFIND_NOTICE_SUMMARY_ENABLED", "1").strip() == "0":
         return
@@ -351,75 +312,7 @@ def send_batch_summary_card(
     print(f"iFinD notice summary delivery: {'sent' if sent else 'skipped'}", flush=True)
 
 
-def fetch_research_rows(
-    client: IfindClient,
-    symbols: list[str],
-    start_date: str,
-    end_date: str,
-) -> list[dict[str, Any]]:
-    formula_template = get_env("IFIND_RESEARCH_FORMULA", "IFIND_REPORT_FORMULA", default="")
-    if formula_template:
-        formula = (
-            formula_template.replace("{codes}", ",".join(symbols))
-            .replace("{start_date}", start_date)
-            .replace("{end_date}", end_date)
-            .replace("{outputpara}", outputpara_for("report"))
-        )
-        return normalize_report_rows(client.data_pool({"formula": formula}))
-
-    reportname = get_env("IFIND_RESEARCH_REPORTNAME", "IFIND_REPORT_REPORTNAME", default="")
-    if reportname:
-        functionpara = parse_json_object_env_any("IFIND_RESEARCH_FUNCTIONPARA", "IFIND_REPORT_FUNCTIONPARA")
-        functionpara.setdefault("startdate", start_date)
-        functionpara.setdefault("enddate", end_date)
-        functionpara.setdefault("codes", ",".join(symbols))
-        payload = {
-            "reportname": reportname,
-            "functionpara": functionpara,
-            "outputpara": get_env("IFIND_RESEARCH_OUTPUTPARA", "IFIND_REPORT_OUTPUTPARA", default=DEFAULT_RESEARCH_OUTPUT),
-        }
-        return normalize_report_rows(client.data_pool(payload))
-
-    legacy_report_type = report_type_for("report")
-    if legacy_report_type:
-        rows: list[dict[str, Any]] = []
-        for group in chunked(symbols, max(1, env_int("IFIND_BATCH_CODE_CHUNK", 20))):
-            response = client.report_query(
-                ",".join(group),
-                begin_date=start_date,
-                end_date=end_date,
-                report_type=legacy_report_type,
-                outputpara=outputpara_for("report"),
-            )
-            rows.extend(normalize_report_rows(response))
-        return rows
-
-    print(
-        research_config_message()
-    )
-    return []
-
-
-def has_research_config() -> bool:
-    return any(
-        [
-            get_env("IFIND_RESEARCH_FORMULA", "IFIND_REPORT_FORMULA", default=""),
-            get_env("IFIND_RESEARCH_REPORTNAME", "IFIND_REPORT_REPORTNAME", default=""),
-            report_type_for("report"),
-        ]
-    )
-
-
-def research_config_message() -> str:
-    return (
-        "iFinD 研报入口尚未配置。前端和官方示例显示 report_query/reportType 更偏公告查询；"
-        "研报/机构研究建议配置 IFIND_RESEARCH_FORMULA=THS_RPT(...)，"
-        "或 IFIND_RESEARCH_REPORTNAME + IFIND_RESEARCH_FUNCTIONPARA 走 /data_pool。"
-    )
-
-
 def run_batch(
-    kind: str,
     days: int,
     analyze: bool,
     deliver: bool,
@@ -427,9 +320,8 @@ def run_batch(
     limit: int | None,
     parse_pdf_dry_run: bool = False,
 ) -> int:
-    profile_id = "ifind_notice" if kind == "notice" else "ifind_report"
-    if not source_profile_enabled(profile_id):
-        print(f"source profile: {profile_id} 已停用，跳过本轮。", flush=True)
+    if not source_profile_enabled("ifind_notice"):
+        print("source profile: ifind_notice 已停用，跳过本轮。", flush=True)
         return 0
     init_db(DEFAULT_DB_PATH).close()
     import_holdings(DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH)
@@ -438,19 +330,11 @@ def run_batch(
         print("没有启用的持仓，跳过。")
         return 0
 
-    report_type = report_type_for(kind)
-    if kind == "notice" and not report_type:
+    report_type = notice_report_type()
+    if not report_type:
         print("IFIND_NOTICE_REPORT_TYPE 未配置，先使用 iFinD 默认公告类型参数。")
         report_type = "901"
-    if kind == "report" and not has_research_config():
-        print(research_config_message())
-        print("iFinD report batch finished: fetched=0, new=0")
-        return 0
-
-    if kind == "notice":
-        start_date, end_date = notice_query_date_range(days)
-    else:
-        start_date, end_date = date_range(days)
+    start_date, end_date = notice_query_date_range(days)
     client = IfindClient.from_env()
     symbols = [holding["symbol"] for holding in holdings if holding.get("symbol")]
     holding_by_symbol = {holding["symbol"]: holding for holding in holdings}
@@ -464,31 +348,27 @@ def run_batch(
     max_events = limit if limit is not None else env_int("IFIND_BATCH_MAX_EVENTS", 200)
     llm_balance_exhausted = False
 
-    if kind == "report":
-        row_groups = [fetch_research_rows(client, symbols, start_date, end_date)]
-    else:
-        row_groups = []
-        for group in chunked(symbols, max(1, max_chunk)):
-            label = ",".join(group)
-            try:
-                response = client.report_query(
-                    label,
-                    begin_date=start_date,
-                    end_date=end_date,
-                    report_type=report_type,
-                    outputpara=outputpara_for(kind),
-                )
-                row_groups.append(normalize_report_rows(response))
-            except IfindNoDataError as exc:
-                row_groups.append(empty_rows_for_no_data(exc, label))
+    row_groups = []
+    for group in chunked(symbols, max(1, max_chunk)):
+        label = ",".join(group)
+        try:
+            response = client.report_query(
+                label,
+                begin_date=start_date,
+                end_date=end_date,
+                report_type=report_type,
+                outputpara=notice_outputpara(),
+            )
+            row_groups.append(normalize_report_rows(response))
+        except IfindNoDataError as exc:
+            row_groups.append(empty_rows_for_no_data(exc, label))
 
     for rows in row_groups:
         for row in rows:
             if max_events and total_seen >= max_events:
                 break
             total_seen += 1
-            event = event_from_report_row(
-                kind,
+            event = event_from_notice_row(
                 row,
                 holding_by_symbol,
                 parse_pdf=(not dry_run or parse_pdf_dry_run),
@@ -509,7 +389,7 @@ def run_batch(
                     normalized,
                     event,
                     store_kind="event",
-                    task=f"{kind}_portfolio",
+                    task="notice_portfolio",
                     db_path=DEFAULT_DB_PATH,
                     analyze=analyze and not llm_balance_exhausted,
                     deliver=deliver,
@@ -565,7 +445,6 @@ def run_batch(
             break
 
     send_batch_summary_card(
-        kind=kind,
         start_date=start_date,
         end_date=end_date,
         fetched=total_seen,
@@ -576,13 +455,12 @@ def run_batch(
         batch_warning=batch_warning,
         analysis_skipped_count=analysis_skipped_count,
     )
-    print(f"iFinD {kind} batch finished: fetched={total_seen}, new={total_new}, range={start_date}..{end_date}")
+    print(f"iFinD notice batch finished: fetched={total_seen}, new={total_new}, range={start_date}..{end_date}")
     return 0
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="iFinD 公告/研报批处理")
-    parser.add_argument("--kind", choices=["notice", "report"], required=True)
+    parser = argparse.ArgumentParser(description="iFinD 公告批处理")
     parser.add_argument("--days", type=int, default=2)
     parser.add_argument("--no-analyze", action="store_true")
     parser.add_argument("--deliver", action="store_true", help="配置飞书后才实际推送；未配置时记录 skipped")
@@ -593,7 +471,6 @@ def main() -> int:
 
     load_env(ROOT / ".env")
     return run_batch(
-        kind=args.kind,
         days=args.days,
         analyze=not args.no_analyze,
         deliver=args.deliver,

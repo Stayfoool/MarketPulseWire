@@ -64,6 +64,8 @@ SERVICE_UNITS = [
     "surveil-overseas-media.service",
     "surveil-china-media.service",
     "surveil-sina-stock-news.service",
+    "surveil-ifind-notice.service",
+    "surveil-jygs-actions.service",
     "surveil-article-daily.service",
     "surveil-signals-extract.service",
     "surveil-signal-outcome.service",
@@ -91,7 +93,6 @@ TIMER_UNITS = [
     "surveil-signal-review.timer",
     "surveil-signal-digest.timer",
     "surveil-ifind-notice.timer",
-    "surveil-ifind-report.timer",
     "surveil-jygs-actions.timer",
     "surveil-research-collector.timer",
     "surveil-official-collector.timer",
@@ -113,7 +114,6 @@ RUN_ONCE_TARGETS = {
     "surveil-signal-review.timer": "surveil-signal-review.service",
     "surveil-signal-digest.timer": "surveil-signal-digest.service",
     "surveil-ifind-notice.timer": "surveil-ifind-notice.service",
-    "surveil-ifind-report.timer": "surveil-ifind-report.service",
     "surveil-jygs-actions.timer": "surveil-jygs-actions.service",
     "surveil-research-collector.timer": "surveil-research-collector.service",
     "surveil-official-collector.timer": "surveil-official-collector.service",
@@ -165,7 +165,6 @@ UNIT_METADATA = {
     "surveil-china-media.service": {"group": "fetching_legacy", "type": "历史兼容", "schedule": "已切流；旧中国财经媒体批处理"},
     "surveil-sina-stock-news.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 30 分钟"},
     "surveil-ifind-notice.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 08:00 / 20:00"},
-    "surveil-ifind-report.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 08:00 / 20:00"},
     "surveil-jygs-actions.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 12:30 / 16:00"},
     "surveil-research-collector.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 5 分钟；页面源内部 15 分钟"},
     "surveil-official-collector.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 10 分钟"},
@@ -186,7 +185,6 @@ UNIT_METADATA = {
     "surveil-overseas-media.timer": {"group": "fetching_legacy", "type": "历史兼容定时器", "schedule": "已切流；旧每 5 分钟"},
     "surveil-china-media.timer": {"group": "fetching_legacy", "type": "历史兼容定时器", "schedule": "已切流；旧每 2 分钟"},
     "surveil-ifind-notice.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "08:00 / 20:00"},
-    "surveil-ifind-report.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "08:00 / 20:00"},
     "surveil-jygs-actions.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "12:30 / 16:00"},
     "surveil-research-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 5 分钟"},
     "surveil-official-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 10 分钟"},
@@ -211,6 +209,25 @@ UNIT_GROUP_LABELS = {
     "processing_scheduled": "非抓取处理/日报任务",
     "infrastructure": "基础设施",
     "other": "其他",
+}
+
+UNIT_TASK_LABELS = {
+    "surveil-x-stream": "X / Serenity",
+    "surveil-sina-flash": "新浪财经快讯",
+    "surveil-sina-stock-news": "新浪持仓个股新闻",
+    "surveil-ifind-notice": "iFinD 公司公告",
+    "surveil-jygs-actions": "韭研公社异动",
+    "surveil-research-collector": "研究机构 / 行业媒体采集",
+    "surveil-official-collector": "公司官网采集",
+    "surveil-news-collector": "新闻媒体采集",
+    "surveil-value-directory": "价值目录",
+    "surveil-article-daily": "文章日报",
+    "surveil-signals-extract": "信号提取",
+    "surveil-signal-outcome": "信号结果更新",
+    "surveil-signal-review": "信号复盘",
+    "surveil-signal-digest": "信号摘要",
+    "surveil-holdings-web": "Surveil 工作台",
+    "surveil-proxy": "网络代理",
 }
 
 LOG_FILES = [
@@ -1053,6 +1070,113 @@ def unit_display_metadata(unit: str, values: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def logical_task_id(unit: str) -> str:
+    for suffix in (".timer", ".service"):
+        if unit.endswith(suffix):
+            return unit[: -len(suffix)]
+    return unit
+
+
+def raw_systemd_state(unit: dict[str, Any] | None) -> str:
+    if not unit:
+        return ""
+    state = "/".join(
+        str(unit.get(key) or "")
+        for key in ("ActiveState", "SubState", "Result")
+        if unit.get(key)
+    )
+    exit_status = str(unit.get("ExecMainStatus") or "").strip()
+    if exit_status and exit_status != "0":
+        state = f"{state}; exit={exit_status}" if state else f"exit={exit_status}"
+    return state
+
+
+def task_execution_status(service: dict[str, Any] | None) -> str:
+    if not service:
+        return "执行服务状态缺失"
+    active = str(service.get("ActiveState") or "")
+    sub = str(service.get("SubState") or "")
+    result = str(service.get("Result") or "")
+    exit_status = str(service.get("ExecMainStatus") or "").strip()
+    if service.get("error"):
+        return "执行状态读取异常"
+    if active == "active" and sub == "running":
+        return "正在执行"
+    if result == "failed" or active == "failed" or (exit_status and exit_status != "0"):
+        return f"最近运行失败（exit {exit_status}）" if exit_status else "最近运行失败"
+    if active == "inactive" and sub == "dead" and result == "success":
+        return "上次运行成功"
+    return str(service.get("status_text") or f"{active}/{sub}".strip("/") or "未知")
+
+
+def build_health_tasks(units: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_id = {str(unit.get("Id") or ""): unit for unit in units}
+    paired_services = set(RUN_ONCE_TARGETS.values())
+    tasks: list[dict[str, Any]] = []
+
+    for timer_id in TIMER_UNITS:
+        timer = by_id.get(timer_id)
+        if not timer:
+            continue
+        service = by_id.get(RUN_ONCE_TARGETS.get(timer_id, ""))
+        task_id = logical_task_id(timer_id)
+        tasks.append(
+            {
+                "Id": task_id,
+                "label": UNIT_TASK_LABELS.get(task_id, task_id.removeprefix("surveil-").replace("-", " ")),
+                "unit_type": "定时任务",
+                "group": timer.get("group") or "other",
+                "group_label": timer.get("group_label") or UNIT_GROUP_LABELS["other"],
+                "lifecycle": timer.get("lifecycle") or "production",
+                "lifecycle_label": timer.get("lifecycle_label") or "",
+                "replacement": timer.get("replacement") or "",
+                "schedule": timer.get("schedule") or "",
+                "schedule_status": timer.get("status_text") or "未知",
+                "execution_status": task_execution_status(service),
+                "next_trigger": timer.get("NextElapseUSecRealtime") or "",
+                "last_execution": (service or {}).get("ExecMainStartTimestamp") or timer.get("LastTriggerUSec") or "",
+                "NRestarts": (service or {}).get("NRestarts") or "",
+                "timer": timer,
+                "service": service,
+                "action_unit": timer,
+                "raw_timer_state": raw_systemd_state(timer),
+                "raw_service_state": raw_systemd_state(service),
+            }
+        )
+
+    for service_id in SERVICE_UNITS:
+        if service_id in paired_services:
+            continue
+        service = by_id.get(service_id)
+        if not service:
+            continue
+        task_id = logical_task_id(service_id)
+        tasks.append(
+            {
+                "Id": task_id,
+                "label": UNIT_TASK_LABELS.get(task_id, task_id.removeprefix("surveil-").replace("-", " ")),
+                "unit_type": service.get("unit_type") or "服务",
+                "group": service.get("group") or "other",
+                "group_label": service.get("group_label") or UNIT_GROUP_LABELS["other"],
+                "lifecycle": service.get("lifecycle") or "production",
+                "lifecycle_label": service.get("lifecycle_label") or "",
+                "replacement": service.get("replacement") or "",
+                "schedule": service.get("schedule") or "",
+                "schedule_status": "常驻" if service.get("ActiveState") == "active" else "未运行",
+                "execution_status": task_execution_status(service),
+                "next_trigger": "",
+                "last_execution": service.get("ExecMainStartTimestamp") or "",
+                "NRestarts": service.get("NRestarts") or "",
+                "timer": None,
+                "service": service,
+                "action_unit": service,
+                "raw_timer_state": "",
+                "raw_service_state": raw_systemd_state(service),
+            }
+        )
+    return tasks
+
+
 def systemctl_action_command(command: str, target: str) -> list[str]:
     mode = os.getenv("HOLDINGS_WEB_SYSTEMCTL_MODE", "auto").strip().lower()
     if mode == "direct" or (mode == "auto" and hasattr(os, "geteuid") and os.geteuid() == 0):
@@ -1128,6 +1252,7 @@ def health_payload() -> dict[str, Any]:
         unit["actions"] = unit_actions(unit_id)
         if unit_id in RUN_ONCE_TARGETS:
             unit["run_once_target"] = RUN_ONCE_TARGETS[unit_id]
+    tasks = build_health_tasks(units)
     sources: list[dict[str, Any]] = []
     with connect_sqlite(DEFAULT_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
@@ -1183,7 +1308,14 @@ def health_payload() -> dict[str, Any]:
         tail = tail_file(logs_dir / name)
         if tail:
             logs.append({"name": name, "tail": tail})
-    return {"ok": True, "unit_groups": UNIT_GROUP_LABELS, "units": units, "sources": sources, "logs": logs}
+    return {
+        "ok": True,
+        "unit_groups": UNIT_GROUP_LABELS,
+        "units": units,
+        "tasks": tasks,
+        "sources": sources,
+        "logs": logs,
+    }
 
 
 def html_page(token_required: bool) -> str:
@@ -1212,8 +1344,8 @@ def html_page(token_required: bool) -> str:
     header {{ height: 56px; display: flex; align-items: center; gap: 16px; padding: 0 20px; background: #102a43; color: white; }}
     header h1 {{ font-size: 18px; margin: 0; font-weight: 650; }}
     .environment-label {{ color: #d9f5ec; border-color: #6cc9b2; background: rgba(15, 118, 110, .35); }}
-    nav.tabs {{ display: flex; gap: 8px; padding: 10px 20px 0; background: var(--bg); }}
-    nav.tabs button {{ background: transparent; border-color: transparent; border-radius: 6px 6px 0 0; }}
+    nav.tabs {{ display: flex; gap: 8px; padding: 10px 20px 0; background: var(--bg); overflow-x: auto; }}
+    nav.tabs button {{ flex: 0 0 auto; white-space: nowrap; background: transparent; border-color: transparent; border-radius: 6px 6px 0 0; }}
     nav.tabs button.active {{ background: white; border-color: var(--line); border-bottom-color: white; color: var(--accent); }}
     main {{ padding: 18px 20px 32px; }}
     .view {{ display: none; }}
@@ -1236,6 +1368,7 @@ def html_page(token_required: bool) -> str:
     .badge.low {{ color: #166534; border-color: #bbf7d0; background: #f0fdf4; }}
     .log {{ white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #0f172a; color: #dbeafe; padding: 10px; border-radius: 6px; overflow: auto; }}
     .summary {{ color: var(--muted); font-size: 13px; margin-left: auto; }}
+    #healthUnitSummary {{ flex: 1 1 360px; min-width: 0; text-align: right; white-space: normal; }}
     button {{ border: 1px solid var(--line); background: white; color: var(--text); height: 34px; padding: 0 12px; border-radius: 6px; cursor: pointer; font-weight: 550; }}
     button.primary {{ background: var(--accent); color: white; border-color: var(--accent); }}
     button.danger {{ color: var(--danger); border-color: #f1b7b0; }}
@@ -1266,7 +1399,15 @@ def html_page(token_required: bool) -> str:
     .events-table td.summary-cell {{ color: var(--muted); }}
     .events-table a {{ color: var(--accent); text-decoration: none; }}
     .table-wrap {{ max-height: calc(100vh - 190px); overflow: auto; }}
-    .status {{ white-space: pre-wrap; font-size: 13px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: white; margin-bottom: 12px; display: none; }}
+    .health-table {{ min-width: 1180px; }}
+    .health-table td:last-child {{ white-space: nowrap; }}
+    @media (max-width: 640px) {{
+      header {{ height: auto; min-height: 56px; padding: 8px 12px; flex-wrap: wrap; gap: 8px 12px; }}
+      nav.tabs {{ padding-left: 12px; padding-right: 12px; }}
+      main {{ padding-left: 12px; padding-right: 12px; }}
+      #healthUnitSummary {{ flex-basis: 100%; margin-left: 0; text-align: left; }}
+    }}
+    .status {{ white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: white; margin-bottom: 12px; display: none; }}
     .status.ok {{ display: block; border-color: #99d6cc; color: var(--ok); }}
     .status.err {{ display: block; border-color: #f1b7b0; color: var(--danger); }}
     .modal-backdrop {{ position: fixed; inset: 0; background: rgba(15, 23, 42, .35); display: none; align-items: center; justify-content: center; padding: 20px; }}
@@ -1509,7 +1650,7 @@ def html_page(token_required: bool) -> str:
         </div>
       </div>
       <div id="sourceProfileConfigHint" class="status ok" style="display:block">
-按 6 类信息来源展示采集层、决策层和薄解读的衔接。启用、Skeptic、Tavily 覆盖已接入采集运行时；频率和代理暂仅记录。
+正在读取信息源、Skeptic 和 Tavily/Web Evidence 的实际运行配置。
       </div>
       <div id="sourceProfileMetrics" class="metric-grid"></div>
       <div class="toolbar">
@@ -1554,17 +1695,17 @@ def html_page(token_required: bool) -> str:
       </div>
       <section class="panel">
         <div class="table-wrap">
-          <table>
+          <table class="health-table">
             <thead>
               <tr>
-                <th>Unit</th>
-                <th style="width:110px">类型</th>
-                <th style="width:130px">状态</th>
-                <th style="width:180px">频率/触发</th>
-                <th style="width:140px">systemd</th>
-                <th style="width:90px">Restarts</th>
-                <th style="width:220px">最近启动/触发</th>
-                <th style="width:220px">操作</th>
+                <th style="width:210px">任务</th>
+                <th style="width:90px">类型</th>
+                <th style="width:115px">调度状态</th>
+                <th style="width:145px">最近执行</th>
+                <th style="width:180px">频率/下次触发</th>
+                <th style="width:65px">Restarts</th>
+                <th style="width:180px">最近执行时间</th>
+                <th style="width:195px">操作</th>
               </tr>
             </thead>
             <tbody id="healthRows"></tbody>
@@ -1936,63 +2077,70 @@ function serviceActionButtons(unit) {{
   `).join(' ');
 }}
 
-function renderHealthUnits(units, groupLabels) {{
+function renderHealthTasks(tasks, groupLabels) {{
   const showShadow = Boolean(document.getElementById('showShadowUnits')?.checked);
   const showLegacy = Boolean(document.getElementById('showLegacyUnits')?.checked);
-  const allUnits = units || [];
-  const visibleUnits = allUnits.filter(unit => {{
-    if (unit.lifecycle === 'shadow' && !showShadow) return false;
-    if (unit.lifecycle === 'legacy_cutover' && !showLegacy) return false;
+  const allTasks = tasks || [];
+  const visibleTasks = allTasks.filter(task => {{
+    if (task.lifecycle === 'shadow' && !showShadow) return false;
+    if (task.lifecycle === 'legacy_cutover' && !showLegacy) return false;
     return true;
   }});
-  const hiddenShadow = allUnits.filter(unit => unit.lifecycle === 'shadow').length;
-  const hiddenLegacy = allUnits.filter(unit => unit.lifecycle === 'legacy_cutover').length;
+  const hiddenShadow = allTasks.filter(task => task.lifecycle === 'shadow').length;
+  const hiddenLegacy = allTasks.filter(task => task.lifecycle === 'legacy_cutover').length;
   const summary = document.getElementById('healthUnitSummary');
   if (summary) {{
-    const parts = [`展示 ${{visibleUnits.length}} / ${{allUnits.length}} 个单元`];
-    if (!showShadow && hiddenShadow) parts.push(`隐藏影子 ${{hiddenShadow}} 个`);
-    if (!showLegacy && hiddenLegacy) parts.push(`隐藏历史兼容 ${{hiddenLegacy}} 个`);
+    const parts = [`展示 ${{visibleTasks.length}} / ${{allTasks.length}} 个逻辑任务`];
+    if (!showShadow && hiddenShadow) parts.push(`隐藏影子任务 ${{hiddenShadow}} 个`);
+    if (!showLegacy && hiddenLegacy) parts.push(`隐藏历史兼容任务 ${{hiddenLegacy}} 个`);
     summary.textContent = parts.join('；');
   }}
   const order = ['fetching_persistent', 'fetching_scheduled', 'processing_scheduled', 'infrastructure', 'fetching_shadow', 'fetching_legacy', 'other'];
   const byGroup = {{}};
-  visibleUnits.forEach(unit => {{
-    const group = unit.group || 'other';
+  visibleTasks.forEach(task => {{
+    const group = task.group || 'other';
     if (!byGroup[group]) byGroup[group] = [];
-    byGroup[group].push(unit);
+    byGroup[group].push(task);
   }});
   const rows = [];
   const orderedGroups = [...order, ...Object.keys(byGroup).filter(group => !order.includes(group))];
   orderedGroups.forEach(group => {{
-    const groupUnits = byGroup[group] || [];
-    if (!groupUnits.length) return;
+    const groupTasks = byGroup[group] || [];
+    if (!groupTasks.length) return;
     rows.push(`
       <tr>
         <td colspan="8" style="background:#f8fafc; color:#334e68; font-weight:650">
-          ${{escapeHtml((groupLabels || {{}})[group] || group)}} <span class="hint">${{groupUnits.length}} 个单元</span>
+          ${{escapeHtml((groupLabels || {{}})[group] || group)}} <span class="hint">${{groupTasks.length}} 个任务</span>
         </td>
       </tr>
     `);
-    groupUnits.forEach(unit => {{
-      const rawStatus = [unit.ActiveState || unit.LoadState || '', unit.SubState || '', unit.Result || unit.error || '']
-        .filter(Boolean).join(' / ');
-      const lifecycle = unit.lifecycle_label ? `<div class="hint">${{escapeHtml(unit.lifecycle_label)}}</div>` : '';
-      const replacement = unit.replacement ? `<div class="hint">替代：${{escapeHtml(unit.replacement)}}</div>` : '';
+    groupTasks.forEach(task => {{
+      const lifecycle = task.lifecycle_label ? `<div class="hint">${{escapeHtml(task.lifecycle_label)}}</div>` : '';
+      const replacement = task.replacement ? `<div class="hint">替代：${{escapeHtml(task.replacement)}}</div>` : '';
+      const rawLines = [];
+      if (task.timer) rawLines.push(`${{task.timer.Id}}：${{task.raw_timer_state || '-'}}`);
+      if (task.service) rawLines.push(`${{task.service.Id}}：${{task.raw_service_state || '-'}}`);
+      const rawDetails = rawLines.length ? `
+        <details class="hint" style="margin-top:4px">
+          <summary>systemd 详情</summary>
+          ${{rawLines.map(line => `<div>${{escapeHtml(line)}}</div>`).join('')}}
+        </details>` : '';
+      const nextTrigger = task.next_trigger ? `<div class="hint">下次：${{escapeHtml(task.next_trigger)}}</div>` : '';
       rows.push(`
         <tr>
-          <td>${{escapeHtml(unit.Id || '')}}</td>
-          <td>${{escapeHtml(unit.unit_type || '')}}${{lifecycle}}${{replacement}}</td>
-          <td>${{badge(unit.status_text || unit.ActiveState || unit.LoadState || '')}}</td>
-          <td>${{escapeHtml(unit.schedule || '')}}</td>
-          <td>${{escapeHtml(rawStatus)}}</td>
-          <td>${{escapeHtml(unit.NRestarts || '')}}</td>
-          <td>${{escapeHtml(unit.ExecMainStartTimestamp || unit.LastTriggerUSec || unit.NextElapseUSecRealtime || '')}}</td>
-          <td>${{serviceActionButtons(unit)}}</td>
+          <td><strong>${{escapeHtml(task.label || task.Id || '')}}</strong><div class="hint">${{escapeHtml(task.Id || '')}}</div>${{rawDetails}}</td>
+          <td>${{escapeHtml(task.unit_type || '')}}${{lifecycle}}${{replacement}}</td>
+          <td>${{badge(task.schedule_status || '未知')}}</td>
+          <td>${{badge(task.execution_status || '未知')}}</td>
+          <td>${{escapeHtml(task.schedule || '')}}${{nextTrigger}}</td>
+          <td>${{escapeHtml(task.NRestarts || '')}}</td>
+          <td>${{escapeHtml(task.last_execution || '')}}</td>
+          <td>${{serviceActionButtons(task.action_unit || {{}})}}</td>
         </tr>
       `);
     }});
   }});
-  return rows.join('') || '<tr><td colspan="8">暂无 systemd 单元状态。</td></tr>';
+  return rows.join('') || '<tr><td colspan="8">暂无 systemd 任务状态。</td></tr>';
 }}
 
 function shortText(value, limit=160) {{
@@ -2669,7 +2817,7 @@ async function loadSourceProfiles() {{
     const hint = document.getElementById('sourceProfileConfigHint');
     if (hint) {{
       const suffix = sourceProfileCache.config_exists ? '已存在本地覆盖配置' : '尚未保存本地覆盖配置';
-      hint.textContent = `${{data.runtime_note || 'enabled/Skeptic/Tavily 覆盖已接入实际采集。'}} 配置文件：${{sourceProfileCache.config_path || '-'}}；${{suffix}}。`;
+      hint.textContent = `${{data.runtime_note || '已读取信息源实际运行配置。'}} 配置文件：${{sourceProfileCache.config_path || '-'}}；${{suffix}}。`;
     }}
   }} catch (err) {{
     showStatus(err.message, 'err');
@@ -2696,10 +2844,10 @@ async function saveSourceProfiles() {{
     setSourceProfileDirty(false);
     const hint = document.getElementById('sourceProfileConfigHint');
     if (hint) {{
-      hint.textContent = `${{data.runtime_note || 'enabled/Skeptic/Tavily 覆盖已接入实际采集。'}} 配置文件：${{sourceProfileCache.config_path || '-'}}；已存在本地覆盖配置。`;
+      hint.textContent = `${{data.runtime_note || '已读取信息源实际运行配置。'}} 配置文件：${{sourceProfileCache.config_path || '-'}}；已存在本地覆盖配置。`;
     }}
     const saved = data.save_result || {{}};
-    showStatus(`信息源配置已保存：停用 ${{saved.disabled_count || 0}} 个，覆盖 ${{saved.override_count || 0}} 个。启用/Skeptic/Tavily 将由运行时读取；频率/代理暂仅记录。`);
+    showStatus(`信息源配置已保存：停用 ${{saved.disabled_count || 0}} 个，覆盖 ${{saved.override_count || 0}} 个。页面已按实际运行配置刷新；频率/代理暂仅记录。`);
   }} catch (err) {{
     showStatus(err.message, 'err');
   }}
@@ -2708,7 +2856,7 @@ async function saveSourceProfiles() {{
 async function loadHealth() {{
   try {{
     const data = await api('/api/health');
-    document.getElementById('healthRows').innerHTML = renderHealthUnits(data.units || [], data.unit_groups || {{}});
+    document.getElementById('healthRows').innerHTML = renderHealthTasks(data.tasks || [], data.unit_groups || {{}});
     document.getElementById('sourceHealthRows').innerHTML = (data.sources || []).map(source => `
       <tr>
         <td>${{escapeHtml(source.monitor || '')}}</td>
@@ -3014,7 +3162,7 @@ function settingsRestartAdvice(changedItems) {{
     lines.push('新浪配置：重启 surveil-sina-flash.service；可选立即运行 surveil-sina-stock-news.timer。');
   }}
   if (hasPrefix('IFIND_')) {{
-    lines.push('iFinD 配置：公告/研报 timer 下一轮自动读取；如需马上验证，立即运行对应 timer 或 smoke service。');
+    lines.push('iFinD 配置：公告 timer 下一轮自动读取；如需马上验证，可在任务健康页立即运行 iFinD 公司公告。');
   }}
   if (hasAny(['SURVEIL_MARKET_FLOW_DIRECT_PATH'])) {{
     lines.push('通用信息统一链路：重启 surveil-sina-flash.service；research、official、news、Sina 个股新闻和 iFinD timer 下一轮自动读取。X/Serenity 与价值目录不受影响。');

@@ -51,13 +51,6 @@ def canonical_items() -> list[NormalizedMarketItem]:
             content_type="notice",
             title="上市公司公告",
         ),
-        NormalizedMarketItem(
-            source="ifind_report",
-            source_category="company_disclosures",
-            collector="ifind_batch",
-            content_type="report",
-            title="研究报告",
-        ),
     ]
 
 
@@ -72,7 +65,7 @@ def fake_interpretation(*args, **kwargs) -> InterpretationResult:
     )
 
 
-def test_six_content_types_share_one_decision_and_interpretation_contract() -> None:
+def test_five_content_types_share_one_decision_and_interpretation_contract() -> None:
     original_decider = market_flow.decide_market_item
     original_interpreter = market_flow.interpret_market_item
     calls = {"decision": 0, "interpretation": 0}
@@ -100,7 +93,7 @@ def test_six_content_types_share_one_decision_and_interpretation_contract() -> N
         market_flow.decide_market_item = original_decider
         market_flow.interpret_market_item = original_interpreter
 
-    assert calls == {"decision": 6, "interpretation": 6}
+    assert calls == {"decision": 5, "interpretation": 5}
     assert all(isinstance(result, MarketFlowResult) for result in results)
     assert all(result.decision.action == "push" for result in results)
     assert all(result.delivery_intent["should_deliver"] is True for result in results)
@@ -168,7 +161,7 @@ def test_existing_wrappers_delegate_to_shared_core() -> None:
 
 
 def main() -> int:
-    test_six_content_types_share_one_decision_and_interpretation_contract()
+    test_five_content_types_share_one_decision_and_interpretation_contract()
     test_interpretation_failure_preserves_deterministic_action()
     test_post_decision_finalization_updates_one_decision_result()
     test_existing_wrappers_delegate_to_shared_core()

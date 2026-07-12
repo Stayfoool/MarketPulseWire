@@ -1,7 +1,5 @@
 {
-  "disabled_sources": [
-    "ifind_report"
-  ],
+  "disabled_sources": [],
   "overrides": {
     "semianalysis": {
       "frequency": "进程内每 300 秒",

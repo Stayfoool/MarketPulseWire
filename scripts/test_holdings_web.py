@@ -8,7 +8,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import holdings_web
-from holdings_web import RUN_ONCE_TARGETS, fetch_events_rows, html_page, unit_actions, unit_display_metadata
+from holdings_web import (
+    RUN_ONCE_TARGETS,
+    SERVICE_UNITS,
+    build_health_tasks,
+    fetch_events_rows,
+    html_page,
+    unit_actions,
+    unit_display_metadata,
+)
 from source_profiles import (
     filter_enabled_named_sources,
     filter_enabled_source_mapping,
@@ -33,11 +41,13 @@ def test_health_page_exposes_service_action_controls() -> None:
     html = html_page(token_required=False)
     assert "/api/service-action" in html
     assert "runServiceAction" in html
-    assert "renderHealthUnits" in html
+    assert "renderHealthTasks" in html
     assert "fetching_persistent" in html
     assert "showShadowUnits" in html
     assert "showLegacyUnits" in html
     assert "显示历史兼容单元" in html
+    assert "调度状态" in html
+    assert "最近执行" in html
     assert "重启定时器" in html
     assert "立即运行" in html
 
@@ -422,6 +432,34 @@ def test_source_profile_runtime_filters_and_flags() -> None:
         assert source_profile_skeptic_enabled("cls_telegraph_api", config_path=config_path) is False
 
 
+def test_source_profile_runtime_note_reports_effective_counts() -> None:
+    with TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        config_path = tmp_path / "source_profiles.local.json"
+        initial = source_profiles_payload(tmp_path / "surveil.sqlite3", config_path=config_path)
+        save_source_profile_config(
+            {
+                "profiles": [
+                    {
+                        "id": profile["id"],
+                        "enabled": True,
+                        "skeptic_enabled": False,
+                        "web_evidence_enabled": False,
+                    }
+                    for profile in initial["profiles"]
+                ]
+            },
+            path=config_path,
+        )
+        payload = source_profiles_payload(tmp_path / "surveil.sqlite3", config_path=config_path)
+    status = payload["runtime_status"]
+    assert status["skeptic_sources"] == 0
+    assert status["web_evidence_sources"] == 0
+    assert "Skeptic 实际启用 0 个" in payload["runtime_note"]
+    assert "Tavily/Web Evidence 实际可触发 0 个" in payload["runtime_note"]
+    assert "覆盖已接入" not in payload["runtime_note"]
+
+
 def test_systemd_actions_are_whitelisted() -> None:
     assert "restart" in unit_actions("surveil-rss-monitor.service")
     assert "restart" in unit_actions("surveil-trendforce-page-monitor.service")
@@ -440,6 +478,58 @@ def test_systemd_actions_are_whitelisted() -> None:
     assert RUN_ONCE_TARGETS["surveil-china-media.timer"] == "surveil-china-media.service"
     assert unit_actions("surveil-holdings-web.service") == ["status"]
     assert unit_actions("ssh.service") == []
+    assert "surveil-ifind-notice.service" in SERVICE_UNITS
+
+
+def systemd_fixture(unit: str, values: dict[str, str]) -> dict[str, object]:
+    payload: dict[str, object] = {"Id": unit, **values}
+    payload.update(unit_display_metadata(unit, payload))
+    payload["actions"] = unit_actions(unit)
+    return payload
+
+
+def test_health_tasks_pair_timer_with_service_and_prefer_execution_result() -> None:
+    timer = systemd_fixture(
+        "surveil-ifind-notice.timer",
+        {
+            "ActiveState": "active",
+            "SubState": "waiting",
+            "Result": "success",
+            "NextElapseUSecRealtime": "Sun 2026-07-12 20:00:00 CST",
+        },
+    )
+    service = systemd_fixture(
+        "surveil-ifind-notice.service",
+        {
+            "ActiveState": "failed",
+            "SubState": "failed",
+            "Result": "failed",
+            "ExecMainStatus": "1",
+            "ExecMainStartTimestamp": "Sun 2026-07-12 08:00:01 CST",
+        },
+    )
+    tasks = build_health_tasks([timer, service])
+    task = next(item for item in tasks if item["Id"] == "surveil-ifind-notice")
+    assert task["label"] == "iFinD 公司公告"
+    assert task["schedule_status"] == "等待下次触发"
+    assert task["execution_status"] == "最近运行失败（exit 1）"
+    assert task["action_unit"]["Id"] == "surveil-ifind-notice.timer"
+    assert task["timer"]["Id"] == "surveil-ifind-notice.timer"
+    assert task["service"]["Id"] == "surveil-ifind-notice.service"
+
+
+def test_health_tasks_show_disabled_timer_and_last_success_separately() -> None:
+    timer = systemd_fixture(
+        "surveil-news-collector.timer",
+        {"ActiveState": "inactive", "SubState": "dead", "Result": "success"},
+    )
+    service = systemd_fixture(
+        "surveil-news-collector.service",
+        {"ActiveState": "inactive", "SubState": "dead", "Result": "success", "ExecMainStatus": "0"},
+    )
+    task = next(item for item in build_health_tasks([timer, service]) if item["Id"] == "surveil-news-collector")
+    assert task["schedule_status"] == "定时器未启用"
+    assert task["execution_status"] == "上次运行成功"
 
 
 def test_unit_display_metadata_translates_oneshot_success() -> None:
@@ -525,7 +615,10 @@ def main() -> int:
     test_source_profiles_aggregate_wildcard_health()
     test_source_profile_local_config_roundtrip()
     test_source_profile_runtime_filters_and_flags()
+    test_source_profile_runtime_note_reports_effective_counts()
     test_systemd_actions_are_whitelisted()
+    test_health_tasks_pair_timer_with_service_and_prefer_execution_result()
+    test_health_tasks_show_disabled_timer_and_last_success_separately()
     test_unit_display_metadata_translates_oneshot_success()
     test_unit_display_metadata_translates_waiting_timer()
     test_unit_display_metadata_groups_shadow_collectors()

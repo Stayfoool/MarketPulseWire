@@ -54,6 +54,26 @@ def test_all_event_collectors_import_runtime_entrypoints() -> None:
             assert f"import {forbidden}" not in source
 
 
+def test_ifind_batch_only_builds_notice_events() -> None:
+    source = inspect.getsource(ifind_batch)
+    assert "ifind_report" not in source
+    assert "IFIND_RESEARCH" not in source
+    event = ifind_batch.event_from_notice_row(
+        {
+            "thscode": "300308.SZ",
+            "secName": "中际旭创",
+            "reportTitle": "关于重大合同的公告",
+            "reportDate": "2026-07-12",
+            "seq": "notice-1",
+        },
+        {"300308.SZ": {"symbol": "300308.SZ", "name": "中际旭创"}},
+        parse_pdf=False,
+    )
+    assert event["source"] == "ifind_notice"
+    assert event["event_type"] == "announcement"
+    assert event["symbols"] == ["300308.SZ"]
+
+
 def test_global_switch_is_exposed_in_web_settings_registry() -> None:
     field = FIELDS_BY_KEY[market_runtime.DIRECT_PATH_ENV]
     assert field.group == "pipeline"
@@ -125,6 +145,7 @@ def test_sina_flash_uses_news_media_flash_shape() -> None:
 def main() -> int:
     test_global_switch_selects_exactly_one_runtime_module()
     test_all_event_collectors_import_runtime_entrypoints()
+    test_ifind_batch_only_builds_notice_events()
     test_global_switch_is_exposed_in_web_settings_registry()
     test_direct_and_compat_upsert_preserve_same_store_contract()
     test_sina_flash_uses_news_media_flash_shape()

@@ -130,7 +130,7 @@ SURVEIL_MARKET_FLOW_DIRECT_PATH=1
 ```
 
 `SURVEIL_MARKET_FLOW_DIRECT_PATH` atomically selects one route for research,
-news-media, official-company, Sina flash/portfolio news, and iFinD notice/report.
+news-media, official-company, Sina flash/portfolio news, and iFinD notices.
 Use `1` for the all-source direct route; set it to `0` only for an atomic rollback
 through the compatibility wrappers. `SURVEIL_CONTENT_DIRECT_PATH` and
 `SURVEIL_EVENT_DIRECT_PATH` are read-only compatibility aliases for one release
