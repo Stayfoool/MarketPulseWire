@@ -54,6 +54,7 @@ jobs:
           python scripts/test_event_pipeline_convergence.py
           python scripts/test_market_item.py
           python scripts/test_decision_engine.py
+          python scripts/test_attributed_research.py
           python scripts/test_market_flow.py
           python scripts/test_market_flow_adapters.py
           python scripts/test_market_review_store.py

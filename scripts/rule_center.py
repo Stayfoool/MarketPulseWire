@@ -198,29 +198,10 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "id": "source_priority_semianalysis",
-        "name": "SemiAnalysis 来源优先级",
-        "group": "研究机构/行业媒体",
-        "description": "指定的高价值研究源默认进入即时提醒，除非 Skeptic 明确 block。",
-        "runtime": "industry_hardline / article",
-        "hit_markers": ("source_priority_override",),
-        "priority": 0,
-        "fields": (
-            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
-            {
-                "key": "sources",
-                "label": "优先来源 ID",
-                "type": "list",
-                "default": ["semianalysis"],
-                "help": "填写后替换默认来源列表；来源 ID 可在“信息源”页查看。",
-            },
-        ),
-    },
-    {
         "id": "attributed_research_hard_variable",
-        "name": "媒体转述高价值行业研究观点",
+        "name": "明确署名的行业研究硬变量",
         "group": "研究机构/行业媒体",
-        "description": "任一新闻媒体明确署名转述受信任行业研究源，并包含半导体/AI产业硬变量或重大预期变化时即时提醒。媒体之间不分级。",
+        "description": "任一通用来源明确署名引用受信任行业研究源，并包含半导体/AI 产业硬变量或重大预期变化时即时提醒；来源分类不参与重要性判断。",
         "runtime": "attributed_research / market_flow + decision_engine",
         "hit_markers": ("attributed_research_hard_variable",),
         "priority": 0,
@@ -244,22 +225,15 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "industry_quantified_hardline",
-        "name": "量化产业硬变量",
-        "group": "研究机构/行业媒体",
-        "description": "SEMI、TrendForce、DIGITIMES、The Elec、Nikkei xTECH 的设备、材料、产能、资本开支、涨价、管制、订单等量化硬变量即时提醒。",
-        "runtime": "industry_hardline / 规则快判 + article_reviews 兼容存储",
-        "hit_markers": ("industry_hardline_override", "event_first_hardline"),
+        "name": "重点主题与产业硬变量",
+        "group": "通用内容规则",
+        "description": "任一通用来源同时命中重点主题，以及价格、产能、资本开支、订单、交付、供需、监管、技术路线或业绩规模等实质变量时即时提醒。",
+        "runtime": "industry_hardline / market_flow + decision_engine",
+        "hit_markers": ("industry_hardline_override", "industry_quantified_hardline"),
         "priority": 0,
         "fields": (
             {"key": "enabled", "label": "启用", "type": "bool", "default": True},
             {"key": "extra_keywords", "label": "额外硬变量触发词", "type": "list", "default": []},
-            {
-                "key": "extra_sources",
-                "label": "额外来源 ID/前缀",
-                "type": "list",
-                "default": [],
-                "help": "仅用于新增已接入的研究机构/行业媒体来源；输入完整来源 ID 或稳定前缀。",
-            },
         ),
     },
 )
@@ -632,7 +606,7 @@ def _event_candidates(conn, cutoff: str, limit: int) -> list[dict[str, Any]]:
 def simulate_rules(*, db_path: Path = DEFAULT_DB_PATH, days: int = 7, limit: int = 120) -> dict[str, Any]:
     """Evaluate recent stored entries with the live rules without sending Feishu."""
     from attributed_research import attributed_research_rule
-    from industry_hardline import is_quantified_hardline_item, is_source_priority_immediate
+    from industry_hardline import industry_topic_hard_variable_rule
     from push_rules import first_matching_push_rule, load_enabled_holdings_for_rules
     from source_profiles import runtime_source_profile
 
@@ -658,16 +632,21 @@ def simulate_rules(*, db_path: Path = DEFAULT_DB_PATH, days: int = 7, limit: int
                     "reason": str(rule.get("brief_reason") or rule.get("reason") or ""),
                 }
             )
-        if is_source_priority_immediate(str(item["source"])):
-            matches.append({"rule_id": "source_priority_semianalysis", "name": "SemiAnalysis 来源优先级", "reason": "来源在优先级白名单内。"})
-        if is_quantified_hardline_item(str(item["source"]), item):
-            matches.append({"rule_id": "industry_quantified_hardline", "name": "量化产业硬变量", "reason": "来源和量化硬变量条件同时命中。"})
+        industry = industry_topic_hard_variable_rule(str(item["source"]), item)
+        if industry:
+            matches.append(
+                {
+                    "rule_id": "industry_quantified_hardline",
+                    "name": "重点主题与产业硬变量",
+                    "reason": str(industry.get("brief_reason") or industry.get("reason") or ""),
+                }
+            )
         attributed = attributed_research_rule(item)
         if attributed:
             matches.append(
                 {
                     "rule_id": "attributed_research_hard_variable",
-                    "name": "媒体转述高价值行业研究观点",
+                    "name": "明确署名的行业研究硬变量",
                     "reason": str(attributed.get("brief_reason") or attributed.get("reason") or ""),
                 }
             )

@@ -1,125 +1,119 @@
 #!/usr/bin/env python3
-"""Regression checks for narrow semiconductor/AI industry hardline rules."""
+"""Regression checks for source-neutral topic and hard-variable rules."""
 
 from __future__ import annotations
 
 from industry_hardline import (
     apply_hardline_review_override,
-    apply_source_priority_override,
-    event_first_hardline_review,
     explain_hardline,
-    is_quantified_hardline_item,
-    should_event_first_hardline_item,
+    industry_topic_hard_variable_rule,
+    topic_hard_variable_match,
 )
 
 
-def test_quantified_hardline_applies_to_allowed_sources() -> None:
-    item = {
-        "page_source": "semi_prnewswire_semiconductors",
-        "title": "SEMI Raises 2026 Front-End Equipment Forecast to $152.2 Billion",
-        "summary": "SEMI raised semiconductor equipment growth from 16.5% to 23.5%.",
-    }
-    assert is_quantified_hardline_item("trendforce_page", item) is True
-    review = {
-        "importance": "medium",
-        "push_now": False,
-        "affected_targets": ["半导体设备"],
-        "reason": "模型认为需要日报观察。",
-        "raw": {},
-    }
-    updated = apply_hardline_review_override("trendforce_page", item, review)
-    assert updated["importance"] == "high"
-    assert updated["push_now"] is True
-    assert updated["industry_hardline_override"] is True
-    assert "产业硬变量线覆盖" in updated["reason"]
+SEMI_EQUIPMENT_CASE = {
+    "title": "SEMI Raises 2026 Front-End Equipment Forecast to $152.2 Billion",
+    "summary": "SEMI raised semiconductor equipment growth from 16.5% to 23.5%.",
+}
 
 
-def test_domestic_finance_sources_do_not_use_hardline_override() -> None:
-    item = {
-        "title": "中信建投：SEMI上修全年预期，达1522亿美元",
-        "summary": "SEMI于6月11日发布报告，将2026年全球前端半导体设备市场规模增速上调至23.5%。",
-    }
-    review = {"importance": "medium", "push_now": False, "reason": "国内二手来源。"}
-    assert is_quantified_hardline_item("yicai_brief", item) is False
-    assert is_quantified_hardline_item("cls_telegraph_api", item) is False
-    assert apply_hardline_review_override("yicai_brief", item, review) == review
-    assert apply_hardline_review_override("cls_telegraph_api", item, review) == review
-
-
-def test_prompt_note_identifies_source_family() -> None:
-    note = explain_hardline(
-        "digitimes_tw_semiconductors_components",
-        ("AI server component capacity expands 20% with new equipment orders",),
+def test_same_topic_and_hard_variable_match_across_sources() -> None:
+    sources = (
+        "trendforce_page",
+        "sina_flash",
+        "cls_telegraph_api",
+        "company_blog",
+        "future_media",
     )
-    assert "DIGITIMES" in note
-    assert "硬变量" in note
+    rules = [industry_topic_hard_variable_rule(source, SEMI_EQUIPMENT_CASE) for source in sources]
+    assert all(rule is not None for rule in rules)
+    assert {tuple(rule["claim_topics"]) for rule in rules if rule} == {("半导体", "半导体设备/材料")}
+    assert {tuple(rule["hard_variable_types"]) for rule in rules if rule} == {("预测调整",)}
 
 
-def test_semianalysis_source_priority_forces_immediate_push() -> None:
-    item = {
-        "title": "SemiAnalysis weekly AI infrastructure report",
-        "summary": "Research note on AI accelerator supply chains.",
-    }
+def test_review_override_is_content_based() -> None:
     review = {
         "importance": "medium",
         "push_now": False,
         "affected_targets": [],
-        "reason": "模型认为进入日报即可。",
-        "daily_summary": "AI infrastructure research note.",
+        "reason": "模型认为需要日报观察。",
         "raw": {},
     }
-    updated = apply_source_priority_override("semianalysis", item, review)
+    updated = apply_hardline_review_override("sina_flash", SEMI_EQUIPMENT_CASE, review)
     assert updated["importance"] == "high"
     assert updated["push_now"] is True
-    assert updated["source_priority_override"] is True
-    assert "SemiAnalysis" in updated["affected_targets"]
-    assert "来源优先级覆盖" in updated["reason"]
-    assert updated["raw"]["source_priority_override"] == "semianalysis"
+    assert updated["industry_hardline_override"] is True
+    assert "来源分类不参与重要性判断" in updated["reason"]
+    assert updated["raw"]["industry_topic_hard_variable"]["rule_id"] == "industry_quantified_hardline"
 
 
-def test_semianalysis_source_priority_respects_skeptic_block() -> None:
-    review = {
-        "importance": "low",
-        "push_now": False,
-        "skeptic_blocked": True,
-        "skeptic": {"skeptic_verdict": "block"},
-    }
-    assert apply_source_priority_override("semianalysis", {}, review) == review
-
-
-def test_short_research_media_hardline_uses_event_first() -> None:
+def test_source_identity_without_hard_variable_does_not_match() -> None:
     item = {
-        "page_source": "semi_prnewswire_semiconductors",
-        "title": "SEMI Raises 2026 Front-End Equipment Forecast to $152.2 Billion",
-        "summary": "SEMI raised growth from 16.5% to 23.5%.",
+        "title": "SemiAnalysis weekly AI infrastructure report",
+        "summary": "Research note on AI accelerator supply chains.",
     }
-    assert should_event_first_hardline_item("trendforce_page", item, max_chars=300) is True
-    review = event_first_hardline_review("trendforce_page", item)
-    assert review is not None
-    assert review["importance"] == "high"
-    assert review["push_now"] is True
-    assert review["model"] == "event_first_hardline"
-    assert review["raw"]["event_first_policy"] == "research_industry_media_short_hard_variable"
+    assert topic_hard_variable_match(item) == {}
+    assert industry_topic_hard_variable_rule("semianalysis", item) is None
 
 
-def test_long_research_media_article_stays_on_article_flow() -> None:
+def test_topic_and_hard_variable_are_both_required() -> None:
+    topic_only = {"title": "AI infrastructure and semiconductor industry overview"}
+    hard_variable_only = {"title": "Company raises 2027 revenue forecast by 20%"}
+    assert topic_hard_variable_match(topic_only) == {}
+    assert topic_hard_variable_match(hard_variable_only) == {}
+
+
+def test_unquantified_roadmap_shift_is_a_hard_variable() -> None:
     item = {
-        "page_source": "semi_prnewswire_semiconductors",
-        "title": "SEMI Raises Equipment Forecast",
-        "summary": "SEMI raised semiconductor equipment growth from 16.5% to 23.5%. " * 20,
+        "title": "DeepSeek and Zhipu develop custom ASICs to bypass NVIDIA GPUs",
+        "summary": "The AI accelerator roadmap is shifting away from merchant chips.",
     }
-    assert should_event_first_hardline_item("trendforce_page", item, max_chars=300) is False
-    assert event_first_hardline_review("trendforce_page", item) is None
+    rule = industry_topic_hard_variable_rule("news_media", item)
+    assert rule is not None
+    assert "AI基础设施" in rule["claim_topics"]
+    assert "时间表/技术路线" in rule["hard_variable_types"]
+    assert rule["quantified_evidence"] == []
+
+
+def test_multi_topic_recap_preserves_multiple_hard_variables() -> None:
+    item = {
+        "title": "Semiconductor and AI infrastructure semi recap",
+        "summary": (
+            "PCB supply shortage is projected to persist until 2028. "
+            "TSMC plans a 30x PIC capacity expansion to 25,000 wafers per month by 2028. "
+            "NAND price hike reaches 5x while equipment suppliers start emergency investment. "
+            "DeepSeek develops custom ASICs to bypass NVIDIA GPUs."
+        ),
+    }
+    rule = industry_topic_hard_variable_rule("sina_flash", item)
+    assert rule is not None
+    assert {"AI基础设施", "半导体", "存储/HBM", "光互联/CPO", "PCB/电子制造"}.issubset(
+        set(rule["claim_topics"])
+    )
+    assert {"供需缺口/瓶颈", "价格", "产能/产量", "资本开支/投资", "时间表/技术路线"}.issubset(
+        set(rule["hard_variable_types"])
+    )
+    assert "30x" in rule["quantified_evidence"]
+    assert "25,000 wafers" in rule["quantified_evidence"]
+
+
+def test_explain_hardline_describes_content_not_source_family() -> None:
+    note = explain_hardline(
+        "digitimes_tw_semiconductors_components",
+        ("AI server semiconductor equipment forecast raised 20%",),
+    )
+    assert "重点主题" in note
+    assert "DIGITIMES" not in note
 
 
 def main() -> int:
-    test_quantified_hardline_applies_to_allowed_sources()
-    test_domestic_finance_sources_do_not_use_hardline_override()
-    test_prompt_note_identifies_source_family()
-    test_semianalysis_source_priority_forces_immediate_push()
-    test_semianalysis_source_priority_respects_skeptic_block()
-    test_short_research_media_hardline_uses_event_first()
-    test_long_research_media_article_stays_on_article_flow()
+    test_same_topic_and_hard_variable_match_across_sources()
+    test_review_override_is_content_based()
+    test_source_identity_without_hard_variable_does_not_match()
+    test_topic_and_hard_variable_are_both_required()
+    test_unquantified_roadmap_shift_is_a_hard_variable()
+    test_multi_topic_recap_preserves_multiple_hard_variables()
+    test_explain_hardline_describes_content_not_source_family()
     print("industry hardline checks passed")
     return 0
 

@@ -151,9 +151,9 @@ def test_shadow_collect_rss_can_attach_direct_decision() -> None:
     decision = candidate["direct_shadow"]["decision"]
     assert payload["ran_direct_decision_shadow"] is True
     assert payload["counts"]["direct_shadow_candidates"] == 1
-    assert payload["counts"]["direct_shadow_push_candidates"] == 1
-    assert decision["action"] == "push"
-    assert decision["rule_hit_ids"][0] in {"event_first_hardline", "source_priority_semianalysis"}
+    assert payload["counts"]["direct_shadow_push_candidates"] == 0
+    assert decision["action"] == "archive"
+    assert decision["rule_hit_ids"] == []
     assert candidate["direct_shadow"]["normalized_item"]["source_category"] == "research_industry_media"
 
 

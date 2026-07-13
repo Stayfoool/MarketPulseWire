@@ -47,7 +47,7 @@ def test_international_bank_theme_rule_reports_delivery_dedup_metadata_only() ->
     assert "reservation stays in the delivery layer" in decision.dedup["note"]
 
 
-def test_short_industry_hardline_uses_event_first_decision() -> None:
+def test_industry_hard_variable_is_source_neutral() -> None:
     item = {
         "source": "trendforce_page",
         "page_source": "semi_prnewswire_semiconductors",
@@ -56,21 +56,54 @@ def test_short_industry_hardline_uses_event_first_decision() -> None:
     }
     decision = decide_market_item(item, holdings=[])
     assert decision.action == "push"
-    assert decision.rule_hits[0]["rule_id"] == "event_first_hardline"
-    assert decision.audit_json["source_stage"] == "industry_hardline_event_first"
-    assert decision.rule_hits[0]["raw"]["event_first_policy"] == "research_industry_media_short_hard_variable"
+    assert decision.rule_hits[0]["rule_id"] == "industry_quantified_hardline"
+    assert decision.audit_json["source_stage"] == "industry_topic_hard_variable"
+    sina_decision = decide_market_item({**item, "source": "sina_flash"}, holdings=[])
+    assert sina_decision.action == "push"
+    assert sina_decision.rule_hits[0]["hard_variable_types"] == decision.rule_hits[0]["hard_variable_types"]
 
 
-def test_long_semianalysis_uses_source_priority_decision() -> None:
+def test_transport_metadata_does_not_change_content_importance() -> None:
+    text = "HBM supply shortage will persist until 2028 and prices are projected to double."
+    variants = (
+        NormalizedMarketItem(
+            source="trendforce_page",
+            source_category="research_industry_media",
+            publisher_role="research_publisher",
+            content_type="article",
+            title=text,
+        ),
+        NormalizedMarketItem(
+            source="sina_flash",
+            source_category="news_media",
+            publisher_role="news_media",
+            content_type="flash",
+            title=text,
+        ),
+        NormalizedMarketItem(
+            source="company_blog",
+            source_category="official_company",
+            publisher_role="official_company",
+            content_type="official_news",
+            title=text,
+        ),
+    )
+    decisions = [decide_market_item(item, holdings=[]) for item in variants]
+    assert {decision.action for decision in decisions} == {"push"}
+    assert {decision.importance for decision in decisions} == {"high"}
+    assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"industry_quantified_hardline"}
+
+
+def test_semianalysis_source_identity_alone_does_not_raise_importance() -> None:
     item = {
         "source": "semianalysis",
         "title": "SemiAnalysis weekly AI infrastructure report",
         "summary": "Research note on AI accelerator supply chains. " * 20,
     }
     decision = decide_market_item(item, holdings=[])
-    assert decision.action == "push"
-    assert decision.rule_hits[0]["rule_id"] == "source_priority_semianalysis"
-    assert decision.rule_hits[0]["raw"]["source_priority_override"] == "semianalysis"
+    assert decision.action == "archive"
+    assert decision.importance == "unknown"
+    assert decision.rule_hits == []
 
 
 def test_news_media_attributed_semianalysis_hard_variable_pushes() -> None:
@@ -102,8 +135,9 @@ def test_holding_and_attributed_research_rules_are_preserved_together() -> None:
     assert [rule["rule_id"] for rule in decision.rule_hits] == [
         "holding_keyword_immediate_alert",
         "attributed_research_hard_variable",
+        "industry_quantified_hardline",
     ]
-    assert decision.audit_json["source_stage"] == "push_rules_with_attributed_research"
+    assert decision.audit_json["source_stage"] == "combined_content_rules"
     assert decision.dedup["dedup_key"].startswith("attributed_research:semianalysis:")
 
 
@@ -137,8 +171,9 @@ def test_no_deterministic_match_archives_for_legacy_gate_to_continue() -> None:
 def main() -> int:
     test_direct_holding_bank_rule_matches_legacy_push_rule()
     test_international_bank_theme_rule_reports_delivery_dedup_metadata_only()
-    test_short_industry_hardline_uses_event_first_decision()
-    test_long_semianalysis_uses_source_priority_decision()
+    test_industry_hard_variable_is_source_neutral()
+    test_transport_metadata_does_not_change_content_importance()
+    test_semianalysis_source_identity_alone_does_not_raise_importance()
     test_news_media_attributed_semianalysis_hard_variable_pushes()
     test_holding_and_attributed_research_rules_are_preserved_together()
     test_macro_primary_text_decides_push_without_raw_event_marker()

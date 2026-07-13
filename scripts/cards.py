@@ -219,12 +219,8 @@ def thin_push_reason(item: dict[str, Any], review: dict[str, Any]) -> str:
     raw = review.get("raw") if isinstance(review.get("raw"), dict) else {}
     if review.get("mandatory_push") == "yicai_morning_brief":
         return "每日固定栏目：第一财经券商晨会观点速递。"
-    if review.get("source_priority_override") or raw.get("source_priority_override"):
-        return "来源优先级：SemiAnalysis 报告默认即时提醒，具体标的映射待验证。"
     if review.get("industry_hardline_override") or raw.get("industry_hardline_override"):
-        return "产业硬变量来源命中：SEMI/TrendForce/DIGITIMES/The Elec/Nikkei xTECH 等。"
-    if review.get("event_first") or raw.get("event_first_hardline"):
-        return "研究机构/行业媒体短文本硬变量，先即时提醒，后续再做深度校验。"
+        return "通用内容规则命中：重点主题同时出现价格、产能、订单、供需、监管或技术路线等产业硬变量。"
     macro = review.get("macro_policy_line") if isinstance(review.get("macro_policy_line"), dict) else raw.get("macro_policy_line")
     if isinstance(macro, dict) and macro.get("matched"):
         return "美国核心宏观/Fed 政策线，可能影响美债、美元、风险偏好和成长股估值。"
