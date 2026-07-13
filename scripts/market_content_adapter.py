@@ -154,6 +154,34 @@ def _interpretation_content(source: str, item: dict[str, Any]) -> str:
     return "\n\n".join(note for note in notes if note)[:12000]
 
 
+def _source_enrichment_interpretation(normalized: NormalizedMarketItem) -> InterpretationResult | None:
+    if not normalized.source.startswith("value_directory_"):
+        return None
+    preview = normalized.raw.get("value_directory_preview")
+    if not isinstance(preview, dict):
+        return None
+    facts = preview.get("facts") if isinstance(preview.get("facts"), dict) else {}
+    if facts.get("status") != "ok":
+        return None
+    targets = [
+        {"name": str(target), "code": "", "relation": "价值目录第一页可见信息", "direction": "uncertain"}
+        for target in facts.get("targets") or []
+        if str(target).strip()
+    ]
+    notes = [str(point) for point in facts.get("key_points") or [] if str(point).strip()]
+    preview_basis = str(facts.get("preview_basis") or "").strip()
+    if preview_basis:
+        notes.append(f"可见范围：{preview_basis}")
+    return InterpretationResult(
+        core_content=str(facts.get("core_content") or normalized.summary or normalized.title),
+        related_targets=targets[:5],
+        notes=notes,
+        llm_judgement="not_needed",
+        model=str(facts.get("model") or "value_directory_preview"),
+        prompt_version="value_directory_preview_v1",
+    )
+
+
 def _evaluate_content_item(
     source: str,
     item: dict[str, Any],
@@ -162,9 +190,12 @@ def _evaluate_content_item(
     *,
     official: bool = False,
 ) -> MarketFlowResult:
+    source_interpretation = _source_enrichment_interpretation(normalized)
+    value_directory_source = normalized.source.startswith("value_directory_")
     return evaluate_market_item(
         normalized,
         holdings=holdings,
+        source_interpretation=source_interpretation,
         content=_interpretation_content(source, item),
         task=(
             "为一条已完成规则决策的核心产业链公司官网新闻生成极简实时摘要。"
@@ -176,7 +207,7 @@ def _evaluate_content_item(
         forbidden_mode="official" if official else "article",
         extra_notes=["只可围绕 DecisionResult 的规则上下文解释，不得输出或改写推送开关。"],
         user_agent="surveil-official-content-flow/0.1" if official else "surveil-article-content-flow/0.1",
-        force_interpretation=True,
+        force_interpretation=not value_directory_source,
         storage_ref={
             "store_kind": "official_news_reviews" if official else "article_reviews",
             "source": source,
@@ -189,6 +220,13 @@ def _attach_article_flow_audit(review: dict[str, Any], flow_result: MarketFlowRe
     updated = dict(review)
     raw = dict(updated.get("raw") or {})
     raw["_market_flow_result"] = flow_result.audit_payload()
+    source_enrichment = {
+        key: flow_result.item.raw[key]
+        for key in ("value_directory_preview", "value_directory_policy")
+        if key in flow_result.item.raw
+    }
+    if source_enrichment:
+        raw["_source_enrichment"] = source_enrichment
     updated["raw"] = raw
     return updated
 

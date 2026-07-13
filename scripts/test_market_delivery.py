@@ -212,6 +212,34 @@ def test_content_delivery_uses_decision_action_and_marks_legacy_rows() -> None:
         market_delivery.send_card = original_send
 
 
+def test_reloaded_article_review_still_uses_nested_decision_action() -> None:
+    original_send = market_delivery.send_card
+    calls: list[dict] = []
+    try:
+        market_delivery.send_card = lambda card: calls.append(card) or True
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            item = {"id": "nested-archive", "title": "兼容字段冲突测试"}
+            review = content_review("archive")
+            assert review["push_now"] is True
+            with sqlite3.connect(db_path) as conn:
+                save_article_review(conn, "value_directory_ib_stocks", item, review)
+                loaded = article_review_exists(conn, "value_directory_ib_stocks", "nested-archive")
+            assert loaded is not None and loaded["push_now"] is True
+            status = market_delivery.deliver_article_review(
+                "value_directory_ib_stocks",
+                item,
+                loaded,
+                db_path=db_path,
+                use_rule_dedup=False,
+            )
+        assert status == "skipped"
+        assert calls == []
+    finally:
+        market_delivery.send_card = original_send
+
+
 def test_article_delivery_dedup_skips_without_changing_decision_action() -> None:
     original_send = market_delivery.send_card
     calls: list[dict] = []
@@ -257,6 +285,7 @@ def main() -> int:
     test_send_failure_releases_reservation_and_records_failure()
     test_success_confirms_rule_dedup_and_duplicate_skips_second_send()
     test_content_delivery_uses_decision_action_and_marks_legacy_rows()
+    test_reloaded_article_review_still_uses_nested_decision_action()
     test_article_delivery_dedup_skips_without_changing_decision_action()
     print("market delivery checks passed")
     return 0

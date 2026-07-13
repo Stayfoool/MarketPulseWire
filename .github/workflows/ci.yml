@@ -42,6 +42,7 @@ jobs:
           python scripts/test_official_collector.py
           python scripts/test_research_collector.py
           python scripts/test_value_directory_monitor.py
+          python scripts/test_value_directory_flow.py
           python scripts/test_rss_monitor_fetch.py
           python scripts/test_push_rules.py
           python scripts/test_investment_bank_theme_config.py
@@ -51,8 +52,12 @@ jobs:
           python scripts/test_content_flow.py
           python scripts/test_event_runtime.py
           python scripts/test_event_pipeline_convergence.py
+          python scripts/test_market_item.py
+          python scripts/test_decision_engine.py
           python scripts/test_market_flow.py
           python scripts/test_market_flow_adapters.py
+          python scripts/test_market_review_store.py
+          python scripts/test_market_delivery.py
           python scripts/test_sina_zy_client.py
           python scripts/test_industry_hardline.py
           python scripts/test_macro_policy.py

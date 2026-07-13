@@ -16,7 +16,7 @@ All general research, news-media, official-company, flash, portfolio-news, notic
 - `article_reviews`, `official_news_reviews`, and `events/event_analyses` remain compatibility storage truth for existing daily, Web, and signal readers.
 - `SURVEIL_MARKET_FLOW_DIRECT_PATH` is the only Web-visible production route switch: `0` routes every general source through compatibility wrappers and `1` routes every general source through direct modules. The old content/event variables are read-only compatibility aliases for one release when the new variable is absent; conflicting legacy values resolve to one global compatibility route, never a mixed state.
 - X/Serenity intentionally stays on its `seen_posts` and direct-card route because media/thread semantics are source-specific.
-- `value_directory_monitor` intentionally stays on its rule-first index/preview/OCR route and compatibility article-review storage. These two routes are explicit exclusions, not incomplete migrations.
+- `value_directory_monitor` keeps its private Playwright profile, login/WAF handling, daily timer, list baseline, and visible-first-page/OCR collection boundary. Title rules only select preview candidates; the enriched final item uses the same `process_market_item(...)`, `DecisionResult.action`, `article_reviews`, rule dedup, delivery, and view contract as other general sources.
 
 ## End-to-End Flow
 
@@ -26,6 +26,7 @@ flowchart TD
         X["X / Serenity public posts"]
         Official["Official company feeds<br/>OpenAI / NVIDIA / Samsung / SK hynix / Micron"]
         Industry["Research / industry media<br/>SEMI / TrendForce / DIGITIMES / Nikkei xTECH / The Elec"]
+        ValueDirectory["ValueList international-bank research index<br/>stocks / industry / macro"]
         China["China finance and hard-tech media<br/>Sina / First Yicai / CLS / Star Market Daily / Jin10"]
         Notices["Company notices and filings<br/>iFinD"]
         JYGS["JYGS action monitor<br/>currently low priority"]
@@ -36,6 +37,7 @@ flowchart TD
     subgraph C["Collectors"]
         XStream["surveil-x-stream<br/>scripts/x_stream.py"]
         ResearchCollector["surveil-research-collector<br/>scripts/research_collector.py"]
+        ValueCollector["surveil-value-directory<br/>scripts/value_directory_monitor.py<br/>visible first-page OCR"]
         OfficialCollector["surveil-official-collector<br/>scripts/official_collector.py"]
         NewsCollector["surveil-news-collector<br/>scripts/news_collector.py"]
         SinaFlash["surveil-sina-flash<br/>scripts/sina_flash.py"]
@@ -76,6 +78,7 @@ flowchart TD
     X --> XStream
     Official --> OfficialCollector
     Industry --> ResearchCollector
+    ValueDirectory --> ValueCollector
     China --> NewsCollector
     China --> SinaFlash
     China --> SinaStock
@@ -88,6 +91,7 @@ flowchart TD
 
     XStream --> SQLite
     ResearchCollector --> SQLite
+    ValueCollector --> SQLite
     OfficialCollector --> SQLite
     NewsCollector --> SQLite
     SinaFlash --> SQLite
@@ -139,6 +143,7 @@ flowchart LR
         Domestic["First Yicai / CLS / Star Market Daily / Jin10"]
         Sina["Sina flash and stock news"]
         IfindSource["iFinD notices and reports"]
+        ValueSource["ValueList international-bank research lists<br/>visible first-page preview only"]
         JYGSSource["JYGS action feed<br/>currently low priority"]
         EvidenceAPI["Tavily search API"]
     end
@@ -151,6 +156,7 @@ flowchart LR
         SinaFlashSvc["surveil-sina-flash<br/>simple / high-frequency loop<br/>sina_flash.py"]
         SinaStockSvc["surveil-sina-stock-news<br/>oneshot timer / 30 min<br/>sina_stock_news.py"]
         IfindSvc["surveil-ifind-notice<br/>oneshot timer<br/>ifind_batch.py"]
+        ValueSvc["surveil-value-directory<br/>oneshot timer / daily 08:00<br/>value_directory_monitor.py"]
         JYGSSvc["surveil-jygs-actions<br/>oneshot timer<br/>jygs_actions.py"]
     end
 
@@ -196,11 +202,13 @@ flowchart LR
     Sina --> SinaFlashSvc
     Sina --> SinaStockSvc
     IfindSource --> IfindSvc
+    ValueSource --> ValueSvc
     JYGSSource --> JYGSSvc
     EvidenceAPI --> EvidenceMod
     ResearchProd --> SignalExtractSvc
     OfficialProd --> SignalExtractSvc
     NewsProd --> SignalExtractSvc
+    ValueSvc --> SignalExtractSvc
     ResearchShadow --> ShadowDigest
     OfficialShadow --> ShadowDigest
     NewsShadow --> ShadowDigest
@@ -215,7 +223,7 @@ The health page uses the same high-level grouping: fetching services are separat
 |---|---|---|---|---|---|---|---|---|
 | `surveil-x-stream.service` | X API filtered stream, currently focused on Serenity and configured X rules | Public X posts received from the stream; link/card enrichment is best-effort | X stream rules, account/list configuration, local delivery status retry; no article keyword prefilter | `simple` persistent | Long connection, reconnect on failure | X source path (`seen_posts`, X card/report path); not the legacy article/event review stores | No | No |
 | `surveil-research-collector.timer` -> `.service` | SemiAnalysis, TrendForce RSS/pages, SEMI/PRNewswire, DIGITIMES, Nikkei xTECH, The Elec | Official RSS/RDF/list-page entries and public article bodies when accessible | Source profile enabled filtering; RSS/RDF runs every batch; page sources are internally throttled to 15 minutes by default | `oneshot` batch | Timer every 5 minutes; page cadence default 900 seconds | `NormalizedMarketItem` -> `process_market_item` -> compatible `article_reviews` -> delivery/view | Yes | Yes, only through Skeptic |
-| `surveil-value-directory.timer` -> `.service` | ValueList international-bank research lists: stocks and industry/macro | User-account-visible list metadata plus naturally visible first-page preview image/text on detail pages; no PDF download, no purchase/VIP bypass, no cookie export | Source profile enabled filtering; international-bank target/rating, holding keyword, holding relation, and major theme strategy hard rules | `oneshot` browser batch with private server Chromium profile | Daily 08:00, persistent timer | Value directory collection plus visible first-page preview/OCR, then rule-first decision and thin Feishu cards; compatible with `article_reviews` | No | No |
+| `surveil-value-directory.timer` -> `.service` | ValueList international-bank research lists: stocks and industry/macro | User-account-visible list metadata plus naturally visible first-page preview image/text on detail pages; no PDF download, no purchase/VIP bypass, no cookie export | Title-level deterministic decision selects preview candidates; the enriched item is re-decided by the unified decision engine. International-bank target/rating, holding keyword, holding relation, and major theme strategy rules remain deterministic | `oneshot` browser batch with private server Chromium profile | Daily 08:00, persistent timer | Browser/OCR collector -> `NormalizedMarketItem` -> `process_market_item` -> compatible `article_reviews` -> unified dedup/delivery/view | No | No |
 | `surveil-official-collector.timer` -> `.service` | OpenAI, NVIDIA, Samsung, SK hynix, Micron official feeds | Official RSS/Atom feed entries and public article bodies when accessible | Source profile enabled filtering; official-company source list only; ordinary marketing/newsroom items are downgraded by the decision layer | `oneshot` batch | Every 10 minutes | `NormalizedMarketItem` -> `process_market_item` -> compatible `official_news_reviews` -> delivery/view | Yes | Yes, only through Skeptic |
 | `surveil-news-collector.timer` -> `.service` | First Yicai, CLS public front-end roll API, Jin10 public/RSSHub important feed, Star Market Daily | Public flash/news/list entries from configured domestic sources | Source profile enabled filtering; CLS state/backoff and source focus filtering remain collector concerns; mandatory Yicai morning brief is an auditable decision rule | `oneshot` batch | Every 2 minutes | `NormalizedMarketItem` -> `process_market_item` -> compatible `article_reviews` -> delivery/view | Yes | Yes, only through Skeptic |
 | `surveil-sina-flash.service` | Sina Finance 7x24 flash API or optional Sina ZY provider | All fetched flash rows for configured tags/provider page | Match enabled holdings by code/name/aliases or macro policy line; dedupe into `events` | `simple` persistent | Script loop, default `SINA_FLASH_POLL_SECONDS=15` seconds | `news_media + flash` item -> `process_market_item` -> compatible `events/event_analyses` -> delivery/view | No | No |

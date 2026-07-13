@@ -200,8 +200,8 @@ def value_directory_preview_lines(item: dict[str, Any]) -> list[str]:
     elif status:
         lines.append(f"第一页提取：失败/不可用（{facts.get('error') or status}）")
     meta_parts = []
-    for label, key in (("机构", "institution"), ("日期", "report_date"), ("方向", "stance"), ("动作", "action"), ("评级", "rating"), ("目标价", "target_price")):
-        value = str(facts.get(key) or "").strip()
+    for label, key in (("机构", "institution"), ("日期", "report_date"), ("方向", "stance"), ("研报动作", "research_action"), ("评级", "rating"), ("目标价", "target_price")):
+        value = str(facts.get(key) or (facts.get("action") if key == "research_action" else "") or "").strip()
         if value and value.lower() != "unknown":
             meta_parts.append(f"{label}：{value}")
     if meta_parts:

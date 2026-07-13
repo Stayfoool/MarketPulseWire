@@ -10,6 +10,7 @@ import market_content_flow
 import market_event_adapter
 import market_event_flow
 import market_flow
+import market_runtime
 from market_flow import evaluate_market_item, finalize_market_flow_result
 from market_item import DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem
 
@@ -124,6 +125,109 @@ def test_interpretation_failure_preserves_deterministic_action() -> None:
     assert result.audit_json["interpretation_failed"] is True
 
 
+def test_supplied_source_interpretation_skips_second_llm_call() -> None:
+    original_interpreter = market_flow.interpret_market_item
+    try:
+        market_flow.interpret_market_item = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("source enrichment must not trigger a second interpretation LLM")
+        )
+        result = evaluate_market_item(
+            NormalizedMarketItem(
+                source="value_directory_ib_industry_macro",
+                source_category="research_industry_media",
+                collector="value_directory_monitor",
+                content_type="research_index",
+                title="瑞银亚太科技策略",
+            ),
+            decision=DecisionResult(action="push", importance="high", reason="硬规则命中。"),
+            source_interpretation=InterpretationResult(
+                core_content="瑞银认为智能体 AI 将继续推动半导体与硬件上行。",
+                model="preview-model",
+                prompt_version="value_directory_preview_v1",
+            ),
+            force_interpretation=True,
+        )
+    finally:
+        market_flow.interpret_market_item = original_interpreter
+    assert result.interpretation.model == "preview-model"
+    assert result.audit_json["source_interpretation_supplied"] is True
+    assert result.audit_json["interpreter_called"] is False
+
+
+def test_value_directory_preview_failure_policy_finalizes_decision_action() -> None:
+    result = evaluate_market_item(
+        NormalizedMarketItem(
+            source="value_directory_ib_stocks",
+            source_category="research_industry_media",
+            collector="value_directory_monitor",
+            content_type="research_index",
+            title="高盛-交易思路：做多中国人工智能价值链",
+            raw={
+                "value_directory_preview": {
+                    "facts": {"status": "failed", "error": "OCR unavailable"},
+                },
+                "value_directory_policy": {
+                    "preview_enabled": True,
+                    "push_on_preview_failure": False,
+                },
+            },
+        ),
+        decision=DecisionResult(
+            action="push",
+            importance="high",
+            reason="国际投行主题策略规则命中。",
+            rule_hits=[{"rule_id": "international_bank_theme_strategy"}],
+        ),
+    )
+    assert result.decision.action == "archive"
+    assert result.decision.importance == "high"
+    assert result.decision.rule_hits[0]["rule_id"] == "international_bank_theme_strategy"
+    control = result.decision.audit_json["deterministic_source_control"]
+    assert control["control_id"] == "value_directory_preview_failure_block"
+    assert result.delivery_intent["should_deliver"] is False
+
+
+def test_value_directory_enrichment_is_preserved_in_review_audit() -> None:
+    original_interpreter = market_flow.interpret_market_item
+    try:
+        market_flow.interpret_market_item = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("preview facts should supply the interpretation")
+        )
+        review = market_content_adapter.review_article(
+            "value_directory_ib_industry_macro",
+            {
+                "id": "value-flow-1",
+                "title": "瑞银-亚太科技策略：Agentic AI to carry Semis&Hardware further",
+                "summary": "瑞银认为智能体 AI 将继续推动半导体与硬件上行。",
+                "raw": {
+                    "value_directory_preview": {
+                        "facts": {
+                            "status": "ok",
+                            "core_content": "瑞银认为智能体 AI 将继续推动半导体与硬件上行。",
+                            "research_action": "overweight",
+                            "targets": ["半导体", "AI 硬件"],
+                            "key_points": ["半导体景气上行"],
+                            "preview_basis": "visible_first_page_ocr",
+                            "model": "preview-model",
+                            "ocr": {"status": "ok", "text": "Agentic AI to carry Semis further"},
+                        }
+                    },
+                    "value_directory_policy": {
+                        "preview_enabled": True,
+                        "push_on_preview_failure": True,
+                    },
+                },
+            },
+        )
+    finally:
+        market_flow.interpret_market_item = original_interpreter
+    enrichment = review["raw"]["_source_enrichment"]
+    facts = enrichment["value_directory_preview"]["facts"]
+    assert facts["research_action"] == "overweight"
+    assert facts["ocr"]["text"] == "Agentic AI to carry Semis further"
+    assert review["raw"]["_market_flow_result"]["audit"]["source_interpretation_supplied"] is True
+
+
 def test_post_decision_finalization_updates_one_decision_result() -> None:
     result = evaluate_market_item(
         canonical_items()[0],
@@ -160,11 +264,89 @@ def test_existing_wrappers_delegate_to_shared_core() -> None:
         assert "def process_" not in wrapper_source
 
 
+class _DummyContext:
+    def __enter__(self):
+        return object()
+
+    def __exit__(self, *_args):
+        return False
+
+
+def test_reprocessing_existing_review_preserves_pushed_marker() -> None:
+    original_connect = market_runtime.connect_sqlite
+    original_existing = market_runtime.article_review_exists
+    original_module = market_runtime._selected_module
+    original_deliver = market_runtime.deliver_article_review
+    calls = {"processed": 0, "delivered": 0}
+
+    class FakeModule:
+        @staticmethod
+        def process_article_review(*_args, **_kwargs):
+            calls["processed"] += 1
+            return {
+                "importance": "high",
+                "push_now": True,
+                "reason": "规则重算命中。",
+                "raw": {
+                    "decision_result": DecisionResult(
+                        action="push",
+                        importance="high",
+                        reason="规则重算命中。",
+                    ).to_dict()
+                },
+            }
+
+        @staticmethod
+        def gate_lines(_review):
+            return []
+
+    try:
+        market_runtime.connect_sqlite = lambda *_args, **_kwargs: _DummyContext()
+        market_runtime.article_review_exists = lambda *_args, **_kwargs: {
+            "pushed_at": "2026-07-13T00:00:00+00:00",
+            "raw": {},
+        }
+        market_runtime._selected_module = lambda _kind: FakeModule
+
+        def fake_deliver(_source, _item, review, **_kwargs):
+            calls["delivered"] += 1
+            assert review["pushed_at"] == "2026-07-13T00:00:00+00:00"
+            return "skipped"
+
+        market_runtime.deliver_article_review = fake_deliver
+        item = NormalizedMarketItem(
+            source="value_directory_ib_stocks",
+            source_category="research_industry_media",
+            collector="value_directory_monitor",
+            content_type="research_index",
+            title="高盛研报",
+            raw={"id": "reprocess-pushed"},
+        )
+        outcome = market_runtime.process_market_item(
+            item,
+            {"id": "reprocess-pushed", "title": "高盛研报"},
+            store_kind="article",
+            reprocess_existing=True,
+        )
+    finally:
+        market_runtime.connect_sqlite = original_connect
+        market_runtime.article_review_exists = original_existing
+        market_runtime._selected_module = original_module
+        market_runtime.deliver_article_review = original_deliver
+    assert calls == {"processed": 1, "delivered": 1}
+    assert outcome.inserted is False
+    assert outcome.delivery_status == "skipped"
+
+
 def main() -> int:
     test_five_content_types_share_one_decision_and_interpretation_contract()
     test_interpretation_failure_preserves_deterministic_action()
+    test_supplied_source_interpretation_skips_second_llm_call()
+    test_value_directory_preview_failure_policy_finalizes_decision_action()
+    test_value_directory_enrichment_is_preserved_in_review_audit()
     test_post_decision_finalization_updates_one_decision_result()
     test_existing_wrappers_delegate_to_shared_core()
+    test_reprocessing_existing_review_preserves_pushed_marker()
     print("market flow checks passed")
     return 0
 
