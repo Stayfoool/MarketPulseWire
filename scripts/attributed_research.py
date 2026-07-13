@@ -1,4 +1,4 @@
-"""Trusted research attribution for secondary news-media reports.
+"""Trusted research attribution across normalized market content.
 
 The LLM, when needed, only extracts structured claims with verbatim evidence.
 This module validates that evidence before the deterministic decision engine
@@ -22,9 +22,6 @@ from rule_center import effective_list, rule_enabled
 RULE_ID = "attributed_research_hard_variable"
 EXTRACTION_KEY = "_attributed_research"
 PROMPT_VERSION = "attributed_research_v1"
-NEWS_MEDIA_ROLE = "news_media"
-NEWS_MEDIA_CATEGORIES = {"news_media", "portfolio_stock_news"}
-
 DEFAULT_TRUSTED_INSTITUTIONS = (
     "semianalysis",
     "trendforce",
@@ -263,12 +260,7 @@ def publisher_role(item: NormalizedMarketItem | dict[str, Any]) -> str:
     raw = _item_value(item, "raw")
     if isinstance(raw, dict) and raw.get("publisher_role"):
         return _clean_text(raw.get("publisher_role"))
-    category = _clean_text(_item_value(item, "source_category"))
-    return NEWS_MEDIA_ROLE if category in NEWS_MEDIA_CATEGORIES else ""
-
-
-def is_news_media_item(item: NormalizedMarketItem | dict[str, Any]) -> bool:
-    return publisher_role(item) == NEWS_MEDIA_ROLE
+    return ""
 
 
 def trusted_institution_ids() -> tuple[str, ...]:
@@ -373,7 +365,7 @@ def _quantified_evidence(text: str) -> list[str]:
 def deterministic_extraction(item: NormalizedMarketItem | dict[str, Any]) -> dict[str, Any]:
     text = item_text(item)
     mentions = institution_mentions(text)
-    if not is_news_media_item(item) or not mentions:
+    if not mentions:
         return {}
     sentences = _sentences(text)
     for mention in mentions:
@@ -444,7 +436,7 @@ def validate_extraction(
     *,
     candidate_ids: set[str] | None = None,
 ) -> dict[str, Any]:
-    if not is_news_media_item(item) or not isinstance(extraction, dict):
+    if not isinstance(extraction, dict):
         return {}
     text = item_text(item)
     institution_id = str(extraction.get("institution_id") or "").strip()
@@ -535,7 +527,7 @@ def llm_extraction(item: NormalizedMarketItem, mentions: list[dict[str, str]]) -
 
 
 def prepare_item_for_decision(item: NormalizedMarketItem) -> NormalizedMarketItem:
-    if not rule_enabled(RULE_ID) or not is_news_media_item(item):
+    if not rule_enabled(RULE_ID):
         return item
     text = item_text(item)
     mentions = institution_mentions(text)

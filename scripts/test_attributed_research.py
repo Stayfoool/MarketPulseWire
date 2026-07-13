@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression checks for attributed high-value research in news media."""
+"""Regression checks for attributed high-value research across transports."""
 
 from __future__ import annotations
 
@@ -66,14 +66,17 @@ def test_all_monitored_research_institutions_have_default_attribution_aliases() 
         assert rule["attributed_institution"] == institution_id
 
 
-def test_non_media_transport_does_not_use_secondary_attribution_rule() -> None:
+def test_attribution_rule_does_not_depend_on_transport_role() -> None:
     item = NormalizedMarketItem(
         source="company_blog",
         source_category="official_company",
         publisher_role="official_company",
         title=SERENITY_CASE,
     )
-    assert attributed_research_rule(item) is None
+    rule = attributed_research_rule(item)
+    assert rule is not None
+    assert rule["attributed_institution"] == "semianalysis"
+    assert rule["publisher_role"] == "official_company"
 
 
 def test_mentions_criticism_and_lowercase_semi_do_not_false_positive() -> None:
@@ -208,7 +211,7 @@ def test_sina_event_adapter_uses_the_same_attribution_decision() -> None:
 def main() -> int:
     test_same_attribution_rule_applies_to_all_news_media_roles()
     test_all_monitored_research_institutions_have_default_attribution_aliases()
-    test_non_media_transport_does_not_use_secondary_attribution_rule()
+    test_attribution_rule_does_not_depend_on_transport_role()
     test_mentions_criticism_and_lowercase_semi_do_not_false_positive()
     test_llm_only_extracts_evidence_and_deterministic_engine_decides()
     test_llm_hallucinated_quote_is_rejected_without_breaking_ingestion()

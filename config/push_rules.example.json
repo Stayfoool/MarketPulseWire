@@ -44,10 +44,6 @@
       "extra_primary_keywords": [],
       "extra_secondary_keywords": []
     },
-    "source_priority_semianalysis": {
-      "enabled": true,
-      "sources": ["semianalysis"]
-    },
     "attributed_research_hard_variable": {
       "enabled": true,
       "trusted_institutions": ["semianalysis", "trendforce", "semi", "digitimes", "the_elec", "nikkei_xtech"],
@@ -55,8 +51,7 @@
     },
     "industry_quantified_hardline": {
       "enabled": true,
-      "extra_keywords": [],
-      "extra_sources": []
+      "extra_keywords": []
     }
   }
 }

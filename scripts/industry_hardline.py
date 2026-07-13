@@ -1,272 +1,294 @@
-"""Rules for semiconductor/AI industry hard-variable sources.
-
-This module keeps narrow source-level overrides separate from broader
-portfolio news sources. The quantified industry hardline set is intentionally
-limited to the five sources requested by the user:
-SEMI, TrendForce, DIGITIMES, The Elec, and Nikkei xTECH.
-SemiAnalysis is handled as a source-priority override because the user wants
-all reports from this source to be treated as important real-time alerts.
-"""
+"""Source-neutral topic and hard-variable rules for market content."""
 
 from __future__ import annotations
 
-import os
 import re
-from typing import Iterable
+from typing import Any, Iterable
 
 from rule_center import effective_list, rule_enabled
 
-HARDLINE_SOURCE_PREFIXES = (
-    "semi_prnewswire_semiconductors",
-    "trendforce_",
-    "digitimes_",
-    "nikkei_xtech_",
-    "thelec_",
-)
 
+RULE_ID = "industry_quantified_hardline"
 
-HARDLINE_SOURCE_NAMES = (
-    "semi_prnewswire_semiconductors",
-    "trendforce_page",
-    "digitimes_tw_semiconductors_components",
-    "digitimes_tw_ic_design",
-    "digitimes_tw_ic_manufacturing",
-    "digitimes_tw_ai_focus",
-    "digitimes_tw_server",
-    "digitimes_en_daily",
-    "nikkei_xtech_all",
-    "thelec_kr_semiconductor",
-    "thelec_kr_all",
-)
-
-
-SOURCE_PRIORITY_IMMEDIATE_SOURCES = {
-    "semianalysis",
+INDUSTRY_TOPICS: dict[str, tuple[str, ...]] = {
+    "AI基础设施": (
+        "ai infrastructure",
+        "ai基础设施",
+        "ai 基础设施",
+        "ai",
+        "ai server",
+        "ai servers",
+        "ai服务器",
+        "gpu",
+        "accelerator",
+        "accelerators",
+        "inference",
+        "rag",
+        "data center",
+        "datacenter",
+        "算力",
+        "数据中心",
+    ),
+    "半导体": (
+        "semiconductor",
+        "semiconductors",
+        "chip",
+        "chips",
+        "asic",
+        "asics",
+        "foundry",
+        "wafer",
+        "wafers",
+        "fab",
+        "fabs",
+        "晶圆",
+        "晶圆代工",
+        "芯片",
+        "半导体",
+    ),
+    "存储/HBM": (
+        "hbm",
+        "dram",
+        "nand",
+        "flash memory",
+        "memory",
+        "ssd",
+        "存储",
+        "内存",
+        "闪存",
+    ),
+    "先进封装/测试": (
+        "advanced packaging",
+        "cowos",
+        "hybrid bonding",
+        "probe card",
+        "chiplet",
+        "先进封装",
+        "混合键合",
+        "探针卡",
+        "封装测试",
+    ),
+    "光互联/CPO": (
+        "cpo",
+        "co-packaged optics",
+        "photonics",
+        "photonic integrated circuit",
+        "optical interconnect",
+        "pic capacity",
+        "fau",
+        "glass bridge",
+        "光互联",
+        "光通信",
+        "硅光",
+        "光子集成电路",
+    ),
+    "PCB/电子制造": (
+        "pcb",
+        "ccl",
+        "package substrate",
+        "glass substrate",
+        "odm",
+        "覆铜板",
+        "玻璃基板",
+        "电子制造",
+    ),
+    "半导体设备/材料": (
+        "semiconductor equipment",
+        "front-end equipment",
+        "fab equipment",
+        "semiconductor material",
+        "photoresist",
+        "helium",
+        "molybdenum",
+        "tungsten",
+        "半导体设备",
+        "半导体材料",
+        "光刻胶",
+        "电子特气",
+        "钼",
+        "钨",
+    ),
+    "机器人": (
+        "humanoid robot",
+        "robotics",
+        "optimus",
+        "harmonic reducer",
+        "人形机器人",
+        "机器人",
+        "谐波减速器",
+    ),
+    "数据中心电力/散热": (
+        "gas turbine",
+        "power grid",
+        "liquid cooling",
+        "data center power",
+        "燃气轮机",
+        "电网",
+        "液冷",
+        "数据中心电力",
+    ),
 }
 
-EVENT_FIRST_DEFAULT_MAX_CHARS = 300
+HARD_VARIABLES: dict[str, tuple[str, ...]] = {
+    "供需缺口/瓶颈": (
+        "structural shortage",
+        "supply shortage",
+        "supply gap",
+        "supply constraint",
+        "capacity constraint",
+        "bottleneck",
+        "shortage",
+        "紧缺",
+        "短缺",
+        "供需缺口",
+        "供应缺口",
+        "供应瓶颈",
+        "产能瓶颈",
+    ),
+    "价格": (
+        "price hike",
+        "price increase",
+        "price cut",
+        "pricing power",
+        "prices to double",
+        "价格翻倍",
+        "涨价",
+        "提价",
+        "价格上调",
+        "降价",
+        "价格下调",
+    ),
+    "产能/产量": (
+        "capacity expansion",
+        "capacity cut",
+        "production ramp",
+        "mass production",
+        "scaling to",
+        "output increase",
+        "output cut",
+        "扩产",
+        "产能扩张",
+        "新增产能",
+        "减产",
+        "停产",
+        "投产",
+        "量产",
+        "产量提升",
+    ),
+    "资本开支/投资": (
+        "capital expenditure",
+        "capex",
+        "fab investment",
+        "equipment investment",
+        "emergency investment",
+        "资本开支",
+        "设备投资",
+        "工厂投资",
+        "紧急投资",
+    ),
+    "订单/采购": (
+        "purchase order",
+        "procurement",
+        "supply agreement",
+        "order backlog",
+        "secured its first order",
+        "订单",
+        "采购",
+        "供货协议",
+        "中标",
+        "定点",
+        "客户认证",
+    ),
+    "出货/交付": (
+        "shipment forecast",
+        "shipment guidance",
+        "delivery cycle",
+        "delivery time",
+        "started shipments",
+        "出货指引",
+        "出货预测",
+        "交付周期",
+        "交付时间",
+        "开始出货",
+    ),
+    "需求": (
+        "demand surge",
+        "demand decline",
+        "demand contraction",
+        "volume contraction",
+        "需求激增",
+        "需求下滑",
+        "需求收缩",
+        "销量收缩",
+    ),
+    "监管/贸易": (
+        "export control",
+        "tariff exception",
+        "tariff exemption",
+        "trade restriction",
+        "sanction",
+        "出口管制",
+        "关税豁免",
+        "贸易限制",
+        "制裁",
+        "禁令",
+    ),
+    "时间表/技术路线": (
+        "delayed until",
+        "delayed to",
+        "delay the implementation",
+        "roadmap shift",
+        "shift from",
+        "shift to",
+        "replace tungsten",
+        "bypass nvidia",
+        "custom asic",
+        "推迟至",
+        "延期至",
+        "延后至",
+        "技术路线",
+        "切换至",
+        "替代",
+        "绕过",
+    ),
+    "业绩/市场规模": (
+        "revenue forecast",
+        "profit forecast",
+        "gross margin",
+        "market size",
+        "annual recurring revenue",
+        "arr",
+        "业绩指引",
+        "收入指引",
+        "利润指引",
+        "毛利率",
+        "市场规模",
+    ),
+    "预测调整": (
+        "raises forecast",
+        "raised forecast",
+        "cuts forecast",
+        "cut forecast",
+        "forecast",
+        "revised up",
+        "revised down",
+        "预测",
+        "上调预测",
+        "下调预测",
+        "上修指引",
+        "下修指引",
+    ),
+}
 
-
-HARDLINE_KEYWORDS = (
-    "equipment",
-    "device",
-    "equipment",
-    "material",
-    "materials",
-    "capex",
-    "capital expenditure",
-    "investment",
-    "invest",
-    "funding",
-    "factory",
-    "fab",
-    "plant",
-    "capacity",
-    "expansion",
-    "output",
-    "production",
-    "price",
-    "pricing",
-    "raise",
-    "raise prices",
-    "increase",
-    "shortage",
-    "tighten",
-    "tightening",
-    "supply",
-    "demand",
-    "order",
-    "orders",
-    "backlog",
-    "shipment",
-    "shipment",
-    "restriction",
-    "ban",
-    "export control",
-    "control",
-    "tariff",
-    "HBM",
-    "DRAM",
-    "NAND",
-    "MLCC",
-    "glass core",
-    "advanced packaging",
-    "CPO",
-    "optical",
-    "photonics",
-    "liquid cooling",
-    "power",
-    "grid",
+QUANTIFIED_PATTERNS = (
+    r"(?:[$¥￥]\s*)?\d[\d,]*(?:\.\d+)?\s*(?:%|％|x|倍|billion|bn|million|trillion|[bm](?![a-z])|亿|万亿|兆)",
+    r"\d[\d,]*(?:\.\d+)?\s*(?:wafers?|units?|tools?|台|套|条|座|片|个月|年)",
+    r"20\d{2}",
 )
 
-STRONG_HARDLINE_KEYWORDS = (
-    "capex",
-    "capital expenditure",
-    "investment",
-    "invest",
-    "equipment",
-    "material",
-    "materials",
-    "capacity",
-    "expansion",
-    "price",
-    "pricing",
-    "shortage",
-    "tighten",
-    "order",
-    "orders",
-    "backlog",
-    "restriction",
-    "export control",
-    "ban",
-    "资本开支",
-    "投资",
-    "设备",
-    "材料",
-    "产能",
-    "扩产",
-    "涨价",
-    "价格",
-    "短缺",
-    "紧缺",
-    "订单",
-    "管制",
-    "出口管制",
-    "禁令",
-)
 
-
-def is_hardline_source(source: str) -> bool:
-    if not rule_enabled("industry_quantified_hardline"):
-        return False
-    source_names = effective_list("industry_quantified_hardline", "extra_sources", HARDLINE_SOURCE_NAMES)
-    source_prefixes = effective_list("industry_quantified_hardline", "extra_sources", HARDLINE_SOURCE_PREFIXES)
-    return source in source_names or source.startswith(source_prefixes)
-
-
-def effective_source(source: str, item: dict | None = None) -> str:
-    if item and source == "trendforce_page":
-        return str(item.get("page_source") or source)
-    return source
-
-
-def hardline_heuristic_matches(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return any(keyword.lower() in lowered for keyword in HARDLINE_KEYWORDS)
-
-
-def has_strong_keyword(text: str) -> bool:
-    lowered = str(text or "").lower()
-    keywords = effective_list("industry_quantified_hardline", "extra_keywords", STRONG_HARDLINE_KEYWORDS)
-    return any(keyword.lower() in lowered for keyword in keywords)
-
-
-def has_quantified_signal(text: str) -> bool:
-    patterns = (
-        r"\d+(?:\.\d+)?\s*(?:亿|万亿|兆)\s*(?:韩元|美元|人民币|元)?",
-        r"\d+(?:\.\d+)?\s*(?:billion|bn|million|trillion)\s*(?:won|usd|dollars|rmb|yuan)?",
-        r"\d+(?:\.\d+)?\s*(?:%|％)",
-        r"\d+(?:\.\d+)?\s*(?:台|套|条|座|家|片|wafers?|units?|tools?)",
-    )
-    return any(re.search(pattern, str(text or ""), flags=re.IGNORECASE) for pattern in patterns)
-
-
-def is_quantified_hardline_item(source: str, item: dict) -> bool:
-    effective = effective_source(source, item)
-    if not is_hardline_source(effective):
-        return False
-    text = collect_hardline_text(
-        item.get("title"),
-        item.get("summary"),
-        item.get("content"),
-        item.get("full_text"),
-        item.get("source_module"),
-        item.get("source_display"),
-    )
-    return has_strong_keyword(text) and has_quantified_signal(text)
-
-
-def apply_hardline_review_override(source: str, item: dict, review: dict) -> dict:
-    """Keep quantified hard-variable items from narrow industry sources immediate.
-
-    This only applies to SEMI/TrendForce/DIGITIMES/The Elec/Nikkei xTECH.
-    It does not apply to domestic finance wires such as Yicai or CLS.
-    """
-    if not is_quantified_hardline_item(source, item):
-        return review
-    updated = dict(review)
-    updated["importance"] = "high"
-    updated["push_now"] = True
-    updated["industry_hardline_override"] = True
-    targets = list(updated.get("affected_targets") or [])
-    for target in ("产业硬变量", "受益/受损标的待确认"):
-        if target not in targets:
-            targets.append(target)
-    updated["affected_targets"] = targets[:5]
-    note = (
-        "产业硬变量线覆盖：来源属于 SEMI/TrendForce/DIGITIMES/The Elec/Nikkei xTECH，"
-        "且内容包含设备、材料、产能、资本开支、涨价、管制或订单等量化硬变量；"
-        "即使具体 A 股映射待确认，也先即时推送并标注待验证。"
-    )
-    reason = str(updated.get("reason") or "").strip()
-    if note not in reason:
-        updated["reason"] = f"{reason}\n{note}".strip()
-    raw = dict(updated.get("raw") or {})
-    raw["industry_hardline_override"] = True
-    updated["raw"] = raw
-    return updated
-
-
-def is_source_priority_immediate(source: str) -> bool:
-    if not rule_enabled("source_priority_semianalysis"):
-        return False
-    sources = effective_list(
-        "source_priority_semianalysis",
-        "sources",
-        SOURCE_PRIORITY_IMMEDIATE_SOURCES,
-        replace_when_set=True,
-    )
-    return str(source or "").strip().lower() in {item.lower() for item in sources}
-
-
-def apply_source_priority_override(source: str, item: dict, review: dict) -> dict:
-    """Force selected high-trust sources into immediate push review flow."""
-    if not is_source_priority_immediate(source):
-        return review
-    skeptic = review.get("skeptic") if isinstance(review.get("skeptic"), dict) else {}
-    if review.get("skeptic_blocked") or str(skeptic.get("skeptic_verdict") or "").lower() == "block":
-        return review
-    updated = dict(review)
-    updated["importance"] = "high"
-    updated["push_now"] = True
-    updated["source_priority_override"] = True
-    targets = list(updated.get("affected_targets") or [])
-    for target in ("SemiAnalysis", "产业链影响待确认"):
-        if target not in targets:
-            targets.append(target)
-    updated["affected_targets"] = targets[:5]
-    note = (
-        "来源优先级覆盖：SemiAnalysis 属于高价值半导体/AI 产业研究源，"
-        "按当前策略其报告默认视为重要并即时推送；具体受益/受损标的和官方确认情况在正文中标注待验证。"
-    )
-    reason = str(updated.get("reason") or "").strip()
-    if note not in reason:
-        updated["reason"] = f"{reason}\n{note}".strip()
-    summary = str(updated.get("daily_summary") or "").strip()
-    if summary and "待验证" not in summary and "待确认" not in summary:
-        updated["daily_summary"] = f"{summary}（SemiAnalysis 来源优先级覆盖，标的映射待验证。）"
-    raw = dict(updated.get("raw") or {})
-    raw["source_priority_override"] = "semianalysis"
-    updated["raw"] = raw
-    return updated
-
-
-def event_first_max_chars() -> int:
-    raw = os.getenv("RESEARCH_MEDIA_EVENT_FIRST_MAX_CHARS", str(EVENT_FIRST_DEFAULT_MAX_CHARS)).strip()
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return EVENT_FIRST_DEFAULT_MAX_CHARS
+def collect_hardline_text(*values: object) -> str:
+    return " ".join(str(value or "") for value in values)
 
 
 def normalize_visible_text(*values: object) -> str:
@@ -276,26 +298,8 @@ def normalize_visible_text(*values: object) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def is_research_industry_source(source: str, item: dict | None = None) -> bool:
-    effective = effective_source(source, item)
-    return is_hardline_source(effective) or is_source_priority_immediate(source)
-
-
-def should_event_first_hardline_item(source: str, item: dict, *, max_chars: int | None = None) -> bool:
-    """Return whether a research/industry-media item should use the fast rule path.
-
-    The fast path is intentionally narrow: short title/summary-level items only,
-    and only for source-priority reports or quantified hard-variable items from
-    the research/industry-media source family.
-    """
-    if os.getenv("RESEARCH_MEDIA_EVENT_FIRST_ENABLED", "1").strip() == "0":
-        return False
-    limit = event_first_max_chars() if max_chars is None else max_chars
-    if limit <= 0:
-        return False
-    if not is_research_industry_source(source, item):
-        return False
-    text = normalize_visible_text(
+def item_text(item: dict[str, Any]) -> str:
+    return normalize_visible_text(
         item.get("title"),
         item.get("summary"),
         item.get("content"),
@@ -303,73 +307,126 @@ def should_event_first_hardline_item(source: str, item: dict, *, max_chars: int 
         item.get("source_module"),
         item.get("source_display"),
     )
-    if not text or len(text) > limit:
+
+
+def _contains_keyword(text: str, keyword: str) -> bool:
+    lowered = text.casefold()
+    normalized = keyword.casefold().strip()
+    if not normalized:
         return False
-    if is_source_priority_immediate(source):
-        return True
-    return is_quantified_hardline_item(source, item)
+    if re.fullmatch(r"[a-z0-9]+", normalized):
+        return re.search(rf"(?<![a-z0-9]){re.escape(normalized)}(?![a-z0-9])", lowered) is not None
+    return normalized in lowered
 
 
-def event_first_hardline_review(source: str, item: dict) -> dict | None:
-    """Build a high-importance legacy article review for short hard-variable items.
+def _matched_labels(text: str, mapping: dict[str, tuple[str, ...]]) -> list[str]:
+    return [label for label, keywords in mapping.items() if any(_contains_keyword(text, keyword) for keyword in keywords)]
 
-    This keeps storage/daily/signal extraction on the existing article review
-    path while applying a rule-quick-pass decision for short hard variables.
-    """
-    if not should_event_first_hardline_item(source, item):
+
+def matched_industry_topics(text: str) -> list[str]:
+    return _matched_labels(text, INDUSTRY_TOPICS)
+
+
+def matched_hard_variables(text: str) -> list[str]:
+    labels = _matched_labels(text, HARD_VARIABLES)
+    extras = effective_list(RULE_ID, "extra_keywords", ())
+    if any(_contains_keyword(text, keyword) for keyword in extras):
+        labels.append("自定义硬变量")
+    return list(dict.fromkeys(labels))
+
+
+def quantified_evidence(text: str) -> list[str]:
+    values: list[str] = []
+    for pattern in QUANTIFIED_PATTERNS:
+        values.extend(match.group(0) for match in re.finditer(pattern, text, flags=re.IGNORECASE))
+    return list(dict.fromkeys(value.strip() for value in values if value.strip()))[:10]
+
+
+def _sentences(text: str) -> list[str]:
+    return [part.strip(" -\t") for part in re.split(r"(?<=[。！？!?；;])|\n+", text) if part.strip(" -\t")]
+
+
+def evidence_quotes(text: str) -> list[str]:
+    quotes: list[str] = []
+    for sentence in _sentences(text):
+        if matched_hard_variables(sentence):
+            quotes.append(sentence[:500])
+        if len(quotes) >= 5:
+            break
+    return list(dict.fromkeys(quotes))
+
+
+def topic_hard_variable_match(item: dict[str, Any]) -> dict[str, Any]:
+    if not rule_enabled(RULE_ID):
+        return {}
+    text = item_text(item)
+    if not text:
+        return {}
+    topics = matched_industry_topics(text)
+    variables = matched_hard_variables(text)
+    if not topics or not variables:
+        return {}
+    return {
+        "topics": topics,
+        "hard_variables": variables,
+        "evidence_quotes": evidence_quotes(text),
+        "quantified_evidence": quantified_evidence(text),
+    }
+
+
+def industry_topic_hard_variable_rule(source: str, item: dict[str, Any]) -> dict[str, Any] | None:
+    match = topic_hard_variable_match(item)
+    if not match:
         return None
-    effective = effective_source(source, item)
-    family = "SemiAnalysis" if is_source_priority_immediate(source) else source_family(effective)
-    title = str(item.get("title") or "").strip()
-    summary = str(item.get("summary") or item.get("content") or item.get("full_text") or "").strip()
+    topics = list(match["topics"])
+    variables = list(match["hard_variables"])
     reason = (
-        f"规则快判：{family} 属于研究机构/行业媒体高价值来源，"
-        "且本条为短文本硬变量/标题级信号；先即时推送，后续可在日报或二次校验中补充完整分析。"
+        f"通用产业内容规则：命中重点主题{'、'.join(topics[:3])}，并包含"
+        f"{'、'.join(variables[:4])}等实质硬变量；来源分类不参与重要性判断。"
     )
-    review = {
+    return {
+        "matched": True,
+        "rule_id": RULE_ID,
         "importance": "high",
         "push_now": True,
-        "market_impact": "研究机构/行业媒体短硬变量可能迅速改变半导体/AI 产业链预期，需即时关注。",
-        "incremental_classification": "无法判断",
-        "affected_targets": [family, "产业硬变量", "受益/受损标的待确认"],
-        "daily_summary": title or summary[:120],
+        "should_push": True,
         "reason": reason,
-        "confidence": "中",
-        "model": "event_first_hardline",
-        "event_first": True,
-        "raw": {
-            "event_first_hardline": True,
-            "event_first_source_family": family,
-            "event_first_policy": "research_industry_media_short_hard_variable",
-            "event_first_max_chars": event_first_max_chars(),
-        },
+        "brief_reason": reason,
+        "affected_targets": topics[:5],
+        "related_targets": [
+            {"name": topic, "code": "", "relation": "重点主题 + 产业硬变量", "direction": "uncertain"}
+            for topic in topics[:5]
+        ],
+        "claim_topics": topics,
+        "hard_variable_types": variables,
+        "evidence_quotes": list(match["evidence_quotes"]),
+        "quantified_evidence": list(match["quantified_evidence"]),
+        "source": source,
     }
-    return review
 
 
-def collect_hardline_text(*values: object) -> str:
-    return " ".join(str(value or "") for value in values)
+def is_topic_hard_variable_item(item: dict[str, Any]) -> bool:
+    return bool(topic_hard_variable_match(item))
 
 
-def source_family(source: str) -> str:
-    if source.startswith("digitimes_"):
-        return "DIGITIMES"
-    if source.startswith("trendforce"):
-        return "TrendForce"
-    if source.startswith("nikkei_xtech"):
-        return "Nikkei xTECH"
-    if source.startswith("thelec_"):
-        return "The Elec"
-    if source.startswith("semi_"):
-        return "SEMI"
-    return source
+def apply_hardline_review_override(source: str, item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
+    rule = industry_topic_hard_variable_rule(source, item)
+    if not rule:
+        return review
+    updated = dict(review)
+    updated["importance"] = "high"
+    updated["push_now"] = True
+    updated["industry_hardline_override"] = True
+    updated["affected_targets"] = list(rule["affected_targets"])
+    updated["reason"] = "\n".join(filter(None, (str(updated.get("reason") or "").strip(), rule["reason"])))
+    raw = dict(updated.get("raw") or {})
+    raw["industry_hardline_override"] = True
+    raw["industry_topic_hard_variable"] = rule
+    updated["raw"] = raw
+    return updated
 
 
 def explain_hardline(source: str, text_parts: Iterable[object]) -> str:
-    text = collect_hardline_text(*text_parts)
-    effective = effective_source(source)
-    if not is_hardline_source(effective):
-        return ""
-    if hardline_heuristic_matches(text):
-        return f"{source_family(effective)} 命中设备/材料/产能/涨价/管制/订单等硬变量。"
-    return f"{source_family(effective)} 属于产业硬变量线，但当前内容未明显命中硬变量关键词。"
+    item = {"title": collect_hardline_text(*text_parts)}
+    rule = industry_topic_hard_variable_rule(source, item)
+    return str(rule.get("reason") or "") if rule else ""

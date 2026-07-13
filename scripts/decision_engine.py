@@ -12,11 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from attributed_research import EXTRACTION_KEY, attributed_research_rule
-from industry_hardline import (
-    apply_hardline_review_override,
-    apply_source_priority_override,
-    event_first_hardline_review,
-)
+from industry_hardline import industry_topic_hard_variable_rule
 from macro_policy import macro_policy_match
 from market_item import DecisionResult, NormalizedMarketItem, normalize_importance
 from push_rules import first_matching_push_rule
@@ -86,11 +82,9 @@ def _audit_base(source: str, item: NormalizedMarketItem | dict[str, Any], legacy
         "source": source,
         "deterministic_push_match": False,
         "legacy_entrypoints_wrapped": [
-            "industry_hardline.event_first_hardline_review",
             "push_rules.first_matching_push_rule",
             "attributed_research.attributed_research_rule",
-            "industry_hardline.apply_source_priority_override",
-            "industry_hardline.apply_hardline_review_override",
+            "industry_hardline.industry_topic_hard_variable_rule",
             "macro_policy.macro_policy_match",
         ],
     }
@@ -115,17 +109,6 @@ def _audit_base(source: str, item: NormalizedMarketItem | dict[str, Any], legacy
             }
         )
     return base
-
-
-def _base_review() -> dict[str, Any]:
-    return {
-        "importance": "low",
-        "push_now": False,
-        "affected_targets": [],
-        "reason": "",
-        "daily_summary": "",
-        "raw": {},
-    }
 
 
 def _rule_dedup(rule: dict[str, Any]) -> dict[str, Any]:
@@ -366,23 +349,6 @@ def _decision_from_rules(
     )
 
 
-def _review_to_rule(review: dict[str, Any], *, source: str, rule_id: str, reason_fallback: str) -> dict[str, Any]:
-    reason = str(review.get("reason") or reason_fallback)
-    return {
-        "matched": True,
-        "rule_id": rule_id,
-        "importance": normalize_importance(review.get("importance"), default="high"),
-        "push_now": bool(review.get("push_now") or review.get("should_push_now")),
-        "should_push": bool(review.get("push_now") or review.get("should_push_now")),
-        "reason": reason,
-        "brief_reason": str(review.get("brief_reason") or reason),
-        "affected_targets": list(review.get("affected_targets") or [])[:5],
-        "related_targets": list(review.get("related_targets") or [])[:5],
-        "source": source,
-        "raw": dict(review.get("raw") or {}),
-    }
-
-
 def _macro_rule(source: str, match: dict[str, Any]) -> dict[str, Any]:
     reason = str(match.get("reason") or "美国核心宏观/Fed 政策线命中。")
     full_reason = f"宏观政策线规则：{reason}"
@@ -474,16 +440,6 @@ def decide_market_item(
     symbol_set = _symbol_set(item, legacy_item, symbols)
     audit = _audit_base(resolved_source, item, legacy_item)
 
-    event_first_review = event_first_hardline_review(resolved_source, legacy_item)
-    if event_first_review:
-        rule = _review_to_rule(
-            event_first_review,
-            source=resolved_source,
-            rule_id="event_first_hardline",
-            reason_fallback="研究机构/行业媒体短硬变量规则快判命中。",
-        )
-        return _decision_from_rule(rule, audit_json=audit, source_stage="industry_hardline_event_first")
-
     attributed_rule = attributed_research_rule(item)
     push_rule = first_matching_push_rule(
         source=resolved_source,
@@ -491,42 +447,30 @@ def decide_market_item(
         holdings=holdings,
         symbols=symbol_set,
     )
-    if push_rule and attributed_rule:
+    industry_rule = industry_topic_hard_variable_rule(resolved_source, legacy_item)
+    matched_rules = [rule for rule in (push_rule, attributed_rule, industry_rule) if rule]
+    if len(matched_rules) > 1:
+        dedup_rule = next((rule for rule in matched_rules if rule.get("dedup_key")), None)
         return _decision_from_rules(
-            [push_rule, attributed_rule],
+            matched_rules,
             audit_json=audit,
-            source_stage="push_rules_with_attributed_research",
-            dedup_rule=attributed_rule,
+            source_stage="combined_content_rules",
+            dedup_rule=dedup_rule,
         )
     if push_rule:
         return _decision_from_rule(push_rule, audit_json=audit, source_stage="push_rules_first_match")
-
     if attributed_rule:
         return _decision_from_rule(
             attributed_rule,
             audit_json=audit,
             source_stage="attributed_research_hard_variable",
         )
-
-    source_priority = apply_source_priority_override(resolved_source, legacy_item, _base_review())
-    if source_priority.get("source_priority_override") and source_priority.get("push_now"):
-        rule = _review_to_rule(
-            source_priority,
-            source=resolved_source,
-            rule_id="source_priority_semianalysis",
-            reason_fallback="SemiAnalysis 来源优先级规则命中。",
+    if industry_rule:
+        return _decision_from_rule(
+            industry_rule,
+            audit_json=audit,
+            source_stage="industry_topic_hard_variable",
         )
-        return _decision_from_rule(rule, audit_json=audit, source_stage="industry_hardline_source_priority")
-
-    hardline = apply_hardline_review_override(resolved_source, legacy_item, _base_review())
-    if hardline.get("industry_hardline_override") and hardline.get("push_now"):
-        rule = _review_to_rule(
-            hardline,
-            source=resolved_source,
-            rule_id="industry_quantified_hardline",
-            reason_fallback="产业硬变量线规则命中。",
-        )
-        return _decision_from_rule(rule, audit_json=audit, source_stage="industry_hardline_review_override")
 
     macro = macro_policy_match(legacy_item)
     if macro.get("matched"):
