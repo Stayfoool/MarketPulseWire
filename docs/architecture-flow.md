@@ -19,6 +19,44 @@ All general research, news-media, official-company, flash, portfolio-news, notic
 - X/Serenity intentionally stays on its `seen_posts` and direct-card route because media/thread semantics are source-specific.
 - `value_directory_monitor` keeps its private Playwright profile, login/WAF handling, daily timer, list baseline, and visible-first-page/OCR collection boundary. Title rules only select preview candidates; the enriched final item uses the same `process_market_item(...)`, `DecisionResult.action`, `article_reviews`, rule dedup, delivery, and view contract as other general sources.
 
+## Source Onboarding Contract
+
+New sources extend the edges of the system, not the decision spine. The default onboarding path is:
+
+`source profile -> collector/fetch adapter -> NormalizedMarketItem -> process_market_item -> DecisionResult -> existing store/delivery adapters`
+
+The source adapter owns transport-specific work such as authentication, API/RSS/browser access, polling cadence, raw technical deduplication, body extraction, and source-health reporting. Once usable content exists, the adapter returns to the shared normalized contract. It must not copy rule evaluation, interpretation, review persistence, or Feishu delivery into the collector.
+
+Source metadata has the following limited role:
+
+| Field | Allowed use | Not allowed |
+|---|---|---|
+| `source` / `collector` | Runtime identity, health, configuration lookup, audit | Importance solely because a named source is considered prestigious |
+| `source_category` | Workbench grouping, collector ownership, storage/rendering context | Selecting a different decision pipeline or high/low mapping |
+| `publisher_role` | Describing original publisher, secondary transport, or official publisher | Enabling a common content rule only for one media role |
+| `content_type` | Fetch/render/dedup details such as article, flash, notice, or status | Treating flash/article shape as an importance signal |
+
+Common rules are content contracts. Holding keywords, topics, hard variables, macro policy, explicit attributed research, and deterministic exclusions should accept any normalized item that provides the required evidence. Tests should vary `source`, category, role, and content type while holding the text constant and expect the same common-rule result.
+
+Allowed source-specific behavior normally stops at one of these boundaries:
+
+- acquisition: API, RSS, page parsing, authenticated browser, WAF/login stop conditions;
+- source state: stream reconnects, thread/reply handling, baseline, polling cadence, technical delivery retry;
+- enrichment: linked-post context, visible-page OCR, attachment text, or structured disclosure fields;
+- presentation: media/thread rendering that cannot be represented by the general thin card.
+
+An exception that goes beyond these boundaries must record:
+
+1. why the shared contract cannot represent the requirement;
+2. the smallest independent segment and the exact point where it rejoins shared processing;
+3. whether `DecisionResult.action`, common dedup, review audit, and delivery are still reused;
+4. focused regression tests and production health checks;
+5. the condition for reviewing or removing the exception.
+
+X/Serenity remains the current explicit independent-route exception because its stream, thread, media, and direct-card semantics are source-specific. Value directory is not a separate final-decision exception: its private browser/OCR boundary stays specialized, while its enriched item rejoins the shared decision, store, and delivery spine.
+
+For ambiguous language, deterministic rules remain the high-precision path. A bounded LLM extractor may inspect one paragraph, adjacent sentences, or one bullet group and return structured claims plus verbatim evidence. Code must validate those spans before a common rule can use them; the model cannot return the final action.
+
 ## End-to-End Flow
 
 ```mermaid
