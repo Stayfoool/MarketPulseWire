@@ -11,16 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from article_gate import (
-    article_item_id,
-    mark_pushed as mark_article_pushed,
-    review_exists as article_review_exists,
-    rule_first_review,
-    save_review as save_article_review,
-)
-from cards import build_article_card
-from feishu import send_card
-from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert
+from decision_engine import decide_market_item
+from market_item import NormalizedMarketItem
+from market_review_store import article_item_id, article_review_exists
+from market_runtime import normalize_market_item, process_market_item
+from push_rules import load_enabled_holdings_for_rules
 from rss_monitor import DB_PATH, connect_db, save_new_items_with_retry
 from source_health import record_source_failure, record_source_success
 from source_profiles import source_profile_enabled
@@ -108,7 +103,7 @@ def shadow_payload(entries: list[dict[str, Any]], *, started_at: str, source: Va
                 "summary": item.get("summary", ""),
                 "already_seen": item_id in seen,
                 "already_reviewed": item_id in reviewed,
-                "pipeline": "value_directory shadow -> decision layer / thin card planned",
+                "pipeline": "value_directory shadow only; production uses unified market flow",
             }
         )
     return {
@@ -130,28 +125,6 @@ def shadow_payload(entries: list[dict[str, Any]], *, started_at: str, source: Va
         },
         "candidates": candidates,
         "errors": [],
-    }
-
-
-def rule_only_low_review(item: dict[str, Any], *, source: ValueDirectorySource | None = None) -> dict[str, Any]:
-    source = source or source_config()
-    title = str(item.get("title") or "")
-    return {
-        "importance": "medium",
-        "push_now": False,
-        "market_impact": "",
-        "incremental_classification": "规则未命中",
-        "affected_targets": [],
-        "daily_summary": title,
-        "reason": f"{source.module} 已入库；未命中直接持仓/观察标的、持仓关联关键词、国际投行评级/目标价或重大主题策略硬规则，不即时推送。",
-        "brief_reason": "未命中即时硬规则，仅入库观察。",
-        "confidence": "规则",
-        "model": "rule_only",
-        "raw": {
-            "llm_mode": "rule_only",
-            "source": source.source_id,
-            "source_module": source.module,
-        },
     }
 
 
@@ -183,17 +156,61 @@ def enrich_item_with_preview(item: dict[str, Any]) -> dict[str, Any]:
     return apply_preview_to_item(item, preview, facts)
 
 
-def preview_failed(item: dict[str, Any]) -> bool:
-    raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
-    preview = raw.get("value_directory_preview") if isinstance(raw.get("value_directory_preview"), dict) else {}
-    facts = preview.get("facts") if isinstance(preview.get("facts"), dict) else {}
-    return bool(facts and facts.get("status") != "ok")
-
-
 def has_preview_record(item: dict[str, Any]) -> bool:
     raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
     preview = raw.get("value_directory_preview") if isinstance(raw.get("value_directory_preview"), dict) else {}
     return bool(preview.get("facts"))
+
+
+def with_preview_failure(item: dict[str, Any], error: Exception) -> dict[str, Any]:
+    updated = dict(item)
+    raw = dict(updated.get("raw") or {})
+    raw["value_directory_preview"] = {
+        "facts": {
+            "status": "failed",
+            "model": "preview_failed",
+            "error": str(error)[:500],
+        }
+    }
+    updated["raw"] = raw
+    updated["preview_lines"] = [f"第一页提取：失败/不可用（{error}）"]
+    return updated
+
+
+def with_value_directory_policy(item: dict[str, Any]) -> dict[str, Any]:
+    updated = dict(item)
+    raw = dict(updated.get("raw") or {})
+    raw["value_directory_policy"] = {
+        "preview_enabled": preview_enabled(),
+        "push_on_preview_failure": push_on_preview_failure(),
+    }
+    updated["raw"] = raw
+    return updated
+
+
+def normalized_value_directory_item(
+    item: dict[str, Any],
+    source: ValueDirectorySource,
+) -> NormalizedMarketItem:
+    prepared = dict(item)
+    prepared["source_category"] = "research_industry_media"
+    prepared["collector"] = "value_directory_monitor"
+    prepared["content_type"] = "research_index"
+    return normalize_market_item(
+        source.source_id,
+        prepared,
+        store_kind="article",
+        source_profile_id=source.source_id,
+    )
+
+
+def preview_candidate(item: dict[str, Any], source: ValueDirectorySource) -> bool:
+    normalized = normalized_value_directory_item(item, source)
+    decision = decide_market_item(
+        normalized,
+        holdings=load_enabled_holdings_for_rules(),
+    )
+    return decision.should_push
 
 
 def review_and_maybe_push(
@@ -206,116 +223,37 @@ def review_and_maybe_push(
     item_id = article_item_id(item)
     with connect_db() as conn:
         existing = article_review_exists(conn, source.source_id, item_id)
-    if existing:
-        review = existing
-        if recheck_rules and not review.get("pushed_at"):
-            refreshed = rule_first_review(source.source_id, item)
-            if refreshed:
-                review = refreshed
-                with connect_db() as conn:
-                    save_article_review(conn, source.source_id, item, review)
-    else:
-        review = rule_first_review(source.source_id, item)
-        if review and preview_enabled():
-            try:
-                item = enrich_item_with_preview(item)
-                refreshed = rule_first_review(source.source_id, item)
-                if refreshed:
-                    review = refreshed
-                if preview_failed(item) and not push_on_preview_failure():
-                    review = dict(review)
-                    review["push_now"] = False
-                    review["reason"] = (
-                        f"{review.get('reason') or ''}\n第一页预览提取失败，按当前配置不发送标题兜底推送。"
-                    ).strip()
-            except Exception as exc:  # noqa: BLE001 - detail preview should not break the whole batch
-                item = dict(item)
-                raw = dict(item.get("raw") or {})
-                raw["value_directory_preview"] = {"facts": {"status": "failed", "error": str(exc)[:500]}}
-                item["raw"] = raw
-                item["preview_lines"] = [f"第一页提取：失败/不可用（{exc}）"]
-                if not push_on_preview_failure():
-                    review = dict(review)
-                    review["push_now"] = False
-                    review["reason"] = (
-                        f"{review.get('reason') or ''}\n第一页预览提取失败，按当前配置不发送标题兜底推送。"
-                    ).strip()
-        if not review:
-            review = rule_only_low_review(item, source=source)
-        with connect_db() as conn:
-            save_article_review(conn, source.source_id, item, review)
+    if existing and (existing.get("pushed_at") or not recheck_rules):
+        return False
 
-    if review.get("push_now") and not review.get("pushed_at") and preview_enabled() and not has_preview_record(item):
+    should_enrich = preview_candidate(item, source)
+    if existing and recheck_rules and not should_enrich:
+        return False
+    if should_enrich and preview_enabled() and not has_preview_record(item):
         try:
             item = enrich_item_with_preview(item)
-            refreshed = rule_first_review(source.source_id, item)
-            if refreshed:
-                review = refreshed
-            with connect_db() as conn:
-                save_article_review(conn, source.source_id, item, review)
         except Exception as exc:  # noqa: BLE001
-            item = dict(item)
-            raw = dict(item.get("raw") or {})
-            raw["value_directory_preview"] = {"facts": {"status": "failed", "error": str(exc)[:500]}}
-            item["raw"] = raw
-            item["preview_lines"] = [f"第一页提取：失败/不可用（{exc}）"]
-            if not push_on_preview_failure():
-                review = dict(review)
-                review["push_now"] = False
-                review["reason"] = (
-                    f"{review.get('reason') or ''}\n第一页预览提取失败，按当前配置不发送标题兜底推送。"
-                ).strip()
-            with connect_db() as conn:
-                save_article_review(conn, source.source_id, item, review)
+            item = with_preview_failure(item, exc)
 
+    item = with_value_directory_policy(item)
+    normalized = normalized_value_directory_item(item, source)
+    outcome = process_market_item(
+        normalized,
+        item,
+        store_kind="article",
+        source_profile_id=source.source_id,
+        db_path=DB_PATH,
+        deliver=True,
+        use_rule_dedup=True,
+        reprocess_existing=existing is not None,
+    )
+    decision = outcome.flow_result.decision
     print(
-        f"{source.source_id} 规则门控：importance={review.get('importance')} "
-        f"push={review.get('push_now')} title={item.get('title', '')}",
+        f"{source.source_id} 统一决策：importance={decision.importance} "
+        f"action={decision.action} delivery={outcome.delivery_status} title={item.get('title', '')}",
         flush=True,
     )
-    if not review.get("push_now") or review.get("pushed_at"):
-        return False
-
-    reservation = reserve_rule_alert(
-        review,
-        source=source.source_id,
-        item_id=item_id,
-        title=str(item.get("title") or ""),
-        published_at=str(item.get("published_at") or ""),
-        db_path=DB_PATH,
-    )
-    if reservation.get("duplicate"):
-        first = reservation.get("first") or {}
-        review = dict(review)
-        review["push_now"] = False
-        review["reason"] = (
-            f"{review.get('reason') or ''}\n同一国际投行主题报告跨来源去重：已由 "
-            f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
-        ).strip()
-        raw = dict(review.get("raw") or {})
-        raw["rule_alert_dedup"] = reservation
-        review["raw"] = raw
-        with connect_db() as conn:
-            save_article_review(conn, source.source_id, item, review)
-        return False
-
-    item = dict(item)
-    item["article_review"] = review
-    item["analysis_lines_prefix"] = [
-        f"来源：{source.module}",
-        str(review.get("brief_reason") or review.get("reason") or ""),
-    ]
-    for line in item.get("preview_lines") or []:
-        if line:
-            item["analysis_lines_prefix"].append(str(line))
-    sent = send_card(build_article_card(source.source_id, item))
-    if sent:
-        confirm_rule_alert(reservation, db_path=DB_PATH)
-        with connect_db() as conn:
-            mark_article_pushed(conn, source.source_id, item_id)
-        return True
-    release_rule_alert(reservation, db_path=DB_PATH)
-    return False
+    return outcome.delivery_status == "sent"
 
 
 def collect_production(

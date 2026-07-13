@@ -241,16 +241,22 @@ def decision_result_from_payload(payload: Any) -> DecisionResult | None:
     """Read a DecisionResult from unified metadata, or return None for legacy data."""
     if not isinstance(payload, dict):
         return None
-    candidates = [payload.get("decision_result"), payload.get("_decision_result")]
-    raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
-    analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}
-    candidates.extend(
-        [
-            raw.get("decision_result"),
-            analysis.get("decision_result"),
-            analysis.get("_decision_result"),
-        ]
-    )
+    candidates: list[Any] = []
+    containers = [payload]
+    seen: set[int] = set()
+    index = 0
+    while index < len(containers) and index < 8:
+        container = containers[index]
+        index += 1
+        identity = id(container)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        candidates.extend([container.get("decision_result"), container.get("_decision_result")])
+        for key in ("raw", "analysis"):
+            nested = container.get(key)
+            if isinstance(nested, dict):
+                containers.append(nested)
     for candidate in candidates:
         if not isinstance(candidate, dict) or "action" not in candidate:
             continue

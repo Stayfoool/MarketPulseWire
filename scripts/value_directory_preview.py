@@ -47,7 +47,7 @@ USER_PROMPT = """请提取这份价值目录研报可见第一页预览中的关
 {
   "core_content": "一句中文概括，只基于标题和第一页可见信息",
   "stance": "bullish/bearish/neutral/mixed/unknown",
-  "action": "buy/sell/overweight/underweight/upgrade/downgrade/initiate/long/short/none/unknown",
+  "research_action": "buy/sell/overweight/underweight/upgrade/downgrade/initiate/long/short/none/unknown",
   "institution": "机构名或 unknown",
   "report_date": "YYYY-MM-DD 或 unknown",
   "rating": "评级或 unknown",
@@ -151,7 +151,7 @@ def title_metadata(title: str) -> dict[str, Any]:
     match = re.search(r"(?:目标价|target price|PT|tp)[^0-9€$￥¥]{0,16}([€$￥¥]?\s*\d+(?:\.\d+)?)", text, re.I)
     if match:
         target_price = match.group(1).replace(" ", "")
-    action = "unknown"
+    research_action = "unknown"
     lowered = text.lower()
     action_map = (
         ("做多", "long"),
@@ -174,14 +174,14 @@ def title_metadata(title: str) -> dict[str, Any]:
     )
     for needle, label in action_map:
         if needle.lower() in lowered:
-            action = label
+            research_action = label
             break
     return {
         "institution": institution or "unknown",
         "report_date": report_date or "unknown",
         "pages": pages,
         "target_price": target_price or "unknown",
-        "action": action,
+        "research_action": research_action,
     }
 
 
@@ -516,7 +516,9 @@ def normalize_facts(
         "status": "ok",
         "core_content": core,
         "stance": str(parsed.get("stance") or "unknown"),
-        "action": str(parsed.get("action") or meta.get("action") or "unknown"),
+        "research_action": str(
+            parsed.get("research_action") or parsed.get("action") or meta.get("research_action") or "unknown"
+        ),
         "institution": str(parsed.get("institution") or meta.get("institution") or "unknown"),
         "report_date": str(parsed.get("report_date") or meta.get("report_date") or "unknown"),
         "rating": str(parsed.get("rating") or "unknown"),
@@ -546,7 +548,7 @@ def fallback_facts(
         "status": status,
         "core_content": compact(item.get("title"), 420),
         "stance": "unknown",
-        "action": meta.get("action") or "unknown",
+        "research_action": meta.get("research_action") or "unknown",
         "institution": meta.get("institution") or "unknown",
         "report_date": meta.get("report_date") or "unknown",
         "rating": "unknown",
@@ -588,7 +590,7 @@ def preview_lines(facts: dict[str, Any]) -> list[str]:
     elif status:
         lines.append(f"第一页提取：失败/不可用（{facts.get('error') or status}）")
     meta_parts = []
-    for label, key in (("机构", "institution"), ("日期", "report_date"), ("方向", "stance"), ("动作", "action"), ("评级", "rating"), ("目标价", "target_price")):
+    for label, key in (("机构", "institution"), ("日期", "report_date"), ("方向", "stance"), ("研报动作", "research_action"), ("评级", "rating"), ("目标价", "target_price")):
         value = str(facts.get(key) or "").strip()
         if value and value.lower() != "unknown":
             meta_parts.append(f"{label}：{value}")

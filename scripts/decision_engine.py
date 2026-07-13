@@ -405,6 +405,56 @@ def _macro_rule(source: str, match: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def apply_deterministic_source_controls(
+    item: NormalizedMarketItem,
+    decision: DecisionResult,
+) -> DecisionResult:
+    """Apply trusted collector policy without introducing another decision authority."""
+    if not item.source.startswith("value_directory_") or not decision.should_push:
+        return decision
+    policy = item.raw.get("value_directory_policy")
+    preview = item.raw.get("value_directory_preview")
+    if not isinstance(policy, dict) or not isinstance(preview, dict):
+        return decision
+    facts = preview.get("facts") if isinstance(preview.get("facts"), dict) else {}
+    status = str(facts.get("status") or "").strip()
+    if (
+        not policy.get("preview_enabled")
+        or policy.get("push_on_preview_failure")
+        or not status
+        or status == "ok"
+    ):
+        return decision
+
+    control_reason = "第一页预览提取失败，按生产配置不发送标题兜底推送。"
+    reason = f"{decision.reason}\n{control_reason}".strip()
+    audit = dict(decision.audit_json)
+    audit["deterministic_source_control"] = {
+        "control_id": "value_directory_preview_failure_block",
+        "initial_action": decision.action,
+        "final_action": "archive",
+        "preview_status": status,
+        "preview_error": str(facts.get("error") or "")[:500],
+        "policy": {
+            "preview_enabled": True,
+            "push_on_preview_failure": False,
+        },
+    }
+    return DecisionResult(
+        action="archive",
+        importance=decision.importance,
+        reason=reason,
+        brief_reason=control_reason,
+        rule_hits=list(decision.rule_hits),
+        candidate_rules=list(decision.candidate_rules),
+        skeptic=dict(decision.skeptic),
+        dedup=dict(decision.dedup),
+        need_llm_interpretation=False,
+        need_limited_llm_judgement=False,
+        audit_json=audit,
+    )
+
+
 def decide_market_item(
     item: NormalizedMarketItem | dict[str, Any],
     *,

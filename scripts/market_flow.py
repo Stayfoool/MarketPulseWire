@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from attributed_research import prepare_item_for_decision
-from decision_engine import decide_market_item
+from decision_engine import apply_deterministic_source_controls, decide_market_item
 from market_item import DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem
 from market_interpreter import interpret_market_item
 from market_runtime import (
@@ -52,6 +52,7 @@ def evaluate_market_item(
     holdings: list[dict[str, Any]] | None = None,
     symbols: set[str] | list[str] | tuple[str, ...] | None = None,
     decision: DecisionResult | None = None,
+    source_interpretation: InterpretationResult | None = None,
     content: str = "",
     task: str = "为一条已完成规则决策的市场信息生成极简实时摘要。",
     intro: str = "请解读以下市场信息",
@@ -69,13 +70,19 @@ def evaluate_market_item(
         holdings=holdings or [],
         symbols=symbols,
     )
+    resolved_decision = apply_deterministic_source_controls(decision_item, resolved_decision)
     should_interpret = bool(
-        force_interpretation
-        or resolved_decision.need_llm_interpretation
-        or resolved_decision.need_limited_llm_judgement
+        source_interpretation is None
+        and (
+            force_interpretation
+            or resolved_decision.need_llm_interpretation
+            or resolved_decision.need_limited_llm_judgement
+        )
     )
     interpretation_error = ""
-    if should_interpret:
+    if source_interpretation is not None:
+        interpretation = source_interpretation
+    elif should_interpret:
         try:
             interpretation = interpret_market_item(
                 decision_item,
@@ -106,6 +113,7 @@ def evaluate_market_item(
         audit_json={
             "flow_version": FLOW_VERSION,
             "decision_supplied": decision is not None,
+            "source_interpretation_supplied": source_interpretation is not None,
             "interpreter_called": should_interpret,
             "interpretation_failed": bool(interpretation_error),
             "interpretation_error": interpretation_error,

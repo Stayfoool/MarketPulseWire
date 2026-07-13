@@ -196,6 +196,7 @@ def _process_content_item(
     db_path: Path,
     deliver: bool,
     use_rule_dedup: bool,
+    reprocess_existing: bool,
 ) -> MarketProcessOutcome:
     module = _selected_module(store_kind)
     source = item.source
@@ -206,7 +207,7 @@ def _process_content_item(
             if store_kind == "official"
             else article_review_exists(conn, source, item_id)
         )
-        if existing is not None:
+        if existing is not None and not reprocess_existing:
             payload = existing
             inserted = False
         elif store_kind == "official":
@@ -217,7 +218,7 @@ def _process_content_item(
                 source_profile_id=source_profile_id,
                 normalized_item=item,
             )
-            inserted = True
+            inserted = existing is None
         else:
             payload = module.process_article_review(
                 conn,
@@ -226,7 +227,10 @@ def _process_content_item(
                 source_profile_id=source_profile_id,
                 normalized_item=item,
             )
-            inserted = True
+            inserted = existing is None
+        if existing is not None and existing.get("pushed_at"):
+            payload = dict(payload)
+            payload["pushed_at"] = existing["pushed_at"]
     storage_ref = {
         "store_kind": "official_news_reviews" if store_kind == "official" else "article_reviews",
         "source": source,
@@ -324,6 +328,7 @@ def process_market_item(
     analyze: bool = True,
     deliver: bool = True,
     use_rule_dedup: bool = True,
+    reprocess_existing: bool = False,
 ) -> MarketProcessOutcome:
     """Persist, decide, interpret, and optionally deliver one normalized item."""
     if store_kind == "event":
@@ -344,4 +349,5 @@ def process_market_item(
         db_path=db_path,
         deliver=deliver,
         use_rule_dedup=use_rule_dedup,
+        reprocess_existing=reprocess_existing,
     )

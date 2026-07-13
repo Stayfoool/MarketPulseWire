@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import inspect
 import sqlite3
 import sys
 import types
@@ -12,6 +13,8 @@ from tempfile import TemporaryDirectory
 
 import value_directory_preview
 import value_directory_monitor
+from market_item import DecisionResult, InterpretationResult, MarketFlowResult
+from market_runtime import MarketProcessOutcome
 from source_profiles import runtime_source_profile
 from value_directory_browser import classify_page_state, dedupe_entries, normalize_entry, source_config
 from value_directory_preview import (
@@ -277,7 +280,7 @@ def test_preview_ocr_text_path_uses_text_llm_without_vision() -> None:
                 {
                     "core_content": "野村维持中际旭创买入评级并上调目标价至 CNY 1,325。",
                     "stance": "bullish",
-                    "action": "buy",
+                    "research_action": "buy",
                     "institution": "野村",
                     "report_date": "2026-07-06",
                     "rating": "Buy",
@@ -311,6 +314,8 @@ def test_preview_ocr_text_path_uses_text_llm_without_vision() -> None:
     assert facts["status"] == "ok"
     assert facts["model"] == "deepseek-v4-pro"
     assert facts["target_price"] == "CNY 1,325.00"
+    assert facts["research_action"] == "buy"
+    assert "action" not in facts
     assert facts["ocr"]["engine"] == "paddleocr"
     assert facts["preview_basis"] == "visible_first_page_ocr"
 
@@ -376,16 +381,106 @@ def test_recheck_keeps_existing_review_without_new_rule() -> None:
     existing = {"push_now": False, "pushed_at": "", "importance": "medium"}
     original_connect = value_directory_monitor.connect_db
     original_existing = value_directory_monitor.article_review_exists
-    original_rule = value_directory_monitor.rule_first_review
+    original_candidate = value_directory_monitor.preview_candidate
+    original_process = value_directory_monitor.process_market_item
     try:
         value_directory_monitor.connect_db = lambda: _DummyContext()
         value_directory_monitor.article_review_exists = lambda *_: existing
-        value_directory_monitor.rule_first_review = lambda *_: None
+        value_directory_monitor.preview_candidate = lambda *_: False
+        value_directory_monitor.process_market_item = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unmatched recheck must not rewrite the stored review")
+        )
         assert value_directory_monitor.review_and_maybe_push(item, recheck_rules=True) is False
     finally:
         value_directory_monitor.connect_db = original_connect
         value_directory_monitor.article_review_exists = original_existing
-        value_directory_monitor.rule_first_review = original_rule
+        value_directory_monitor.preview_candidate = original_candidate
+        value_directory_monitor.process_market_item = original_process
+
+
+def test_new_item_uses_unified_market_runtime_after_preview_enrichment() -> None:
+    source = source_config("value_directory_ib_industry_macro")
+    item = {
+        "id": "862079",
+        "url": "https://www.valuelist.cn/862079.html",
+        "title": "瑞银-亚太科技策略：Agentic AI to carry Semis&Hardware further",
+        "summary": "title only",
+        "published_at": "2026-07-11T00:00:00+00:00",
+        "raw": {},
+    }
+    calls: list[dict[str, object]] = []
+    original_connect = value_directory_monitor.connect_db
+    original_existing = value_directory_monitor.article_review_exists
+    original_candidate = value_directory_monitor.preview_candidate
+    original_enrich = value_directory_monitor.enrich_item_with_preview
+    original_process = value_directory_monitor.process_market_item
+    try:
+        value_directory_monitor.connect_db = lambda: _DummyContext()
+        value_directory_monitor.article_review_exists = lambda *_: None
+        value_directory_monitor.preview_candidate = lambda *_: True
+
+        def fake_enrich(raw_item):
+            enriched = dict(raw_item)
+            enriched["summary"] = "瑞银认为智能体 AI 将继续推动半导体与硬件上行。"
+            enriched["raw"] = {
+                "value_directory_preview": {
+                    "facts": {
+                        "status": "ok",
+                        "core_content": enriched["summary"],
+                        "research_action": "overweight",
+                        "targets": ["半导体", "AI 硬件"],
+                        "model": "test-preview-model",
+                    }
+                }
+            }
+            return enriched
+
+        def fake_process(normalized, raw_item, **kwargs):
+            calls.append({"normalized": normalized, "raw_item": raw_item, **kwargs})
+            decision = DecisionResult(action="push", importance="high", reason="价值目录规则命中。")
+            return MarketProcessOutcome(
+                flow_result=MarketFlowResult(
+                    item=normalized,
+                    decision=decision,
+                    interpretation=InterpretationResult(core_content=raw_item["summary"]),
+                ),
+                inserted=True,
+                storage_ref={"store_kind": "article_reviews", "item_id": raw_item["id"]},
+                delivery_status="sent",
+            )
+
+        value_directory_monitor.enrich_item_with_preview = fake_enrich
+        value_directory_monitor.process_market_item = fake_process
+        assert value_directory_monitor.review_and_maybe_push(item, source=source) is True
+    finally:
+        value_directory_monitor.connect_db = original_connect
+        value_directory_monitor.article_review_exists = original_existing
+        value_directory_monitor.preview_candidate = original_candidate
+        value_directory_monitor.enrich_item_with_preview = original_enrich
+        value_directory_monitor.process_market_item = original_process
+
+    assert len(calls) == 1
+    call = calls[0]
+    normalized = call["normalized"]
+    assert normalized.source == source.source_id
+    assert normalized.content_type == "research_index"
+    assert normalized.raw["value_directory_policy"]["preview_enabled"] is True
+    assert call["store_kind"] == "article"
+    assert call["deliver"] is True
+    assert call["use_rule_dedup"] is True
+    assert call["reprocess_existing"] is False
+
+
+def test_value_directory_monitor_does_not_own_store_dedup_or_delivery() -> None:
+    source = inspect.getsource(value_directory_monitor)
+    for forbidden in (
+        "send_card(",
+        "reserve_rule_alert(",
+        "save_article_review(",
+        "mark_article_pushed(",
+    ):
+        assert forbidden not in source
+    assert "process_market_item(" in source
 
 
 def test_collect_production_rechecks_current_unpushed_reviews() -> None:
@@ -471,6 +566,8 @@ def main() -> int:
     test_preview_ocr_text_path_uses_text_llm_without_vision()
     test_preview_ocr_failure_falls_back_without_blocking()
     test_recheck_keeps_existing_review_without_new_rule()
+    test_new_item_uses_unified_market_runtime_after_preview_enrichment()
+    test_value_directory_monitor_does_not_own_store_dedup_or_delivery()
     test_collect_production_rechecks_current_unpushed_reviews()
     print("value directory monitor checks passed")
     return 0

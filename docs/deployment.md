@@ -130,14 +130,17 @@ SURVEIL_MARKET_FLOW_DIRECT_PATH=1
 ```
 
 `SURVEIL_MARKET_FLOW_DIRECT_PATH` atomically selects one route for research,
-news-media, official-company, Sina flash/portfolio news, and iFinD notices.
+news-media, official-company, Sina flash/portfolio news, iFinD notices, and the
+ValueList item after its private browser/OCR enrichment step.
 Use `1` for the all-source direct route; set it to `0` only for an atomic rollback
 through the compatibility wrappers. `SURVEIL_CONTENT_DIRECT_PATH` and
 `SURVEIL_EVENT_DIRECT_PATH` are read-only compatibility aliases for one release
 when the new variable is absent. If their values conflict, all general sources
 resolve to compatibility mode; they can no longer create a mixed runtime state.
-X/Serenity and `value_directory_monitor` are deliberate independent routes and
-do not use this switch.
+X/Serenity is the deliberate independent route and does not use this switch.
+`value_directory_monitor` keeps an independent Playwright/OCR collection boundary,
+but its final decision, compatible review write, dedup, and delivery use
+`process_market_item(...)` and therefore follow the same switch.
 
 When changing settings programmatically on the server, invoke `settings_store`
 as the `surveil` service user. Do not write `/opt/surveil/.env` as root, because

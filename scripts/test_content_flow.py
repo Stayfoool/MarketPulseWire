@@ -177,7 +177,7 @@ def test_runtime_switch_and_monitor_imports() -> None:
             os.environ.pop(market_runtime.DIRECT_PATH_ENV, None)
         else:
             os.environ[market_runtime.DIRECT_PATH_ENV] = original
-    for module in (rss_monitor, china_finance_media_monitor, trendforce_page_monitor):
+    for module in (rss_monitor, china_finance_media_monitor, trendforce_page_monitor, value_directory_monitor):
         assert module.process_market_item.__module__ == "market_runtime"
         source = inspect.getsource(module)
         for forbidden in ("content_runtime", "market_content_flow", "market_event_flow", "event_runtime"):
@@ -188,10 +188,11 @@ def test_runtime_switch_and_monitor_imports() -> None:
     assert "SURVEIL_EVENT_DIRECT_PATH" not in FIELDS_BY_KEY
 
 
-def test_value_directory_remains_outside_content_runtime_route() -> None:
+def test_value_directory_uses_content_runtime_after_private_enrichment() -> None:
     source = inspect.getsource(value_directory_monitor)
-    assert "from article_gate import" in source
-    assert "process_market_item" not in source
+    assert "from article_gate import" not in source
+    assert value_directory_monitor.process_market_item.__module__ == "market_runtime"
+    assert "process_market_item(" in source
 
 
 def main() -> int:
@@ -202,7 +203,7 @@ def main() -> int:
     test_interpretation_failure_does_not_cancel_hard_rule_push()
     test_skeptic_final_action_is_persisted_in_decision_result()
     test_runtime_switch_and_monitor_imports()
-    test_value_directory_remains_outside_content_runtime_route()
+    test_value_directory_uses_content_runtime_after_private_enrichment()
     print("content flow checks passed")
     return 0
 
