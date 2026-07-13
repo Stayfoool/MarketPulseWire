@@ -32,12 +32,14 @@ def test_sina_flash_event_audit_preserves_raw_and_context() -> None:
     assert "_normalized_market_item" not in event["raw"]
     assert updated["raw"]["macro_policy_line"] == event["raw"]["macro_policy_line"]
     assert item.source_category == "news_media"
+    assert item.publisher_role == "news_media"
     assert item.collector == "sina_flash"
     assert item.content_type == "flash_news"
     assert item.symbols == ["688017.SH"]
     assert item.themes == ["新浪财经快讯", "宏观流动性/美联储政策"]
     assert item.dedupe_key == "sina_flash:flash-1"
     assert audit["source_category"] == "news_media"
+    assert audit["publisher_role"] == "news_media"
     assert audit["collector"] == "sina_flash"
     assert audit["content_type"] == "flash_news"
     assert audit["symbols"] == ["688017.SH"]
@@ -66,6 +68,7 @@ def test_sina_stock_news_event_audit_uses_portfolio_category() -> None:
     }
     audit = event_with_normalized_market_item_audit(event)["raw"]["_normalized_market_item"]
     assert audit["source_category"] == "portfolio_stock_news"
+    assert audit["publisher_role"] == "news_media"
     assert audit["collector"] == "sina_stock_news"
     assert audit["content_type"] == "stock_news"
     assert audit["dedupe_key"] == "sina_stock_news:article:abc"

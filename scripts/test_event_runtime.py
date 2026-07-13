@@ -114,6 +114,7 @@ def test_direct_and_compat_upsert_preserve_same_store_contract() -> None:
                 with sqlite3.connect(db_path) as conn:
                     raw = json.loads(conn.execute("SELECT raw_json FROM events WHERE id = 1").fetchone()[0])
                 assert raw["_normalized_market_item"]["source_category"] == "news_media"
+                assert raw["_normalized_market_item"]["publisher_role"] == "news_media"
                 assert raw["_normalized_market_item"]["content_type"] == "flash"
                 second = market_runtime.process_market_item(
                     normalized,
@@ -139,6 +140,7 @@ def test_sina_flash_uses_news_media_flash_shape() -> None:
         store_kind="event",
     )
     assert item.source_category == "news_media"
+    assert item.publisher_role == "news_media"
     assert item.content_type == "flash"
 
 

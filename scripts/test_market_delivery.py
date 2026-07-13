@@ -149,7 +149,7 @@ def test_success_confirms_rule_dedup_and_duplicate_skips_second_send() -> None:
         assert len(calls) == 1
         assert dedup_status == "sent"
         assert [row[0] for row in rows] == ["sent", "skipped"]
-        assert json.loads(rows[1][2])["reason"] == "同一国际投行主题报告跨来源去重"
+        assert json.loads(rows[1][2])["reason"] == "同一规则观点跨来源去重"
     finally:
         market_delivery.send_card_with_response = original_send
         if original_webhook is None:

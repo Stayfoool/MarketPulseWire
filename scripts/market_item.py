@@ -114,6 +114,7 @@ def stable_dedupe_key(
 class NormalizedMarketItem:
     source: str
     source_category: str = ""
+    publisher_role: str = ""
     collector: str = ""
     content_type: str = "unknown"
     title: str = ""
@@ -131,6 +132,7 @@ class NormalizedMarketItem:
     def __post_init__(self) -> None:
         self.source = _clean_text(self.source)
         self.source_category = _clean_text(self.source_category)
+        self.publisher_role = _clean_text(self.publisher_role)
         self.collector = _clean_text(self.collector)
         self.content_type = _clean_text(self.content_type) or "unknown"
         self.title = _clean_text(self.title)
@@ -161,6 +163,7 @@ class NormalizedMarketItem:
         return {
             "source": self.source,
             "source_category": self.source_category,
+            "publisher_role": self.publisher_role,
             "collector": self.collector,
             "content_type": self.content_type,
             "title": self.title,
@@ -223,7 +226,7 @@ class DecisionResult:
 
     def legacy_push_fields(self, push_key: str = "push_now") -> dict[str, Any]:
         return {
-            "importance": self.importance if self.importance != "unknown" else "low",
+            "importance": self.importance,
             push_key: self.should_push,
             "reason": self.reason,
             "brief_reason": self.brief_reason,
@@ -324,6 +327,7 @@ class MarketFlowResult:
             "item": {
                 "source": self.item.source,
                 "source_category": self.item.source_category,
+                "publisher_role": self.item.publisher_role,
                 "collector": self.item.collector,
                 "content_type": self.item.content_type,
                 "dedupe_key": self.item.dedupe_key,
@@ -360,6 +364,7 @@ def item_from_article_mapping(
     item: dict[str, Any],
     *,
     source_category: str = "",
+    publisher_role: str = "",
     collector: str = "",
     content_type: str = "article",
 ) -> NormalizedMarketItem:
@@ -368,6 +373,7 @@ def item_from_article_mapping(
     return NormalizedMarketItem(
         source=source,
         source_category=source_category,
+        publisher_role=publisher_role,
         collector=collector,
         content_type=content_type,
         title=str(item.get("title") or ""),
@@ -387,6 +393,7 @@ def item_from_event_mapping(
     event: dict[str, Any],
     *,
     source_category: str = "",
+    publisher_role: str = "",
     collector: str = "",
 ) -> NormalizedMarketItem:
     raw = dict(event.get("raw") or {})
@@ -394,6 +401,7 @@ def item_from_event_mapping(
     return NormalizedMarketItem(
         source=str(event.get("source") or ""),
         source_category=source_category,
+        publisher_role=publisher_role,
         collector=collector,
         content_type=str(event.get("event_type") or "event"),
         title=str(event.get("title") or ""),

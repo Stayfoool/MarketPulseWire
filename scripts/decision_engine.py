@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from attributed_research import EXTRACTION_KEY, attributed_research_rule
 from industry_hardline import (
     apply_hardline_review_override,
     apply_source_priority_override,
@@ -45,6 +46,9 @@ def _legacy_item(item: NormalizedMarketItem | dict[str, Any]) -> dict[str, Any]:
             {
                 "title": item.title,
                 "summary": item.summary,
+                "source": item.source,
+                "source_category": item.source_category,
+                "publisher_role": item.publisher_role,
                 "content": raw.get("content") or item.summary,
                 "full_text": item.full_text,
                 "url": item.url,
@@ -84,6 +88,7 @@ def _audit_base(source: str, item: NormalizedMarketItem | dict[str, Any], legacy
         "legacy_entrypoints_wrapped": [
             "industry_hardline.event_first_hardline_review",
             "push_rules.first_matching_push_rule",
+            "attributed_research.attributed_research_rule",
             "industry_hardline.apply_source_priority_override",
             "industry_hardline.apply_hardline_review_override",
             "macro_policy.macro_policy_match",
@@ -94,10 +99,14 @@ def _audit_base(source: str, item: NormalizedMarketItem | dict[str, Any], legacy
             {
                 "content_type": item.content_type,
                 "source_category": item.source_category,
+                "publisher_role": item.publisher_role,
                 "collector": item.collector,
                 "dedupe_key": item.dedupe_key,
             }
         )
+        attribution = item.raw.get(EXTRACTION_KEY)
+        if isinstance(attribution, dict):
+            base["attributed_research_extraction"] = dict(attribution)
     else:
         base.update(
             {
@@ -325,6 +334,38 @@ def _decision_from_rule(
     )
 
 
+def _decision_from_rules(
+    rules: list[dict[str, Any]],
+    *,
+    audit_json: dict[str, Any],
+    source_stage: str,
+    dedup_rule: dict[str, Any] | None = None,
+) -> DecisionResult:
+    audit = dict(audit_json)
+    audit["deterministic_push_match"] = True
+    audit["source_stage"] = source_stage
+    audit["legacy_rules"] = [dict(rule) for rule in rules]
+    reasons = list(
+        dict.fromkeys(
+            str(rule.get("brief_reason") or rule.get("reason") or "").strip()
+            for rule in rules
+            if str(rule.get("brief_reason") or rule.get("reason") or "").strip()
+        )
+    )
+    reason = "\n".join(reasons)
+    return DecisionResult(
+        action="push",
+        importance="high",
+        reason=reason,
+        brief_reason=reason,
+        rule_hits=rules,
+        dedup=_rule_dedup(dedup_rule or {}),
+        need_llm_interpretation=True,
+        need_limited_llm_judgement=False,
+        audit_json=audit,
+    )
+
+
 def _review_to_rule(review: dict[str, Any], *, source: str, rule_id: str, reason_fallback: str) -> dict[str, Any]:
     reason = str(review.get("reason") or reason_fallback)
     return {
@@ -393,14 +434,29 @@ def decide_market_item(
         )
         return _decision_from_rule(rule, audit_json=audit, source_stage="industry_hardline_event_first")
 
+    attributed_rule = attributed_research_rule(item)
     push_rule = first_matching_push_rule(
         source=resolved_source,
         item=legacy_item,
         holdings=holdings,
         symbols=symbol_set,
     )
+    if push_rule and attributed_rule:
+        return _decision_from_rules(
+            [push_rule, attributed_rule],
+            audit_json=audit,
+            source_stage="push_rules_with_attributed_research",
+            dedup_rule=attributed_rule,
+        )
     if push_rule:
         return _decision_from_rule(push_rule, audit_json=audit, source_stage="push_rules_first_match")
+
+    if attributed_rule:
+        return _decision_from_rule(
+            attributed_rule,
+            audit_json=audit,
+            source_stage="attributed_research_hard_variable",
+        )
 
     source_priority = apply_source_priority_override(resolved_source, legacy_item, _base_review())
     if source_priority.get("source_priority_override") and source_priority.get("push_now"):

@@ -1524,6 +1524,7 @@ def html_page(token_required: bool) -> str:
           <option value="high">high</option>
           <option value="medium">medium</option>
           <option value="low">low</option>
+          <option value="unknown">unknown / 未命中规则</option>
         </select>
         <input id="signalQuery" placeholder="搜索标题、原因、复盘" style="width:260px">
         <button class="primary" onclick="loadSignals()">查询</button>
@@ -2705,7 +2706,7 @@ function sourceProfileSearchText(item) {{
   return [
     item.category_label, item.name, item.id, item.source_type, item.fetch_range,
     item.filter_policy, item.frequency, item.runtime_shape, item.pipeline,
-    item.fetcher, item.tavily_policy, item.proxy_profile, item.text_length_policy,
+    item.fetcher, item.publisher_role, item.tavily_policy, item.proxy_profile, item.text_length_policy,
     (item.service_units || []).join(' '), item.notes, item.enabled ? 'enabled' : 'disabled'
   ].join(' ').toLowerCase();
 }}
@@ -2731,6 +2732,7 @@ function sourceProfilesForSave() {{
     id: item.id,
     enabled: item.enabled !== false,
     frequency: item.frequency || '',
+    publisher_role: item.publisher_role || '',
     skeptic_enabled: Boolean(item.skeptic_enabled),
     web_evidence_enabled: Boolean(item.web_evidence_enabled),
     proxy_profile: item.proxy_profile || '',
@@ -2775,7 +2777,14 @@ function renderSourceProfiles() {{
           <input class="source-control" data-source-id="${{escapeHtml(item.id || '')}}" data-field="frequency" value="${{escapeHtml(item.frequency || '')}}" oninput="updateSourceProfileDraft(this)">
           <div class="hint">${{escapeHtml(item.runtime_shape || '')}}</div>
         </td>
-        <td>${{escapeHtml(item.pipeline || '')}}<div class="hint">${{escapeHtml(item.text_length_policy || '')}}</div></td>
+        <td>
+          ${{escapeHtml(item.pipeline || '')}}
+          <div class="hint">${{escapeHtml(item.text_length_policy || '')}}</div>
+          <select class="source-control" data-source-id="${{escapeHtml(item.id || '')}}" data-field="publisher_role" onchange="updateSourceProfileDraft(this)">
+            <option value="" ${{item.publisher_role ? '' : 'selected'}}>非新闻媒体转述</option>
+            <option value="news_media" ${{item.publisher_role === 'news_media' ? 'selected' : ''}}>新闻媒体转述</option>
+          </select>
+        </td>
         <td>
           <div class="source-checks">
             <label><input type="checkbox" data-source-id="${{escapeHtml(item.id || '')}}" data-field="skeptic_enabled" onchange="updateSourceProfileDraft(this)" ${{skepticChecked}}> Skeptic</label>

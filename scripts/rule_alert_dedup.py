@@ -12,7 +12,10 @@ from market_db import DEFAULT_DB_PATH, init_db
 from market_item import decision_result_from_payload
 
 
-RULE_ID = "international_bank_theme_strategy"
+RULE_IDS = {
+    "international_bank_theme_strategy",
+    "attributed_research_hard_variable",
+}
 
 
 def utc_now() -> str:
@@ -32,7 +35,7 @@ def rule_hit(payload: dict[str, Any]) -> dict[str, Any] | None:
         + list(payload.get("rule_hits") or [])
     )
     for candidate in candidates:
-        if isinstance(candidate, dict) and candidate.get("rule_id") == RULE_ID and candidate.get("dedup_key"):
+        if isinstance(candidate, dict) and candidate.get("rule_id") in RULE_IDS and candidate.get("dedup_key"):
             return candidate
     return None
 
@@ -55,6 +58,7 @@ def reserve_rule_alert(
     if not hit:
         return {"reserved": False, "applicable": False}
     dedup_key = str(hit.get("dedup_key") or "")
+    rule_id = str(hit.get("rule_id") or "")
     lookback_days = max(1, min(int(hit.get("dedup_lookback_days") or 14), 90))
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=lookback_days)).isoformat()
@@ -78,6 +82,7 @@ def reserve_rule_alert(
                 "applicable": True,
                 "duplicate": True,
                 "dedup_key": dedup_key,
+                "rule_id": rule_id,
                 "first": {
                     "status": row[0],
                     "source": row[1],
@@ -107,7 +112,7 @@ def reserve_rule_alert(
             """,
             (
                 dedup_key,
-                RULE_ID,
+                rule_id,
                 source,
                 item_id,
                 title,
@@ -118,7 +123,7 @@ def reserve_rule_alert(
             ),
         )
         conn.commit()
-        return {"reserved": True, "applicable": True, "dedup_key": dedup_key}
+        return {"reserved": True, "applicable": True, "dedup_key": dedup_key, "rule_id": rule_id}
     finally:
         conn.close()
 

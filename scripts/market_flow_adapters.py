@@ -23,6 +23,7 @@ def normalized_item_audit_payload(item: NormalizedMarketItem) -> dict[str, Any]:
         "schema": "NormalizedMarketItem/v1",
         "source": item.source,
         "source_category": item.source_category,
+        "publisher_role": item.publisher_role,
         "collector": item.collector,
         "content_type": item.content_type,
         "title": item.title,

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from attributed_research import prepare_item_for_decision
 from decision_engine import attach_decision_to_event_analysis
 from market_flow import evaluate_market_item
 from market_flow_adapters import (
@@ -24,11 +25,12 @@ from market_review_store import (
     load_enabled_holdings as store_load_enabled_holdings,
 )
 from push_rules import apply_event_push_rules
+from source_profiles import runtime_source_profile
 
 
 EVENT_SOURCE_CONTEXT: dict[str, dict[str, str]] = {
-    "sina_flash": {"source_category": "news_media", "collector": "sina_flash"},
-    "sina_stock_news": {"source_category": "portfolio_stock_news", "collector": "sina_stock_news"},
+    "sina_flash": {"source_category": "news_media", "publisher_role": "news_media", "collector": "sina_flash"},
+    "sina_stock_news": {"source_category": "portfolio_stock_news", "publisher_role": "news_media", "collector": "sina_stock_news"},
     "ifind_notice": {"source_category": "company_disclosures", "collector": "ifind_batch"},
 }
 
@@ -52,11 +54,18 @@ def _event_without_normalized_audit(event: dict[str, Any]) -> dict[str, Any]:
 
 def normalized_event_item(event: dict[str, Any]) -> NormalizedMarketItem:
     base = _event_without_normalized_audit(event)
-    context = event_source_context(str(base.get("source") or ""))
+    source = str(base.get("source") or "")
+    context = event_source_context(source)
+    profile = runtime_source_profile(source) or {}
+    source_category = str(base.get("source_category") or context.get("source_category") or profile.get("category") or "")
+    publisher_role = str(base.get("publisher_role") or context.get("publisher_role") or profile.get("publisher_role") or "")
+    if not publisher_role and source_category in {"news_media", "portfolio_stock_news"}:
+        publisher_role = "news_media"
     return item_from_event_mapping(
         base,
-        source_category=context.get("source_category", ""),
-        collector=context.get("collector", ""),
+        source_category=source_category,
+        publisher_role=publisher_role,
+        collector=str(base.get("collector") or context.get("collector") or profile.get("fetcher") or source),
     )
 
 
@@ -199,9 +208,10 @@ def apply_event_rules_to_analysis(
     symbol_set = {str(symbol).upper() for symbol in symbols if str(symbol).strip()}
     holdings = load_enabled_holdings(db_path)
     updated = apply_event_push_rules(event, analysis, holdings=holdings, symbols=symbol_set)
+    decision_item = prepare_item_for_decision(normalized_event_item(event))
     return attach_decision_to_event_analysis(
         str(event.get("source") or ""),
-        event,
+        decision_item,
         updated,
         holdings=holdings,
         symbols=symbol_set,

@@ -90,6 +90,13 @@ def _profile(source_profile_id: str) -> dict[str, Any]:
         return {}
 
 
+def _publisher_role(raw_item: dict[str, Any], profile: dict[str, Any], category: str) -> str:
+    explicit = str(raw_item.get("publisher_role") or profile.get("publisher_role") or "").strip()
+    if explicit:
+        return explicit
+    return "news_media" if category in {"news_media", "portfolio_stock_news"} else ""
+
+
 def normalize_market_item(
     source: str,
     raw_item: dict[str, Any],
@@ -110,17 +117,20 @@ def normalize_market_item(
         return item_from_event_mapping(
             normalized_input,
             source_category=str(raw_item.get("source_category") or category),
+            publisher_role=_publisher_role(raw_item, profile, str(raw_item.get("source_category") or category)),
             collector=str(raw_item.get("collector") or collector),
         )
     official = store_kind == "official"
+    category = str(
+        raw_item.get("source_category")
+        or profile.get("category")
+        or ("official_company" if official else ARTICLE_COMPAT_SOURCE_CATEGORIES.get(source, ""))
+    )
     return item_from_article_mapping(
         source,
         raw_item,
-        source_category=str(
-            raw_item.get("source_category")
-            or profile.get("category")
-            or ("official_company" if official else ARTICLE_COMPAT_SOURCE_CATEGORIES.get(source, ""))
-        ),
+        source_category=category,
+        publisher_role=_publisher_role(raw_item, profile, category),
         collector=str(raw_item.get("collector") or profile.get("fetcher") or source),
         content_type=str(raw_item.get("content_type") or ("official_news" if official else "article")),
     )

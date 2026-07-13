@@ -136,7 +136,7 @@ def _duplicate_article_review(
 ) -> None:
     first = reservation.get("first") or {}
     note = (
-        "同一国际投行主题报告跨来源去重：已由 "
+        "同一规则观点跨来源去重：已由 "
         f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
     )
     updated = dict(review)
@@ -295,7 +295,7 @@ def deliver_event(event_id: int, analysis: dict[str, Any], db_path: Path = DEFAU
             "feishu",
             "skipped",
             {
-                "reason": "同一国际投行主题报告跨来源去重",
+                "reason": "同一规则观点跨来源去重",
                 "first_source": first.get("source"),
                 "first_published_at": first.get("published_at"),
                 "dedup_key": reservation.get("dedup_key"),
