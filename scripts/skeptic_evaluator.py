@@ -543,11 +543,12 @@ def apply_skeptic_review(
         for rule_id in review_raw.get("_protected_decision_rule_ids") or []
         if str(rule_id).strip()
     ]
-    llm_downgrade_protected = bool(protected_rule_ids) and str(skeptic.get("mode") or "") == "llm"
+    llm_downgrade_protected = bool(review.get(push_key)) and str(skeptic.get("mode") or "") == "llm"
     if llm_downgrade_protected and (verdict != "pass" or suggestion != "push_now"):
         protected_skeptic = dict(skeptic)
         protected_skeptic["llm_downgrade_ignored"] = True
-        protected_skeptic["protected_rule_ids"] = protected_rule_ids
+        if protected_rule_ids:
+            protected_skeptic["protected_rule_ids"] = protected_rule_ids
         protected_skeptic["final_push_suggestion_before_protection"] = suggestion
         protected_skeptic["final_push_suggestion"] = "push_now"
         updated["skeptic"] = protected_skeptic

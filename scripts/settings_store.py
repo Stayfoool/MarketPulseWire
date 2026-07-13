@@ -25,20 +25,6 @@ class SettingField:
 
 SETTING_GROUPS: list[dict[str, Any]] = [
     {
-        "id": "pipeline",
-        "title": "处理链路",
-        "restart_hint": "统一链路变更后重启新浪快讯常驻服务；其余 collector timer 下一轮自动读取。X/Serenity 与价值目录不受此开关影响。",
-        "fields": [
-            SettingField(
-                "SURVEIL_MARKET_FLOW_DIRECT_PATH",
-                "通用信息统一 market flow",
-                "pipeline",
-                help="1=research/news/official/Sina/iFinD 共用 direct flow；0=全部走兼容 wrapper。X/Serenity 与价值目录保持独立。",
-                placeholder="1",
-            ),
-        ],
-    },
-    {
         "id": "llm",
         "title": "大模型",
         "restart_hint": "保存后建议重启 X/RSS/TrendForce/海外媒体等常驻分析服务，使新模型配置立即生效。",

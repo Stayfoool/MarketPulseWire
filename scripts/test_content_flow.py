@@ -4,16 +4,12 @@
 from __future__ import annotations
 
 import inspect
-import os
 import sqlite3
 
-import article_gate
 import china_finance_media_monitor
 import market_flow
 import market_content_adapter
-import market_content_flow
 import market_runtime
-import official_news_gate
 import rss_monitor
 import trendforce_page_monitor
 import value_directory_monitor
@@ -30,17 +26,6 @@ def fake_interpretation(*args, **kwargs) -> InterpretationResult:
         model="fake-model",
         prompt_version="market_interpreter_v1",
     )
-
-
-def test_gate_modules_are_thin_compatibility_exports() -> None:
-    assert article_gate.review_article.__module__ == "market_content_adapter"
-    assert article_gate.process_article_review.__module__ == "market_content_adapter"
-    assert article_gate.rule_first_review.__module__ == "market_content_adapter"
-    assert official_news_gate.review_official_news.__module__ == "market_content_adapter"
-    assert official_news_gate.process_official_review.__module__ == "market_content_adapter"
-    assert "from market_content_adapter import" in inspect.getsource(market_content_flow)
-    assert "call_chat_completion_with_prompts" not in article_gate.__dict__
-    assert "call_chat_completion_with_prompts" not in official_news_gate.__dict__
 
 
 def test_article_interpretation_cannot_override_decision_action() -> None:
@@ -165,30 +150,30 @@ def test_skeptic_final_action_is_persisted_in_decision_result() -> None:
     assert stored["raw"]["raw"]["decision_result"]["action"] == "ignore"
 
 
-def test_runtime_switch_and_monitor_imports() -> None:
-    original = os.environ.get(market_runtime.DIRECT_PATH_ENV)
-    try:
-        os.environ[market_runtime.DIRECT_PATH_ENV] = "0"
-        assert market_runtime.runtime_path_name() == "compat"
-        os.environ[market_runtime.DIRECT_PATH_ENV] = "1"
-        assert market_runtime.runtime_path_name() == "direct"
-    finally:
-        if original is None:
-            os.environ.pop(market_runtime.DIRECT_PATH_ENV, None)
-        else:
-            os.environ[market_runtime.DIRECT_PATH_ENV] = original
+def test_runtime_and_monitor_imports_use_one_unified_path() -> None:
+    assert market_runtime._selected_module("article").__name__ == "market_content_adapter"
+    assert market_runtime._selected_module("official").__name__ == "market_content_adapter"
+    assert market_runtime._selected_module("event").__name__ == "market_event_adapter"
     for module in (rss_monitor, china_finance_media_monitor, trendforce_page_monitor, value_directory_monitor):
         assert module.process_market_item.__module__ == "market_runtime"
         source = inspect.getsource(module)
-        for forbidden in ("content_runtime", "market_content_flow", "market_event_flow", "event_runtime"):
+        for forbidden in (
+            "content_runtime",
+            "market_content_flow",
+            "market_event_flow",
+            "event_runtime",
+            "article_gate",
+            "official_news_gate",
+            "event_pipeline",
+        ):
             assert f"from {forbidden} import" not in source
             assert f"import {forbidden}" not in source
-    assert FIELDS_BY_KEY[market_runtime.DIRECT_PATH_ENV].group == "pipeline"
+    assert "SURVEIL_MARKET_FLOW_DIRECT_PATH" not in FIELDS_BY_KEY
     assert "SURVEIL_CONTENT_DIRECT_PATH" not in FIELDS_BY_KEY
     assert "SURVEIL_EVENT_DIRECT_PATH" not in FIELDS_BY_KEY
 
 
-def test_value_directory_uses_content_runtime_after_private_enrichment() -> None:
+def test_value_directory_uses_unified_runtime_after_private_enrichment() -> None:
     source = inspect.getsource(value_directory_monitor)
     assert "from article_gate import" not in source
     assert value_directory_monitor.process_market_item.__module__ == "market_runtime"
@@ -196,14 +181,13 @@ def test_value_directory_uses_content_runtime_after_private_enrichment() -> None
 
 
 def main() -> int:
-    test_gate_modules_are_thin_compatibility_exports()
     test_article_interpretation_cannot_override_decision_action()
     test_official_flow_uses_same_decision_and_interpretation_contract()
     test_yicai_morning_brief_is_auditable_decision_rule()
     test_interpretation_failure_does_not_cancel_hard_rule_push()
     test_skeptic_final_action_is_persisted_in_decision_result()
-    test_runtime_switch_and_monitor_imports()
-    test_value_directory_uses_content_runtime_after_private_enrichment()
+    test_runtime_and_monitor_imports_use_one_unified_path()
+    test_value_directory_uses_unified_runtime_after_private_enrichment()
     print("content flow checks passed")
     return 0
 

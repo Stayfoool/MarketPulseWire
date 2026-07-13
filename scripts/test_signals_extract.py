@@ -9,10 +9,9 @@ import tempfile
 from datetime import date
 from pathlib import Path
 
-from article_gate import ensure_article_reviews_table
 from market_db import init_db
+from market_review_store import ensure_article_reviews_table, ensure_official_news_table
 from market_skills import import_market_skills, match_market_skills
-from official_news_gate import ensure_official_news_table
 import signal_outcome_update
 from signal_outcome_update import compute_metrics, quote_rows_from_response, target_rows
 from signal_store import upsert_signal

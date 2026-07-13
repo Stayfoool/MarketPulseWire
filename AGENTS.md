@@ -1,25 +1,38 @@
-## 项目计划
+## 文档职责
 
-- 主 living plan：`docs/monitoring-plan.md`。
-- 当前路线图、实施状态、待定事项、风险和验证缺口都维护在这个文件里。
-- 不要把活跃 TODO 分散到多个计划文档；如果以后需要深度参考文档，从主计划里链接过去。
-- 下载外部工具时遵循全局下载策略：优先官方源；官方 GitHub release 因网络失败时，可使用华为云、清华、阿里等广泛使用的第三方镜像，并记录官方来源和镜像来源。
+- `AGENTS.md` 是长期工程规范的唯一文档真源，只保存稳定、可执行的项目红线。
+- `docs/architecture-flow.md` 只描述当前代码和生产结构，不制定原则。若文档与代码/CI 冲突，以代码和生产只读审计为事实，并在同一 PR 修正文档。
+- `docs/monitoring-plan.md` 是本机 living plan，只保存当前目标、实施状态、下一步、风险和验证缺口；不保存长期原则或完整历史。该文件可能包含个人生产计划，因此不进入 Git。
+- `docs/deployment.md` 保存部署和运维步骤；服务器 Web 面板和服务器私有 `.env` 是生产配置真源。
+- Git 历史保存已完成阶段的详细过程，不在 living plan 重复堆积。
+
+## 信息处理不变量
+
+- 除明确例外外，信息源最终必须归一化为 `NormalizedMarketItem`，并进入 `process_market_item -> decision_engine -> market_interpreter -> review_store -> market_delivery -> view`。
+- collector 只负责合规采集、技术去重、正文/附件富化、标准化、来源状态和健康记录。collector 不得自行执行单条 review 持久化、规则去重占位或市场信息投递。
+- `DecisionResult.action` 是即时推送资格的唯一权威。缺少有效 `DecisionResult` 时必须关闭式失败，不得从 `push_now`、`should_push_now`、`should_push`、importance 或 LLM 输出恢复推送资格。
+- 旧 push 字段和旧表只可作为兼容存储、历史展示或派生投影；它们不是正确性真源。`pushed_at`、delivery status 和 dedup state 只记录执行结果，不能创建推送资格。
+- 后处理可以把 `push` 降级为 daily/archive/ignore，但不能把非 push 提升为 push。只有决策层可以生成新的 push action。
+- 持仓/关联关键词、重点主题、硬变量、宏观政策、归因研究和去重规则应优先设计为跨来源内容规则。同一内容只改变来源元数据时，通用决策原则上保持一致。
+- `source_category`、`publisher_role`、`content_type` 只用于采集、存储、展示和审计，不得仅凭分类、内容形态或来源名称判定重要性。
+- LLM 可以做受限抽取、关系识别和薄解读，但必须保留并校验原文证据；LLM 不得直接决定 importance/action，解析失败也不得改变确定性规则结果。
+- 来源特殊性应限制在 API/RSS/浏览器、登录/WAF、thread/media、附件/OCR、基线、频率和展示等边界。独立路径必须在架构文档中记录原因、最小边界、测试和复核条件。
+- 不为单一来源预建插件框架、第二套 decision、第二套 review store、独立缓存表或常驻服务。优先复用现有 source profile、runtime、规则、存储 adapter 和 delivery。
+
+## 测试与变更
+
+- `scripts/test_architecture_invariants.py` 执行统一 collector、禁止调用、兼容模块、来源 profile 和显式例外检查；新增来源不得绕过该测试。
+- 新增或调整通用规则时，至少提供两个不同来源元数据的同文回归样例，并验证 `DecisionResult.action` 一致。
+- 新来源至少验证规范化、停用、空内容/解析失败、重复、来源健康、最终 action、存储和投递审计。
+- 私有 `.env`、`LOCAL_COMMANDS.md`、`config/portfolio.json`、SQLite、browser profile、cookie/session 和生产 source override 不进入 Git，也不被部署覆盖。
 
 ## GitHub 工作流
 
-- 今后默认不要直接向 `main` 推送普通代码、文档或配置修改。
-- 新改动应从最新 `main` 新建 `codex/` 前缀分支，提交后推送分支并创建 Pull Request。
-- 等 GitHub Actions / CI 必需检查变绿后，再把 PR merge 到 `main`。
-- 紧急生产 hotfix 只有在用户明确要求快速直推、或线上服务需要立即恢复时才可绕过 PR；直推前必须先跑本地相关测试，并在事后说明绕过原因。
+- 普通代码、文档和配置修改从最新 `main` 新建 `codex/` 分支，通过 PR 和必需 CI 后 merge，再按部署文档上线并做生产只读验证。
+- 不直接向 `main` 推送普通改动。只有用户明确要求紧急恢复生产时才可绕过 PR，并须先运行相关测试、事后记录原因。
 
-## 信息源演进与主干一致性
+## 下载策略
 
-- 新增或调整信息源时，默认只扩展采集适配、正文获取、来源健康和必要富化；最终条目必须尽量归一化为 `NormalizedMarketItem`，进入现有 `market_flow -> decision_engine -> market_interpreter -> review_store -> delivery/view` 主干。
-- `source_category`、`publisher_role`、`content_type` 用于采集、展示、存储适配和审计，不得仅凭这些字段或来源名称把内容判为重要或不重要。
-- 持仓/关联关键词、重点主题、硬变量、宏观政策、去重和其他通用规则应优先设计为跨来源规则。同一内容只改变来源元数据时，通用决策结果原则上应保持一致。
-- `DecisionResult.action` 是唯一推送权威。不得为新来源增加第二个最终 action、独立 push 布尔值或由 LLM 自行覆盖确定性规则的入口。
-- LLM 可以做受限抽取、跨句关系识别和薄解读，但输出必须回验原文证据；LLM 不得直接决定 importance/action，解析失败也不得改变已经成立的确定性规则结果。
-- 信息源特殊性应尽量限制在采集边界，例如 API/RSS、登录/WAF、浏览器 profile、thread/reply、媒体附件、第一页 OCR、基线和轮询频率。特殊采集完成后应重新回到公共数据契约和决策层。
-- 只有来源确实存在无法由公共主干表达的语义或投递要求时，才允许保留独立路径。例外必须在 `docs/architecture-flow.md` 和 `docs/monitoring-plan.md` 记录原因、准确边界、仍复用的公共层、测试要求和未来复核条件；不得因为旧脚本或旧表已经存在就继续扩展平行架构。
-- 不为单一新来源预建通用框架、独立缓存表、第二套 review store 或新的常驻服务。优先复用现有 source profile、collector runtime、规则中心、存储适配和 delivery；只有真实需求证明现有结构不足时才增加抽象。
-- 每次新增来源或调整通用规则，至少验证：规范化样例、同文跨来源一致性、来源特有失败状态、去重、`DecisionResult.action`、存储/投递审计，以及生产私有配置未被 Git 或部署覆盖。
+- 外部数据、模型、论文和工具优先使用作者、维护者或发布方官方来源。
+- 官方源因网络或 CDN 问题反复失败时，可使用华为云、清华、阿里等广泛使用的镜像，并记录官方来源、镜像 URL、文件名、版本和校验信息。
+- WAF、登录或浏览器挑战阻断官方下载时停止并请求用户协助，不使用异常自动化或不可信镜像绕过。

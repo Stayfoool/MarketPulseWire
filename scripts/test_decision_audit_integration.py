@@ -8,10 +8,9 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from article_gate import save_review as save_article_review
-from event_pipeline import apply_event_rules_to_analysis
 from market_db import init_db
-from official_news_gate import save_review as save_official_review
+from market_content_adapter import save_official_review, save_review as save_article_review
+from market_event_adapter import apply_event_rules_to_analysis
 
 
 def test_article_review_save_adds_decision_audit_without_flipping_push_flag() -> None:

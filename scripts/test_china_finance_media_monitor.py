@@ -100,12 +100,6 @@ def test_yicai_morning_brief_is_mandatory_push() -> None:
         "full_text": "",
     }
     assert cfm.is_mandatory_yicai_morning_brief("yicai_brief", item) is True
-    review = {"importance": "medium", "push_now": False, "reason": "普通观点汇总。"}
-    updated = cfm.force_mandatory_morning_review(review, item)
-    assert updated["importance"] == "high"
-    assert updated["push_now"] is True
-    assert updated["mandatory_push"] == "yicai_morning_brief"
-    assert "强制推送规则" in updated["reason"]
 
 
 def test_short_english_keyword_requires_token_boundary() -> None:

@@ -20,10 +20,11 @@ from zoneinfo import ZoneInfo
 
 from db_utils import connect_sqlite
 from env_utils import load_env
-from event_pipeline import content_hash, json_dumps, normalize_importance, should_push_analysis, utc_now
 from feishu import send_card
 from llm_analysis import call_chat_completion_with_prompts
 from market_db import DEFAULT_DB_PATH, init_db
+from market_event_adapter import normalize_importance
+from market_review_store import event_content_hash as content_hash, json_dumps, utc_now
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -689,7 +690,8 @@ def jygs_event_card(event_id: int, parsed: dict[str, Any]) -> dict[str, Any]:
 
 def deliver_jygs_event(event_id: int, parsed: dict[str, Any]) -> str:
     importance = normalize_importance(str(parsed.get("importance") or ""))
-    if not should_push_analysis(parsed, importance):
+    push_decision = parsed.get("push_decision") if isinstance(parsed.get("push_decision"), dict) else {}
+    if not bool(push_decision.get("should_push")) or importance not in {"high", "medium"}:
         return "skipped"
     if not os.getenv("FEISHU_WEBHOOK", "").strip():
         return "skipped"

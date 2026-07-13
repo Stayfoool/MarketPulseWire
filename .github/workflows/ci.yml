@@ -50,6 +50,7 @@ jobs:
           python scripts/test_rule_center.py
           python scripts/test_gate_prompts.py
           python scripts/test_content_flow.py
+          python scripts/test_architecture_invariants.py
           python scripts/test_event_runtime.py
           python scripts/test_event_pipeline_convergence.py
           python scripts/test_market_item.py
@@ -65,6 +66,7 @@ jobs:
           python scripts/test_holdings_web.py
           python scripts/test_time_utils.py
           python scripts/test_x_stream_health.py
+          python scripts/test_jygs_actions.py
           python scripts/test_skeptic_evaluator.py
           python scripts/test_web_evidence.py
           python scripts/test_signals_extract.py

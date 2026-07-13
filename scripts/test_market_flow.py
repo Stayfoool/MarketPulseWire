@@ -3,12 +3,8 @@
 
 from __future__ import annotations
 
-import inspect
-
 import market_content_adapter
-import market_content_flow
 import market_event_adapter
-import market_event_flow
 import market_flow
 import market_runtime
 from market_flow import evaluate_market_item, finalize_market_flow_result
@@ -249,19 +245,16 @@ def test_post_decision_finalization_updates_one_decision_result() -> None:
     assert finalized.decision.audit_json["market_flow_finalization"]["initial_action"] == "push"
 
 
-def test_existing_wrappers_delegate_to_shared_core() -> None:
-    content_adapter_source = inspect.getsource(market_content_adapter)
-    event_adapter_source = inspect.getsource(market_event_adapter)
-    content_wrapper_source = inspect.getsource(market_content_flow)
-    event_wrapper_source = inspect.getsource(market_event_flow)
-    assert "from market_flow import" in content_adapter_source
-    assert "from market_flow import" in event_adapter_source
-    assert "from market_content_adapter import" in content_wrapper_source
-    assert "from market_event_adapter import" in event_wrapper_source
-    for wrapper_source in (content_wrapper_source, event_wrapper_source):
-        assert "from decision_engine import" not in wrapper_source
-        assert "from market_interpreter import" not in wrapper_source
-        assert "def process_" not in wrapper_source
+def test_post_decision_finalization_cannot_promote_non_push_action() -> None:
+    result = evaluate_market_item(
+        canonical_items()[0],
+        decision=DecisionResult(action="archive", importance="low", reason="no deterministic match"),
+    )
+    finalized = finalize_market_flow_result(result, final_push=True, importance="high", reason="legacy flag")
+    assert finalized.decision.action == "archive"
+    audit = finalized.decision.audit_json["market_flow_finalization"]
+    assert audit["promotion_rejected"] is True
+    assert finalized.delivery_intent["should_deliver"] is False
 
 
 class _DummyContext:
@@ -311,6 +304,7 @@ def test_reprocessing_existing_review_preserves_pushed_marker() -> None:
         def fake_deliver(_source, _item, review, **_kwargs):
             calls["delivered"] += 1
             assert review["pushed_at"] == "2026-07-13T00:00:00+00:00"
+            assert _kwargs["decision"].action == "push"
             return "skipped"
 
         market_runtime.deliver_article_review = fake_deliver
@@ -338,6 +332,39 @@ def test_reprocessing_existing_review_preserves_pushed_marker() -> None:
     assert outcome.delivery_status == "skipped"
 
 
+def test_existing_legacy_review_without_decision_fails_closed() -> None:
+    original_connect = market_runtime.connect_sqlite
+    original_existing = market_runtime.article_review_exists
+    try:
+        market_runtime.connect_sqlite = lambda *_args, **_kwargs: _DummyContext()
+        market_runtime.article_review_exists = lambda *_args, **_kwargs: {
+            "importance": "high",
+            "push_now": True,
+            "reason": "legacy push flag",
+            "raw": {},
+            "pushed_at": "",
+        }
+        item = NormalizedMarketItem(
+            source="cls_telegraph_api",
+            source_category="news_media",
+            collector="news_collector",
+            content_type="article",
+            title="旧记录",
+            raw={"id": "legacy-no-decision"},
+        )
+        outcome = market_runtime.process_market_item(
+            item,
+            {"id": "legacy-no-decision", "title": "旧记录"},
+            store_kind="article",
+        )
+    finally:
+        market_runtime.connect_sqlite = original_connect
+        market_runtime.article_review_exists = original_existing
+    assert outcome.flow_result.decision.action == "archive"
+    assert outcome.flow_result.decision.audit_json["contract_error"] == "missing_decision_result"
+    assert outcome.delivery_status == "missing_decision"
+
+
 def main() -> int:
     test_five_content_types_share_one_decision_and_interpretation_contract()
     test_interpretation_failure_preserves_deterministic_action()
@@ -345,8 +372,9 @@ def main() -> int:
     test_value_directory_preview_failure_policy_finalizes_decision_action()
     test_value_directory_enrichment_is_preserved_in_review_audit()
     test_post_decision_finalization_updates_one_decision_result()
-    test_existing_wrappers_delegate_to_shared_core()
+    test_post_decision_finalization_cannot_promote_non_push_action()
     test_reprocessing_existing_review_preserves_pushed_marker()
+    test_existing_legacy_review_without_decision_fails_closed()
     print("market flow checks passed")
     return 0
 

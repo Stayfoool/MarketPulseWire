@@ -16,7 +16,7 @@ from market_flow_adapters import (
     store_event_flow_analysis,
 )
 from market_db import DEFAULT_DB_PATH
-from market_delivery import deliver_event
+from market_delivery import deliver_event, record_delivery
 from market_item import NormalizedMarketItem, decision_result_from_payload, item_from_event_mapping
 from market_review_store import (
     event_content_hash,
@@ -299,19 +299,7 @@ def normalize_importance(value: str) -> str:
 
 def should_push_analysis(parsed: dict[str, Any], importance: str | None = None) -> bool:
     decision = decision_result_from_payload(parsed)
-    if decision is not None:
-        return decision.should_push
-    normalized = normalize_importance(str(importance or infer_importance(parsed)))
-    push_decision = parsed.get("push_decision")
-    if isinstance(push_decision, dict) and "should_push" in push_decision:
-        raw = push_decision.get("should_push")
-        if isinstance(raw, bool):
-            return raw and normalized in {"high", "medium"}
-        if isinstance(raw, str):
-            wants_push = raw.strip().lower() in {"true", "yes", "1", "y", "是", "推送"}
-            return wants_push and normalized in {"high", "medium"}
-        return bool(raw) and normalized in {"high", "medium"}
-    return normalized in {"high", "medium"}
+    return bool(decision and decision.should_push)
 
 
 def maybe_deliver_event(event_id: int, analysis: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> str:
@@ -320,4 +308,14 @@ def maybe_deliver_event(event_id: int, analysis: dict[str, Any], db_path: Path =
     if not event_row:
         raise RuntimeError(f"事件不存在：{event_id}")
     updated = apply_event_rules_to_analysis(event_row, analysis, db_path=db_path)
-    return deliver_event(event_id, updated, db_path=db_path)
+    decision = decision_result_from_payload(updated)
+    if decision is None:
+        record_delivery(
+            event_id,
+            "feishu",
+            "skipped",
+            {"reason": "缺少统一 DecisionResult", "contract_error": "missing_decision_result"},
+            db_path=db_path,
+        )
+        return "missing_decision"
+    return deliver_event(event_id, updated, decision=decision, db_path=db_path)

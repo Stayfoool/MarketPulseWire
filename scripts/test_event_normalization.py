@@ -8,7 +8,7 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from event_pipeline import event_with_normalized_market_item_audit, normalized_event_item, upsert_event
+from market_event_adapter import event_with_normalized_market_item_audit, normalized_event_item, upsert_event
 
 
 def test_sina_flash_event_audit_preserves_raw_and_context() -> None:

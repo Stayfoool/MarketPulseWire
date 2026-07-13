@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from env_utils import load_env
-from event_pipeline import analyze_event
 from market_db import DEFAULT_DB_PATH, init_db
+from market_event_adapter import analyze_event
 
 
 ROOT = Path(__file__).resolve().parents[1]
