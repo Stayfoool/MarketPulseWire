@@ -73,6 +73,40 @@ def test_long_semianalysis_uses_source_priority_decision() -> None:
     assert decision.rule_hits[0]["raw"]["source_priority_override"] == "semianalysis"
 
 
+def test_news_media_attributed_semianalysis_hard_variable_pushes() -> None:
+    item = NormalizedMarketItem(
+        source="sina_flash",
+        source_category="news_media",
+        publisher_role="news_media",
+        content_type="flash",
+        title="SemiAnalysis创始人Dylan Patel表示，存储存在结构性短缺，CPO落地推迟至2028年。",
+    )
+    decision = decide_market_item(item, holdings=[])
+    assert decision.action == "push"
+    assert decision.importance == "high"
+    assert decision.rule_hits[0]["rule_id"] == "attributed_research_hard_variable"
+    assert decision.rule_hits[0]["transport_source"] == "sina_flash"
+    assert decision.dedup["dedup_key"].startswith("attributed_research:semianalysis:")
+
+
+def test_holding_and_attributed_research_rules_are_preserved_together() -> None:
+    item = NormalizedMarketItem(
+        source="sina_stock_news",
+        source_category="portfolio_stock_news",
+        publisher_role="news_media",
+        content_type="portfolio_news",
+        title="SemiAnalysis表示，绿的谐波获得CPO设备订单，交付规模预计增长20%。",
+    )
+    decision = decide_market_item(item, holdings=[GREEN])
+    assert decision.action == "push"
+    assert [rule["rule_id"] for rule in decision.rule_hits] == [
+        "holding_keyword_immediate_alert",
+        "attributed_research_hard_variable",
+    ]
+    assert decision.audit_json["source_stage"] == "push_rules_with_attributed_research"
+    assert decision.dedup["dedup_key"].startswith("attributed_research:semianalysis:")
+
+
 def test_macro_primary_text_decides_push_without_raw_event_marker() -> None:
     item = {"source": "news_media", "title": "美国CPI数据大幅低于市场预期，2年期美债收益率大跌"}
     decision = decide_market_item(item, holdings=[])
@@ -105,6 +139,8 @@ def main() -> int:
     test_international_bank_theme_rule_reports_delivery_dedup_metadata_only()
     test_short_industry_hardline_uses_event_first_decision()
     test_long_semianalysis_uses_source_priority_decision()
+    test_news_media_attributed_semianalysis_hard_variable_pushes()
+    test_holding_and_attributed_research_rules_are_preserved_together()
     test_macro_primary_text_decides_push_without_raw_event_marker()
     test_macro_secondary_match_becomes_limited_judgement_candidate()
     test_no_deterministic_match_archives_for_legacy_gate_to_continue()

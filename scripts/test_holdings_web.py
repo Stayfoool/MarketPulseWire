@@ -309,11 +309,17 @@ def test_source_profiles_group_six_categories() -> None:
         "ifind_notice",
     } <= profile_ids
     semianalysis = next(item for item in payload["profiles"] if item["id"] == "semianalysis")
+    cls = next(item for item in payload["profiles"] if item["id"] == "cls_telegraph_api")
+    sina_flash = next(item for item in payload["profiles"] if item["id"] == "sina_flash")
+    sina_stock_news = next(item for item in payload["profiles"] if item["id"] == "sina_stock_news")
     trendforce_page = next(item for item in payload["profiles"] if item["category"] == "research_industry_media" and item["source_type"] == "公开列表页")
     assert "surveil-research-collector.timer" in semianalysis["service_units"]
     assert "surveil-rss-monitor.service" not in semianalysis["service_units"]
     assert "surveil-research-collector.timer" in trendforce_page["service_units"]
     assert "surveil-trendforce-page-monitor.service" not in trendforce_page["service_units"]
+    assert cls["publisher_role"] == "news_media"
+    assert sina_flash["publisher_role"] == "news_media"
+    assert sina_stock_news["publisher_role"] == "news_media"
 
 
 def test_source_profiles_aggregate_wildcard_health() -> None:
@@ -373,6 +379,7 @@ def test_source_profile_local_config_roundtrip() -> None:
                         "id": "semianalysis",
                         "enabled": False,
                         "frequency": "每 60 秒",
+                        "publisher_role": "news_media",
                         "skeptic_enabled": False,
                         "web_evidence_enabled": True,
                         "proxy_profile": "测试代理",
@@ -393,6 +400,7 @@ def test_source_profile_local_config_roundtrip() -> None:
         assert raw["disabled_sources"] == ["semianalysis"]
         assert set(raw["overrides"]["semianalysis"]) == {
             "frequency",
+            "publisher_role",
             "skeptic_enabled",
             "proxy_profile",
             "notes",
@@ -401,6 +409,7 @@ def test_source_profile_local_config_roundtrip() -> None:
     profile = next(item for item in payload["profiles"] if item["id"] == "semianalysis")
     assert profile["enabled"] is False
     assert profile["frequency"] == "每 60 秒"
+    assert profile["publisher_role"] == "news_media"
     assert profile["skeptic_enabled"] is False
     assert profile["web_evidence_enabled"] is True
     assert profile["proxy_profile"] == "测试代理"
@@ -430,6 +439,21 @@ def test_source_profile_runtime_filters_and_flags() -> None:
             "nvidia_blog"
         ]
         assert source_profile_skeptic_enabled("cls_telegraph_api", config_path=config_path) is False
+
+
+def test_source_profile_can_explicitly_remove_news_media_role() -> None:
+    with TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        config_path = tmp_path / "source_profiles.local.json"
+        save_source_profile_config(
+            {"profiles": [{"id": "cls_telegraph_api", "enabled": True, "publisher_role": ""}]},
+            path=config_path,
+        )
+        raw = load_source_profile_config(config_path)
+        assert raw["overrides"]["cls_telegraph_api"]["publisher_role"] == ""
+        payload = source_profiles_payload(tmp_path / "surveil.sqlite3", config_path=config_path)
+    profile = next(item for item in payload["profiles"] if item["id"] == "cls_telegraph_api")
+    assert profile["publisher_role"] == ""
 
 
 def test_source_profile_runtime_note_reports_effective_counts() -> None:
@@ -615,6 +639,7 @@ def main() -> int:
     test_source_profiles_aggregate_wildcard_health()
     test_source_profile_local_config_roundtrip()
     test_source_profile_runtime_filters_and_flags()
+    test_source_profile_can_explicitly_remove_news_media_role()
     test_source_profile_runtime_note_reports_effective_counts()
     test_systemd_actions_are_whitelisted()
     test_health_tasks_pair_timer_with_service_and_prefer_execution_result()

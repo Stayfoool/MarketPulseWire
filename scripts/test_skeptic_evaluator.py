@@ -300,6 +300,60 @@ def test_nvidia_ai_platform_delay_override_keeps_push_now() -> None:
         conn.close()
 
 
+def test_attributed_research_rule_ignores_llm_only_downgrade() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "surveil.sqlite3"
+        conn = init_db(path)
+        original_llm = skeptic_evaluator.llm_skeptic_review
+
+        def fake_llm(**_kwargs):
+            return {
+                "skeptic_verdict": "downgrade",
+                "old_news_risk": "low",
+                "price_in_risk": "high",
+                "over_linking_risk": "medium",
+                "hard_variable_score": 80,
+                "relation_strength_score": 80,
+                "reason": "模型认为可能已经部分定价。",
+                "what_would_change_mind": "",
+                "final_push_suggestion": "daily",
+                "mode": "llm",
+            }
+
+        review = {
+            "importance": "high",
+            "push_now": True,
+            "reason": "SemiAnalysis明确指出存储结构性短缺。",
+            "raw": {
+                "_decision_rule_ids": ["attributed_research_hard_variable"],
+                "_protected_decision_rule_ids": ["attributed_research_hard_variable"],
+            },
+        }
+        item = {
+            "id": "attributed-1",
+            "title": "SemiAnalysis表示，存储结构性短缺将持续到2028年。",
+            "published_at": datetime.now(timezone.utc).isoformat(),
+            "summary": "SemiAnalysis表示，存储结构性短缺将持续到2028年。",
+        }
+        try:
+            skeptic_evaluator.llm_skeptic_review = fake_llm
+            updated = apply_skeptic_review(
+                conn,
+                source="cls_telegraph_api",
+                item=item,
+                review=review,
+                push_key="push_now",
+            )
+        finally:
+            skeptic_evaluator.llm_skeptic_review = original_llm
+
+        assert updated["push_now"] is True
+        assert updated["importance"] == "high"
+        assert updated["skeptic"]["llm_downgrade_ignored"] is True
+        assert updated["skeptic"]["final_push_suggestion"] == "push_now"
+        conn.close()
+
+
 def main() -> int:
     test_skeptic_downgrades_duplicate_article()
     test_official_review_preserves_skeptic_metadata()
@@ -308,6 +362,7 @@ def main() -> int:
     test_skeptic_llm_failure_records_health_without_blocking()
     test_hbm_hard_variable_override_keeps_push_now()
     test_nvidia_ai_platform_delay_override_keeps_push_now()
+    test_attributed_research_rule_ignores_llm_only_downgrade()
     print("skeptic evaluator tests OK")
     return 0
 

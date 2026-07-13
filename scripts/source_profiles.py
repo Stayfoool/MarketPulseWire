@@ -1,9 +1,9 @@
 """Source profile registry for the Web workbench.
 
 Profiles are defined in code and can be overlaid by a private local config.
-Low-risk runtime fields are honored by collectors: enabled, skeptic_enabled,
-and web_evidence_enabled. Frequency and proxy fields are recorded for operator
-visibility and source-by-source tuning.
+Runtime fields are overlaid by the private Web-managed config. The
+publisher_role field is orthogonal to category/content type so all secondary
+news media can share attribution rules.
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PROFILE_CONFIG_PATH = ROOT / "config/source_profiles.local.json"
 EDITABLE_OVERRIDE_FIELDS = {
     "frequency",
+    "publisher_role",
     "skeptic_enabled",
     "web_evidence_enabled",
     "proxy_profile",
@@ -65,6 +66,7 @@ class SourceProfile:
     service_units: tuple[str, ...]
     health_keys: tuple[tuple[str, str], ...]
     fetcher: str = ""
+    publisher_role: str = ""
     skeptic_enabled: bool = False
     web_evidence_enabled: bool = False
     tavily_policy: str = "不触发"
@@ -316,6 +318,7 @@ def build_profiles() -> list[SourceProfile]:
                 service_units=("surveil-news-collector.timer", "surveil-news-collector.service"),
                 health_keys=(("china_finance_media", source_id),),
                 fetcher="scripts/news_collector.py -> scripts/china_finance_media_monitor.py",
+                publisher_role="news_media",
                 skeptic_enabled=True,
                 web_evidence_enabled=True,
                 tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key",
@@ -339,6 +342,7 @@ def build_profiles() -> list[SourceProfile]:
                 service_units=("surveil-sina-flash.service",),
                 health_keys=(("sina_flash", "*"),),
                 fetcher="scripts/sina_flash.py",
+                publisher_role="news_media",
                 skeptic_enabled=False,
                 web_evidence_enabled=False,
                 proxy_profile="默认直连",
@@ -357,6 +361,7 @@ def build_profiles() -> list[SourceProfile]:
                 service_units=("surveil-sina-stock-news.timer", "surveil-sina-stock-news.service"),
                 health_keys=(("sina_stock_news", "*"),),
                 fetcher="scripts/sina_stock_news.py",
+                publisher_role="news_media",
                 skeptic_enabled=False,
                 web_evidence_enabled=False,
                 text_length_policy="按持仓相关性优先；长文/旧闻争议后续可接 Skeptic",
@@ -484,6 +489,9 @@ def save_source_profile_config(
             value = str(row.get(field) or "").strip()
             if value and value != str(default.get(field) or ""):
                 item[field] = value
+        publisher_role = str(row.get("publisher_role") or "").strip()
+        if publisher_role != str(default.get("publisher_role") or ""):
+            item["publisher_role"] = publisher_role
         for field in ("skeptic_enabled", "web_evidence_enabled"):
             value = normalize_bool(row.get(field), bool(default.get(field)))
             if value != bool(default.get(field)):

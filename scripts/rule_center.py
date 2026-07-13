@@ -217,6 +217,32 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
+        "id": "attributed_research_hard_variable",
+        "name": "媒体转述高价值行业研究观点",
+        "group": "研究机构/行业媒体",
+        "description": "任一新闻媒体明确署名转述受信任行业研究源，并包含半导体/AI产业硬变量或重大预期变化时即时提醒。媒体之间不分级。",
+        "runtime": "attributed_research / market_flow + decision_engine",
+        "hit_markers": ("attributed_research_hard_variable",),
+        "priority": 0,
+        "fields": (
+            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
+            {
+                "key": "trusted_institutions",
+                "label": "受信任机构 ID",
+                "type": "list",
+                "default": ["semianalysis", "trendforce", "semi", "digitimes", "the_elec", "nikkei_xtech"],
+                "help": "填写后替换默认机构列表；机构 ID 使用规则定义中的稳定 ID。",
+            },
+            {
+                "key": "extra_aliases",
+                "label": "额外机构/人物别名",
+                "type": "list",
+                "default": [],
+                "help": "格式为 institution_id=alias，例如 trendforce=集邦。",
+            },
+        ),
+    },
+    {
         "id": "industry_quantified_hardline",
         "name": "量化产业硬变量",
         "group": "研究机构/行业媒体",
@@ -605,8 +631,10 @@ def _event_candidates(conn, cutoff: str, limit: int) -> list[dict[str, Any]]:
 
 def simulate_rules(*, db_path: Path = DEFAULT_DB_PATH, days: int = 7, limit: int = 120) -> dict[str, Any]:
     """Evaluate recent stored entries with the live rules without sending Feishu."""
+    from attributed_research import attributed_research_rule
     from industry_hardline import is_quantified_hardline_item, is_source_priority_immediate
     from push_rules import first_matching_push_rule, load_enabled_holdings_for_rules
+    from source_profiles import runtime_source_profile
 
     safe_days = max(1, min(int(days), 60))
     safe_limit = max(10, min(int(limit), 300))
@@ -617,6 +645,9 @@ def simulate_rules(*, db_path: Path = DEFAULT_DB_PATH, days: int = 7, limit: int
     holdings = load_enabled_holdings_for_rules(db_path)
     results = []
     for item in candidates:
+        profile = runtime_source_profile(str(item["source"])) or {}
+        item["source_category"] = str(profile.get("category") or item.get("source_category") or "")
+        item["publisher_role"] = str(profile.get("publisher_role") or item.get("publisher_role") or "")
         matches: list[dict[str, Any]] = []
         rule = first_matching_push_rule(source=str(item["source"]), item=item, holdings=holdings)
         if rule:
@@ -631,6 +662,15 @@ def simulate_rules(*, db_path: Path = DEFAULT_DB_PATH, days: int = 7, limit: int
             matches.append({"rule_id": "source_priority_semianalysis", "name": "SemiAnalysis 来源优先级", "reason": "来源在优先级白名单内。"})
         if is_quantified_hardline_item(str(item["source"]), item):
             matches.append({"rule_id": "industry_quantified_hardline", "name": "量化产业硬变量", "reason": "来源和量化硬变量条件同时命中。"})
+        attributed = attributed_research_rule(item)
+        if attributed:
+            matches.append(
+                {
+                    "rule_id": "attributed_research_hard_variable",
+                    "name": "媒体转述高价值行业研究观点",
+                    "reason": str(attributed.get("brief_reason") or attributed.get("reason") or ""),
+                }
+            )
         if not matches:
             continue
         results.append(

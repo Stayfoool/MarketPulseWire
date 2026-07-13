@@ -537,6 +537,21 @@ def apply_skeptic_review(
     updated["skeptic"] = skeptic
     verdict = str(skeptic.get("skeptic_verdict") or "pass")
     suggestion = str(skeptic.get("final_push_suggestion") or "push_now")
+    review_raw = review.get("raw") if isinstance(review.get("raw"), dict) else {}
+    protected_rule_ids = [
+        str(rule_id)
+        for rule_id in review_raw.get("_protected_decision_rule_ids") or []
+        if str(rule_id).strip()
+    ]
+    llm_downgrade_protected = bool(protected_rule_ids) and str(skeptic.get("mode") or "") == "llm"
+    if llm_downgrade_protected and (verdict != "pass" or suggestion != "push_now"):
+        protected_skeptic = dict(skeptic)
+        protected_skeptic["llm_downgrade_ignored"] = True
+        protected_skeptic["protected_rule_ids"] = protected_rule_ids
+        protected_skeptic["final_push_suggestion_before_protection"] = suggestion
+        protected_skeptic["final_push_suggestion"] = "push_now"
+        updated["skeptic"] = protected_skeptic
+        return updated
     if verdict != "pass":
         original_reason = str(updated.get("reason") or "").strip()
         skeptic_reason = str(skeptic.get("reason") or "").strip()

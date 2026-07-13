@@ -51,6 +51,9 @@ SETTING_GROUPS: list[dict[str, Any]] = [
             SettingField("LLM_RETRY_COUNT", "重试次数", "llm", placeholder="2"),
             SettingField("LLM_THINKING_TYPE", "默认 thinking", "llm", placeholder="disabled"),
             SettingField("LLM_GATE_THINKING_TYPE", "门控 thinking", "llm", placeholder="enabled"),
+            SettingField("ATTRIBUTED_RESEARCH_LLM_ENABLED", "媒体机构归因语义抽取", "llm", placeholder="1"),
+            SettingField("ATTRIBUTED_RESEARCH_LLM_THINKING_TYPE", "媒体机构归因 thinking", "llm", placeholder="disabled"),
+            SettingField("ATTRIBUTED_RESEARCH_LLM_MAX_OUTPUT_TOKENS", "媒体机构归因输出 tokens", "llm", placeholder="900"),
         ],
     },
     {

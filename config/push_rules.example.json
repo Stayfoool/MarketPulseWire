@@ -48,6 +48,11 @@
       "enabled": true,
       "sources": ["semianalysis"]
     },
+    "attributed_research_hard_variable": {
+      "enabled": true,
+      "trusted_institutions": ["semianalysis", "trendforce", "semi", "digitimes", "the_elec", "nikkei_xtech"],
+      "extra_aliases": []
+    },
     "industry_quantified_hardline": {
       "enabled": true,
       "extra_keywords": [],

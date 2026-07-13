@@ -30,11 +30,13 @@ def test_article_mapping_preserves_source_context_and_dedupe_key() -> None:
         "value_directory_ib_stocks",
         item,
         source_category="research_industry_media",
+        publisher_role="research_origin",
         collector="value_directory_monitor",
         content_type="research_index",
     )
     assert normalized.source == "value_directory_ib_stocks"
     assert normalized.source_category == "research_industry_media"
+    assert normalized.publisher_role == "research_origin"
     assert normalized.collector == "value_directory_monitor"
     assert normalized.content_type == "research_index"
     assert normalized.dedupe_key == "value_directory_ib_stocks:862591"
@@ -55,9 +57,15 @@ def test_event_mapping_uses_source_event_id_and_symbols() -> None:
         "themes": ["宏观流动性/美联储政策"],
         "raw": {"provider": "legacy"},
     }
-    normalized = item_from_event_mapping(event, source_category="news_media", collector="sina_flash")
+    normalized = item_from_event_mapping(
+        event,
+        source_category="news_media",
+        publisher_role="news_media",
+        collector="sina_flash",
+    )
     assert normalized.source == "sina_flash"
     assert normalized.content_type == "flash_news"
+    assert normalized.publisher_role == "news_media"
     assert normalized.dedupe_key == "sina_flash:flash-1"
     assert normalized.symbols == ["688017.SH"]
     assert normalized.raw["source_event_id"] == "flash-1"
@@ -101,6 +109,7 @@ def test_invalid_enums_fall_back_to_safe_defaults() -> None:
     assert normalize_action("send-now") == "archive"
     assert normalize_importance("very-high") == "unknown"
     assert normalize_llm_judgement("freeform bullish") == "not_needed"
+    assert DecisionResult(importance="unknown").legacy_push_fields()["importance"] == "unknown"
 
 
 def test_stable_dedupe_key_prefers_source_event_id_then_url() -> None:

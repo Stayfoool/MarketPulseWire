@@ -79,14 +79,19 @@ def _source_profile(source: str) -> dict[str, Any]:
 def normalized_article_item(source: str, item: dict[str, Any]) -> NormalizedMarketItem:
     profile = _source_profile(source)
     default_content_type = "research_index" if source.startswith("value_directory_") else "article"
+    source_category = str(
+        item.get("source_category")
+        or profile.get("category")
+        or ARTICLE_COMPAT_SOURCE_CATEGORIES.get(source, "")
+    )
+    publisher_role = str(item.get("publisher_role") or profile.get("publisher_role") or "")
+    if not publisher_role and source_category in {"news_media", "portfolio_stock_news"}:
+        publisher_role = "news_media"
     return item_from_article_mapping(
         source,
         item,
-        source_category=str(
-            item.get("source_category")
-            or profile.get("category")
-            or ARTICLE_COMPAT_SOURCE_CATEGORIES.get(source, "")
-        ),
+        source_category=source_category,
+        publisher_role=publisher_role,
         collector=str(item.get("collector") or profile.get("fetcher") or "market_content_adapter"),
         content_type=str(item.get("content_type") or default_content_type),
     )
@@ -98,6 +103,7 @@ def normalized_official_item(source: str, item: dict[str, Any]) -> NormalizedMar
         source,
         item,
         source_category=str(item.get("source_category") or profile.get("category") or "official_company"),
+        publisher_role=str(item.get("publisher_role") or profile.get("publisher_role") or ""),
         collector=str(item.get("collector") or profile.get("fetcher") or "market_content_adapter"),
         content_type=str(item.get("content_type") or "official_news"),
     )
@@ -201,6 +207,12 @@ def _article_review_from_results(
     interpretation: InterpretationResult,
 ) -> dict[str, Any]:
     targets = _target_labels(decision, interpretation)
+    rule_ids = [str(rule.get("rule_id") or "") for rule in decision.rule_hits if rule.get("rule_id")]
+    protected_rule_ids = [
+        str(rule.get("rule_id") or "")
+        for rule in decision.rule_hits
+        if rule.get("rule_id") and rule.get("protected_from_llm_downgrade")
+    ]
     interpretation_failed = interpretation.model == "interpretation_failed"
     reason = (
         decision.brief_reason or decision.reason
@@ -208,7 +220,7 @@ def _article_review_from_results(
         else interpretation.brief_reason or decision.brief_reason or decision.reason
     )
     return {
-        "importance": decision.importance if decision.importance != "unknown" else "low",
+        "importance": decision.importance,
         "push_now": decision.should_push,
         "market_impact": "",
         "incremental_classification": "规则命中" if decision.rule_hits else "未命中确定性规则",
@@ -221,6 +233,8 @@ def _article_review_from_results(
         "raw": {
             **interpretation.to_dict(),
             "_interpretation_result": interpretation.to_dict(),
+            "_decision_rule_ids": rule_ids,
+            "_protected_decision_rule_ids": protected_rule_ids,
             "llm_mode": "thin" if interpretation.model != "interpretation_failed" else "failed",
         },
     }
@@ -243,7 +257,7 @@ def _official_review_from_results(
         "llm_mode": "thin" if interpretation.model != "interpretation_failed" else "failed",
     }
     return {
-        "importance": decision.importance if decision.importance != "unknown" else "low",
+        "importance": decision.importance,
         "should_push_now": decision.should_push,
         "reason": reason,
         "daily_summary": interpretation.core_content or str(item.get("title") or ""),

@@ -9,12 +9,12 @@ from tempfile import TemporaryDirectory
 from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert
 
 
-def review_with_rule(key: str) -> dict:
+def review_with_rule(key: str, rule_id: str = "international_bank_theme_strategy") -> dict:
     return {
         "raw": {
             "rule_hits": [
                 {
-                    "rule_id": "international_bank_theme_strategy",
+                    "rule_id": rule_id,
                     "dedup_key": key,
                     "dedup_lookback_days": 14,
                 }
@@ -71,9 +71,40 @@ def test_release_makes_failed_send_retryable() -> None:
         assert retry["reserved"] is True
 
 
+def test_attributed_research_rule_uses_the_same_cross_source_reservation() -> None:
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        first = reserve_rule_alert(
+            review_with_rule(
+                "attributed_research:semianalysis:test",
+                rule_id="attributed_research_hard_variable",
+            ),
+            source="cls_telegraph_api",
+            item_id="1",
+            title="SemiAnalysis存储观点",
+            published_at="2026-07-10T09:24:30+00:00",
+            db_path=db_path,
+        )
+        confirm_rule_alert(first, db_path=db_path)
+        duplicate = reserve_rule_alert(
+            review_with_rule(
+                "attributed_research:semianalysis:test",
+                rule_id="attributed_research_hard_variable",
+            ),
+            source="sina_flash",
+            item_id="2",
+            title="新浪转述SemiAnalysis存储观点",
+            published_at="2026-07-10T09:30:00+00:00",
+            db_path=db_path,
+        )
+        assert duplicate["duplicate"] is True
+        assert duplicate["rule_id"] == "attributed_research_hard_variable"
+
+
 def main() -> int:
     test_reserve_confirm_and_duplicate()
     test_release_makes_failed_send_retryable()
+    test_attributed_research_rule_uses_the_same_cross_source_reservation()
     print("rule alert dedup checks passed")
     return 0
 

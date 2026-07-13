@@ -9,6 +9,8 @@ All general research, news-media, official-company, flash, portfolio-news, notic
 `collector -> NormalizedMarketItem -> market_flow -> decision_engine -> market_interpreter -> store adapter -> market_delivery -> view`
 
 - `DecisionResult.action` is the push intent source. LLM output is normalized to `InterpretationResult` and cannot freely set or replace the push action.
+- `NormalizedMarketItem.publisher_role` is orthogonal to source category and content type. CLS, Jin10, Sina flash, Sina portfolio news, and future secondary news transports use `publisher_role=news_media`, so attribution rules do not maintain a media-name allowlist.
+- News-media items that mention a trusted research source pass through `attributed_research` before deterministic decision evaluation. Clear wording uses a local fast path; ambiguous wording may use an LLM only to extract institution, attribution, claim enums, and verbatim evidence. The decision engine revalidates the evidence and remains the only component that creates the push action.
 - Every general collector constructs a `NormalizedMarketItem` and calls the same `market_flow.process_market_item(...)` facade. Direct mode loads `market_content_adapter` / `market_event_adapter` only to preserve legacy payload and store shapes; compatibility mode reaches those same adapters through thin historical wrappers. Collectors no longer choose content/event flows or execute store/delivery branches.
 - `market_flow_adapters` owns raw event ingestion and explicit article/official/event compatibility-store writes. `market_delivery` owns article/official/event reservation, send execution, delivery status, and legacy pushed markers. Neither layer evaluates rules or calls the interpreter.
 - `article_reviews`, `official_news_reviews`, and `events/event_analyses` remain compatibility storage truth for existing daily, Web, and signal readers.
@@ -54,7 +56,8 @@ flowchart TD
     end
 
     subgraph A["Decision and Interpretation"]
-        Keyword["keyword, macro, and hardline filters"]
+        Keyword["keyword, macro, hardline, and attributed-research filters"]
+        Attribution["Restricted attribution extraction<br/>institution, claim enums, verbatim evidence"]
         Decision["Decision layer<br/>source profile, rules, dedupe, restricted judgement"]
         Skeptic["Skeptic Evaluator<br/>old news / price-in / over-linking / hard-variable checks"]
         EvidenceLayer["Controlled evidence pack<br/>source, URL, claim, stance, source quality"]
@@ -80,6 +83,8 @@ flowchart TD
     JYGS --> JYGSJob
     Config --> WebWorkbench
     WebSearch --> EvidenceLayer
+    China --> Attribution
+    Attribution --> Decision
 
     XStream --> SQLite
     ResearchCollector --> SQLite
@@ -232,7 +237,7 @@ Historical compatibility units remain installed and whitelisted so operators can
 | `surveil-overseas-media.timer` -> `.service` | `surveil-research-collector.timer` | Kept for rollback/debugging; `DISABLE_LEGACY_RESEARCH_MONITORS=1` keeps it off. |
 | `surveil-china-media.timer` -> `.service` | `surveil-news-collector.timer` | Kept for rollback/debugging; `DISABLE_LEGACY_CHINA_MEDIA_MONITOR=1` keeps it off. |
 
-The Web workbench exposes a `source_profiles.py` catalog above these systemd units. It groups sources into the six target categories used by the production cleanup plan: X / Serenity, Research / industry media, official company sources, news media, Sina portfolio stock news, and iFinD company disclosures. Source profiles now show the unified production collectors while keeping the original `source_health` monitor/source labels for historical continuity.
+The Web workbench exposes a `source_profiles.py` catalog above these systemd units. It groups sources into the six target categories used by the production cleanup plan: X / Serenity, Research / industry media, official company sources, news media, Sina portfolio stock news, and iFinD company disclosures. The separate `publisher_role` selector lets transports in different categories share secondary-media attribution behavior. Source profiles keep the original `source_health` monitor/source labels for historical continuity.
 
 ## Decision and Delivery Layers
 
@@ -241,6 +246,7 @@ flowchart TD
     Raw["Raw item<br/>post, RSS item, page item, flash, notice"]
     Normalize["Collection layer<br/>normalize source, title, URL, time, content shape"]
     Dedupe["Baseline and dedupe<br/>source_state, seen_items, content hash, title similarity"]
+    Attribution["Optional restricted attribution extraction<br/>trusted institution, explicit quote, claim evidence"]
     RuleFast["Decision layer: rule quick pass<br/>source profile, holdings, macro line, hard variables"]
     Supplemental["Decision layer: supplemental review<br/>Skeptic, Web Evidence, restricted LLM judgement"]
     Decision["DecisionResult<br/>push, daily, archive, ignore, baseline"]
@@ -253,7 +259,7 @@ flowchart TD
     Outcome["Outcome tracking<br/>1/3/5/10/20d returns, hit/miss, lessons"]
     Feedback["Human feedback in Web workbench<br/>old news, priced-in, counter evidence, relation error"]
 
-    Raw --> Normalize --> Dedupe --> RuleFast
+    Raw --> Normalize --> Dedupe --> Attribution --> RuleFast
     RuleFast -- "clear rule hit / clear reject" --> Decision
     RuleFast -- "uncertain or evidence-sensitive" --> Supplemental
     Supplemental --> Decision

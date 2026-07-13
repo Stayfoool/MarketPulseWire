@@ -33,6 +33,9 @@ def test_rule_registry_payload_has_all_current_hard_rules() -> None:
     keyword_alert = next(item for item in payload["rules"] if item["id"] == "holding_keyword_immediate_alert")
     assert keyword_alert["group"] == "持仓与公司"
     assert any(field["key"] == "enabled" and field["default"] is True for field in keyword_alert["fields"])
+    attributed = next(item for item in payload["rules"] if item["id"] == "attributed_research_hard_variable")
+    trusted = next(field for field in attributed["fields"] if field["key"] == "trusted_institutions")
+    assert {"semianalysis", "trendforce", "semi", "digitimes", "the_elec", "nikkei_xtech"} == set(trusted["default"])
 
 
 def test_private_config_normalizes_and_preserves_explicit_fields() -> None:

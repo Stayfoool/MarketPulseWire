@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from attributed_research import prepare_item_for_decision
 from decision_engine import decide_market_item
 from market_item import DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem
 from market_interpreter import interpret_market_item
@@ -62,8 +63,9 @@ def evaluate_market_item(
     storage_ref: dict[str, Any] | None = None,
 ) -> MarketFlowResult:
     """Evaluate one normalized item without persistence or delivery side effects."""
+    decision_item = item if decision is not None else prepare_item_for_decision(item)
     resolved_decision = decision or decide_market_item(
-        item,
+        decision_item,
         holdings=holdings or [],
         symbols=symbols,
     )
@@ -76,7 +78,7 @@ def evaluate_market_item(
     if should_interpret:
         try:
             interpretation = interpret_market_item(
-                item,
+                decision_item,
                 resolved_decision,
                 content=content,
                 task=task,
@@ -90,9 +92,9 @@ def evaluate_market_item(
             interpretation = interpretation_failure(exc)
             interpretation_error = str(exc).strip()[:500]
     else:
-        interpretation = rule_only_interpretation(item, resolved_decision)
+        interpretation = rule_only_interpretation(decision_item, resolved_decision)
     return MarketFlowResult(
-        item=item,
+        item=decision_item,
         decision=resolved_decision,
         interpretation=interpretation,
         storage_ref=dict(storage_ref or {}),
