@@ -9,8 +9,8 @@ from pathlib import Path
 
 from db_utils import connect_sqlite
 from env_utils import load_env
-from event_pipeline import analyze_event, maybe_deliver_event
 from market_db import DEFAULT_DB_PATH, init_db
+from market_event_adapter import analyze_event, maybe_deliver_event
 
 
 def latest_analysis(event_id: int, task: str, db_path: Path) -> dict | None:

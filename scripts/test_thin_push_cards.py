@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 
 from cards import build_article_card
-from event_pipeline import compact_event_analysis_lines
+from market_delivery import compact_event_analysis_lines
 
 
 def flatten_card_text(card: dict) -> str:

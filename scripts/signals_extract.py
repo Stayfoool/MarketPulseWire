@@ -411,7 +411,7 @@ def event_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple[d
         return None
     view = event_view_from_row(row)
     importance = normalize_importance(str(row["importance"] or analysis.get("importance") or ""))
-    if not should_include(importance, bool(row["should_push"]) or bool(row["pushed_at"]), include_medium=True):
+    if not should_include(importance, view.push or bool(row["pushed_at"]), include_medium=True):
         return None
     incremental = analysis.get("incremental_view") if isinstance(analysis.get("incremental_view"), dict) else {}
     price = analysis.get("price_impact") if isinstance(analysis.get("price_impact"), dict) else {}
@@ -496,13 +496,13 @@ def article_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple
     if source.lower() in SKIPPED_SOURCES:
         return None
     importance = normalize_importance(str(row["importance"] or ""))
-    pushed = bool(row["push_now"]) or bool(row["pushed_at"])
+    view = article_view_from_row(row)
+    pushed = view.push or bool(row["pushed_at"])
     if not should_include(importance, pushed, include_medium=False):
         return None
     gate = json_loads(str(row["gate_json"] or "{}"), {})
     if not isinstance(gate, dict):
         gate = {}
-    view = article_view_from_row(row)
     targets: list[dict[str, Any]] = []
     affected = json_loads(str(row["affected_targets_json"] or "[]"), [])
     if isinstance(affected, list):
@@ -578,13 +578,13 @@ def article_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple
 def official_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]] | None:
     source = str(row["source"] or "")
     importance = normalize_importance(str(row["importance"] or ""))
-    pushed = bool(row["should_push_now"]) or bool(row["pushed_at"])
+    view = official_view_from_row(row)
+    pushed = view.push or bool(row["pushed_at"])
     if not should_include(importance, pushed, include_medium=False):
         return None
     analysis = json_loads(str(row["analysis_json"] or "{}"), {})
     if not isinstance(analysis, dict):
         analysis = {}
-    view = official_view_from_row(row)
     incremental = analysis.get("incremental_view") if isinstance(analysis.get("incremental_view"), dict) else {}
     signal = {
         "source_table": "official_news_reviews",

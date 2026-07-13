@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from cards import div_markdown, md_escape, source_module
 from env_utils import load_env
 from feishu import send_card
-from official_news_gate import ensure_official_news_table
+from market_review_store import ensure_official_news_table
 from rss_monitor import DB_PATH
 
 

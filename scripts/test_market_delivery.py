@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 import market_delivery
 from feishu import FeishuResponse
 from market_db import init_db
+from market_item import DecisionResult, decision_result_from_payload
 from market_review_store import (
     article_review_exists,
     official_review_exists,
@@ -76,6 +77,12 @@ def content_review(action: str = "push", *, rule_hits: list[dict] | None = None,
     return review
 
 
+def required_decision(payload: dict) -> DecisionResult:
+    decision = decision_result_from_payload(payload)
+    assert decision is not None
+    return decision
+
+
 def test_archive_and_missing_webhook_are_recorded_without_sending() -> None:
     original_webhook = os.environ.pop("FEISHU_WEBHOOK", None)
     try:
@@ -84,8 +91,14 @@ def test_archive_and_missing_webhook_are_recorded_without_sending() -> None:
             init_db(db_path).close()
             archive_id = insert_event(db_path, "archive-1")
             push_id = insert_event(db_path, "push-1")
-            assert market_delivery.deliver_event(archive_id, decision_analysis("archive"), db_path) == "skipped"
-            assert market_delivery.deliver_event(push_id, decision_analysis("push"), db_path) == "skipped"
+            archive = decision_analysis("archive")
+            push = decision_analysis("push")
+            assert market_delivery.deliver_event(
+                archive_id, archive, decision=required_decision(archive), db_path=db_path
+            ) == "skipped"
+            assert market_delivery.deliver_event(
+                push_id, push, decision=required_decision(push), db_path=db_path
+            ) == "skipped"
             rows = delivery_rows(db_path)
         assert json.loads(rows[0][2])["decision_action"] == "archive"
         assert json.loads(rows[1][2])["reason"] == "FEISHU_WEBHOOK 未配置"
@@ -104,7 +117,10 @@ def test_send_failure_releases_reservation_and_records_failure() -> None:
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
             event_id = insert_event(db_path, "failed-1")
-            assert market_delivery.deliver_event(event_id, decision_analysis(), db_path) == "failed"
+            analysis = decision_analysis()
+            assert market_delivery.deliver_event(
+                event_id, analysis, decision=required_decision(analysis), db_path=db_path
+            ) == "failed"
             row = delivery_rows(db_path)[0]
         assert row[0] == "failed"
         assert row[1] == "send failed"
@@ -139,8 +155,12 @@ def test_success_confirms_rule_dedup_and_duplicate_skips_second_send() -> None:
             first_id = insert_event(db_path, "dedup-1", "高盛做多中国 AI 价值链")
             second_id = insert_event(db_path, "dedup-2", "同一报告二次传播")
             analysis = decision_analysis(rule_hits=[rule_hit])
-            assert market_delivery.deliver_event(first_id, analysis, db_path) == "sent"
-            assert market_delivery.deliver_event(second_id, analysis, db_path) == "skipped"
+            assert market_delivery.deliver_event(
+                first_id, analysis, decision=required_decision(analysis), db_path=db_path
+            ) == "sent"
+            assert market_delivery.deliver_event(
+                second_id, analysis, decision=required_decision(analysis), db_path=db_path
+            ) == "skipped"
             with sqlite3.connect(db_path) as conn:
                 dedup_status = conn.execute(
                     "SELECT status FROM rule_alert_dedup WHERE dedup_key = ?", (rule_hit["dedup_key"],)
@@ -178,6 +198,7 @@ def test_content_delivery_uses_decision_action_and_marks_legacy_rows() -> None:
                     "cls_telegraph_api",
                     article_item,
                     archive_review,
+                    decision=required_decision(archive_review),
                     db_path=db_path,
                     use_rule_dedup=False,
                 )
@@ -188,6 +209,7 @@ def test_content_delivery_uses_decision_action_and_marks_legacy_rows() -> None:
                     "cls_telegraph_api",
                     article_item,
                     push_review,
+                    decision=required_decision(push_review),
                     db_path=db_path,
                     use_rule_dedup=False,
                 )
@@ -198,6 +220,7 @@ def test_content_delivery_uses_decision_action_and_marks_legacy_rows() -> None:
                     "nvidia_blog",
                     official_item,
                     official_push,
+                    decision=required_decision(official_push),
                     analysis_lines=["核心内容：测试"],
                     db_path=db_path,
                 )
@@ -231,6 +254,7 @@ def test_reloaded_article_review_still_uses_nested_decision_action() -> None:
                 "value_directory_ib_stocks",
                 item,
                 loaded,
+                decision=required_decision(loaded),
                 db_path=db_path,
                 use_rule_dedup=False,
             )
@@ -261,13 +285,21 @@ def test_article_delivery_dedup_skips_without_changing_decision_action() -> None
                 save_article_review(conn, "jin10_rsshub_important", second_item, review)
             assert (
                 market_delivery.deliver_article_review(
-                    "cls_telegraph_api", first_item, review, db_path=db_path
+                    "cls_telegraph_api",
+                    first_item,
+                    review,
+                    decision=required_decision(review),
+                    db_path=db_path,
                 )
                 == "sent"
             )
             assert (
                 market_delivery.deliver_article_review(
-                    "jin10_rsshub_important", second_item, review, db_path=db_path
+                    "jin10_rsshub_important",
+                    second_item,
+                    review,
+                    decision=required_decision(review),
+                    db_path=db_path,
                 )
                 == "duplicate"
             )

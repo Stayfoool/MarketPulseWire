@@ -608,21 +608,6 @@ def is_mandatory_yicai_morning_brief(source: str, item: dict[str, Any]) -> bool:
     return "券商晨会观点速递" in strip_tags(str(text))
 
 
-def force_mandatory_morning_review(review: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
-    updated = dict(review)
-    updated["importance"] = "high"
-    updated["push_now"] = True
-    updated["mandatory_push"] = "yicai_morning_brief"
-    updated["incremental_classification"] = str(updated.get("incremental_classification") or "晨会观点汇总")
-    updated["market_impact"] = str(updated.get("market_impact") or "第一财经券商晨会观点速递为每日必读信息源，按用户规则固定推送。")
-    updated["daily_summary"] = str(updated.get("daily_summary") or item.get("title") or "券商晨会观点速递")
-    reason = str(updated.get("reason") or "").strip()
-    note = "强制推送规则：第一财经“券商晨会观点速递”为每日必发晨会源，即使部分内容只是观点汇总，也固定推送供人工筛选。"
-    if note not in reason:
-        updated["reason"] = f"{reason}\n{note}".strip()
-    return updated
-
-
 def notify_item(source: str, item: dict[str, Any]) -> None:
     enriched = enrich_item(source, item)
     mandatory_morning = is_mandatory_yicai_morning_brief(source, enriched)

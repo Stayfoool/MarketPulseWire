@@ -3,8 +3,7 @@
 
 from __future__ import annotations
 
-import article_gate
-import official_news_gate
+import market_content_adapter
 
 
 def assert_contains(text: str, expected: str) -> None:
@@ -13,8 +12,8 @@ def assert_contains(text: str, expected: str) -> None:
 
 
 def main() -> int:
-    article_prompt = article_gate.GATE_SYSTEM_PROMPT + "\n" + article_gate.GATE_USER_PROMPT
-    official_prompt = official_news_gate.GATE_SYSTEM_PROMPT + "\n" + official_news_gate.GATE_USER_PROMPT
+    article_prompt = market_content_adapter.GATE_SYSTEM_PROMPT + "\n" + market_content_adapter.GATE_USER_PROMPT
+    official_prompt = market_content_adapter.OFFICIAL_SYSTEM_PROMPT + "\n" + market_content_adapter.OFFICIAL_USER_PROMPT
 
     for prompt in (article_prompt, official_prompt):
         assert_contains(prompt, "星际之门/Stargate-like")

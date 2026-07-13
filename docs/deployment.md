@@ -120,27 +120,14 @@ The installer also copies the production collector units:
 - `surveil-news-collector.service`
 - `surveil-news-collector.timer`
 
-In production mode all general collectors construct `NormalizedMarketItem` and
-call `process_market_item(...)`, while preserving the compatible
-`article_reviews`, `official_news_reviews`, and `events/event_analyses` stores.
-The global runtime switch is configured from the server Web panel:
-
-```bash
-SURVEIL_MARKET_FLOW_DIRECT_PATH=1
-```
-
-`SURVEIL_MARKET_FLOW_DIRECT_PATH` atomically selects one route for research,
-news-media, official-company, Sina flash/portfolio news, iFinD notices, and the
-ValueList item after its private browser/OCR enrichment step.
-Use `1` for the all-source direct route; set it to `0` only for an atomic rollback
-through the compatibility wrappers. `SURVEIL_CONTENT_DIRECT_PATH` and
-`SURVEIL_EVENT_DIRECT_PATH` are read-only compatibility aliases for one release
-when the new variable is absent. If their values conflict, all general sources
-resolve to compatibility mode; they can no longer create a mixed runtime state.
-X/Serenity is the deliberate independent route and does not use this switch.
-`value_directory_monitor` keeps an independent Playwright/OCR collection boundary,
-but its final decision, compatible review write, dedup, and delivery use
-`process_market_item(...)` and therefore follow the same switch.
+All general collectors construct `NormalizedMarketItem` and call
+`process_market_item(...)`, while preserving the existing `article_reviews`,
+`official_news_reviews`, and `events/event_analyses` stores. The former
+direct/compat runtime switch and compatibility wrappers have been removed; rollback
+now uses the normal Git/PR/deployment process instead of selecting a second runtime.
+X/Serenity remains the deliberate independent route. `value_directory_monitor`
+keeps its private Playwright/OCR collection boundary, but its final decision,
+compatible review write, dedup and delivery use the unified runtime.
 
 When changing settings programmatically on the server, invoke `settings_store`
 as the `surveil` service user. Do not write `/opt/surveil/.env` as root, because

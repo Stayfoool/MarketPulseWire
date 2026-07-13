@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
@@ -25,8 +24,6 @@ from market_review_store import article_item_id, article_review_exists, official
 from source_profiles import runtime_source_profile
 
 
-DIRECT_PATH_ENV = "SURVEIL_MARKET_FLOW_DIRECT_PATH"
-LEGACY_DIRECT_PATH_ENVS = ("SURVEIL_CONTENT_DIRECT_PATH", "SURVEIL_EVENT_DIRECT_PATH")
 StoreKind = Literal["article", "official", "event"]
 
 EVENT_SOURCE_CONTEXT: dict[str, tuple[str, str, str]] = {
@@ -55,28 +52,6 @@ class MarketItemProcessingError(RuntimeError):
     def __init__(self, message: str, outcome: MarketProcessOutcome) -> None:
         super().__init__(message)
         self.outcome = outcome
-
-
-def _env_flag(value: str) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def market_flow_direct_path_enabled() -> bool:
-    """Resolve one global route; conflicting legacy aliases fall back together."""
-    explicit = os.getenv(DIRECT_PATH_ENV)
-    if explicit is not None and explicit.strip():
-        return _env_flag(explicit)
-    legacy = [os.getenv(key) for key in LEGACY_DIRECT_PATH_ENVS]
-    configured = [_env_flag(value) for value in legacy if value is not None and value.strip()]
-    if not configured:
-        return False
-    if all(value == configured[0] for value in configured):
-        return configured[0]
-    return False
-
-
-def runtime_path_name() -> str:
-    return "direct" if market_flow_direct_path_enabled() else "compat"
 
 
 def is_official_news_source(source: str) -> bool:
@@ -137,12 +112,9 @@ def normalize_market_item(
 
 
 def _selected_module(store_kind: StoreKind) -> ModuleType:
-    direct = market_flow_direct_path_enabled()
     if store_kind == "event":
-        return importlib.import_module("market_event_adapter" if direct else "event_pipeline")
-    if direct:
-        return importlib.import_module("market_content_adapter")
-    return importlib.import_module("official_news_gate" if store_kind == "official" else "article_gate")
+        return importlib.import_module("market_event_adapter")
+    return importlib.import_module("market_content_adapter")
 
 
 def _interpretation_from_payload(payload: dict[str, Any]) -> InterpretationResult:
@@ -168,22 +140,32 @@ def _flow_result(
     storage_ref: dict[str, Any],
     *,
     default_action: str = "archive",
+    missing_is_contract_error: bool = True,
 ) -> MarketFlowResult:
     decision = decision_result_from_payload(payload)
     if decision is None:
-        push = bool(payload.get("push_now") or payload.get("should_push_now"))
+        reason = (
+            "缺少统一 DecisionResult，已按关闭式策略禁止推送。"
+            if missing_is_contract_error
+            else "条目尚未进入决策阶段。"
+        )
         decision = DecisionResult(
-            action="push" if push else default_action,
+            action=default_action,
             importance=payload.get("importance") or "unknown",
-            reason=str(payload.get("reason") or ""),
-            brief_reason=str(payload.get("brief_reason") or payload.get("reason") or ""),
+            reason=reason,
+            brief_reason=reason,
+            audit_json=(
+                {"contract_error": "missing_decision_result"}
+                if missing_is_contract_error
+                else {"technical_action": default_action}
+            ),
         )
     return MarketFlowResult(
         item=item,
         decision=decision,
         interpretation=_interpretation_from_payload(payload),
         storage_ref=storage_ref,
-        audit_json={"runtime_path": runtime_path_name()},
+        audit_json={"runtime_path": "unified"},
     )
 
 
@@ -236,13 +218,17 @@ def _process_content_item(
         "source": source,
         "item_id": item_id,
     }
+    flow_result = _flow_result(item, payload, storage_ref)
     status = "not_requested"
     if deliver:
-        if store_kind == "official":
+        if flow_result.decision.audit_json.get("contract_error") == "missing_decision_result":
+            status = "missing_decision"
+        elif store_kind == "official":
             status = deliver_official_review(
                 source,
                 raw_item,
                 payload,
+                decision=flow_result.decision,
                 analysis_lines=module.analysis_lines_from_review(payload),
                 db_path=db_path,
             )
@@ -251,12 +237,13 @@ def _process_content_item(
                 source,
                 raw_item,
                 payload,
+                decision=flow_result.decision,
                 db_path=db_path,
                 analysis_lines_prefix=module.gate_lines(payload),
                 use_rule_dedup=use_rule_dedup,
             )
     return MarketProcessOutcome(
-        flow_result=_flow_result(item, payload, storage_ref),
+        flow_result=flow_result,
         inserted=inserted,
         storage_ref=storage_ref,
         payload=payload,
@@ -280,7 +267,7 @@ def _process_event_item(
     empty_payload: dict[str, Any] = {}
     if not inserted:
         return MarketProcessOutcome(
-            flow_result=_flow_result(item, empty_payload, storage_ref),
+            flow_result=_flow_result(item, empty_payload, storage_ref, missing_is_contract_error=False),
             inserted=False,
             storage_ref=storage_ref,
             delivery_status="existing",
@@ -292,13 +279,14 @@ def _process_event_item(
                 empty_payload,
                 storage_ref,
                 default_action="baseline" if baseline_only else "archive",
+                missing_is_contract_error=False,
             ),
             inserted=True,
             storage_ref=storage_ref,
             delivery_status="baseline" if baseline_only else "not_analyzed",
         )
     partial = MarketProcessOutcome(
-        flow_result=_flow_result(item, empty_payload, storage_ref),
+        flow_result=_flow_result(item, empty_payload, storage_ref, missing_is_contract_error=False),
         inserted=True,
         storage_ref=storage_ref,
     )
@@ -306,9 +294,10 @@ def _process_event_item(
         analysis = module.analyze_event(event_id, task=task, db_path=db_path)
     except Exception as exc:  # noqa: BLE001 - preserve the inserted event reference for batch recovery
         raise MarketItemProcessingError(str(exc), partial) from exc
+    flow_result = _flow_result(item, analysis, storage_ref)
     status = module.maybe_deliver_event(event_id, analysis, db_path=db_path) if deliver else "not_requested"
     return MarketProcessOutcome(
-        flow_result=_flow_result(item, analysis, storage_ref),
+        flow_result=flow_result,
         inserted=True,
         storage_ref=storage_ref,
         payload=analysis,

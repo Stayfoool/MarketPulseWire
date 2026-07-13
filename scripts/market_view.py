@@ -117,6 +117,12 @@ def _payload_fields(payload: dict[str, Any], fallback_targets: list[str] | None 
     }
 
 
+def _push_from_decision_or_history(action: str, legacy_value: Any, pushed_at: Any = "") -> bool:
+    if action:
+        return action == "push"
+    return bool(legacy_value or pushed_at)
+
+
 def article_view_from_row(row: Any) -> MarketViewItem:
     gate = _json_loads(_row_value(row, "gate_json"), {})
     if not isinstance(gate, dict):
@@ -139,7 +145,11 @@ def article_view_from_row(row: Any) -> MarketViewItem:
         pushed_at=str(_row_value(row, "pushed_at") or ""),
         importance=str(_row_value(row, "importance") or ""),
         classification=str(_row_value(row, "incremental_classification") or ""),
-        push=bool(_row_value(row, "push_now")),
+        push=_push_from_decision_or_history(
+            fields["decision_action"],
+            _row_value(row, "push_now"),
+            _row_value(row, "pushed_at"),
+        ),
         delivery_status="sent" if _row_value(row, "pushed_at") else "daily",
         decision_action=fields["decision_action"],
         decision_reason=fields["decision_reason"],
@@ -170,7 +180,11 @@ def official_view_from_row(row: Any) -> MarketViewItem:
         pushed_at=str(_row_value(row, "pushed_at") or ""),
         importance=str(_row_value(row, "importance") or ""),
         classification="",
-        push=bool(_row_value(row, "should_push_now") or _row_value(row, "pushed_at")),
+        push=_push_from_decision_or_history(
+            fields["decision_action"],
+            _row_value(row, "should_push_now"),
+            _row_value(row, "pushed_at"),
+        ),
         delivery_status="sent" if _row_value(row, "pushed_at") else "daily",
         decision_action=fields["decision_action"],
         decision_reason=fields["decision_reason"],
@@ -208,7 +222,7 @@ def event_view_from_row(row: Any) -> MarketViewItem:
         pushed_at=pushed_at,
         importance=str(_row_value(row, "importance") or analysis.get("importance") or ""),
         classification=str(_row_value(row, "classification") or ""),
-        push=bool(_row_value(row, "should_push") or pushed_at),
+        push=_push_from_decision_or_history(fields["decision_action"], _row_value(row, "should_push"), pushed_at),
         delivery_status=delivery_status or ("sent" if pushed_at else ""),
         baseline_only=bool(_row_value(row, "baseline_only")),
         decision_action=fields["decision_action"],

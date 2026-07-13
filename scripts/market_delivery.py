@@ -18,7 +18,7 @@ from feishu import send_card, send_card_with_response
 from llm_analysis import format_llm_analysis
 from market_card_view import card_targets, decision_reason, interpretation_core, interpretation_reason
 from market_db import DEFAULT_DB_PATH
-from market_item import decision_result_from_payload
+from market_item import DecisionResult
 from market_review_store import (
     article_item_id,
     event_row_by_id,
@@ -154,14 +154,13 @@ def deliver_article_review(
     item: dict[str, Any],
     review: dict[str, Any],
     *,
+    decision: DecisionResult,
     db_path: Path = DEFAULT_DB_PATH,
     analysis_lines_prefix: list[str] | None = None,
     use_rule_dedup: bool = True,
 ) -> str:
     """Deliver a pre-decided article review and update compatibility state."""
-    decision = decision_result_from_payload(review)
-    should_push = decision.should_push if decision is not None else bool(review.get("push_now"))
-    if not should_push or review.get("pushed_at"):
+    if not decision.should_push or review.get("pushed_at"):
         return "skipped"
     item_id = article_item_id(item)
     reservation: dict[str, Any] = {}
@@ -198,13 +197,12 @@ def deliver_official_review(
     item: dict[str, Any],
     review: dict[str, Any],
     *,
+    decision: DecisionResult,
     analysis_lines: list[str],
     db_path: Path = DEFAULT_DB_PATH,
 ) -> str:
     """Deliver a pre-decided official-news review and update compatibility state."""
-    decision = decision_result_from_payload(review)
-    should_push = decision.should_push if decision is not None else bool(review.get("should_push_now"))
-    if not should_push or review.get("pushed_at"):
+    if not decision.should_push or review.get("pushed_at"):
         return "skipped"
     prepared = dict(item)
     prepared["article_review"] = review
@@ -257,19 +255,23 @@ def simple_event_card(
     }
 
 
-def deliver_event(event_id: int, analysis: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> str:
+def deliver_event(
+    event_id: int,
+    analysis: dict[str, Any],
+    *,
+    decision: DecisionResult,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> str:
     """Execute a precomputed event decision and persist its delivery outcome."""
     event_row = event_row_by_id(event_id, db_path)
     if not event_row:
         raise RuntimeError(f"事件不存在：{event_id}")
-    decision = decision_result_from_payload(analysis)
-    if decision is None or not decision.should_push:
-        action = decision.action if decision else "legacy_skip"
+    if not decision.should_push:
         record_delivery(
             event_id,
             "feishu",
             "skipped",
-            {"reason": "DecisionResult.action 不是 push", "decision_action": action},
+            {"reason": "DecisionResult.action 不是 push", "decision_action": decision.action},
             db_path=db_path,
         )
         return "skipped"

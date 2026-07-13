@@ -8,10 +8,9 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from article_gate import gate_lines
+from market_content_adapter import gate_lines
 from market_db import init_db
-from official_news_gate import review_exists as official_review_exists
-from official_news_gate import save_review as save_official_review
+from market_review_store import official_review_exists, save_official_review
 import skeptic_evaluator
 from skeptic_evaluator import apply_skeptic_review, history_candidates
 
@@ -350,6 +349,47 @@ def test_attributed_research_rule_ignores_llm_only_downgrade() -> None:
         assert updated["push_now"] is True
         assert updated["importance"] == "high"
         assert updated["skeptic"]["llm_downgrade_ignored"] is True
+
+
+def test_any_deterministic_push_ignores_llm_only_downgrade() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "surveil.sqlite3"
+        conn = init_db(path)
+        original_llm = skeptic_evaluator.llm_skeptic_review
+
+        def fake_llm(**_kwargs):
+            return {
+                "skeptic_verdict": "block",
+                "reason": "模型建议阻断。",
+                "final_push_suggestion": "ignore",
+                "mode": "llm",
+            }
+
+        review = {
+            "importance": "high",
+            "push_now": True,
+            "reason": "确定性规则命中。",
+            "raw": {"_decision_rule_ids": ["macro_policy_line"]},
+        }
+        item = {
+            "id": "deterministic-1",
+            "title": "美国 CPI 大幅低于预期，美债收益率下跌",
+            "published_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            skeptic_evaluator.llm_skeptic_review = fake_llm
+            updated = apply_skeptic_review(
+                conn,
+                source="yicai_brief",
+                item=item,
+                review=review,
+                push_key="push_now",
+            )
+        finally:
+            skeptic_evaluator.llm_skeptic_review = original_llm
+        assert updated["push_now"] is True
+        assert updated["importance"] == "high"
+        assert updated["skeptic"]["llm_downgrade_ignored"] is True
         assert updated["skeptic"]["final_push_suggestion"] == "push_now"
         conn.close()
 
@@ -363,6 +403,7 @@ def main() -> int:
     test_hbm_hard_variable_override_keeps_push_now()
     test_nvidia_ai_platform_delay_override_keeps_push_now()
     test_attributed_research_rule_ignores_llm_only_downgrade()
+    test_any_deterministic_push_ignores_llm_only_downgrade()
     print("skeptic evaluator tests OK")
     return 0
 

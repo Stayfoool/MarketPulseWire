@@ -8,21 +8,9 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import article_gate
+import market_content_adapter
 import market_review_store
-import official_news_gate
 from market_db import init_db
-
-
-def test_gate_modules_reexport_store_functions() -> None:
-    assert article_gate.article_item_id is market_review_store.article_item_id
-    assert article_gate.ensure_article_reviews_table is market_review_store.ensure_article_reviews_table
-    assert article_gate.review_exists is market_review_store.article_review_exists
-    assert article_gate.mark_pushed is market_review_store.mark_article_pushed
-
-    assert official_news_gate.ensure_official_news_table is market_review_store.ensure_official_news_table
-    assert official_news_gate.review_exists is market_review_store.official_review_exists
-    assert official_news_gate.mark_pushed is market_review_store.mark_official_pushed
 
 
 def test_article_review_store_round_trip_and_mark_pushed() -> None:
@@ -213,7 +201,7 @@ def test_event_store_round_trip_analysis_delivery_and_holdings() -> None:
         assert json.loads(delivery[2]) == {"title": event["title"]}
 
 
-def test_article_gate_save_uses_normalized_market_item_audit() -> None:
+def test_article_adapter_save_uses_normalized_market_item_audit() -> None:
     conn = sqlite3.connect(":memory:")
     try:
         item = {
@@ -232,7 +220,7 @@ def test_article_gate_save_uses_normalized_market_item_audit() -> None:
             "confidence": "低",
             "raw": {},
         }
-        article_gate.save_review(conn, "cls_telegraph_api", item, review)
+        market_content_adapter.save_review(conn, "cls_telegraph_api", item, review)
         row = conn.execute(
             "SELECT gate_json FROM article_reviews WHERE source = ? AND item_id = ?",
             ("cls_telegraph_api", "cls-ai-theme"),
@@ -247,7 +235,7 @@ def test_article_gate_save_uses_normalized_market_item_audit() -> None:
         conn.close()
 
 
-def test_official_gate_save_uses_normalized_market_item_audit() -> None:
+def test_official_adapter_save_uses_normalized_market_item_audit() -> None:
     conn = sqlite3.connect(":memory:")
     try:
         item = {
@@ -264,7 +252,7 @@ def test_official_gate_save_uses_normalized_market_item_audit() -> None:
             "daily_summary": item["title"],
             "analysis": {"core_content": item["summary"]},
         }
-        official_news_gate.save_review(conn, "nvidia_blog", item, review)
+        market_content_adapter.save_official_review(conn, "nvidia_blog", item, review)
         row = conn.execute(
             "SELECT analysis_json FROM official_news_reviews WHERE source = ? AND item_id = ?",
             ("nvidia_blog", "nvidia-platform"),
@@ -280,12 +268,11 @@ def test_official_gate_save_uses_normalized_market_item_audit() -> None:
 
 
 def main() -> int:
-    test_gate_modules_reexport_store_functions()
     test_article_review_store_round_trip_and_mark_pushed()
     test_official_review_store_round_trip_and_mark_pushed()
     test_event_store_round_trip_analysis_delivery_and_holdings()
-    test_article_gate_save_uses_normalized_market_item_audit()
-    test_official_gate_save_uses_normalized_market_item_audit()
+    test_article_adapter_save_uses_normalized_market_item_audit()
+    test_official_adapter_save_uses_normalized_market_item_audit()
     print("market review store tests OK")
     return 0
 

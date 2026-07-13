@@ -10,10 +10,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from article_gate import ensure_article_reviews_table
 from cards import div_markdown, md_escape
 from env_utils import load_env
 from feishu import send_card
+from market_review_store import ensure_article_reviews_table
 from rss_monitor import DB_PATH
 
 

@@ -8,22 +8,10 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import event_pipeline
 import market_event_adapter
-import market_event_flow
 import market_flow
 from market_db import init_db
 from market_item import InterpretationResult
-
-
-def test_event_compatibility_modules_are_thin_exports() -> None:
-    assert event_pipeline.analyze_event.__module__ == "market_event_adapter"
-    assert market_event_flow.analyze_event.__module__ == "market_event_adapter"
-    assert "from market_event_adapter import" in Path(market_event_flow.__file__).read_text(encoding="utf-8")
-    pipeline_source = Path(event_pipeline.__file__).read_text(encoding="utf-8")
-    assert "from decision_engine import" not in pipeline_source
-    assert "from market_interpreter import" not in pipeline_source
-    assert "def analyze_event" not in pipeline_source
 
 
 def test_decision_result_action_precedes_legacy_push_fields() -> None:
@@ -37,16 +25,16 @@ def test_decision_result_action_precedes_legacy_push_fields() -> None:
         "push_decision": {"should_push": False},
         "_decision_result": {"action": "push", "importance": "high"},
     }
-    assert event_pipeline.should_push_analysis(archive) is False
-    assert event_pipeline.analysis_record_fields(archive)[4] == 0
-    assert event_pipeline.should_push_analysis(push) is True
-    assert event_pipeline.analysis_record_fields(push)[4] == 1
+    assert market_event_adapter.should_push_analysis(archive) is False
+    assert market_event_adapter.analysis_record_fields(archive)[4] == 0
+    assert market_event_adapter.should_push_analysis(push) is True
+    assert market_event_adapter.analysis_record_fields(push)[4] == 1
 
 
-def test_legacy_analysis_without_decision_result_still_uses_compatibility_helper() -> None:
-    assert event_pipeline.should_push_analysis(
+def test_legacy_analysis_without_decision_result_cannot_push() -> None:
+    assert market_event_adapter.should_push_analysis(
         {"importance": "medium", "push_decision": {"should_push": True}}
-    ) is True
+    ) is False
 
 
 def test_analyze_event_writes_interpretation_result_and_legacy_fields() -> None:
@@ -67,7 +55,7 @@ def test_analyze_event_writes_interpretation_result_and_legacy_fields() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
-        event_id, _ = event_pipeline.upsert_event(
+        event_id, _ = market_event_adapter.upsert_event(
             {
                 "source": "sina_flash",
                 "source_event_id": "macro-1",
@@ -82,7 +70,7 @@ def test_analyze_event_writes_interpretation_result_and_legacy_fields() -> None:
         )
         try:
             market_flow.interpret_market_item = fake_interpret
-            analysis = event_pipeline.analyze_event(event_id, db_path=db_path)
+            analysis = market_event_adapter.analyze_event(event_id, db_path=db_path)
         finally:
             market_flow.interpret_market_item = original
 
@@ -107,7 +95,7 @@ def test_event_entry_applies_international_bank_theme_decision() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
-        analysis = event_pipeline.apply_event_rules_to_analysis(
+        analysis = market_event_adapter.apply_event_rules_to_analysis(
             {
                 "source": "sina_flash",
                 "event_type": "flash_news",
@@ -148,7 +136,7 @@ def test_event_entry_applies_direct_holding_rating_target_decision() -> None:
                     "2026-07-12T00:00:00+00:00",
                 ),
             )
-        analysis = event_pipeline.apply_event_rules_to_analysis(
+        analysis = market_event_adapter.apply_event_rules_to_analysis(
             {
                 "source": "sina_stock_news",
                 "event_type": "portfolio_news",
@@ -168,9 +156,8 @@ def test_event_entry_applies_direct_holding_rating_target_decision() -> None:
 
 
 def main() -> int:
-    test_event_compatibility_modules_are_thin_exports()
     test_decision_result_action_precedes_legacy_push_fields()
-    test_legacy_analysis_without_decision_result_still_uses_compatibility_helper()
+    test_legacy_analysis_without_decision_result_cannot_push()
     test_analyze_event_writes_interpretation_result_and_legacy_fields()
     test_event_entry_applies_international_bank_theme_decision()
     test_event_entry_applies_direct_holding_rating_target_decision()

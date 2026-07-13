@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -86,13 +85,11 @@ def run_item(item: dict, source_id: str, db_path: Path):
 
 
 def test_value_directory_uses_unified_store_decision_and_delivery() -> None:
-    original_direct = os.environ.get("SURVEIL_MARKET_FLOW_DIRECT_PATH")
     original_holdings = market_content_adapter.load_enabled_holdings_for_rules
     original_interpreter = market_flow.interpret_market_item
     original_send = market_delivery.send_card
     sent_cards: list[dict] = []
     try:
-        os.environ["SURVEIL_MARKET_FLOW_DIRECT_PATH"] = "1"
         market_content_adapter.load_enabled_holdings_for_rules = lambda: []
         market_flow.interpret_market_item = lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("ValueList source enrichment must not invoke a second LLM")
@@ -147,10 +144,6 @@ def test_value_directory_uses_unified_store_decision_and_delivery() -> None:
         market_content_adapter.load_enabled_holdings_for_rules = original_holdings
         market_flow.interpret_market_item = original_interpreter
         market_delivery.send_card = original_send
-        if original_direct is None:
-            os.environ.pop("SURVEIL_MARKET_FLOW_DIRECT_PATH", None)
-        else:
-            os.environ["SURVEIL_MARKET_FLOW_DIRECT_PATH"] = original_direct
 
     assert enriched_outcome.flow_result.decision.action == "push"
     assert enriched_outcome.delivery_status == "sent"

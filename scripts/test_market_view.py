@@ -45,6 +45,7 @@ def test_article_view_prefers_unified_interpretation_and_decision_metadata() -> 
     web = view.to_web_row()
     assert web["summary"] == "统一解读：Rubin 强调液冷与高速互联。"
     assert web["decision_action"] == "push"
+    assert web["push"] is True
     assert "液冷" in web["related_targets"]
     assert "AI/半导体产业链" in web["related_targets"]
 
@@ -115,6 +116,33 @@ def test_official_and_event_views_read_prefixed_decision_metadata() -> None:
     assert event.related_targets == ["A股风险偏好", "成长股估值", "宏观流动性/美联储政策"]
 
 
+def test_unified_action_overrides_conflicting_legacy_view_flags() -> None:
+    official = official_view_from_row(
+        {
+            "source": "nvidia_blog",
+            "item_id": "archive-conflict",
+            "title": "Archive conflict",
+            "importance": "high",
+            "should_push_now": 1,
+            "pushed_at": "",
+            "analysis_json": json.dumps({"_decision_result": {"action": "archive", "importance": "high"}}),
+        }
+    )
+    event = event_view_from_row(
+        {
+            "id": 8,
+            "source": "sina_flash",
+            "title": "Event conflict",
+            "importance": "high",
+            "should_push": 1,
+            "pushed_at": "",
+            "analysis_json": json.dumps({"_decision_result": {"action": "ignore", "importance": "high"}}),
+        }
+    )
+    assert official.push is False
+    assert event.push is False
+
+
 def test_article_signal_extraction_uses_market_view_thesis_and_targets() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -176,6 +204,7 @@ def test_article_signal_extraction_uses_market_view_thesis_and_targets() -> None
 def main() -> int:
     test_article_view_prefers_unified_interpretation_and_decision_metadata()
     test_official_and_event_views_read_prefixed_decision_metadata()
+    test_unified_action_overrides_conflicting_legacy_view_flags()
     test_article_signal_extraction_uses_market_view_thesis_and_targets()
     print("market view checks passed")
     return 0

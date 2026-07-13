@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from article_gate import ensure_article_reviews_table
+from market_review_store import ensure_article_reviews_table
 from db_utils import connect_sqlite
 from rule_center import (
     RULE_BY_ID,

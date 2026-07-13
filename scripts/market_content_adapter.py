@@ -362,15 +362,18 @@ def process_article_review(
         review=review,
         push_key="push_now",
     )
+    hard_variable_protected = bool(review.get("industry_hard_variable_override"))
+    blocked = bool(review.get("skeptic_blocked"))
+    downgraded = bool(review.get("skeptic_downgraded")) and not hard_variable_protected
     flow_result = finalize_market_flow_result(
         flow_result,
-        final_push=bool(review.get("push_now")),
+        final_push=False if blocked or downgraded else None,
         importance=str(review.get("importance") or ""),
         reason=str(review.get("reason") or ""),
         brief_reason=str(review.get("brief_reason") or review.get("reason") or ""),
         skeptic=dict(review.get("skeptic") or {}),
-        downgraded=bool(review.get("skeptic_downgraded")),
-        blocked=bool(review.get("skeptic_blocked")),
+        downgraded=downgraded,
+        blocked=blocked,
     )
     review = _attach_article_flow_audit(review, flow_result)
     review = attach_decision_result_to_article_review(flow_result.decision, review)
@@ -490,15 +493,18 @@ def process_official_review(
         review=review,
         push_key="should_push_now",
     )
+    hard_variable_protected = bool(review.get("industry_hard_variable_override"))
+    blocked = bool(review.get("skeptic_blocked"))
+    downgraded = bool(review.get("skeptic_downgraded")) and not hard_variable_protected
     flow_result = finalize_market_flow_result(
         flow_result,
-        final_push=bool(review.get("should_push_now")),
+        final_push=False if blocked or downgraded else None,
         importance=str(review.get("importance") or ""),
         reason=str(review.get("reason") or ""),
         brief_reason=str(review.get("brief_reason") or review.get("reason") or ""),
         skeptic=dict(review.get("skeptic") or {}),
-        downgraded=bool(review.get("skeptic_downgraded")),
-        blocked=bool(review.get("skeptic_blocked")),
+        downgraded=downgraded,
+        blocked=blocked,
     )
     review = _attach_official_flow_audit(review, flow_result)
     review = attach_decision_result_to_official_review(flow_result.decision, review)

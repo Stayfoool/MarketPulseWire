@@ -12,10 +12,8 @@ from market_runtime import (
     MarketItemProcessingError,
     MarketProcessOutcome,
     is_official_news_source,
-    market_flow_direct_path_enabled,
     normalize_market_item,
     process_market_item,
-    runtime_path_name,
 )
 
 
@@ -136,9 +134,8 @@ def finalize_market_flow_result(
     """Return a result whose DecisionResult reflects deterministic post-decision controls."""
     initial = result.decision
     action = initial.action
-    if final_push is True:
-        action = "push"
-    elif final_push is False and initial.should_push:
+    promotion_rejected = final_push is True and not initial.should_push
+    if final_push is False and initial.should_push:
         action = "ignore" if blocked else "daily" if downgraded else "archive"
     audit = dict(initial.audit_json)
     audit["market_flow_finalization"] = {
@@ -147,6 +144,7 @@ def finalize_market_flow_result(
         "final_push": final_push,
         "downgraded": downgraded,
         "blocked": blocked,
+        "promotion_rejected": promotion_rejected,
     }
     final_decision = DecisionResult(
         action=action,
