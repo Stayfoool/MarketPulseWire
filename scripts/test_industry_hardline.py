@@ -27,7 +27,7 @@ def test_same_topic_and_hard_variable_match_across_sources() -> None:
     )
     rules = [industry_topic_hard_variable_rule(source, SEMI_EQUIPMENT_CASE) for source in sources]
     assert all(rule is not None for rule in rules)
-    assert {tuple(rule["claim_topics"]) for rule in rules if rule} == {("半导体", "半导体设备/材料")}
+    assert {tuple(rule["claim_topics"]) for rule in rules if rule} == {("半导体设备/材料",)}
     assert {tuple(rule["hard_variable_types"]) for rule in rules if rule} == {("预测调整",)}
 
 
@@ -61,6 +61,46 @@ def test_topic_and_hard_variable_are_both_required() -> None:
     hard_variable_only = {"title": "Company raises 2027 revenue forecast by 20%"}
     assert topic_hard_variable_match(topic_only) == {}
     assert topic_hard_variable_match(hard_variable_only) == {}
+
+
+def test_topics_and_hard_variables_cannot_be_combined_across_sections() -> None:
+    item = {
+        "title": "菜鸟战略落定：国内供应链划归阿里电商",
+        "full_text": (
+            "跨境订单团队划转至阿里电商事业群。<br />"
+            "页面推荐：AI、半导体、存储和机器人行业周报。"
+        ),
+    }
+    assert topic_hard_variable_match(item) == {}
+
+
+def test_quantified_data_center_investment_is_a_hard_variable() -> None:
+    item = {
+        "title": "Meta commits an additional $40 billion investment in its Louisiana data center campus."
+    }
+    rule = industry_topic_hard_variable_rule("jin10_rsshub_important", item)
+    assert rule is not None
+    assert "AI基础设施" in rule["claim_topics"]
+    assert "资本开支/投资" in rule["hard_variable_types"]
+    assert "$40 billion" in rule["quantified_evidence"]
+
+
+def test_investor_question_is_not_treated_as_an_investment_hard_variable() -> None:
+    item = {
+        "title": "公司参与字节、阿里全球数据中心建设吗？锐捷网络回应",
+        "summary": "有投资者向锐捷网络（301165.SZ）提问，公司有参与全球数据中心建设吗？",
+    }
+    assert topic_hard_variable_match(item) == {}
+
+
+def test_expansion_before_capacity_is_detected_in_the_same_sentence() -> None:
+    item = {
+        "title": "TSMC plans a 30x expansion of photonic integrated circuit capacity to 25,000 wafers by 2028."
+    }
+    rule = industry_topic_hard_variable_rule("news_media", item)
+    assert rule is not None
+    assert "光互联/CPO" in rule["claim_topics"]
+    assert "产能/产量" in rule["hard_variable_types"]
 
 
 def test_unquantified_roadmap_shift_is_a_hard_variable() -> None:
@@ -111,6 +151,10 @@ def main() -> int:
     test_review_override_is_content_based()
     test_source_identity_without_hard_variable_does_not_match()
     test_topic_and_hard_variable_are_both_required()
+    test_topics_and_hard_variables_cannot_be_combined_across_sections()
+    test_quantified_data_center_investment_is_a_hard_variable()
+    test_investor_question_is_not_treated_as_an_investment_hard_variable()
+    test_expansion_before_capacity_is_detected_in_the_same_sentence()
     test_unquantified_roadmap_shift_is_a_hard_variable()
     test_multi_topic_recap_preserves_multiple_hard_variables()
     test_explain_hardline_describes_content_not_source_family()
