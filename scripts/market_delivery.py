@@ -18,6 +18,7 @@ from feishu import send_card, send_card_with_response
 from llm_analysis import format_llm_analysis
 from market_card_view import card_targets, decision_reason, interpretation_core, interpretation_reason
 from market_db import DEFAULT_DB_PATH
+from macro_event_dedup import MACRO_DEDUP_RULE_IDS, macro_event_dedup_hit
 from market_item import DecisionResult
 from market_move_dedup import MARKET_MOVE_RULE_ID, intraday_market_move_dedup_hit
 from market_review_store import (
@@ -136,9 +137,15 @@ def _duplicate_article_review(
     db_path: Path,
 ) -> None:
     first = reservation.get("first") or {}
-    if reservation.get("rule_id") == MARKET_MOVE_RULE_ID:
+    rule_id = str(reservation.get("rule_id") or "")
+    if rule_id == MARKET_MOVE_RULE_ID:
         note = (
             "同一盘中行情事件跨来源去重：已由 "
+            f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
+        )
+    elif rule_id in MACRO_DEDUP_RULE_IDS:
+        note = (
+            "同一美国宏观数据事件跨来源去重：已由 "
             f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
         )
     else:
@@ -171,7 +178,7 @@ def _reserve_delivery_alert(
         item_id=item_id,
         title=str(item.get("title") or ""),
         published_at=str(item.get("published_at") or ""),
-        delivery_hit=intraday_market_move_dedup_hit(item, decision),
+        delivery_hit=macro_event_dedup_hit(item, decision) or intraday_market_move_dedup_hit(item, decision),
         db_path=db_path,
     )
 
@@ -319,22 +326,34 @@ def deliver_event(
     )
     if reservation.get("duplicate"):
         first = reservation.get("first") or {}
-        market_move_duplicate = reservation.get("rule_id") == MARKET_MOVE_RULE_ID
+        rule_id = str(reservation.get("rule_id") or "")
+        market_move_duplicate = rule_id == MARKET_MOVE_RULE_ID
+        macro_duplicate = rule_id in MACRO_DEDUP_RULE_IDS
+        duplicate_status = market_move_duplicate or macro_duplicate
+        if market_move_duplicate:
+            reason = "同一盘中行情事件跨来源去重"
+            dedup_kind = "intraday_market_move"
+        elif macro_duplicate:
+            reason = "同一美国宏观数据事件跨来源去重"
+            dedup_kind = rule_id
+        else:
+            reason = "同一规则观点跨来源去重"
+            dedup_kind = "rule_alert"
         record_delivery(
             event_id,
             "feishu",
-            "duplicate" if market_move_duplicate else "skipped",
+            "duplicate" if duplicate_status else "skipped",
             {
-                "reason": "同一盘中行情事件跨来源去重" if market_move_duplicate else "同一规则观点跨来源去重",
+                "reason": reason,
                 "first_source": first.get("source"),
                 "first_item_id": first.get("item_id"),
                 "first_published_at": first.get("published_at"),
                 "dedup_key": reservation.get("dedup_key"),
-                "dedup_kind": "intraday_market_move" if market_move_duplicate else "rule_alert",
+                "dedup_kind": dedup_kind,
             },
             db_path=db_path,
         )
-        return "duplicate" if market_move_duplicate else "skipped"
+        return "duplicate" if duplicate_status else "skipped"
     if not os.getenv("FEISHU_WEBHOOK", "").strip():
         release_rule_alert(reservation, db_path=db_path)
         record_delivery(event_id, "feishu", "skipped", {"reason": "FEISHU_WEBHOOK 未配置"}, db_path=db_path)
