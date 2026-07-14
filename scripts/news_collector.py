@@ -43,6 +43,7 @@ NEWS_BATCH_SOURCES = {
     "cls_telegraph_api": CHINA_MEDIA_FEEDS["cls_telegraph_api"],
     "star_market_daily_subject": CHINA_MEDIA_FEEDS["star_market_daily_subject"],
     "jin10_rsshub_important": CHINA_MEDIA_FEEDS["jin10_rsshub_important"],
+    "sina_finance_articles": CHINA_MEDIA_FEEDS["sina_finance_articles"],
 }
 
 

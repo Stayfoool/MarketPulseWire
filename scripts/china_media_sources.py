@@ -10,6 +10,7 @@ CHINA_MEDIA_FEEDS = {
     "cls_telegraph_api": "https://api3.cls.cn/v1/roll/get_roll_list",
     "star_market_daily_subject": "https://www.cls.cn/subject/1777",
     "jin10_rsshub_important": "https://rsshub.rssforever.com/jin10/important",
+    "sina_finance_articles": "https://feed.mix.sina.com.cn/api/roll/get",
 }
 
 
@@ -20,6 +21,7 @@ CHINA_MEDIA_LABELS = {
     "cls_telegraph_api": "财联社 / 电报 API",
     "star_market_daily_subject": "科创板日报 / 科创板最新动态",
     "jin10_rsshub_important": "金十资讯 / 重要事件",
+    "sina_finance_articles": "新浪财经 / 滚动文章",
 }
 
 
@@ -30,6 +32,7 @@ CHINA_MEDIA_ACCESS_NOTES = {
     "cls_telegraph_api": "公开前端 API：低频读取公开电报列表，不绕过登录、付费墙、WAF 或反爬限制；接口异常会显式记录。",
     "star_market_daily_subject": "公开专题页：读取财联社/科创板日报公开页面内的标题、摘要和链接，不绕过登录、付费墙或访问控制。",
     "jin10_rsshub_important": "RSSHub 备选：仅作为公开路由补充，不绕过登录、付费或 WAF。",
+    "sina_finance_articles": "新浪财经公开滚动 API：读取公开文章列表并抓取可直接访问的详情页正文；不使用登录态、付费接口或 WAF 绕过。",
 }
 
 

@@ -10,6 +10,8 @@ from pathlib import Path
 
 import china_finance_media_monitor as cfm
 import investment_universe as iu
+from decision_engine import decide_market_item
+from market_item import NormalizedMarketItem
 from china_finance_media_monitor import cls_sign, next_data_from_html, parse_cls_time
 from media_keyword_config import keyword_matches_text
 
@@ -240,8 +242,326 @@ def test_star_market_daily_cross_source_dedup() -> None:
             cfm.DB_PATH = original_db
 
 
+def sina_detail_fixture() -> str:
+    return """
+    <html>
+      <head>
+        <title>英伟达：CPO已进入量产（信息量很大）_新浪财经_新浪网</title>
+        <meta property="og:title" content="英伟达：CPO已进入量产（信息量很大）" />
+        <meta property="og:url" content="https://finance.sina.com.cn/wm/2026-07-09/doc-inihefve8236522.shtml" />
+        <meta property="bytedance:published_time" content="2026-07-09T07:49:00+08:00" />
+        <meta property="article:author" content="北向牧风" />
+        <meta name="description" content="花旗前几天和英伟达IR进行了交流。" />
+      </head>
+      <body>
+        <div class="article" id="artibody">
+          <p>（来源：北向牧风）</p>
+          <p>花旗前几天和英伟达IR进行了交流，把投资者关心的几个核心话题的答复做了梳理。</p>
+          <p>Kyber / Rubin Ultra 延迟</p>
+          <p>英伟达仍坚持其产品路线图完全没有变动。</p>
+          <p>CPO（共封装光学）</p>
+          <p>管理层重申，面向 scale-out 的 CPO 目前已随 Spectrum-X 进入量产，客户导入的更多细节会在今年晚些时候披露；scale-out 场景下 CPO 的客户采用度很高。从 2028 自然年的 Feynman 开始，客户在 NVLink 上将可以在 CPO 与铜连接（Copper）之间二选一。</p>
+          <div class="appendQr_wrap">海量资讯、精准解读，尽在新浪财经APP</div>
+        </div>
+        <!-- 原始正文end -->
+      </body>
+    </html>
+    """
+
+
+def test_sina_detail_parser_extracts_wm_article_evidence() -> None:
+    parsed = cfm.parse_sina_detail_html(sina_detail_fixture())
+    assert parsed["title"] == "英伟达：CPO已进入量产（信息量很大）"
+    assert parsed["published_at"] == "2026-07-08T23:49:00+00:00"
+    assert parsed["author"] == "北向牧风"
+    assert parsed["docid"] == "nihefve8236522"
+    assert "Rubin Ultra 延迟" in parsed["full_text"]
+    assert "Spectrum-X 进入量产" in parsed["full_text"]
+    assert "Feynman 开始" in parsed["full_text"]
+    assert "新浪财经APP" not in parsed["full_text"]
+
+
+def test_sina_roll_row_normalizes_docid_timestamp_and_url() -> None:
+    row = {
+        "docid": "comos:nihefve8236522",
+        "url": "http://finance.sina.com.cn/wm/2026-07-09/doc-inihefve8236522.shtml?utm_source=x&from=wap",
+        "title": "英伟达：CPO已进入量产（信息量很大）",
+        "intro": "花旗与英伟达IR交流。",
+        "ctime": "1783554540",
+        "media_name": "市场资讯",
+    }
+    item = cfm.sina_roll_row_to_item(row, lid="2517", page=2)
+    assert item is not None
+    assert item["id"] == "nihefve8236522"
+    assert item["url"] == "https://finance.sina.com.cn/wm/2026-07-09/doc-inihefve8236522.shtml"
+    assert item["published_at"] == "2026-07-08T23:49:00+00:00"
+    assert item["raw"]["roll_lid"] == "2517"
+    assert item["raw"]["roll_media_name"] == "市场资讯"
+
+
+def test_sina_roll_union_deduplicates_channels_before_detail_fetch() -> None:
+    original_fetch_page = cfm.fetch_sina_roll_page
+    original_enrich = cfm.enrich_sina_finance_item
+    original_lids = os.environ.get("SINA_FINANCE_ROLL_LIDS")
+    original_pages = os.environ.get("SINA_FINANCE_ROLL_MAX_PAGES")
+    calls: list[str] = []
+    try:
+        os.environ["SINA_FINANCE_ROLL_LIDS"] = "2516,2517"
+        os.environ["SINA_FINANCE_ROLL_MAX_PAGES"] = "1"
+
+        def fake_fetch(lid: str, page: int, num: int) -> list[dict]:
+            if lid == "2516":
+                return [
+                    {
+                        "docid": "comos:nihefve8236522",
+                        "url": "https://finance.sina.com.cn/wm/2026-07-09/doc-inihefve8236522.shtml",
+                        "title": "英伟达：CPO已进入量产（信息量很大）",
+                        "ctime": "1783554540",
+                    }
+                ]
+            return [
+                {
+                    "docid": "comos:nihefve8236522",
+                    "url": "https://finance.sina.cn/2026-07-09/detail-inihefve8236522.d.html",
+                    "title": "英伟达：CPO已进入量产（信息量很大）",
+                    "ctime": "1783554540",
+                }
+            ]
+
+        def fake_enrich(item: dict) -> dict:
+            calls.append(str(item["id"]))
+            return {**item, "full_text": "Spectrum-X CPO已量产", "body_source": "fake detail"}
+
+        cfm.fetch_sina_roll_page = fake_fetch
+        cfm.enrich_sina_finance_item = fake_enrich
+        items = cfm.parse_sina_finance_article_items(persist_state=False)
+    finally:
+        cfm.fetch_sina_roll_page = original_fetch_page
+        cfm.enrich_sina_finance_item = original_enrich
+        if original_lids is None:
+            os.environ.pop("SINA_FINANCE_ROLL_LIDS", None)
+        else:
+            os.environ["SINA_FINANCE_ROLL_LIDS"] = original_lids
+        if original_pages is None:
+            os.environ.pop("SINA_FINANCE_ROLL_MAX_PAGES", None)
+        else:
+            os.environ["SINA_FINANCE_ROLL_MAX_PAGES"] = original_pages
+
+    assert calls == ["nihefve8236522"]
+    assert len(items) == 1
+    assert len(items[0]["raw"]["roll_channels"]) == 2
+
+
+def test_sina_roll_partial_channel_failure_keeps_successful_rows() -> None:
+    original_fetch_page = cfm.fetch_sina_roll_page
+    original_enrich = cfm.enrich_sina_finance_item
+    original_lids = os.environ.get("SINA_FINANCE_ROLL_LIDS")
+    original_pages = os.environ.get("SINA_FINANCE_ROLL_MAX_PAGES")
+    try:
+        os.environ["SINA_FINANCE_ROLL_LIDS"] = "bad,2517"
+        os.environ["SINA_FINANCE_ROLL_MAX_PAGES"] = "1"
+
+        def fake_fetch(lid: str, page: int, num: int) -> list[dict]:
+            if lid == "bad":
+                raise RuntimeError("channel down")
+            return [
+                {
+                    "docid": "comos:nihtvuk5345523",
+                    "url": "https://finance.sina.com.cn/stock/usstock/c/2026-07-14/doc-inihtvuk5345523.shtml",
+                    "title": "软银孙正义认为核聚变将是满足未来AI发展能源需求的关键",
+                    "ctime": "1784001411",
+                }
+            ]
+
+        cfm.fetch_sina_roll_page = fake_fetch
+        cfm.enrich_sina_finance_item = lambda item: {**item, "full_text": "detail"}
+        items = cfm.parse_sina_finance_article_items(persist_state=False)
+    finally:
+        cfm.fetch_sina_roll_page = original_fetch_page
+        cfm.enrich_sina_finance_item = original_enrich
+        if original_lids is None:
+            os.environ.pop("SINA_FINANCE_ROLL_LIDS", None)
+        else:
+            os.environ["SINA_FINANCE_ROLL_LIDS"] = original_lids
+        if original_pages is None:
+            os.environ.pop("SINA_FINANCE_ROLL_MAX_PAGES", None)
+        else:
+            os.environ["SINA_FINANCE_ROLL_MAX_PAGES"] = original_pages
+
+    assert len(items) == 1
+    assert items[0]["id"] == "nihtvuk5345523"
+
+
+def test_sina_roll_api_rejects_malformed_response() -> None:
+    original_http_get = cfm.http_get
+    try:
+        class Response:
+            content = b'{"result":{"status":{"code":0},"data":{}}}'
+
+        cfm.http_get = lambda *args, **kwargs: Response()
+        try:
+            cfm.fetch_sina_roll_page("2517", 1, 10)
+        except RuntimeError as exc:
+            assert "data" in str(exc)
+        else:
+            raise AssertionError("malformed roll response should fail")
+    finally:
+        cfm.http_get = original_http_get
+
+
+def test_sina_roll_stops_at_watermark_and_skips_seen_items() -> None:
+    original_db = cfm.DB_PATH
+    original_fetch_page = cfm.fetch_sina_roll_page
+    original_enrich = cfm.enrich_sina_finance_item
+    original_lids = os.environ.get("SINA_FINANCE_ROLL_LIDS")
+    original_pages = os.environ.get("SINA_FINANCE_ROLL_MAX_PAGES")
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfm.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            cfm.save_source_state(cfm.SINA_FINANCE_SOURCE, {"roll_watermarks": {"2517": 200}})
+            with cfm.connect_db() as conn:
+                cfm.ensure_seen_table(conn)
+                conn.execute(
+                    """
+                    INSERT INTO seen_items (source, item_id, url, title, summary, published_at, first_seen_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (cfm.SINA_FINANCE_SOURCE, "seen-doc", "https://example.com/seen", "seen", "", "", ""),
+                )
+                conn.commit()
+            os.environ["SINA_FINANCE_ROLL_LIDS"] = "2517"
+            os.environ["SINA_FINANCE_ROLL_MAX_PAGES"] = "3"
+            pages: list[int] = []
+
+            def fake_fetch(lid: str, page: int, num: int) -> list[dict]:
+                pages.append(page)
+                if page == 1:
+                    return [
+                        {
+                            "docid": "comos:new-doc",
+                            "url": "https://finance.sina.com.cn/stock/usstock/c/2026-07-14/doc-inew-doc.shtml",
+                            "title": "AI芯片新消息",
+                            "ctime": "300",
+                        },
+                        {
+                            "docid": "comos:seen-doc",
+                            "url": "https://example.com/seen",
+                            "title": "seen",
+                            "ctime": "299",
+                        },
+                    ]
+                return [
+                    {
+                        "docid": "comos:old-doc",
+                        "url": "https://example.com/old",
+                        "title": "old",
+                        "ctime": "199",
+                    }
+                ]
+
+            cfm.fetch_sina_roll_page = fake_fetch
+            cfm.enrich_sina_finance_item = lambda item: {**item, "full_text": "detail"}
+            items = cfm.parse_sina_finance_article_items(persist_state=True)
+            assert cfm.load_source_state(cfm.SINA_FINANCE_SOURCE)["roll_watermarks"]["2517"] == 200
+            cfm.commit_sina_finance_roll_state()
+            state = cfm.load_source_state(cfm.SINA_FINANCE_SOURCE)
+    finally:
+        cfm.DB_PATH = original_db
+        cfm.fetch_sina_roll_page = original_fetch_page
+        cfm.enrich_sina_finance_item = original_enrich
+        if original_lids is None:
+            os.environ.pop("SINA_FINANCE_ROLL_LIDS", None)
+        else:
+            os.environ["SINA_FINANCE_ROLL_LIDS"] = original_lids
+        if original_pages is None:
+            os.environ.pop("SINA_FINANCE_ROLL_MAX_PAGES", None)
+        else:
+            os.environ["SINA_FINANCE_ROLL_MAX_PAGES"] = original_pages
+
+    assert pages == [1, 2]
+    assert [item["id"] for item in items] == ["new-doc"]
+    assert state["roll_watermarks"]["2517"] == 300
+
+
+def test_sina_first_run_baseline_and_idempotency() -> None:
+    original_db = cfm.DB_PATH
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfm.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            item = {
+                "id": "nihefve8236522",
+                "url": "https://finance.sina.com.cn/wm/2026-07-09/doc-inihefve8236522.shtml",
+                "title": "英伟达：CPO已进入量产（信息量很大）",
+                "summary": "花旗与英伟达IR交流。",
+                "published_at": "2026-07-08T23:49:00+00:00",
+            }
+            assert cfm.save_new_items_with_retry(cfm.SINA_FINANCE_SOURCE, [item], notify_baseline=False) == []
+            assert cfm.save_new_items_with_retry(cfm.SINA_FINANCE_SOURCE, [item], notify_baseline=True) == []
+            with cfm.connect_db() as conn:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM seen_items WHERE source = ?",
+                    (cfm.SINA_FINANCE_SOURCE,),
+                ).fetchone()[0]
+    finally:
+        cfm.DB_PATH = original_db
+
+    assert count == 1
+
+
+def test_sina_generic_title_uses_detail_body_for_focus() -> None:
+    original_match = cfm.investment_universe_match
+    try:
+        def fake_match(source: str, item: dict):
+            assert source == cfm.SINA_FINANCE_SOURCE
+            assert "Spectrum-X 进入量产" in item["full_text"]
+            return {"matched": True, "tags": ["user_include_keyword"], "reason": "CPO detail body"}
+
+        cfm.investment_universe_match = fake_match
+        item = {
+            "title": "信息量很大",
+            "summary": "",
+            "full_text": "英伟达表示 CPO 已随 Spectrum-X 进入量产，NVLink 未来可选择 CPO。",
+            "source_module": "新浪财经 / 滚动文章",
+        }
+        assert cfm.should_focus_item(item, cfm.SINA_FINANCE_SOURCE) is True
+    finally:
+        cfm.investment_universe_match = original_match
+
+
+def test_sina_nvidia_cpo_decision_is_source_neutral() -> None:
+    text = (
+        "花旗与英伟达IR交流，英伟达表示Rubin Ultra没有延迟，CPO已随Spectrum-X交换机进入量产，"
+        "客户采用率很高。从2028年Feynman架构开始，NVLink客户可以选择CPO或铜连接。"
+    )
+    variants = (
+        NormalizedMarketItem(
+            source=cfm.SINA_FINANCE_SOURCE,
+            source_category="news_media",
+            publisher_role="news_media",
+            content_type="article",
+            title="英伟达：CPO已进入量产",
+            summary=text,
+            full_text=text,
+        ),
+        NormalizedMarketItem(
+            source="cls_telegraph_api",
+            source_category="news_media",
+            publisher_role="news_media",
+            content_type="article",
+            title="英伟达：CPO已进入量产",
+            summary=text,
+            full_text=text,
+        ),
+    )
+    decisions = [decide_market_item(item, holdings=[]) for item in variants]
+    assert {decision.action for decision in decisions} == {"push"}
+    assert {decision.importance for decision in decisions} == {"high"}
+    assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"industry_quantified_hardline"}
+
+
 def test_default_sources_include_star_market_daily() -> None:
     assert "star_market_daily_subject" in cfm.parse_sources_arg([])
+    assert "sina_finance_articles" in cfm.parse_sources_arg([])
 
 
 def main() -> int:
@@ -256,6 +576,15 @@ def main() -> int:
     test_jin10_mixed_digest_keeps_only_relevant_lines()
     test_star_market_daily_next_data_parser()
     test_star_market_daily_cross_source_dedup()
+    test_sina_detail_parser_extracts_wm_article_evidence()
+    test_sina_roll_row_normalizes_docid_timestamp_and_url()
+    test_sina_roll_union_deduplicates_channels_before_detail_fetch()
+    test_sina_roll_partial_channel_failure_keeps_successful_rows()
+    test_sina_roll_api_rejects_malformed_response()
+    test_sina_roll_stops_at_watermark_and_skips_seen_items()
+    test_sina_first_run_baseline_and_idempotency()
+    test_sina_generic_title_uses_detail_body_for_focus()
+    test_sina_nvidia_cpo_decision_is_source_neutral()
     test_default_sources_include_star_market_daily()
     print("china_finance_media_monitor helper tests OK")
     return 0

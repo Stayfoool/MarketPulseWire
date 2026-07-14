@@ -58,6 +58,11 @@ DOMESTIC_FEED_SOURCES = {
 }
 
 YICAI_RSSHUB_FALLBACK = CHINA_MEDIA_FEEDS["yicai_brief_rsshub"]
+SINA_FINANCE_SOURCE = "sina_finance_articles"
+SINA_FINANCE_ROLL_URL = CHINA_MEDIA_FEEDS[SINA_FINANCE_SOURCE]
+SINA_FINANCE_REFERER = "https://finance.sina.com.cn/roll/"
+SINA_FINANCE_DEFAULT_LIDS = ("2517",)
+SINA_FINANCE_PENDING_ROLL_STATE: dict[str, Any] = {}
 
 
 def connect_db() -> sqlite3.Connection:
@@ -76,6 +81,13 @@ def canonical_url(url: str) -> str:
     query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
     query = [(key, value) for key, value in query if key not in {"utm_source", "utm_medium", "utm_campaign", "from"}]
     return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query)))
+
+
+def canonical_sina_url(url: str) -> str:
+    normalized = canonical_url(str(url or "").strip().replace("\\/", "/"))
+    if normalized.startswith("http://finance.sina.com.cn/"):
+        normalized = "https://" + normalized[len("http://") :]
+    return normalized
 
 
 def normalize_text(value: str) -> str:
@@ -163,6 +175,364 @@ def parse_cls_time(value: Any) -> str:
     if raw.isdigit():
         return timestamp_to_utc_iso(raw)
     return parse_datetime_to_utc_iso(raw)
+
+
+def sina_finance_roll_lids() -> list[str]:
+    raw = os.getenv("SINA_FINANCE_ROLL_LIDS", "").strip()
+    parts = raw.split(",") if raw else list(SINA_FINANCE_DEFAULT_LIDS)
+    lids: list[str] = []
+    for part in parts:
+        lid = str(part or "").strip()
+        if lid and lid not in lids:
+            lids.append(lid)
+    return lids or list(SINA_FINANCE_DEFAULT_LIDS)
+
+
+def normalize_sina_docid(value: Any) -> str:
+    raw = str(value or "").strip()
+    if raw.startswith("comos:"):
+        raw = raw.split(":", 1)[1]
+    match = re.search(r"doc-i([a-z0-9]+)\.shtml", raw)
+    if match:
+        return match.group(1)
+    match = re.search(r"detail-i([a-z0-9]+)\.d\.html", raw)
+    if match:
+        return match.group(1)
+    return raw
+
+
+def compact_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value or "").strip()
+
+
+def sina_meta_content(html_text: str, keys: Iterable[str]) -> str:
+    ordered_keys = [str(key).lower() for key in keys]
+    for tag in re.findall(r"(?is)<meta\b[^>]*>", html_text):
+        attrs = {
+            str(name).lower(): html.unescape(value).strip()
+            for name, _quote, value in re.findall(r"""([:\w-]+)\s*=\s*(['"])(.*?)\2""", tag, flags=re.S)
+        }
+        marker = str(attrs.get("name") or attrs.get("property") or "").lower()
+        if marker in ordered_keys and attrs.get("content"):
+            return attrs["content"]
+    return ""
+
+
+def first_sina_meta_content(html_text: str, keys: Iterable[str]) -> str:
+    for key in keys:
+        value = sina_meta_content(html_text, [key])
+        if value:
+            return value
+    return ""
+
+
+def sina_page_title(html_text: str) -> str:
+    title = sina_meta_content(html_text, {"og:title", "twitter:title"})
+    if not title:
+        match = re.search(r"(?is)<title[^>]*>(.*?)</title>", html_text)
+        title = strip_tags(match.group(1)) if match else ""
+    return re.sub(r"[_-]新浪财经[_-]新浪网\s*$", "", compact_text(title))
+
+
+def sina_artibody_html(html_text: str) -> str:
+    match = re.search(r"""(?is)<div\b[^>]*\bid\s*=\s*(['"])artibody\1[^>]*>""", html_text)
+    if not match:
+        return ""
+    start = match.end()
+    markers = [
+        "<!-- 原始正文end -->",
+        "<!-- 正文 end -->",
+        '<div class="article-bottom',
+        "<div class='article-bottom",
+        '<div id="article-bottom',
+        "<div id='article-bottom",
+    ]
+    end = len(html_text)
+    for marker in markers:
+        index = html_text.find(marker, start)
+        if index >= 0:
+            end = min(end, index)
+    return html_text[start:end]
+
+
+def parse_sina_artibody(html_text: str) -> str:
+    body_html = sina_artibody_html(html_text)
+    if not body_html:
+        return ""
+    body_html = re.split(r"(?is)<div\b[^>]*\bclass\s*=\s*(['\"])[^'\"]*appendQr_wrap", body_html, maxsplit=1)[0]
+    body_html = re.sub(r"(?is)<script\b.*?</script>|<style\b.*?</style>|<!--.*?-->", "", body_html)
+    paragraphs = re.findall(r"(?is)<p\b[^>]*>(.*?)</p>", body_html)
+    cleaned = [compact_text(strip_tags(paragraph)) for paragraph in paragraphs]
+    cleaned = [
+        paragraph
+        for paragraph in cleaned
+        if paragraph
+        and not paragraph.startswith(("责任编辑：", "新浪声明", "海量资讯、精准解读"))
+        and "新浪财经APP" not in paragraph
+    ]
+    if cleaned:
+        return "\n\n".join(cleaned)[:40000]
+    return compact_text(strip_tags(body_html))[:40000]
+
+
+def parse_sina_detail_html(html_text: str, *, fallback_url: str = "") -> dict[str, str]:
+    title = sina_page_title(html_text)
+    published_at = parse_datetime_to_utc_iso(
+        first_sina_meta_content(
+            html_text,
+            [
+                "bytedance:published_time",
+                "weibo: article:create_at",
+                "article:published_time",
+                "og:published_time",
+            ],
+        )
+    )
+    author = sina_meta_content(html_text, {"article:author", "weibo: article:author"})
+    description = sina_meta_content(html_text, {"description", "og:description"})
+    canonical = canonical_sina_url(sina_meta_content(html_text, {"og:url"}) or fallback_url)
+    body = parse_sina_artibody(html_text)
+    return {
+        "title": title,
+        "published_at": published_at,
+        "author": author,
+        "description": compact_text(description),
+        "url": canonical,
+        "full_text": body,
+        "docid": normalize_sina_docid(canonical),
+    }
+
+
+def fetch_sina_roll_page(lid: str, page: int, num: int) -> list[dict[str, Any]]:
+    params = {
+        "pageid": os.getenv("SINA_FINANCE_ROLL_PAGEID", "153"),
+        "lid": lid,
+        "k": "",
+        "num": str(num),
+        "page": str(page),
+        "r": str(time.time()),
+    }
+    response = http_get(
+        f"{SINA_FINANCE_ROLL_URL}?{urllib.parse.urlencode(params)}",
+        headers={
+            "Accept": "application/json,text/plain,*/*",
+            "Referer": SINA_FINANCE_REFERER,
+        },
+        timeout=env_int("SINA_FINANCE_ROLL_TIMEOUT_SECONDS", 15, minimum=1),
+    )
+    payload = json.loads(response.content.decode("utf-8", errors="replace"))
+    if not isinstance(payload, dict):
+        raise RuntimeError("新浪财经滚动 API 响应格式异常：root 不是 JSON object")
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise RuntimeError("新浪财经滚动 API 响应格式异常：缺少 result")
+    status = result.get("status") if isinstance(result.get("status"), dict) else {}
+    if str(status.get("code", "0")) not in {"0", ""}:
+        raise RuntimeError(f"新浪财经滚动 API 返回错误：{status}")
+    rows = result.get("data")
+    if rows is None:
+        rows = []
+    if not isinstance(rows, list):
+        raise RuntimeError("新浪财经滚动 API 响应格式异常：data 不是列表")
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def sina_roll_row_to_item(row: dict[str, Any], *, lid: str, page: int) -> dict[str, Any] | None:
+    title = strip_tags(str(row.get("title") or "")).strip()
+    url = canonical_sina_url(str(row.get("url") or row.get("wapurl") or ""))
+    docid = normalize_sina_docid(row.get("docid") or url)
+    if not title and not url:
+        return None
+    published_at = parse_datetime_to_utc_iso(row.get("ctime") or row.get("mtime") or row.get("intime") or "")
+    summary = strip_tags(str(row.get("intro") or row.get("summary") or row.get("wapsummary") or "")).strip()
+    media_name = str(row.get("media_name") or row.get("media") or row.get("source") or "").strip()
+    item_id = docid or url or title
+    return {
+        "id": item_id,
+        "url": url,
+        "title": title,
+        "summary": summary,
+        "content": "",
+        "published_at": published_at,
+        "source_module": CHINA_MEDIA_LABELS[SINA_FINANCE_SOURCE],
+        "access_note": CHINA_MEDIA_ACCESS_NOTES[SINA_FINANCE_SOURCE],
+        "body_source": "新浪财经滚动 API",
+        "raw": {
+            "docid": docid,
+            "roll_docid": row.get("docid"),
+            "roll_lid": lid,
+            "roll_page": page,
+            "roll_ctime": row.get("ctime"),
+            "roll_media_name": media_name,
+            "roll_channelid": row.get("channelid"),
+            "roll_categoryid": row.get("categoryid"),
+            "wapurl": row.get("wapurl"),
+        },
+    }
+
+
+def merge_sina_roll_item(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(existing)
+    raw = dict(merged.get("raw") or {})
+    incoming_raw = dict(incoming.get("raw") or {})
+    channels = list(raw.get("roll_channels") or [])
+    existing_channel = {
+        "lid": raw.get("roll_lid"),
+        "page": raw.get("roll_page"),
+        "ctime": raw.get("roll_ctime"),
+    }
+    if existing_channel["lid"] and existing_channel not in channels:
+        channels.append(existing_channel)
+    channel = {
+        "lid": incoming_raw.get("roll_lid"),
+        "page": incoming_raw.get("roll_page"),
+        "ctime": incoming_raw.get("roll_ctime"),
+    }
+    if channel not in channels:
+        channels.append(channel)
+    raw.update({key: value for key, value in incoming_raw.items() if key not in raw or raw.get(key) in (None, "")})
+    raw["roll_channels"] = channels
+    merged["raw"] = raw
+    if not merged.get("summary") and incoming.get("summary"):
+        merged["summary"] = incoming["summary"]
+    return merged
+
+
+def seen_item_ids_for_source(source: str) -> set[str]:
+    try:
+        with connect_db() as conn:
+            ensure_seen_table(conn)
+            return {
+                str(row[0] or "")
+                for row in conn.execute("SELECT item_id FROM seen_items WHERE source = ?", (source,))
+            }
+    except sqlite3.Error:
+        return set()
+
+
+def fetch_sina_detail(url: str) -> dict[str, str]:
+    response = http_get(
+        url,
+        headers={
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer": SINA_FINANCE_REFERER,
+        },
+        timeout=env_int("SINA_FINANCE_DETAIL_TIMEOUT_SECONDS", 20, minimum=1),
+    )
+    return parse_sina_detail_html(response.content.decode("utf-8", errors="replace"), fallback_url=str(response.url))
+
+
+def enrich_sina_finance_item(item: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(item)
+    raw = dict(enriched.get("raw") or {})
+    try:
+        detail = fetch_sina_detail(str(enriched.get("url") or ""))
+        if detail.get("title"):
+            enriched["title"] = detail["title"]
+        if detail.get("published_at"):
+            enriched["published_at"] = detail["published_at"]
+        if detail.get("url"):
+            enriched["url"] = detail["url"]
+        if detail.get("description") and not enriched.get("summary"):
+            enriched["summary"] = detail["description"]
+        if detail.get("full_text"):
+            enriched["full_text"] = detail["full_text"]
+            enriched["body_source"] = "新浪财经详情页 #artibody"
+        else:
+            enriched["full_text"] = str(enriched.get("summary") or "")
+            enriched["body_source"] = "新浪财经滚动 API 摘要（详情页正文为空）"
+        raw.update(
+            {
+                "detail_fetch_status": "ok",
+                "detail_author": detail.get("author", ""),
+                "detail_docid": detail.get("docid", ""),
+                "detail_body_chars": len(detail.get("full_text") or ""),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001 - retain the API row as an auditable fallback
+        enriched["full_text"] = str(enriched.get("summary") or "")
+        enriched["body_source"] = "新浪财经滚动 API 摘要（详情页抓取失败）"
+        raw.update({"detail_fetch_status": "failed", "detail_fetch_error": f"{type(exc).__name__}: {exc}"})
+        if not enriched["full_text"]:
+            raise RuntimeError(f"新浪财经详情页解析失败且滚动摘要为空：{enriched.get('url')} ({exc})") from exc
+    enriched["raw"] = raw
+    return enriched
+
+
+def parse_sina_finance_article_items(*, persist_state: bool = True) -> list[dict[str, Any]]:
+    source = SINA_FINANCE_SOURCE
+    if persist_state:
+        SINA_FINANCE_PENDING_ROLL_STATE.clear()
+    state = load_source_state(source) if persist_state else {}
+    watermarks = state.get("roll_watermarks") if isinstance(state.get("roll_watermarks"), dict) else {}
+    page_size = env_int("SINA_FINANCE_ROLL_PAGE_SIZE", 30, minimum=1)
+    max_pages = env_int("SINA_FINANCE_ROLL_MAX_PAGES", 3, minimum=1)
+    page_size = min(page_size, 100)
+    seen_ids = seen_item_ids_for_source(source) if persist_state else set()
+    by_key: dict[str, dict[str, Any]] = {}
+    channel_errors: dict[str, str] = {}
+    max_ctime_by_lid: dict[str, int] = {}
+    for lid in sina_finance_roll_lids():
+        previous = int(watermarks.get(lid) or 0)
+        try:
+            for page in range(1, max_pages + 1):
+                rows = fetch_sina_roll_page(lid, page, page_size)
+                if not rows:
+                    break
+                reached_previous = False
+                for row in rows:
+                    try:
+                        ctime = int(str(row.get("ctime") or row.get("mtime") or row.get("intime") or "0"))
+                    except ValueError:
+                        ctime = 0
+                    if ctime:
+                        max_ctime_by_lid[lid] = max(max_ctime_by_lid.get(lid, 0), ctime)
+                    if previous and ctime and ctime <= previous:
+                        reached_previous = True
+                        continue
+                    item = sina_roll_row_to_item(row, lid=lid, page=page)
+                    if not item:
+                        continue
+                    key = str(item.get("id") or item.get("url") or "")
+                    if not key or key in seen_ids:
+                        continue
+                    by_key[key] = merge_sina_roll_item(by_key[key], item) if key in by_key else item
+                if reached_previous:
+                    break
+        except Exception as exc:  # noqa: BLE001 - isolate a single roll channel
+            channel_errors[lid] = f"{type(exc).__name__}: {exc}"
+    if channel_errors and not max_ctime_by_lid:
+        raise RuntimeError(f"新浪财经滚动 API 全部频道失败：{channel_errors}")
+    if channel_errors:
+        print(f"新浪财经滚动 API 部分频道失败：{channel_errors}", flush=True)
+    items = sorted(by_key.values(), key=lambda item: str(item.get("published_at") or ""), reverse=True)
+    enriched = [enrich_sina_finance_item(item) for item in items]
+    if persist_state:
+        next_watermarks = dict(watermarks)
+        for lid, ctime in max_ctime_by_lid.items():
+            if ctime:
+                next_watermarks[lid] = max(int(next_watermarks.get(lid) or 0), ctime)
+        SINA_FINANCE_PENDING_ROLL_STATE.clear()
+        SINA_FINANCE_PENDING_ROLL_STATE.update(
+            {
+                "roll_watermarks": next_watermarks,
+                "last_roll_checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        if channel_errors:
+            SINA_FINANCE_PENDING_ROLL_STATE["last_partial_errors"] = channel_errors
+    return enriched
+
+
+def commit_sina_finance_roll_state() -> None:
+    if not SINA_FINANCE_PENDING_ROLL_STATE:
+        return
+    next_state = dict(load_source_state(SINA_FINANCE_SOURCE))
+    next_state.update(SINA_FINANCE_PENDING_ROLL_STATE)
+    if "last_partial_errors" not in SINA_FINANCE_PENDING_ROLL_STATE:
+        next_state.pop("last_partial_errors", None)
+    save_source_state(SINA_FINANCE_SOURCE, next_state)
+    SINA_FINANCE_PENDING_ROLL_STATE.clear()
 
 
 def env_int(name: str, default: int, minimum: int = 0) -> int:
@@ -457,6 +827,8 @@ def source_items(source: str, *, persist_state: bool = True, force: bool = False
         return parse_star_market_daily_subject_items()
     if source == "jin10_rsshub_important":
         return parse_jin10_items()
+    if source == SINA_FINANCE_SOURCE:
+        return parse_sina_finance_article_items(persist_state=persist_state)
     return []
 
 
@@ -464,6 +836,11 @@ def enrich_item(source: str, item: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(item)
     body = ""
     body_source = str(enriched.get("body_source") or "公开页面")
+    if source == SINA_FINANCE_SOURCE:
+        enriched["full_text"] = str(enriched.get("full_text") or enriched.get("content") or enriched.get("summary") or "")
+        enriched.setdefault("source_module", china_media_module(source))
+        enriched.setdefault("access_note", china_media_access_note(source, enriched["body_source"]))
+        return enriched
     if source == "yicai_brief" and enriched.get("url"):
         try:
             body, body_source = fetch_article_body(enriched["url"])
@@ -669,6 +1046,8 @@ def run_once(sources: list[str], notify_baseline: bool = False) -> int:
         items = fetched[source]
         try:
             new_items = save_new_items_with_retry(source, items, notify_baseline=notify_baseline)
+            if source == SINA_FINANCE_SOURCE:
+                commit_sina_finance_roll_state()
         except Exception as exc:
             with connect_db() as conn:
                 record_source_failure(conn, "china_finance_media", source, exc)
@@ -686,7 +1065,13 @@ def run_once(sources: list[str], notify_baseline: bool = False) -> int:
 
 def parse_sources_arg(raw: list[str]) -> list[str]:
     if not raw:
-        return ["yicai_brief", "cls_telegraph_api", "star_market_daily_subject", "jin10_rsshub_important"]
+        return [
+            "yicai_brief",
+            "cls_telegraph_api",
+            "star_market_daily_subject",
+            "jin10_rsshub_important",
+            SINA_FINANCE_SOURCE,
+        ]
     sources = []
     for part in raw:
         for name in part.split(","):
