@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from investment_bank_theme_config import load_config
+from investment_bank_theme_taxonomy import ROTATION_THEME_BUCKETS, ROTATION_THEME_BY_ID
 from investment_universe import investment_universe_match
 from media_keyword_config import keyword_matches_text
 from rule_center import effective_list, rule_enabled, rule_priority, rule_settings
@@ -117,6 +118,134 @@ THEME_EVIDENCE_PATTERNS: tuple[tuple[str, int, tuple[str, ...]], ...] = (
             "资金流.{0,18}(?:\\d|%|亿|万)",
         ),
     ),
+)
+
+ROTATION_DIRECT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"(?:从|由)\s*(?P<from>[^，,。；;！？!?]{1,80}?)\s*"
+        r"(?:(?:轮动|切换|调仓|换仓|撤出|调整)\s*(?:到|至|向|进入|转入)|转向)\s*"
+        r"(?P<to>[^。；;！？!?]{1,100})",
+        re.I,
+    ),
+    re.compile(
+        r"(?:rotat(?:e|es|ed|ing)|rotation|switch(?:es|ed|ing)?|shift(?:s|ed|ing)?|"
+        r"reallocat(?:e|es|ed|ing)|mov(?:e|es|ed|ing))"
+        r"(?:\s+(?:capital|funds|money|allocation|allocations|exposure|positioning|investors?)){0,3}"
+        r"\s+(?:away\s+)?from\s+(?P<from>[^,.;!?]{1,100}?)\s+"
+        r"(?:to|into|toward|towards)\s+(?P<to>[^.;!?]{1,120})",
+        re.I,
+    ),
+)
+
+ROTATION_PAIRED_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"(?:减持|减配|低配|卖出|减仓|降低配置|削减配置)\s*"
+        r"(?P<from>[^，,。；;！？!?]{1,80}?)\s*(?:，|,|；|;|、|并(?:且)?|同时|转而)\s*"
+        r"(?:增持|增配|超配|买入|加仓|提高配置)\s*(?P<to>[^。；;！？!?]{1,100})",
+        re.I,
+    ),
+    re.compile(
+        r"(?:underweight|reduce|trim|sell|cut)\s+(?:exposure|allocation|holdings|positions)?\s*(?:to|in)?\s*"
+        r"(?P<from>[^,.;!?]{1,100}?)\s*(?:,|;|\band\b|\bwhile\b)\s*"
+        r"(?:overweight|add|increase|buy)\s+(?:exposure|allocation|holdings|positions)?\s*(?:to|in)?\s*"
+        r"(?P<to>[^.;!?]{1,120})",
+        re.I,
+    ),
+)
+
+ROTATION_RETROSPECTIVE_MARKERS = (
+    "去年",
+    "前年",
+    "上季度",
+    "此前曾",
+    "回顾",
+    "历史上",
+    "last year",
+    "last quarter",
+    "historically",
+    "in retrospect",
+    "had rotated",
+    "previously rotated",
+)
+
+ROTATION_RUMOR_OR_NEGATION_MARKERS = (
+    "传闻",
+    "网传",
+    "据传",
+    "未经证实",
+    "并未建议",
+    "没有建议",
+    "不建议",
+    "否认",
+    "rumor",
+    "unconfirmed",
+    "does not recommend",
+    "did not recommend",
+    "not recommend",
+    "denied",
+)
+
+ROTATION_PRICE_ACTION_MARKERS = (
+    "市场资金从",
+    "板块资金从",
+    "股价轮动",
+    "涨幅轮动",
+    "成交轮动",
+    "market rotated",
+    "market rotation",
+    "price action",
+    "fund flows rotated",
+)
+
+ROTATION_NON_ALLOCATION_PATTERNS = (
+    re.compile(r"(?:capex|capital expenditure).{0,30}(?:opex|operating expenditure)", re.I),
+    re.compile(r"(?:资本开支|资本支出).{0,30}(?:运营开支|运营支出)", re.I),
+    re.compile(r"(?:商业模式|盈利模式|会计处理).{0,30}(?:轮动|转向|切换)", re.I),
+)
+
+ROTATION_ADVISORY_MARKERS = (
+    "建议",
+    "提示投资者",
+    "主张",
+    "配置策略",
+    "投资策略",
+    "调整配置",
+    "recommend",
+    "advise",
+    "strategy",
+    "allocation",
+    "positioning",
+    "calls for",
+    "urges investors",
+)
+
+ROTATION_ALLOCATION_CONTEXT_MARKERS = (
+    "投资者",
+    "投资策略",
+    "资金",
+    "配置",
+    "仓位",
+    "持仓",
+    "头寸",
+    "调仓",
+    "减配",
+    "增配",
+    "超配",
+    "低配",
+    "买入",
+    "卖出",
+    "资产轮动",
+    "portfolio",
+    "investor",
+    "funds",
+    "allocation",
+    "exposure",
+    "positioning",
+    "overweight",
+    "underweight",
+    "buy",
+    "sell",
+    "reallocate",
 )
 
 VALUE_DIRECTORY_STRATEGY_TITLE_MARKERS = (
@@ -474,6 +603,117 @@ def _strategy_themes(text: str, extra_themes: list[str]) -> list[str]:
     return list(dict.fromkeys(themes))
 
 
+def _rotation_aliases(extra_aliases: list[str]) -> dict[str, tuple[str, ...]]:
+    aliases = {
+        str(bucket["id"]): tuple(str(alias) for alias in bucket["aliases"])
+        for bucket in ROTATION_THEME_BUCKETS
+    }
+    additions: dict[str, list[str]] = {}
+    for mapping in extra_aliases:
+        theme_id, separator, alias = str(mapping).partition("=")
+        theme_id = theme_id.strip()
+        alias = alias.strip()
+        if separator and theme_id in aliases and alias:
+            additions.setdefault(theme_id, []).append(alias)
+    return {
+        theme_id: tuple(dict.fromkeys((*values, *additions.get(theme_id, []))))
+        for theme_id, values in aliases.items()
+    }
+
+
+def _rotation_themes(text: str, extra_aliases: list[str]) -> list[str]:
+    aliases = _rotation_aliases(extra_aliases)
+    return [
+        str(bucket["id"])
+        for bucket in ROTATION_THEME_BUCKETS
+        if any(keyword_matches_text(alias, text) for alias in aliases[str(bucket["id"])])
+    ]
+
+
+def _rotation_theme_labels(theme_ids: list[str]) -> list[str]:
+    return [str(ROTATION_THEME_BY_ID[theme_id]["label"]) for theme_id in theme_ids if theme_id in ROTATION_THEME_BY_ID]
+
+
+def _rotation_statement_is_attributed(statement: str) -> bool:
+    lowered = statement.casefold()
+    if any(marker.casefold() in lowered for marker in ROTATION_ADVISORY_MARKERS):
+        return True
+    for _display, aliases in INTERNATIONAL_BANK_ALIASES:
+        for alias in aliases:
+            escaped = re.escape(alias).replace(r"\ ", r"\s+")
+            if re.search(rf"{escaped}.{{0,20}}(?:[:：]|称|表示|认为|指出|says?|sees?)", statement, flags=re.I):
+                return True
+    return False
+
+
+def _rotation_has_allocation_context(statement: str) -> bool:
+    lowered = statement.casefold()
+    return any(marker.casefold() in lowered for marker in ROTATION_ALLOCATION_CONTEXT_MARKERS)
+
+
+def _rotation_match_is_relevant(theme_ids: list[str], config: dict[str, Any], universe: dict[str, Any]) -> bool:
+    if any(bool(ROTATION_THEME_BY_ID[theme_id]["style"]) for theme_id in theme_ids):
+        if not config["allow_broad_style_rotation"]:
+            return False
+    if not config["require_investment_universe_leg"]:
+        return True
+    approved_bucket = any(
+        not bool(ROTATION_THEME_BY_ID[theme_id]["style"]) or config["allow_broad_style_rotation"]
+        for theme_id in theme_ids
+    )
+    return approved_bucket or bool(universe.get("matched"))
+
+
+def _rotation_candidate(text: str) -> bool:
+    return any(pattern.search(text) for pattern in (*ROTATION_DIRECT_PATTERNS, *ROTATION_PAIRED_PATTERNS))
+
+
+def _extract_rotation_strategy(
+    text: str,
+    *,
+    config: dict[str, Any],
+    universe: dict[str, Any],
+) -> dict[str, Any] | None:
+    for pattern in (*ROTATION_DIRECT_PATTERNS, *ROTATION_PAIRED_PATTERNS):
+        for match in pattern.finditer(text):
+            statement_start = max(0, text.rfind("。", 0, match.start()) + 1)
+            statement_end = text.find("。", match.end())
+            statement = text[statement_start : statement_end if statement_end >= 0 else len(text)].strip()
+            lowered = statement.casefold()
+            retrospective = any(marker.casefold() in lowered for marker in ROTATION_RETROSPECTIVE_MARKERS)
+            if retrospective:
+                continue
+            if any(marker.casefold() in lowered for marker in ROTATION_RUMOR_OR_NEGATION_MARKERS):
+                continue
+            if any(marker.casefold() in lowered for marker in ROTATION_PRICE_ACTION_MARKERS):
+                continue
+            if any(pattern.search(statement) for pattern in ROTATION_NON_ALLOCATION_PATTERNS):
+                continue
+            if not _rotation_statement_is_attributed(statement):
+                continue
+            if not _rotation_has_allocation_context(statement):
+                continue
+            from_text = match.group("from").strip(" ：:，,、")
+            to_text = match.group("to").strip(" ：:，,、")
+            from_themes = _rotation_themes(from_text, config["extra_rotation_theme_aliases"])
+            to_themes = _rotation_themes(to_text, config["extra_rotation_theme_aliases"])
+            if not from_themes or not to_themes or set(from_themes) & set(to_themes):
+                continue
+            all_themes = list(dict.fromkeys((*from_themes, *to_themes)))
+            if not _rotation_match_is_relevant(all_themes, config, universe):
+                continue
+            return {
+                "strategy_type": "rotation",
+                "from_themes": from_themes,
+                "to_themes": to_themes,
+                "from_labels": _rotation_theme_labels(from_themes),
+                "to_labels": _rotation_theme_labels(to_themes),
+                "evidence_quotes": [statement[:320]],
+                "retrospective": False,
+            }
+    return None
+
+
 def _strategy_evidence(text: str, themes: list[str]) -> list[dict[str, Any]]:
     evidence: list[dict[str, Any]] = []
     for kind, score, patterns in THEME_EVIDENCE_PATTERNS:
@@ -538,6 +778,12 @@ def _theme_dedup_key(bank: str, report_title: str, themes: list[str], action: st
     return f"ib_theme:{digest}"
 
 
+def _rotation_dedup_key(bank: str, from_themes: list[str], to_themes: list[str]) -> str:
+    identity = f"{bank}|from:{'|'.join(sorted(from_themes))}|to:{'|'.join(sorted(to_themes))}"
+    digest = hashlib.sha256(identity.casefold().encode("utf-8")).hexdigest()[:20]
+    return f"ib_rotation:{digest}"
+
+
 def _value_directory_strategy_title_evidence(source: str, item: dict[str, Any]) -> list[dict[str, Any]]:
     """Treat an explicit strategy-report title as auditable index metadata.
 
@@ -590,15 +836,32 @@ def international_bank_theme_strategy_rule(
     banks = matched_bank_names(text, allowed_banks=allowed or None)
     if not banks:
         return None
-    actions = _strategy_actions(text, config["extra_action_keywords"])
-    if not actions:
-        return None
-    themes = _strategy_themes(text, config["extra_theme_keywords"])
     universe = investment_universe_match(source, item)
-    if not themes and not universe.get("matched"):
+    rotation = _extract_rotation_strategy(text, config=config, universe=universe) if _rotation_candidate(text) else None
+    if _rotation_candidate(text) and rotation is None:
         return None
-    evidence = _strategy_evidence(text, themes)
-    evidence.extend(_value_directory_strategy_title_evidence(source, item))
+    if rotation is None and any(pattern.search(text) for pattern in ROTATION_NON_ALLOCATION_PATTERNS):
+        return None
+    if rotation:
+        actions = ["配置轮动"]
+        themes = list(dict.fromkeys((*rotation["from_labels"], *rotation["to_labels"])))
+        evidence = [
+            {
+                "kind": "明确双腿配置轮动",
+                "score": 2,
+                "snippet": rotation["evidence_quotes"][0],
+            }
+        ]
+        evidence.extend(_strategy_evidence(text, themes))
+    else:
+        actions = _strategy_actions(text, config["extra_action_keywords"])
+        if not actions:
+            return None
+        themes = _strategy_themes(text, config["extra_theme_keywords"])
+        if not themes and not universe.get("matched"):
+            return None
+        evidence = _strategy_evidence(text, themes)
+        evidence.extend(_value_directory_strategy_title_evidence(source, item))
     evidence_score = sum(int(item["score"]) for item in evidence)
     if evidence_score < config["min_evidence_score"]:
         return None
@@ -608,17 +871,27 @@ def international_bank_theme_strategy_rule(
     report_title = _report_reference(text)
     bank = banks[0]
     action = actions[0]
+    rotation_display = ""
     targets = themes[:4]
+    if rotation:
+        rotation_display = f"{'、'.join(rotation['from_labels'])} -> {'、'.join(rotation['to_labels'])}"
+        targets = [rotation_display, *rotation["to_labels"], *rotation["from_labels"]]
     for holding in matched_holdings(text, holdings):
         label = " ".join(part for part in (str(holding.get("name") or ""), str(holding.get("symbol") or "")) if part)
         if label:
             targets.append(label)
     targets = list(dict.fromkeys(targets))[:5]
     evidence_text = "；".join(f"{item['kind']}（{item['snippet']}）" for item in evidence[:3])
-    reason = (
-        f"国际投行重大主题策略规则：{bank}明确“{action}”{(' / ' + '、'.join(themes[:3])) if themes else ''}；"
-        f"重大性证据 {evidence_text}；来源层级：{tier}。"
-    )
+    if rotation:
+        reason = (
+            f"国际投行重大主题策略规则：{bank}明确配置轮动“{rotation_display}”；"
+            f"重大性证据 {evidence_text}；来源层级：{tier}。"
+        )
+    else:
+        reason = (
+            f"国际投行重大主题策略规则：{bank}明确“{action}”{(' / ' + '、'.join(themes[:3])) if themes else ''}；"
+            f"重大性证据 {evidence_text}；来源层级：{tier}。"
+        )
     if tier == "二手转述/待原报告确认":
         reason += " 原报告尚待确认，先按明确署名策略观点提醒。"
     return {
@@ -637,11 +910,21 @@ def international_bank_theme_strategy_rule(
         "action": action,
         "actions": actions,
         "themes": themes,
+        "strategy_type": "rotation" if rotation else "theme_allocation",
+        "from_themes": list(rotation["from_themes"]) if rotation else [],
+        "to_themes": list(rotation["to_themes"]) if rotation else [],
+        "evidence_quotes": list(rotation["evidence_quotes"]) if rotation else [],
+        "retrospective": bool(rotation["retrospective"]) if rotation else False,
+        "rotation_display": rotation_display,
         "report_title": report_title,
         "source_tier": tier,
         "evidence_score": evidence_score,
         "evidence": evidence,
-        "dedup_key": _theme_dedup_key(bank, report_title, themes, action, item.get("published_at")),
+        "dedup_key": (
+            _rotation_dedup_key(bank, rotation["from_themes"], rotation["to_themes"])
+            if rotation
+            else _theme_dedup_key(bank, report_title, themes, action, item.get("published_at"))
+        ),
         "dedup_lookback_days": config["dedup_lookback_days"],
         "source": source,
     }

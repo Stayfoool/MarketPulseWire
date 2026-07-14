@@ -87,6 +87,93 @@ def test_international_bank_theme_strategy_requires_action_and_evidence() -> Non
     assert weak_evidence is None
 
 
+def test_international_bank_rotation_strategy_extracts_both_legs_across_sources() -> None:
+    variants = (
+        (
+            "cls_telegraph_api",
+            {
+                "title": "摩根士丹利提示投资者从芯片股轮动到 AI 云服务商和超大规模云厂商",
+                "summary": "该行给出最新行业配置策略。",
+                "published_at": "2026-07-15T01:00:00+00:00",
+            },
+        ),
+        (
+            "alphabstract_summaries",
+            {
+                "title": "Morgan Stanley recommends investors rotate from chip stocks into AI cloud providers and hyperscalers",
+                "summary": "The bank published its current sector allocation view.",
+                "published_at": "2026-07-16T01:00:00+00:00",
+            },
+        ),
+    )
+    rules = [
+        international_bank_theme_strategy_rule(source=source, item=item, holdings=[])
+        for source, item in variants
+    ]
+    assert all(rule is not None for rule in rules)
+    assert {rule["action"] for rule in rules if rule} == {"配置轮动"}
+    assert {tuple(rule["from_themes"]) for rule in rules if rule} == {("semiconductor_equities",)}
+    assert {tuple(rule["to_themes"]) for rule in rules if rule} == {("ai_cloud_hyperscalers",)}
+    assert {rule["dedup_key"] for rule in rules if rule} == {rules[0]["dedup_key"]}
+    assert rules[0]["dedup_key"].startswith("ib_rotation:")
+    assert rules[0]["strategy_type"] == "rotation"
+    assert rules[0]["retrospective"] is False
+    assert rules[0]["evidence_quotes"]
+    assert rules[0]["affected_targets"][0] == "芯片股 -> AI 云服务商/超大规模云"
+
+    reverse = international_bank_theme_strategy_rule(
+        source="cls_telegraph_api",
+        item={"title": "摩根士丹利建议投资者从 AI 云服务商转向芯片股"},
+        holdings=[],
+    )
+    assert reverse is not None
+    assert reverse["dedup_key"] != rules[0]["dedup_key"]
+
+
+def test_international_bank_rotation_supports_paired_actions_and_style_buckets() -> None:
+    paired = international_bank_theme_strategy_rule(
+        source="sina_finance_articles",
+        item={"title": "花旗建议减配芯片股、增配 AI 应用和 AI 云服务商"},
+        holdings=[],
+    )
+    assert paired is not None
+    assert paired["from_themes"] == ["semiconductor_equities"]
+    assert paired["to_themes"] == ["ai_cloud_hyperscalers", "ai_applications"]
+
+    style = international_bank_theme_strategy_rule(
+        source="sina_finance_articles",
+        item={"title": "高盛投资策略建议从成长股转向价值股"},
+        holdings=[],
+    )
+    assert style is not None
+    assert style["from_themes"] == ["growth_equities"]
+    assert style["to_themes"] == ["value_equities"]
+
+
+def test_international_bank_rotation_rejects_ambiguous_or_non_current_views() -> None:
+    negatives = (
+        "摩根士丹利称 AI 商业模式正从资本开支 capex 转向运营开支 opex，并上调云厂商评级至买入。",
+        "美银-中控技术：从资本开支向运营开支范式转型，上调评级至买入，工业 AI 驱动销售稳健增长。",
+        "高盛回顾去年投资者从芯片股轮动到 AI 云服务商的过程。",
+        "市场资金从芯片股轮动到 AI 云服务商，摩根士丹利另有一份行业报告。",
+        "摩根士丹利报告称，芯片股上涨后 AI 云服务商出现补涨，属于股价轮动。",
+        "摩根士丹利认为 AI 云服务商盈利前景比芯片股更好。",
+        "花旗建议超配 AI 云服务商，认为芯片股估值偏高。",
+        "花旗称封测行业估值体系从周期股切换到成长股。",
+        "摩根士丹利并未建议投资者从芯片股转向 AI 云服务商。",
+        "网传高盛建议投资者从芯片股轮动到 AI 云服务商，未经证实。",
+    )
+    for text in negatives:
+        assert (
+            international_bank_theme_strategy_rule(
+                source="cls_telegraph_api",
+                item={"title": text, "summary": ""},
+                holdings=[],
+            )
+            is None
+        ), text
+
+
 def test_international_bank_aliases_use_word_boundaries_across_sources() -> None:
     noisy_text = (
         "AI infrastructure cities require substantial long-term electricity investment. "
@@ -273,6 +360,9 @@ def main() -> int:
     test_event_rule_overrides_model_skip()
     test_international_bank_theme_strategy_rule()
     test_international_bank_theme_strategy_requires_action_and_evidence()
+    test_international_bank_rotation_strategy_extracts_both_legs_across_sources()
+    test_international_bank_rotation_supports_paired_actions_and_style_buckets()
+    test_international_bank_rotation_rejects_ambiguous_or_non_current_views()
     test_international_bank_aliases_use_word_boundaries_across_sources()
     test_value_directory_strategy_title_is_index_evidence()
     test_value_directory_industry_macro_strategy_source()

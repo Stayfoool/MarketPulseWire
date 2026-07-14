@@ -3,6 +3,9 @@
   "allowed_banks": [],
   "extra_theme_keywords": [],
   "extra_action_keywords": [],
+  "extra_rotation_theme_aliases": [],
+  "allow_broad_style_rotation": true,
+  "require_investment_universe_leg": true,
   "min_evidence_score": 2,
   "allow_secondary_sources": true,
   "dedup_lookback_days": 14
