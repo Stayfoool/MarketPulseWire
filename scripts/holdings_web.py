@@ -3001,7 +3001,7 @@ function renderRuleCenter() {{
             <h3 style="margin:0">${{escapeHtml(rule.name || rule.id || '')}}</h3>
             <div class="hint">${{escapeHtml(rule.group || '')}} / ${{escapeHtml(rule.runtime || '')}}</div>
           </div>
-          <div>${{badge('近30天 ' + String(stats.matches_30d || 0) + ' 次')}}</div>
+          <div>${{badge(rule.execution_mode_label || rule.execution_mode || '')}} ${{badge('近30天 ' + String(stats.matches_30d || 0) + ' 次')}}</div>
         </div>
         <div class="summary-cell">${{escapeHtml(rule.description || '')}}</div>
         <div class="settings-grid" style="margin-top:10px">

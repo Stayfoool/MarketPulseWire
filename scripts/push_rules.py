@@ -1412,6 +1412,20 @@ def yicai_morning_brief_rule(
     }
 
 
+ORDERED_PUSH_RULE_MATCHERS = (
+    ("investment_bank_rating_target_direct_holding", investment_bank_research_rule),
+    ("holding_keyword_immediate_alert", holding_keyword_immediate_alert_rule),
+    ("investment_bank_portfolio_relation", value_directory_portfolio_relation_rule),
+    ("international_bank_theme_strategy", international_bank_theme_strategy_rule),
+    ("value_directory_industry_macro_research", value_directory_industry_macro_research_rule),
+    ("yicai_morning_brief", yicai_morning_brief_rule),
+    ("direct_holding_hard_variable", direct_holding_hard_variable_rule),
+    ("official_company_hard_variable", official_company_hard_variable_rule),
+    ("macro_policy_line", macro_policy_event_rule),
+)
+ORDERED_FIRST_MATCH_RULE_IDS = tuple(rule_id for rule_id, _matcher in ORDERED_PUSH_RULE_MATCHERS)
+
+
 def first_matching_push_rule(
     *,
     source: str,
@@ -1419,18 +1433,11 @@ def first_matching_push_rule(
     holdings: list[dict[str, Any]],
     symbols: set[str] | None = None,
 ) -> dict[str, Any] | None:
-    matchers = (
-        ("investment_bank_rating_target_direct_holding", investment_bank_research_rule),
-        ("holding_keyword_immediate_alert", holding_keyword_immediate_alert_rule),
-        ("investment_bank_portfolio_relation", value_directory_portfolio_relation_rule),
-        ("international_bank_theme_strategy", international_bank_theme_strategy_rule),
-        ("value_directory_industry_macro_research", value_directory_industry_macro_research_rule),
-        ("yicai_morning_brief", yicai_morning_brief_rule),
-        ("direct_holding_hard_variable", direct_holding_hard_variable_rule),
-        ("official_company_hard_variable", official_company_hard_variable_rule),
-        ("macro_policy_line", macro_policy_event_rule),
-    )
-    for _rule_id, matcher in sorted(matchers, key=lambda item: rule_priority(item[0]), reverse=True):
+    for _rule_id, matcher in sorted(
+        ORDERED_PUSH_RULE_MATCHERS,
+        key=lambda entry: rule_priority(entry[0]),
+        reverse=True,
+    ):
         rule = matcher(source=source, item=item, holdings=holdings, symbols=symbols)
         if rule:
             return rule

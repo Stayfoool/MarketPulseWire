@@ -8,6 +8,8 @@ from pathlib import Path
 
 from decision_engine import decide_market_item
 from market_item import NormalizedMarketItem
+from push_rules import ORDERED_FIRST_MATCH_RULE_IDS
+from rule_center import ORDERED_FIRST_MATCH, PARALLEL_MERGE, RULE_DEFINITIONS
 from source_profiles import build_profiles
 
 
@@ -144,6 +146,22 @@ def test_independent_routes_are_explicit_and_tested() -> None:
         assert (SCRIPTS / contract["test"]).exists(), contract["test"]
 
 
+def test_rule_center_execution_modes_match_runtime_ordering() -> None:
+    ordered_runtime_ids = set(ORDERED_FIRST_MATCH_RULE_IDS)
+    ordered_definition_ids: set[str] = set()
+    for rule in RULE_DEFINITIONS:
+        rule_id = str(rule["id"])
+        mode = str(rule.get("execution_mode") or "")
+        field_keys = {str(field["key"]) for field in rule.get("fields") or ()}
+        assert mode in {ORDERED_FIRST_MATCH, PARALLEL_MERGE}, rule_id
+        if mode == ORDERED_FIRST_MATCH:
+            ordered_definition_ids.add(rule_id)
+            assert "priority" in field_keys, rule_id
+        else:
+            assert "priority" not in field_keys, rule_id
+    assert ordered_definition_ids == ordered_runtime_ids
+
+
 def test_source_profiles_have_complete_runtime_ownership() -> None:
     profiles = build_profiles()
     ids = [profile.id for profile in profiles]
@@ -228,6 +246,7 @@ def main() -> int:
     test_unified_collectors_use_runtime_without_owning_delivery()
     test_removed_compatibility_modules_do_not_return()
     test_independent_routes_are_explicit_and_tested()
+    test_rule_center_execution_modes_match_runtime_ordering()
     test_source_profiles_have_complete_runtime_ownership()
     test_common_rule_is_stable_across_transport_metadata()
     test_trade_friction_rule_is_stable_across_transport_metadata()
