@@ -141,6 +141,12 @@ def _pattern_labels(text: str, patterns: dict[str, tuple[str, ...]]) -> list[str
     return [label for label, variants in patterns.items() if any(re.search(pattern, text, flags=re.I) for pattern in variants)]
 
 
+def _is_issuance(text: str) -> bool:
+    return _contains(text, ISSUANCE_MARKERS) or bool(
+        re.search(r"(?:发行|发售).{0,32}(?:债券|票据)|(?:债券|票据).{0,20}(?:发行|发售)", text)
+    )
+
+
 def _amount(text: str) -> str:
     match = re.search(r"(?:[$¥￥]\s*)?\d[\d,.]*(?:\.\d+)?\s*(?:billion|million|bn|trillion|亿|万亿)", text, flags=re.I)
     return match.group(0).strip() if match else ""
@@ -208,7 +214,7 @@ def ai_credit_risk_rule(source: str, item: dict[str, Any]) -> dict[str, Any] | N
             continue
         families = _pattern_labels(window, STRESS_PATTERNS)
         outcomes = _pattern_labels(window, HARD_OUTCOME_PATTERNS)
-        issuance = _contains(window, ISSUANCE_MARKERS)
+        issuance = _is_issuance(window)
         if not (families or outcomes or issuance):
             continue
         claims.append({
