@@ -302,6 +302,7 @@ def test_source_profiles_group_six_categories() -> None:
     assert {
         "x_serenity",
         "semianalysis",
+        "alphabstract_summaries",
         "value_directory_ib_industry_macro",
         "nvidia_blog",
         "cls_telegraph_api",
@@ -309,11 +310,14 @@ def test_source_profiles_group_six_categories() -> None:
         "ifind_notice",
     } <= profile_ids
     semianalysis = next(item for item in payload["profiles"] if item["id"] == "semianalysis")
+    alphabstract = next(item for item in payload["profiles"] if item["id"] == "alphabstract_summaries")
     cls = next(item for item in payload["profiles"] if item["id"] == "cls_telegraph_api")
     sina_flash = next(item for item in payload["profiles"] if item["id"] == "sina_flash")
     sina_stock_news = next(item for item in payload["profiles"] if item["id"] == "sina_stock_news")
     trendforce_page = next(item for item in payload["profiles"] if item["category"] == "research_industry_media" and item["source_type"] == "公开列表页")
     assert "surveil-research-collector.timer" in semianalysis["service_units"]
+    assert "surveil-research-collector.timer" in alphabstract["service_units"]
+    assert alphabstract["publisher_role"] == "third_party_research_summary"
     assert "surveil-rss-monitor.service" not in semianalysis["service_units"]
     assert "surveil-research-collector.timer" in trendforce_page["service_units"]
     assert "surveil-trendforce-page-monitor.service" not in trendforce_page["service_units"]

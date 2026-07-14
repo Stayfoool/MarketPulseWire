@@ -4,7 +4,7 @@ This document is an as-built map of the current code and production shape. Engin
 
 ## Runtime Spine
 
-All general research, industry-media, news-media, official-company, flash, portfolio-news, ValueList, and iFinD items use one runtime entry:
+All general research, industry-media, news-media, official-company, flash, portfolio-news, AlphaAbstract, ValueList, and iFinD items use one runtime entry:
 
 ```text
 collector
@@ -59,15 +59,16 @@ The former direct/compat route switch and these wrapper modules have been remove
 
 | Source group | Production entry | Item processing |
 |---|---|---|
-| Research and industry media | `research_collector.py` -> `rss_monitor.py` / `trendforce_page_monitor.py` | Unified runtime, article store |
+| Research and industry media | `research_collector.py` -> `rss_monitor.py` / `trendforce_page_monitor.py` / `alphabstract_monitor.py` | Unified runtime, article store |
 | Official company feeds | `official_collector.py` -> `rss_monitor.py` | Unified runtime, official-news store |
 | Domestic and overseas news media | `news_collector.py` -> `china_finance_media_monitor.py` / RSS helpers | Unified runtime, article store |
 | Sina 7x24 flash | `sina_flash.py` | Unified runtime, event store |
 | Sina portfolio stock news | `sina_stock_news.py` | Relevance enrichment, then unified runtime and event store |
 | iFinD company disclosures | `ifind_batch.py` | Unified runtime and event store; the batch summary is an operational card |
+| AlphaAbstract research summaries | `alphabstract_monitor.py` through `research_collector.py` | Public sitemap/page enrichment, then unified runtime and article store |
 | ValueList research directory | `value_directory_monitor.py` | Private browser/OCR enrichment, then unified runtime and article store |
 
-Source-specific login, WAF, API, polling, browser profile, OCR and attachment behavior ends before the normalized runtime boundary.
+Source-specific login, WAF, API, sitemap discovery, polling, browser profile, OCR and attachment behavior ends before the normalized runtime boundary.
 
 ## Storage
 

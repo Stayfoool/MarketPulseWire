@@ -269,9 +269,19 @@ def matched_bank_names(text: str, allowed_banks: set[str] | None = None) -> list
             alias.casefold() in allowed_banks for alias in aliases
         ):
             continue
-        if any(alias.lower() in lowered for alias in aliases):
+        if any(bank_alias_matches(lowered, alias) for alias in aliases):
             banks.append(display)
     return banks
+
+
+def bank_alias_matches(lowered_text: str, alias: str) -> bool:
+    normalized = alias.lower().strip()
+    if not normalized:
+        return False
+    if re.search(r"[a-z0-9]", normalized):
+        pattern = re.escape(normalized).replace(r"\ ", r"\s+")
+        return re.search(rf"(?<![a-z0-9]){pattern}(?![a-z0-9])", lowered_text) is not None
+    return normalized in lowered_text
 
 
 def holding_tokens(holding: dict[str, Any]) -> list[str]:

@@ -125,6 +125,10 @@ All general collectors construct `NormalizedMarketItem` and call
 `official_news_reviews`, and `events/event_analyses` stores. The former
 direct/compat runtime switch and compatibility wrappers have been removed; rollback
 now uses the normal Git/PR/deployment process instead of selecting a second runtime.
+The research collector also runs public list/sitemap page sources such as
+TrendForce/SEMI pages and AlphaAbstract summaries on the same low-frequency page
+cadence. AlphaAbstract uses its public `sitemap.xml` and public summary pages;
+first production discovery is baselined by default unless `SURVEIL_NOTIFY_BASELINE=1`.
 X/Serenity remains the deliberate independent route. `value_directory_monitor`
 keeps its private Playwright/OCR collection boundary, but its final decision,
 compatible review write, dedup and delivery use the unified runtime.

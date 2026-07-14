@@ -17,6 +17,7 @@ SCRIPTS = ROOT / "scripts"
 UNIFIED_ITEM_COLLECTORS = (
     "rss_monitor.py",
     "trendforce_page_monitor.py",
+    "alphabstract_monitor.py",
     "china_finance_media_monitor.py",
     "sina_flash.py",
     "sina_stock_news.py",
