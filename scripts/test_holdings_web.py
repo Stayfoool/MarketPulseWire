@@ -294,9 +294,10 @@ def test_source_profiles_group_six_categories() -> None:
         "0. X / Serenity",
         "1. 研究机构/行业媒体",
         "2. 公司官网",
-        "3. 新闻媒体",
-        "4. 新浪个股新闻",
-        "5. iFinD 公司公告",
+        "3. 官方贸易政策",
+        "4. 新闻媒体",
+        "5. 新浪个股新闻",
+        "6. iFinD 公司公告",
     ]
     profile_ids = {item["id"] for item in payload["profiles"]}
     assert {
@@ -305,6 +306,7 @@ def test_source_profiles_group_six_categories() -> None:
         "alphabstract_summaries",
         "value_directory_ib_industry_macro",
         "nvidia_blog",
+        "ustr_press_releases",
         "cls_telegraph_api",
         "sina_stock_news",
         "ifind_notice",
@@ -312,6 +314,7 @@ def test_source_profiles_group_six_categories() -> None:
     semianalysis = next(item for item in payload["profiles"] if item["id"] == "semianalysis")
     alphabstract = next(item for item in payload["profiles"] if item["id"] == "alphabstract_summaries")
     cls = next(item for item in payload["profiles"] if item["id"] == "cls_telegraph_api")
+    ustr = next(item for item in payload["profiles"] if item["id"] == "ustr_press_releases")
     sina_flash = next(item for item in payload["profiles"] if item["id"] == "sina_flash")
     sina_stock_news = next(item for item in payload["profiles"] if item["id"] == "sina_stock_news")
     trendforce_page = next(item for item in payload["profiles"] if item["category"] == "research_industry_media" and item["source_type"] == "公开列表页")
@@ -322,6 +325,8 @@ def test_source_profiles_group_six_categories() -> None:
     assert "surveil-research-collector.timer" in trendforce_page["service_units"]
     assert "surveil-trendforce-page-monitor.service" not in trendforce_page["service_units"]
     assert cls["publisher_role"] == "news_media"
+    assert ustr["publisher_role"] == "government_official"
+    assert "surveil-news-collector.timer" in ustr["service_units"]
     assert sina_flash["publisher_role"] == "news_media"
     assert sina_stock_news["publisher_role"] == "news_media"
 

@@ -2783,6 +2783,8 @@ function renderSourceProfiles() {{
           <select class="source-control" data-source-id="${{escapeHtml(item.id || '')}}" data-field="publisher_role" onchange="updateSourceProfileDraft(this)">
             <option value="" ${{item.publisher_role ? '' : 'selected'}}>非新闻媒体转述</option>
             <option value="news_media" ${{item.publisher_role === 'news_media' ? 'selected' : ''}}>新闻媒体转述</option>
+            <option value="government_official" ${{item.publisher_role === 'government_official' ? 'selected' : ''}}>政府官方</option>
+            <option value="third_party_research_summary" ${{item.publisher_role === 'third_party_research_summary' ? 'selected' : ''}}>第三方研究汇总</option>
           </select>
         </td>
         <td>

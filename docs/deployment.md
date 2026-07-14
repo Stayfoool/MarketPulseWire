@@ -129,6 +129,14 @@ The research collector also runs public list/sitemap page sources such as
 TrendForce/SEMI pages and AlphaAbstract summaries on the same low-frequency page
 cadence. AlphaAbstract uses its public `sitemap.xml` and public summary pages;
 first production discovery is baselined by default unless `SURVEIL_NOTIFY_BASELINE=1`.
+The news collector also runs public official trade-policy sources through
+`trade_policy_monitor.py`: Federal Register JSON, USTR press releases, European
+Commission Press Corner RSS, MOFCOM policy releases, and MOFCOM spokesperson
+statements. Each source establishes its own first-run baseline, records
+`trade_policy/<source_id>` health, and sends new items through the same unified
+article runtime. The common `trade_friction_escalation` decision rule also applies
+to every existing and future normalized source; official-source identity alone
+does not create push eligibility.
 X/Serenity remains the deliberate independent route. `value_directory_monitor`
 keeps its private Playwright/OCR collection boundary, but its final decision,
 compatible review write, dedup and delivery use the unified runtime.

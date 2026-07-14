@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from decision_engine import decide_market_item
+from decision_engine import _decision_from_rule, decide_market_item
 from market_item import NormalizedMarketItem
 
 
@@ -159,6 +159,68 @@ def test_macro_secondary_match_becomes_limited_judgement_candidate() -> None:
     assert decision.candidate_rules[0]["macro_policy_line"]["tier"] == "secondary_major"
 
 
+def test_trade_friction_rule_is_source_neutral() -> None:
+    text = "USTR seeks public comment on proposed Section 301 tariffs covering China semiconductor imports."
+    variants = (
+        NormalizedMarketItem(
+            source="federal_register_trade_policy",
+            source_category="official_policy",
+            publisher_role="government_official",
+            collector="trade_policy_monitor",
+            content_type="official_policy",
+            title=text,
+        ),
+        NormalizedMarketItem(
+            source="digitimes_en_daily",
+            source_category="research_industry_media",
+            publisher_role="news_media",
+            collector="rss_monitor",
+            content_type="article",
+            title=text,
+        ),
+    )
+    decisions = [decide_market_item(item, holdings=[]) for item in variants]
+    assert {decision.action for decision in decisions} == {"push"}
+    assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"trade_friction_escalation"}
+
+
+def test_weak_trade_tension_becomes_daily() -> None:
+    decision = decide_market_item(
+        {"source": "news_media", "title": "EU tariffs push Chinese carmakers to seek deeper ties in Europe."},
+        holdings=[],
+    )
+    assert decision.action == "daily"
+    assert decision.rule_hits[0]["rule_id"] == "trade_friction_escalation"
+    assert decision.need_limited_llm_judgement is True
+
+
+def test_rule_business_action_does_not_override_delivery_action() -> None:
+    push_decision = _decision_from_rule(
+        {
+            "rule_id": "business_action_example",
+            "action": "daily",
+            "push_now": True,
+            "importance": "high",
+            "reason": "业务动作字段与投递动作字段相互独立。",
+        },
+        audit_json={},
+        source_stage="test",
+    )
+    daily_decision = _decision_from_rule(
+        {
+            "rule_id": "explicit_delivery_action_example",
+            "decision_action": "daily",
+            "push_now": False,
+            "importance": "medium",
+            "reason": "显式投递动作使用独立字段。",
+        },
+        audit_json={},
+        source_stage="test",
+    )
+    assert push_decision.action == "push"
+    assert daily_decision.action == "daily"
+
+
 def test_no_deterministic_match_archives_for_legacy_gate_to_continue() -> None:
     item = {"source": "news_media", "title": "普通行业早报", "summary": "多家公司发布常规动态。"}
     decision = decide_market_item(item, holdings=[])
@@ -178,6 +240,9 @@ def main() -> int:
     test_holding_and_attributed_research_rules_are_preserved_together()
     test_macro_primary_text_decides_push_without_raw_event_marker()
     test_macro_secondary_match_becomes_limited_judgement_candidate()
+    test_trade_friction_rule_is_source_neutral()
+    test_weak_trade_tension_becomes_daily()
+    test_rule_business_action_does_not_override_delivery_action()
     test_no_deterministic_match_archives_for_legacy_gate_to_continue()
     print("decision engine checks passed")
     return 0

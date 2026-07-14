@@ -18,6 +18,7 @@ UNIFIED_ITEM_COLLECTORS = (
     "rss_monitor.py",
     "trendforce_page_monitor.py",
     "alphabstract_monitor.py",
+    "trade_policy_monitor.py",
     "china_finance_media_monitor.py",
     "sina_flash.py",
     "sina_stock_news.py",
@@ -198,12 +199,38 @@ def test_common_rule_is_stable_across_transport_metadata() -> None:
     assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"industry_quantified_hardline"}
 
 
+def test_trade_friction_rule_is_stable_across_transport_metadata() -> None:
+    text = "European Commission initiates an anti-subsidy investigation into battery electric vehicles from China."
+    variants = (
+        NormalizedMarketItem(
+            source="eu_press_corner_trade_policy",
+            source_category="official_policy",
+            publisher_role="government_official",
+            collector="trade_policy_monitor",
+            content_type="official_policy",
+            title=text,
+        ),
+        NormalizedMarketItem(
+            source="cls_telegraph_api",
+            source_category="news_media",
+            publisher_role="news_media",
+            collector="china_finance_media_monitor",
+            content_type="article",
+            title=text,
+        ),
+    )
+    decisions = [decide_market_item(item, holdings=[]) for item in variants]
+    assert {decision.action for decision in decisions} == {"push"}
+    assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"trade_friction_escalation"}
+
+
 def main() -> int:
     test_unified_collectors_use_runtime_without_owning_delivery()
     test_removed_compatibility_modules_do_not_return()
     test_independent_routes_are_explicit_and_tested()
     test_source_profiles_have_complete_runtime_ownership()
     test_common_rule_is_stable_across_transport_metadata()
+    test_trade_friction_rule_is_stable_across_transport_metadata()
     print("architecture invariant checks passed")
     return 0
 

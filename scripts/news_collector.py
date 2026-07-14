@@ -22,12 +22,14 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import china_finance_media_monitor as china_media
+import trade_policy_monitor as trade_policy
 from china_media_sources import CHINA_MEDIA_FEEDS, CHINA_MEDIA_LABELS
 from collector_direct_shadow import attach_direct_decision_shadow, direct_shadow_counts, safe_load_shadow_holdings
 from collector_runtime import filter_enabled_mapping_for_run
 from market_review_store import article_item_id
 from rss_monitor import DB_PATH, strip_tags
 from source_profiles import SOURCE_PROFILE_CONFIG_PATH, runtime_profile_map
+from trade_policy_sources import TRADE_POLICY_SOURCES, TradePolicySource
 from x_check import load_env
 
 
@@ -35,6 +37,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 REPORT_DIR = ROOT / "reports"
 NEWS_CATEGORY = "news_media"
+TRADE_POLICY_CATEGORY = "official_policy"
 NEWS_BATCH_SOURCES = {
     "yicai_brief": CHINA_MEDIA_FEEDS["yicai_brief"],
     "cls_telegraph_api": CHINA_MEDIA_FEEDS["cls_telegraph_api"],
@@ -58,6 +61,16 @@ def news_sources(config_path: Path = SOURCE_PROFILE_CONFIG_PATH) -> dict[str, st
     return filter_enabled_mapping_for_run(sources, label="新闻媒体批处理源", config_path=config_path)
 
 
+def official_trade_policy_sources(config_path: Path = SOURCE_PROFILE_CONFIG_PATH) -> list[TradePolicySource]:
+    profiles = runtime_profile_map(config_path=config_path)
+    return [
+        source
+        for source in TRADE_POLICY_SOURCES
+        if profiles.get(source.name, {}).get("category") == TRADE_POLICY_CATEGORY
+        and profiles.get(source.name, {}).get("enabled", True)
+    ]
+
+
 def selected_sources(
     names: Iterable[str],
     *,
@@ -71,6 +84,26 @@ def selected_sources(
     if missing:
         raise SystemExit(f"未知或已停用的新闻媒体 source：{', '.join(missing)}")
     return {source: url for source, url in sources.items() if source in requested}
+
+
+def selected_source_groups(
+    names: Iterable[str],
+    *,
+    config_path: Path = SOURCE_PROFILE_CONFIG_PATH,
+) -> tuple[dict[str, str], list[TradePolicySource]]:
+    requested = {str(name or "").strip() for name in names if str(name or "").strip()}
+    media = news_sources(config_path=config_path)
+    policy = official_trade_policy_sources(config_path=config_path)
+    if not requested:
+        return media, policy
+    known = set(media) | {source.name for source in policy}
+    missing = sorted(requested - known)
+    if missing:
+        raise SystemExit(f"未知或已停用的 news collector source：{', '.join(missing)}")
+    return (
+        {source: url for source, url in media.items() if source in requested},
+        [source for source in policy if source.name in requested],
+    )
 
 
 def table_exists(conn: sqlite3.Connection, name: str) -> bool:
@@ -238,6 +271,7 @@ def collect_shadow(
     respect_prod_cls_state: bool = False,
     direct_shadow: bool = False,
     direct_shadow_holdings: list[dict[str, Any]] | None = None,
+    policy_sources: list[TradePolicySource] | None = None,
 ) -> dict[str, Any]:
     started_at = utc_now()
     source_ids = list(sources)
@@ -268,6 +302,41 @@ def collect_shadow(
             rows_by_source[source] = future.result()
 
     rows = [rows_by_source[source] for source in sources if source in rows_by_source]
+    if policy_sources:
+        policy_payload = trade_policy.shadow_collect(policy_sources, limit=limit)
+        for policy_row in policy_payload.get("rows", []):
+            candidates = []
+            for item in policy_row.get("candidates", []):
+                decision = item.get("decision") if isinstance(item.get("decision"), dict) else {}
+                action = str(decision.get("action") or "archive")
+                candidates.append(
+                    {
+                        **item,
+                        "already_seen": False,
+                        "already_reviewed": False,
+                        "would_focus": action in {"push", "daily"},
+                        "mandatory_push": "",
+                        "summary": "",
+                        "source_module": policy_row.get("label", policy_row.get("source", "")),
+                        "body_source": "official policy shadow",
+                        "pipeline": "official policy shadow -> source-neutral decision engine",
+                        "direct_shadow": {"decision": decision},
+                    }
+                )
+            rows.append(
+                {
+                    "source": policy_row.get("source", ""),
+                    "url": "",
+                    "ok": bool(policy_row.get("ok")),
+                    "label": policy_row.get("label", ""),
+                    "raw_count": int(policy_row.get("raw_count") or 0),
+                    "candidate_count": len(candidates),
+                    "focus_count": sum(1 for item in candidates if item.get("would_focus")),
+                    "mandatory_count": 0,
+                    "candidates": candidates,
+                    "error": str(policy_row.get("error") or ""),
+                }
+            )
     errors = [row for row in rows if not row.get("ok")]
     counts = {
         "sources": len(rows),
@@ -313,16 +382,25 @@ def collect_shadow(
 def collect_production(
     *,
     sources: dict[str, str],
+    policy_sources: list[TradePolicySource] | None = None,
     notify_baseline: bool = False,
 ) -> dict[str, Any]:
     started_at = utc_now()
     errors: list[dict[str, str]] = []
     new_items = 0
+    media_new_items = 0
+    policy_new_items = 0
     if sources:
         try:
-            new_items = china_media.run_once(list(sources), notify_baseline=notify_baseline)
+            media_new_items = china_media.run_once(list(sources), notify_baseline=notify_baseline)
         except Exception as exc:  # noqa: BLE001 - report the batch failure clearly
             errors.append({"stage": "news_media", "error": f"{type(exc).__name__}: {exc}"})
+    if policy_sources:
+        try:
+            policy_new_items = trade_policy.run_once(policy_sources, notify_baseline=notify_baseline)
+        except Exception as exc:  # noqa: BLE001 - report the source family failure clearly
+            errors.append({"stage": "official_trade_policy", "error": f"{type(exc).__name__}: {exc}"})
+    new_items = media_new_items + policy_new_items
     return {
         "ok": not errors,
         "mode": "production",
@@ -334,8 +412,12 @@ def collect_production(
         "started_at": started_at,
         "finished_at": utc_now(),
         "counts": {
-            "sources": len(sources),
+            "sources": len(sources) + len(policy_sources or []),
+            "news_media_sources": len(sources),
+            "trade_policy_sources": len(policy_sources or []),
             "new_items": new_items,
+            "news_media_new_items": media_new_items,
+            "trade_policy_new_items": policy_new_items,
         },
         "errors": errors,
     }
@@ -397,7 +479,7 @@ def print_text_summary(payload: dict[str, Any]) -> None:
 
 def main() -> int:
     load_env(ENV_PATH)
-    parser = argparse.ArgumentParser(description="Run domestic news-media collector.")
+    parser = argparse.ArgumentParser(description="Run news-media and official trade-policy collector.")
     parser.add_argument("--source", action="append", default=[], help="只跑指定 source id，可重复。")
     parser.add_argument("--production", action="store_true", help="运行生产链路：入库、统一决策/解读、Skeptic/Tavily、飞书推送。")
     parser.add_argument("--notify-baseline", action="store_true", help="生产模式下首次建立基线时也发送通知。默认不发送旧条目。")
@@ -415,10 +497,11 @@ def main() -> int:
     parser.add_argument("--strict-exit", action="store_true", help="任一 source 失败时返回非 0；默认只在报告中记录错误。")
     args = parser.parse_args()
 
-    sources = selected_sources(args.source)
+    sources, policy_sources = selected_source_groups(args.source)
     if args.production:
         payload = collect_production(
             sources=sources,
+            policy_sources=policy_sources,
             notify_baseline=args.notify_baseline or os.getenv("SURVEIL_NOTIFY_BASELINE", "") == "1",
         )
     else:
@@ -429,6 +512,7 @@ def main() -> int:
             compare_reviews=not args.no_compare_reviews,
             respect_prod_cls_state=args.respect_prod_cls_state,
             direct_shadow=args.direct_shadow,
+            policy_sources=policy_sources,
         )
     if args.write_report:
         payload["report_path"] = str(write_report(payload))

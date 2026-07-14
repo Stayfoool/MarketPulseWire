@@ -14,8 +14,9 @@ from typing import Any
 from attributed_research import EXTRACTION_KEY, attributed_research_rule
 from industry_hardline import industry_topic_hard_variable_rule
 from macro_policy import macro_policy_match
-from market_item import DecisionResult, NormalizedMarketItem, normalize_importance
+from market_item import VALID_ACTIONS, DecisionResult, NormalizedMarketItem, normalize_importance
 from push_rules import first_matching_push_rule
+from trade_friction import trade_friction_rule
 
 
 ENGINE_VERSION = "decision_engine_v1"
@@ -85,6 +86,7 @@ def _audit_base(source: str, item: NormalizedMarketItem | dict[str, Any], legacy
             "push_rules.first_matching_push_rule",
             "attributed_research.attributed_research_rule",
             "industry_hardline.industry_topic_hard_variable_rule",
+            "trade_friction.trade_friction_rule",
             "macro_policy.macro_policy_match",
         ],
     }
@@ -301,18 +303,24 @@ def _decision_from_rule(
     source_stage: str,
 ) -> DecisionResult:
     audit = dict(audit_json)
-    audit["deterministic_push_match"] = True
+    explicit_action = str(rule.get("decision_action") or "").strip().lower()
+    action = (
+        explicit_action
+        if explicit_action in VALID_ACTIONS
+        else "push" if rule.get("push_now") or rule.get("should_push") else "archive"
+    )
+    audit["deterministic_push_match"] = action == "push"
     audit["source_stage"] = source_stage
     audit["legacy_rule"] = dict(rule)
     return DecisionResult(
-        action="push" if rule.get("push_now") or rule.get("should_push") else "archive",
+        action=action,
         importance=normalize_importance(rule.get("importance"), default="high"),
         reason=str(rule.get("reason") or ""),
         brief_reason=str(rule.get("brief_reason") or rule.get("reason") or ""),
         rule_hits=[rule],
         dedup=_rule_dedup(rule),
-        need_llm_interpretation=True,
-        need_limited_llm_judgement=False,
+        need_llm_interpretation=action == "push",
+        need_limited_llm_judgement=action == "daily",
         audit_json=audit,
     )
 
@@ -448,7 +456,8 @@ def decide_market_item(
         symbols=symbol_set,
     )
     industry_rule = industry_topic_hard_variable_rule(resolved_source, legacy_item)
-    matched_rules = [rule for rule in (push_rule, attributed_rule, industry_rule) if rule]
+    trade_rule = trade_friction_rule(item)
+    matched_rules = [rule for rule in (push_rule, attributed_rule, industry_rule, trade_rule) if rule]
     if len(matched_rules) > 1:
         dedup_rule = next((rule for rule in matched_rules if rule.get("dedup_key")), None)
         return _decision_from_rules(
@@ -470,6 +479,12 @@ def decide_market_item(
             industry_rule,
             audit_json=audit,
             source_stage="industry_topic_hard_variable",
+        )
+    if trade_rule:
+        return _decision_from_rule(
+            trade_rule,
+            audit_json=audit,
+            source_stage="trade_friction_escalation",
         )
 
     macro = macro_policy_match(legacy_item)

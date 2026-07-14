@@ -198,6 +198,19 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
+        "id": "trade_friction_escalation",
+        "name": "中美/中欧贸易摩擦早期预警",
+        "group": "宏观与政策",
+        "description": "任一通用来源出现中美或中欧贸易政策工具、前置程序、报复威胁或明确关系升级时提前提醒；弱但明确的紧张信号进入 daily。",
+        "runtime": "trade_friction / decision_engine / all normalized sources",
+        "hit_markers": ("trade_friction_escalation",),
+        "priority": 65,
+        "fields": (
+            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
+            {"key": "priority", "label": "规则顺序", "type": "int", "default": 65, "min": 1, "max": 999},
+        ),
+    },
+    {
         "id": "attributed_research_hard_variable",
         "name": "明确署名的行业研究硬变量",
         "group": "研究机构/行业媒体",
