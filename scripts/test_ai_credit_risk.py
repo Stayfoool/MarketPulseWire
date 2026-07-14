@@ -51,14 +51,21 @@ def test_same_content_is_source_neutral_and_deduplicates() -> None:
 
 
 def test_ordinary_large_issuance_is_daily_and_not_industry_push() -> None:
-    item = {
-        "source": "cls_telegraph_api",
-        "title": "Microsoft issued $40 billion of bonds to finance AI infrastructure.",
-        "published_at": "2026-07-14T08:00:00+08:00",
-    }
-    decision = decide_market_item(item, holdings=[])
-    assert decision.action == "daily"
-    assert [rule["rule_id"] for rule in decision.rule_hits] == ["ai_hyperscaler_credit_stress"]
+    texts = (
+        "Microsoft issued $40 billion of bonds to finance AI infrastructure.",
+        "微软发行400亿美元债券为AI基础设施融资。",
+    )
+    for text in texts:
+        decision = decide_market_item(
+            {
+                "source": "cls_telegraph_api",
+                "title": text,
+                "published_at": "2026-07-14T08:00:00+08:00",
+            },
+            holdings=[],
+        )
+        assert decision.action == "daily"
+        assert [rule["rule_id"] for rule in decision.rule_hits] == ["ai_hyperscaler_credit_stress"]
 
 
 def test_one_stress_family_remains_daily() -> None:
