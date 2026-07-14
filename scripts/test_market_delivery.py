@@ -92,6 +92,10 @@ def holding_market_move_rule(target_name: str, target_code: str) -> dict:
     }
 
 
+def macro_rule() -> dict:
+    return {"rule_id": "macro_policy_line"}
+
+
 def required_decision(payload: dict) -> DecisionResult:
     decision = decision_result_from_payload(payload)
     assert decision is not None
@@ -498,6 +502,114 @@ def test_event_delivery_records_intraday_market_move_duplicate() -> None:
             os.environ["FEISHU_WEBHOOK"] = original_webhook
 
 
+def test_macro_release_and_reaction_each_send_once_while_warsh_speech_is_retained() -> None:
+    original_send = market_delivery.send_card
+    calls: list[dict] = []
+    release_one = {
+        "id": "cpi-release-1",
+        "title": "美国6月CPI环比下降0.4%，同比增长3.5%，均低于预期。",
+        "published_at": "2026-07-14T12:32:47+00:00",
+    }
+    release_two = {
+        "id": "cpi-release-2",
+        "title": "美国6月消费者价格指数同比增长3.5%，环比下降0.4%。",
+        "published_at": "2026-07-14T12:34:27+00:00",
+    }
+    reaction_one = {
+        "id": "cpi-reaction-1",
+        "title": "美国6月CPI环比下降0.4%超预期，美股期货跳涨，纳指期货涨1.3%。",
+        "published_at": "2026-07-14T12:34:32+00:00",
+    }
+    reaction_two = {
+        "id": "cpi-reaction-2",
+        "title": "美国6月CPI同比增长3.5%，美元走低，美债收益率下跌。",
+        "published_at": "2026-07-14T12:42:00+00:00",
+    }
+    warsh = {
+        "id": "cpi-warsh-1",
+        "title": "美国6月CPI环比下降0.4%。美联储主席沃什表示，不会容忍通胀过高。",
+        "published_at": "2026-07-14T12:46:37+00:00",
+    }
+    review = content_review("push", rule_hits=[macro_rule()])
+    try:
+        market_delivery.send_card = lambda card: calls.append(card) or True
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            items = (release_one, release_two, reaction_one, reaction_two, warsh)
+            sources = (
+                "cls_telegraph_api",
+                "yicai_brief",
+                "cls_telegraph_api",
+                "wallstreetcn_news",
+                "sina_finance_articles",
+            )
+            with sqlite3.connect(db_path) as conn:
+                for source, item in zip(sources, items, strict=True):
+                    save_article_review(conn, source, item, review)
+            statuses = [
+                market_delivery.deliver_article_review(
+                    source, item, review, decision=required_decision(review), db_path=db_path
+                )
+                for source, item in zip(sources, items, strict=True)
+            ]
+            with sqlite3.connect(db_path) as conn:
+                stored = article_review_exists(conn, "yicai_brief", "cpi-release-2")
+                dedup_rows = conn.execute(
+                    "SELECT rule_id, status FROM rule_alert_dedup ORDER BY created_at"
+                ).fetchall()
+        assert statuses == ["sent", "duplicate", "sent", "duplicate", "sent"]
+        assert len(calls) == 3
+        assert stored is not None and stored["push_now"] is False
+        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
+        assert dedup_rows == [("macro_data_release", "sent"), ("macro_market_reaction", "sent")]
+    finally:
+        market_delivery.send_card = original_send
+
+
+def test_event_delivery_records_macro_release_duplicate() -> None:
+    original_webhook = os.environ.get("FEISHU_WEBHOOK")
+    original_send = market_delivery.send_card_with_response
+    try:
+        os.environ["FEISHU_WEBHOOK"] = "https://example.invalid/webhook"
+        market_delivery.send_card_with_response = lambda card: FeishuResponse(True, 0, "ok", '{"code":0}')
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            first_id = insert_event(
+                db_path,
+                "event-cpi-1",
+                "美国6月CPI环比下降0.4%，同比增长3.5%。",
+                source="cls_telegraph_api",
+                published_at="2026-07-14T12:32:47+00:00",
+            )
+            second_id = insert_event(
+                db_path,
+                "event-cpi-2",
+                "美国6月消费者价格指数同比增长3.5%，环比下降0.4%。",
+                source="sina_flash",
+                published_at="2026-07-14T12:34:00+00:00",
+            )
+            analysis = decision_analysis(rule_hits=[macro_rule()])
+            assert market_delivery.deliver_event(
+                first_id, analysis, decision=required_decision(analysis), db_path=db_path
+            ) == "sent"
+            assert market_delivery.deliver_event(
+                second_id, analysis, decision=required_decision(analysis), db_path=db_path
+            ) == "duplicate"
+            rows = delivery_rows(db_path)
+        duplicate = json.loads(rows[1][2])
+        assert [row[0] for row in rows] == ["sent", "duplicate"]
+        assert duplicate["dedup_kind"] == "macro_data_release"
+        assert duplicate["first_source"] == "cls_telegraph_api"
+    finally:
+        market_delivery.send_card_with_response = original_send
+        if original_webhook is None:
+            os.environ.pop("FEISHU_WEBHOOK", None)
+        else:
+            os.environ["FEISHU_WEBHOOK"] = original_webhook
+
+
 def main() -> int:
     test_simple_event_card_formats_published_time_for_beijing()
     test_archive_and_missing_webhook_are_recorded_without_sending()
@@ -510,6 +622,8 @@ def main() -> int:
     test_distinct_concepts_are_not_intraday_market_move_duplicates()
     test_intraday_market_move_send_failure_releases_reservation()
     test_event_delivery_records_intraday_market_move_duplicate()
+    test_macro_release_and_reaction_each_send_once_while_warsh_speech_is_retained()
+    test_event_delivery_records_macro_release_duplicate()
     print("market delivery checks passed")
     return 0
 

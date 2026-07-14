@@ -31,6 +31,8 @@ flowchart LR
 
 `DecisionResult.action` is the only push-eligibility input accepted by delivery. Delivery execution may still produce `sent`, `duplicate`, `skipped`, or `failed`. Missing decisions cannot fall back to legacy push fields. For a push-eligible intraday Chinese equity market move, delivery may derive a conservative source-neutral fact identity from the Beijing market date, direction, literal concept, and an already matched holding/keyword target; the first reservation sends and later matching source retransmissions are recorded as duplicates without changing the decision.
 
+Push-eligible US CPI, PCE and nonfarm coverage may also receive a delivery-only identity from locally bound evidence. Preview and actual-release identities use country, indicator and reference period; market reactions use country, indicator and a Beijing reaction session with a 06:00 rollover so the evening release and after-midnight follow-through converge even when a report omits the reference month. Each phase can deliver once across sources. Corrections and content carrying a direct Kevin Warsh statement are not suppressed by this macro-data identity. The extractor uses original item text and deterministic evidence only; it does not change the decision or use an LLM.
+
 The former direct/compat route switch and these wrapper modules have been removed:
 
 - `article_gate.py`
@@ -55,6 +57,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `market_event_adapter.py` | Event compatibility payload/store shape |
 | `market_review_store.py` | SQLite review/event persistence and historical row loading |
 | `market_delivery.py` | Rule/fact dedup reservation, Feishu execution, delivery status, pushed markers |
+| `macro_event_dedup.py` | Delivery-only US macro preview/release/reaction identities and direct-Warsh/correction exclusions |
 | `market_view.py` | Read-only unified projection across existing stores |
 | `source_profiles.py` | Source catalog, runtime ownership, health keys and editable source settings |
 
@@ -92,7 +95,7 @@ The project keeps the existing physical stores:
 - `official_news_reviews`
 - `events` / `event_analyses`
 - `seen_items`, `seen_posts`, `source_state`
-- `rule_alert_dedup`, `deliveries` (`rule_alert_dedup` also records the delivery-only `intraday_market_move` reservation kind)
+- `rule_alert_dedup`, `deliveries` (`rule_alert_dedup` also records delivery-only `intraday_market_move` and US macro preview/release/reaction reservation kinds)
 - `source_health`, `x_stream_health`
 - portfolio, relation, evidence and signal tables
 
