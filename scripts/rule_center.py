@@ -28,7 +28,7 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "id": "investment_bank_rating_target_direct_holding",
         "name": "国际投行单股评级/目标价",
         "group": "投行研究",
-        "description": "认可国际投行对直接持仓/观察标的给出评级、目标价或覆盖变化时即时提醒。",
+        "description": "同一局部证据窗口内，认可国际投行对直接持仓/观察标的给出评级、目标价或覆盖变化时即时提醒。",
         "runtime": "push_rules / article + event",
         "execution_mode": ORDERED_FIRST_MATCH,
         "hit_markers": ("investment_bank_rating_target_direct_holding",),

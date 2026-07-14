@@ -9,17 +9,20 @@ from push_rules import (
     direct_holding_hard_variable_rule,
     first_matching_push_rule,
     international_bank_theme_strategy_rule,
+    investment_bank_research_rule,
     official_company_hard_variable_rule,
 )
 
 
 GREEN = {"symbol": "688017.SH", "name": "绿的谐波", "full_name": "绿的谐波传动科技股份有限公司", "aliases": []}
 SIFANGDA = {"symbol": "300179.SZ", "name": "四方达", "full_name": "", "aliases": []}
+JIANGBOLONG = {"symbol": "301308.SZ", "name": "江波龙", "full_name": "深圳市江波龙电子股份有限公司", "aliases": []}
+RUIJIE = {"symbol": "301165.SZ", "name": "锐捷网络", "full_name": "锐捷网络股份有限公司", "aliases": []}
 
 
 def test_investment_bank_target_price_rule_for_direct_holding() -> None:
     item = {
-        "title": "高盛看衰绿地谐波：488股价 vs 138目标价",
+        "title": "高盛看衰绿的谐波：488股价 vs 138目标价",
         "summary": "高盛-绿的谐波(688017)：国内人形机器人需求攀升，产能扩张在即，测试当前定价的估值敏感度。",
     }
     rule = first_matching_push_rule(source="sina_stock_news", item=item, holdings=[GREEN], symbols={"688017.SH"})
@@ -29,13 +32,121 @@ def test_investment_bank_target_price_rule_for_direct_holding() -> None:
     assert rule["importance"] == "high"
     assert rule["target_gap"]["target_price"] == 138.0
     assert rule["target_gap"]["current_price"] == 488.0
+    assert rule["institution"] == "高盛"
+    assert rule["subject"] == {"name": "绿的谐波", "code": "688017.SH"}
+    assert rule["research_action"] == ["目标价"]
+    assert "高盛看衰绿的谐波" in rule["evidence_quote"]
     assert "LLM" in rule["reason"]
+
+
+def test_investment_bank_rule_binds_institution_subject_and_action_locally() -> None:
+    adjacent = {
+        "title": "摩根士丹利发布最新研报。该行将绿的谐波评级从中性上调至买入。",
+        "summary": "",
+    }
+    rule = investment_bank_research_rule(
+        source="cls_telegraph_api",
+        item=adjacent,
+        holdings=[GREEN],
+        symbols={"688017.SH"},
+    )
+    assert rule is not None
+    assert rule["institution"] == "摩根士丹利"
+    assert rule["subject"]["name"] == "绿的谐波"
+    assert rule["research_action"] == ["评级"]
+    assert "该行将绿的谐波" in rule["evidence_quote"]
+
+    indexed_stance = investment_bank_research_rule(
+        source="value_directory_ib_stocks",
+        item={
+            "title": "汇丰-锐捷网络(301165)：买入：AI网络需求热潮下上调盈利预测",
+            "summary": "国际投行个股研报索引。",
+        },
+        holdings=[RUIJIE],
+    )
+    assert indexed_stance is not None
+    assert indexed_stance["institution"] == "汇丰"
+    assert indexed_stance["subject"]["name"] == "锐捷网络"
+    assert indexed_stance["research_action"] == ["评级"]
+
+    production_ratings = [
+        investment_bank_research_rule(
+            source=source,
+            item={"title": "高盛将锐捷网络股份有限公司评级下调至中性，目标价120.50元。"},
+            holdings=[RUIJIE],
+        )
+        for source in ("cls_telegraph_api", "sina_finance_articles")
+    ]
+    assert all(rule is not None for rule in production_ratings)
+    assert {rule["institution"] for rule in production_ratings if rule} == {"高盛"}
+    assert {rule["subject"]["name"] for rule in production_ratings if rule} == {"锐捷网络"}
+    assert {tuple(rule["research_action"]) for rule in production_ratings if rule} == {("目标价", "评级")}
+    assert {rule["revised_rating"] for rule in production_ratings if rule} == {"中性"}
+
+    crossed_subject = {
+        "title": "高盛将英伟达评级下调至中性。绿的谐波今日下跌10%。",
+        "summary": "",
+    }
+    assert (
+        investment_bank_research_rule(
+            source="cls_telegraph_api",
+            item=crossed_subject,
+            holdings=[GREEN],
+            symbols={"688017.SH"},
+        )
+        is None
+    )
+
+    symbol_only = {"title": "高盛将英伟达评级下调至中性。", "summary": ""}
+    assert (
+        investment_bank_research_rule(
+            source="sina_stock_news",
+            item=symbol_only,
+            holdings=[GREEN],
+            symbols={"688017.SH"},
+        )
+        is None
+    )
+
+
+def test_sk_hynix_selloff_does_not_cross_attribute_bank_commentary() -> None:
+    item = {
+        "title": "存储板块重挫，不仅是在A股",
+        "summary": "江波龙相关新闻：全球存储板块遭遇重创。",
+        "full_text": (
+            "SK海力士暴跌15.4%，江波龙跌超10%。\n"
+            "韩国本土券商KIS发布SK海力士业绩预测报告，预计第二季度营业利润低于市场预期。\n"
+            "KIS同步下调2026年和2027年盈利预期，分别较此前低约9%和11%。\n"
+            "野村证券认为供应过剩担忧明显过度。\n"
+            "美银表示韩厂扩产不能等同于未来两三年供给失控。\n"
+            "瑞银预计存储行业收入到2027年接近翻番。"
+        ),
+    }
+    for source in ("sina_stock_news", "cls_telegraph_api"):
+        assert (
+            investment_bank_research_rule(
+                source=source,
+                item=item,
+                holdings=[JIANGBOLONG],
+                symbols={"301308.SZ"},
+            )
+            is None
+        )
+        rule = first_matching_push_rule(
+            source=source,
+            item=item,
+            holdings=[JIANGBOLONG],
+            symbols={"301308.SZ"},
+        )
+        assert rule is not None
+        assert rule["rule_id"] == "holding_keyword_immediate_alert"
+        assert "江波龙" in rule["affected_targets"][0]
 
 
 def test_event_rule_overrides_model_skip() -> None:
     event = {
         "source": "sina_stock_news",
-        "title": "高盛看衰绿地谐波：488股价 vs 138目标价",
+        "title": "高盛看衰绿的谐波：488股价 vs 138目标价",
         "summary": "高盛-绿的谐波(688017)：目标价显著低于现价。",
         "full_text": "",
         "raw": {},
@@ -357,6 +468,8 @@ def test_macro_policy_rule_from_raw() -> None:
 
 def main() -> int:
     test_investment_bank_target_price_rule_for_direct_holding()
+    test_investment_bank_rule_binds_institution_subject_and_action_locally()
+    test_sk_hynix_selloff_does_not_cross_attribute_bank_commentary()
     test_event_rule_overrides_model_skip()
     test_international_bank_theme_strategy_rule()
     test_international_bank_theme_strategy_requires_action_and_evidence()
