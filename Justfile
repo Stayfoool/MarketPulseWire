@@ -6,6 +6,7 @@ test:
     python3 scripts/test_llm_analysis.py
     python3 scripts/test_llm_json_recovery.py
     python3 scripts/test_trendforce_page_monitor.py
+    python3 scripts/test_alphabstract_monitor.py
     python3 scripts/test_link_enrichment.py
     python3 scripts/test_sina_stock_news.py
     python3 scripts/test_china_finance_media_monitor.py

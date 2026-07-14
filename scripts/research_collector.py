@@ -18,6 +18,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from alphabstract_monitor import ALPHAABSTRACT_SOURCES, AlphaAbstractSource
+from alphabstract_monitor import extract_items as extract_alphabstract_items
+from alphabstract_monitor import run_once as run_alphabstract_once
 from collector_runtime import (
     filter_enabled_mapping_for_run,
     filter_enabled_named_for_run,
@@ -89,26 +92,39 @@ def research_page_sources(config_path: Path = SOURCE_PROFILE_CONFIG_PATH) -> lis
     return filter_enabled_named_for_run(sources, label="研究机构/行业媒体页面", config_path=config_path)
 
 
+def research_alphabstract_sources(config_path: Path = SOURCE_PROFILE_CONFIG_PATH) -> list[AlphaAbstractSource]:
+    """Return enabled AlphaAbstract public-summary sources."""
+    profiles = runtime_profile_map(config_path=config_path)
+    sources = [
+        source
+        for source in ALPHAABSTRACT_SOURCES
+        if profiles.get(source.name, {}).get("category") == RESEARCH_CATEGORY
+    ]
+    return filter_enabled_named_for_run(sources, label="AlphaAbstract 摘要源", config_path=config_path)
+
+
 def selected_sources(
     names: Iterable[str],
     *,
     include_rss: bool = True,
     include_pages: bool = True,
     config_path: Path = SOURCE_PROFILE_CONFIG_PATH,
-) -> tuple[dict[str, str], list[PageSource]]:
+) -> tuple[dict[str, str], list[PageSource], list[AlphaAbstractSource]]:
     requested = {str(name or "").strip() for name in names if str(name or "").strip()}
     feeds = research_rss_feeds(config_path=config_path) if include_rss else {}
     pages = research_page_sources(config_path=config_path) if include_pages else []
+    alphabstract = research_alphabstract_sources(config_path=config_path) if include_pages else []
     if not requested:
-        return feeds, pages
+        return feeds, pages, alphabstract
 
-    known = set(feeds) | {source.name for source in pages}
+    known = set(feeds) | {source.name for source in pages} | {source.name for source in alphabstract}
     missing = sorted(requested - known)
     if missing:
         raise SystemExit(f"未知或已停用的研究机构/行业媒体 source：{', '.join(missing)}")
     return (
         {source: url for source, url in feeds.items() if source in requested},
         [source for source in pages if source.name in requested],
+        [source for source in alphabstract if source.name in requested],
     )
 
 
@@ -204,11 +220,11 @@ def save_shadow_feed_state(source: str, state: dict[str, Any], save_shadow_state
 
 
 def due_page_sources(
-    sources: list[PageSource],
+    sources: list[Any],
     *,
     min_interval_seconds: int = DEFAULT_PAGE_MIN_INTERVAL_SECONDS,
     force: bool = False,
-) -> tuple[list[PageSource], list[dict[str, str]]]:
+) -> tuple[list[Any], list[dict[str, str]]]:
     """Return page sources due for production processing.
 
     The unified research collector can run every few minutes for RSS latency,
@@ -237,7 +253,7 @@ def due_page_sources(
     return due, skipped
 
 
-def mark_page_sources_checked(sources: list[PageSource]) -> None:
+def mark_page_sources_checked(sources: list[Any]) -> None:
     if not sources:
         return
     now = utc_now()
@@ -365,10 +381,69 @@ def collect_page_shadow(
     return rows
 
 
+def collect_alphabstract_shadow(
+    sources: list[AlphaAbstractSource],
+    *,
+    limit: int,
+    seen_ids: set[tuple[str, str]],
+    direct_shadow: bool = False,
+    direct_shadow_holdings: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for source in sources:
+        try:
+            items = extract_alphabstract_items(source)
+            rows.append(
+                {
+                    "source": source.name,
+                    "url": source.sitemap_url,
+                    "ok": True,
+                    "module": source.module,
+                    "kind": "alphabstract_sitemap",
+                    "access_note": source.access_note,
+                    "raw_count": len(items),
+                    "candidate_count": len(items),
+                    "candidates": limited(
+                        [
+                            candidate_from_item(
+                                source.name,
+                                item,
+                                seen_ids,
+                                direct_shadow=direct_shadow,
+                                direct_shadow_holdings=direct_shadow_holdings,
+                                collector="research_collector.alphabstract",
+                                content_type="research_summary",
+                            )
+                            for item in items
+                        ],
+                        limit,
+                    ),
+                    "error": "",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - keep shadow report complete
+            rows.append(
+                {
+                    "source": source.name,
+                    "url": source.sitemap_url,
+                    "ok": False,
+                    "module": source.module,
+                    "kind": "alphabstract_sitemap",
+                    "access_note": source.access_note,
+                    "raw_count": 0,
+                    "candidate_count": 0,
+                    "candidates": [],
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+    return rows
+
+
 def collect_shadow(
     *,
     feeds: dict[str, str],
     page_sources: list[PageSource],
+    alphabstract_sources: list[AlphaAbstractSource] | None = None,
     limit: int = 5,
     compare_seen: bool = True,
     save_shadow_state: bool = False,
@@ -376,7 +451,18 @@ def collect_shadow(
     direct_shadow_holdings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     started_at = utc_now()
-    seen_ids = load_seen_item_ids([*feeds.keys(), *(source.name for source in page_sources)]) if compare_seen else set()
+    alphabstract_sources = alphabstract_sources or []
+    seen_ids = (
+        load_seen_item_ids(
+            [
+                *feeds.keys(),
+                *(source.name for source in page_sources),
+                *(source.name for source in alphabstract_sources),
+            ]
+        )
+        if compare_seen
+        else set()
+    )
     holdings_error = ""
     if direct_shadow and direct_shadow_holdings is None:
         direct_shadow_holdings, holdings_error = safe_load_shadow_holdings(DB_PATH)
@@ -395,11 +481,19 @@ def collect_shadow(
         direct_shadow=direct_shadow,
         direct_shadow_holdings=direct_shadow_holdings,
     )
-    all_rows = [*rss_rows, *page_rows]
+    alphabstract_rows = collect_alphabstract_shadow(
+        alphabstract_sources,
+        limit=limit,
+        seen_ids=seen_ids,
+        direct_shadow=direct_shadow,
+        direct_shadow_holdings=direct_shadow_holdings,
+    )
+    all_rows = [*rss_rows, *page_rows, *alphabstract_rows]
     errors = [row for row in all_rows if not row.get("ok")]
     counts = {
         "rss_sources": len(rss_rows),
         "page_sources": len(page_rows),
+        "alphabstract_sources": len(alphabstract_rows),
         "sources": len(all_rows),
         "failed_sources": len(errors),
         "raw_items": sum(int(row.get("raw_count") or 0) for row in all_rows),
@@ -427,6 +521,7 @@ def collect_shadow(
         "counts": counts,
         "rss": rss_rows,
         "pages": page_rows,
+        "alphabstract": alphabstract_rows,
         "errors": errors,
     }
 
@@ -435,16 +530,21 @@ def collect_production(
     *,
     feeds: dict[str, str],
     page_sources: list[PageSource],
+    alphabstract_sources: list[AlphaAbstractSource] | None = None,
     notify_baseline: bool = False,
     page_min_interval_seconds: int = DEFAULT_PAGE_MIN_INTERVAL_SECONDS,
     force_pages: bool = False,
 ) -> dict[str, Any]:
     started_at = utc_now()
+    alphabstract_sources = alphabstract_sources or []
     errors: list[dict[str, str]] = []
     rss_new = 0
     page_new = 0
+    alphabstract_new = 0
     due_pages: list[PageSource] = []
+    due_alphabstract: list[AlphaAbstractSource] = []
     skipped_pages: list[dict[str, str]] = []
+    skipped_alphabstract: list[dict[str, str]] = []
 
     if feeds:
         try:
@@ -467,6 +567,22 @@ def collect_production(
         except Exception as exc:  # noqa: BLE001 - keep the production summary explicit
             errors.append({"stage": "pages", "error": f"{type(exc).__name__}: {exc}"})
 
+    if alphabstract_sources:
+        try:
+            due_alpha_raw, skipped_alphabstract = due_page_sources(
+                alphabstract_sources,
+                min_interval_seconds=page_min_interval_seconds,
+                force=force_pages,
+            )
+            due_alphabstract = list(due_alpha_raw)
+            if due_alphabstract:
+                alphabstract_new = run_alphabstract_once(due_alphabstract, notify_baseline=notify_baseline)
+                mark_page_sources_checked(due_alphabstract)
+            else:
+                print("research_collector production: AlphaAbstract 尚未到达抓取间隔，本轮跳过。", flush=True)
+        except Exception as exc:  # noqa: BLE001 - keep the production summary explicit
+            errors.append({"stage": "alphabstract", "error": f"{type(exc).__name__}: {exc}"})
+
     return {
         "ok": not errors,
         "mode": "production",
@@ -478,13 +594,18 @@ def collect_production(
         "counts": {
             "rss_sources": len(feeds),
             "page_sources": len(page_sources),
+            "alphabstract_sources": len(alphabstract_sources),
             "page_sources_due": len(due_pages),
+            "alphabstract_sources_due": len(due_alphabstract),
             "page_sources_skipped_by_cadence": len(skipped_pages),
+            "alphabstract_sources_skipped_by_cadence": len(skipped_alphabstract),
             "rss_new_items": rss_new,
             "page_new_items": page_new,
-            "new_items": rss_new + page_new,
+            "alphabstract_new_items": alphabstract_new,
+            "new_items": rss_new + page_new + alphabstract_new,
         },
         "skipped_pages": skipped_pages,
+        "skipped_alphabstract": skipped_alphabstract,
         "errors": errors,
     }
 
@@ -505,12 +626,16 @@ def print_text_summary(payload: dict[str, Any]) -> None:
             "research_collector production: "
             f"rss_sources={counts.get('rss_sources', 0)} "
             f"page_sources={counts.get('page_sources', 0)} "
+            f"alphabstract_sources={counts.get('alphabstract_sources', 0)} "
             f"pages_due={counts.get('page_sources_due', 0)} "
+            f"alphabstract_due={counts.get('alphabstract_sources_due', 0)} "
             f"new_items={counts.get('new_items', 0)} "
             f"errors={len(payload.get('errors', []))}",
             flush=True,
         )
         for skipped in payload.get("skipped_pages", [])[:10]:
+            print(f"[SKIP] {skipped.get('source')}: next_due_at={skipped.get('next_due_at')}", flush=True)
+        for skipped in payload.get("skipped_alphabstract", [])[:10]:
             print(f"[SKIP] {skipped.get('source')}: next_due_at={skipped.get('next_due_at')}", flush=True)
         for error in payload.get("errors", []):
             print(f"[ERR] {error.get('stage')}: {error.get('error')}", flush=True)
@@ -527,7 +652,7 @@ def print_text_summary(payload: dict[str, Any]) -> None:
             else ""
         )
     )
-    for group in ("rss", "pages"):
+    for group in ("rss", "pages", "alphabstract"):
         for row in payload.get(group, []):
             status = "OK" if row.get("ok") else "ERR"
             print(
@@ -576,7 +701,7 @@ def main() -> int:
     if args.production and args.save_shadow_state:
         raise SystemExit("--production 不能与 --save-shadow-state 同时使用")
 
-    feeds, pages = selected_sources(
+    feeds, pages, alphabstract = selected_sources(
         args.source,
         include_rss=not args.pages_only,
         include_pages=not args.rss_only,
@@ -585,6 +710,7 @@ def main() -> int:
         payload = collect_production(
             feeds=feeds,
             page_sources=pages,
+            alphabstract_sources=alphabstract,
             notify_baseline=args.notify_baseline or os.getenv("SURVEIL_NOTIFY_BASELINE", "") == "1",
             page_min_interval_seconds=max(0, args.page_min_interval),
             force_pages=args.force_pages,
@@ -593,6 +719,7 @@ def main() -> int:
         payload = collect_shadow(
             feeds=feeds,
             page_sources=pages,
+            alphabstract_sources=alphabstract,
             limit=max(0, args.limit),
             compare_seen=not args.no_compare_seen,
             save_shadow_state=args.save_shadow_state,

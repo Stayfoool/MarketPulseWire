@@ -87,6 +87,32 @@ def test_international_bank_theme_strategy_requires_action_and_evidence() -> Non
     assert weak_evidence is None
 
 
+def test_international_bank_aliases_use_word_boundaries_across_sources() -> None:
+    noisy_text = (
+        "AI infrastructure cities require substantial long-term electricity investment. "
+        "The valuation market opportunity is large, but no investment bank is quoted."
+    )
+    variants = [
+        ("alphabstract_summaries", {"title": noisy_text, "summary": "", "content_type": "research_summary"}),
+        ("cls_telegraph_api", {"title": noisy_text, "summary": ""}),
+    ]
+    for source, item in variants:
+        assert international_bank_theme_strategy_rule(source=source, item=item, holdings=[]) is None
+
+    positive = international_bank_theme_strategy_rule(
+        source="alphabstract_summaries",
+        item={
+            "title": "Citi says go long AI infrastructure basket",
+            "summary": "Citigroup sees valuation and market mismatch across AI, semiconductors and data center power.",
+            "published_at": "2026-07-13T00:00:00+00:00",
+        },
+        holdings=[],
+    )
+    assert positive is not None
+    assert positive["banks"] == ["花旗"]
+    assert positive["action"] == "做多"
+
+
 def test_value_directory_strategy_title_is_index_evidence() -> None:
     item = {
         "title": "高盛-交易思路：做多中国人工智能价值链（GSXACART）",
@@ -247,6 +273,7 @@ def main() -> int:
     test_event_rule_overrides_model_skip()
     test_international_bank_theme_strategy_rule()
     test_international_bank_theme_strategy_requires_action_and_evidence()
+    test_international_bank_aliases_use_word_boundaries_across_sources()
     test_value_directory_strategy_title_is_index_evidence()
     test_value_directory_industry_macro_strategy_source()
     test_international_bank_multi_leg_strategy_rule()

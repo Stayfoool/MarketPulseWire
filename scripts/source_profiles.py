@@ -219,6 +219,32 @@ def build_profiles() -> list[SourceProfile]:
 
     profiles.append(
         SourceProfile(
+            id="alphabstract_summaries",
+            category="research_industry_media",
+            name="AlphaAbstract / Summaries",
+            source_type="公开 sitemap + summary 页面",
+            fetch_range="robots.txt 允许的公开 sitemap 条目和 summary 页面正文、Article JSON-LD、原始来源链接；不访问登录、付费或受控内容",
+            filter_policy="公开摘要全文进入统一决策；不因来源本身提升推送资格，依赖跨来源硬变量、持仓/关键词、主题规则和 Skeptic 控制",
+            frequency="每 5 分钟 timer；页面源内部 900 秒节流",
+            runtime_shape="timer one-shot",
+            pipeline="AlphaAbstract sitemap/page -> NormalizedMarketItem -> 统一决策/解读 -> article_reviews -> 统一去重/投递/view",
+            service_units=("surveil-research-collector.timer", "surveil-research-collector.service"),
+            health_keys=(("alphabstract", "alphabstract_summaries"),),
+            fetcher="scripts/research_collector.py -> scripts/alphabstract_monitor.py",
+            publisher_role="third_party_research_summary",
+            skeptic_enabled=True,
+            web_evidence_enabled=True,
+            tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key",
+            proxy_profile="默认直连；必要时可走 SURVEIL_HTTP_PROXY",
+            text_length_policy="读取公开 summary 页正文；长文由统一决策/解读截断和规则处理",
+            source_priority="二级研究摘要源，不设来源级推送特权",
+            url="https://alphabstract.com/sitemap.xml",
+            notes="无 RSS/Atom 端点；以官方 sitemap 为发现入口，保留 isBasedOn 原始访谈/视频链接用于审计。",
+        )
+    )
+
+    profiles.append(
+        SourceProfile(
             id="value_directory_ib_stocks",
             category="research_industry_media",
             name="价值目录 / 国际投行-个股",

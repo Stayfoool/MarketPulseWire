@@ -339,6 +339,7 @@ bash -n scripts/*.sh
 python scripts/test_analysis.py
 python scripts/test_llm_analysis.py
 python scripts/test_trendforce_page_monitor.py
+python scripts/test_alphabstract_monitor.py
 python scripts/test_link_enrichment.py
 python scripts/test_sina_stock_news.py
 python scripts/test_china_finance_media_monitor.py

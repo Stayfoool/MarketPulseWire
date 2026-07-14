@@ -10,6 +10,7 @@ The catalog is public configuration and code. Credentials, cookies, paid-content
 | --- | --- |
 | Serenity on X | Useful for market-facing interpretation of AI infrastructure, photonics, memory, CPO, and global semiconductor equity narratives. It is not an official data source; treat it as a high-signal opinion stream that still needs verification. |
 | TrendForce | A widely cited research provider for memory, panels, foundry, components, AI servers, MLCC, and pricing/supply-demand trends. Its public headlines and summaries often flag important supply-chain direction before broader market discussion. |
+| AlphaAbstract | Public third-party summaries of AI investment research, founder/operator interviews, and infrastructure theses. Treat as a useful secondary research-summary source with preserved original-source provenance. |
 | SEMI | A primary industry association for semiconductor equipment, fabs, materials, and market statistics. Its equipment forecasts and market-data releases can directly reprice equipment and components expectations. |
 | DIGITIMES | Taiwan supply-chain coverage is especially relevant to TSMC, IC design, advanced packaging, servers, ODMs, PCBs, components, and AI hardware manufacturing. |
 | Nikkei xTECH | Japan is important in semiconductor equipment, materials, components, industrial automation, and automotive electronics. Nikkei xTECH helps surface Japan-side technology and supply-chain changes. |
@@ -77,6 +78,16 @@ Public page monitors include:
 - Press Centre In-Depth Analyses
 
 Research Report and Selected Topics pages may contain member or paid content. Surveil only reads public list-page titles/summaries and does not bypass access controls.
+
+## AlphaAbstract
+
+AlphaAbstract is monitored as a public third-party research-summary site. It does not currently expose RSS/Atom, so MarketPulseWire uses its public sitemap as the discovery entry and then reads public `/summaries/...` pages.
+
+| Source Key | Source | URL | Method |
+| --- | --- | --- | --- |
+| `alphabstract_summaries` | AlphaAbstract / Summaries | `https://alphabstract.com/sitemap.xml` | Public sitemap + public summary pages |
+
+The collector preserves Article JSON-LD metadata, canonical URL, published/modified dates, author, and `isBasedOn` original-source links when present. AlphaAbstract does not receive source-level push privilege: items still go through `NormalizedMarketItem`, deterministic cross-source rules, restricted interpretation, Skeptic controls, deduplication, and final `DecisionResult.action`.
 
 ## SEMI
 

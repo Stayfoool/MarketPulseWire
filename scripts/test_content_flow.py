@@ -6,6 +6,7 @@ from __future__ import annotations
 import inspect
 import sqlite3
 
+import alphabstract_monitor
 import china_finance_media_monitor
 import market_flow
 import market_content_adapter
@@ -154,7 +155,7 @@ def test_runtime_and_monitor_imports_use_one_unified_path() -> None:
     assert market_runtime._selected_module("article").__name__ == "market_content_adapter"
     assert market_runtime._selected_module("official").__name__ == "market_content_adapter"
     assert market_runtime._selected_module("event").__name__ == "market_event_adapter"
-    for module in (rss_monitor, china_finance_media_monitor, trendforce_page_monitor, value_directory_monitor):
+    for module in (rss_monitor, china_finance_media_monitor, trendforce_page_monitor, alphabstract_monitor, value_directory_monitor):
         assert module.process_market_item.__module__ == "market_runtime"
         source = inspect.getsource(module)
         for forbidden in (

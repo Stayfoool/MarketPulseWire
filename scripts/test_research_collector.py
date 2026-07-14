@@ -14,7 +14,9 @@ from source_profiles import save_source_profile_config
 def test_research_sources_include_expected_groups() -> None:
     feeds = research_collector.research_rss_feeds()
     pages = research_collector.research_page_sources()
+    alphabstract = research_collector.research_alphabstract_sources()
     page_names = {source.name for source in pages}
+    alpha_names = {source.name for source in alphabstract}
 
     assert "semianalysis" in feeds
     assert "trendforce_semiconductors" in feeds
@@ -25,6 +27,7 @@ def test_research_sources_include_expected_groups() -> None:
     assert "micron_news_releases" not in feeds
     assert "trendforce_research_latest" in page_names
     assert "semi_prnewswire_semiconductors" in page_names
+    assert "alphabstract_summaries" in alpha_names
 
 
 def test_disabled_source_is_filtered() -> None:
@@ -35,14 +38,16 @@ def test_disabled_source_is_filtered() -> None:
                 "profiles": [
                     {"id": "semianalysis", "enabled": False},
                     {"id": "trendforce_research_latest", "enabled": False},
+                    {"id": "alphabstract_summaries", "enabled": False},
                 ]
             },
             path=config_path,
         )
-        feeds, pages = research_collector.selected_sources([], config_path=config_path)
+        feeds, pages, alphabstract = research_collector.selected_sources([], config_path=config_path)
         assert "semianalysis" not in feeds
         assert "trendforce_semiconductors" in feeds
         assert "trendforce_research_latest" not in {source.name for source in pages}
+        assert "alphabstract_summaries" not in {source.name for source in alphabstract}
 
 
 def test_shadow_collect_rss_does_not_write_prod_seen_items() -> None:
@@ -93,6 +98,7 @@ def test_shadow_collect_rss_does_not_write_prod_seen_items() -> None:
             payload = research_collector.collect_shadow(
                 feeds={"semianalysis": "https://example.com/feed.xml"},
                 page_sources=[],
+                alphabstract_sources=[],
                 limit=5,
                 compare_seen=True,
                 save_shadow_state=False,
@@ -138,6 +144,7 @@ def test_shadow_collect_rss_can_attach_direct_decision() -> None:
         payload = research_collector.collect_shadow(
             feeds={"semianalysis": "https://example.com/feed.xml"},
             page_sources=[],
+            alphabstract_sources=[],
             limit=5,
             compare_seen=False,
             save_shadow_state=False,
@@ -158,12 +165,13 @@ def test_shadow_collect_rss_can_attach_direct_decision() -> None:
 
 
 def test_json_report_shape() -> None:
-    payload = research_collector.collect_shadow(feeds={}, page_sources=[], compare_seen=False)
+    payload = research_collector.collect_shadow(feeds={}, page_sources=[], alphabstract_sources=[], compare_seen=False)
     assert payload["ok"] is True
     assert payload["mode"] == "shadow_dry_run"
     assert payload["counts"] == {
         "rss_sources": 0,
         "page_sources": 0,
+        "alphabstract_sources": 0,
         "sources": 0,
         "failed_sources": 0,
         "raw_items": 0,
@@ -172,6 +180,7 @@ def test_json_report_shape() -> None:
     }
     assert payload["rss"] == []
     assert payload["pages"] == []
+    assert payload["alphabstract"] == []
     assert payload["errors"] == []
 
 
@@ -179,13 +188,18 @@ def test_production_collect_delegates_to_existing_pipelines() -> None:
     calls: list[tuple[str, object, bool]] = []
     original_run_rss_once = research_collector.run_rss_once
     original_run_page_once = research_collector.run_page_once
+    original_run_alpha_once = research_collector.run_alphabstract_once
     original_due_page_sources = research_collector.due_page_sources
     original_mark_page_sources_checked = research_collector.mark_page_sources_checked
 
     class Page:
         name = "trendforce_research_latest"
 
+    class Alpha:
+        name = "alphabstract_summaries"
+
     page = Page()
+    alpha = Alpha()
 
     def fake_run_rss_once(feeds: dict[str, str], notify_baseline: bool = False) -> int:
         calls.append(("rss", feeds, notify_baseline))
@@ -194,6 +208,10 @@ def test_production_collect_delegates_to_existing_pipelines() -> None:
     def fake_run_page_once(pages: list[object], notify_baseline: bool = False) -> int:
         calls.append(("pages", [item.name for item in pages], notify_baseline))
         return 1
+
+    def fake_run_alpha_once(sources: list[object], notify_baseline: bool = False) -> int:
+        calls.append(("alphabstract", [item.name for item in sources], notify_baseline))
+        return 3
 
     def fake_due_page_sources(pages: list[object], *, min_interval_seconds: int, force: bool):
         calls.append(("due", {"min_interval_seconds": min_interval_seconds, "force": force}, False))
@@ -205,11 +223,13 @@ def test_production_collect_delegates_to_existing_pipelines() -> None:
     try:
         research_collector.run_rss_once = fake_run_rss_once
         research_collector.run_page_once = fake_run_page_once
+        research_collector.run_alphabstract_once = fake_run_alpha_once
         research_collector.due_page_sources = fake_due_page_sources
         research_collector.mark_page_sources_checked = fake_mark_page_sources_checked
         payload = research_collector.collect_production(
             feeds={"semianalysis": "https://example.com/feed.xml"},
             page_sources=[page],  # type: ignore[list-item]
+            alphabstract_sources=[alpha],  # type: ignore[list-item]
             notify_baseline=True,
             page_min_interval_seconds=900,
             force_pages=False,
@@ -217,6 +237,7 @@ def test_production_collect_delegates_to_existing_pipelines() -> None:
     finally:
         research_collector.run_rss_once = original_run_rss_once
         research_collector.run_page_once = original_run_page_once
+        research_collector.run_alphabstract_once = original_run_alpha_once
         research_collector.due_page_sources = original_due_page_sources
         research_collector.mark_page_sources_checked = original_mark_page_sources_checked
 
@@ -224,12 +245,16 @@ def test_production_collect_delegates_to_existing_pipelines() -> None:
     assert payload["wrote_production_seen_items"] is True
     assert payload["counts"]["rss_new_items"] == 2
     assert payload["counts"]["page_new_items"] == 1
-    assert payload["counts"]["new_items"] == 3
+    assert payload["counts"]["alphabstract_new_items"] == 3
+    assert payload["counts"]["new_items"] == 6
     assert calls == [
         ("rss", {"semianalysis": "https://example.com/feed.xml"}, True),
         ("due", {"min_interval_seconds": 900, "force": False}, False),
         ("pages", ["trendforce_research_latest"], True),
         ("mark", ["trendforce_research_latest"], False),
+        ("due", {"min_interval_seconds": 900, "force": False}, False),
+        ("alphabstract", ["alphabstract_summaries"], True),
+        ("mark", ["alphabstract_summaries"], False),
     ]
 
 
