@@ -16,6 +16,7 @@ The catalog is public configuration and code. Credentials, cookies, paid-content
 | Nikkei xTECH | Japan is important in semiconductor equipment, materials, components, industrial automation, and automotive electronics. Nikkei xTECH helps surface Japan-side technology and supply-chain changes. |
 | The Elec | Korea is central to memory, HBM, OLED/display, batteries, equipment, and materials. The Elec can surface Samsung/SK hynix/LG-adjacent supply-chain signals. |
 | Official company feeds | First-party announcements from OpenAI, NVIDIA, Samsung Semiconductor, SK hynix, and Micron are primary sources for architecture, product, capex, platform, and supply-chain changes. |
+| Official trade-policy sources | Federal Register, USTR, European Commission and MOFCOM expose investigations, public comments, hearings, tariffs, export controls, trade remedies and official escalation language before or at formal action. |
 | Sina Finance / iFinD / JYGS | China-market channels for holdings-related news, official company notices, announcements, and A-share event/action monitoring. |
 | First Yicai / CLS / Star Market Daily / Jin10 | Domestic market-moving context for A-share risk appetite, hard-tech company updates, macro/Fed policy reaction, and China-side semiconductor/AI narratives. |
 
@@ -42,6 +43,20 @@ These feeds are included in `scripts/trendforce_sources.py` through `DEFAULT_RSS
 | `micron_news_releases` | Micron News Releases | `https://investors.micron.com/rss/news-releases.xml` | RSS |
 
 Official company news goes through the unified decision layer first. High-impact semiconductor/AI infrastructure items can be pushed immediately; lower-signal items can be collected into a daily digest, and the LLM only supplies thin interpretation or restricted supplemental judgement.
+
+## Official Trade Policy
+
+These public official sources are defined in `scripts/trade_policy_sources.py` and run through `scripts/news_collector.py -> scripts/trade_policy_monitor.py`.
+
+| Source Key | Source | URL / Method |
+| --- | --- | --- |
+| `federal_register_china_trade` | U.S. Federal Register | Official JSON API query for recent China documents |
+| `ustr_press_releases` | U.S. Trade Representative | Public press-release list and new-item detail pages |
+| `eu_press_corner_trade_policy` | European Commission Press Corner | Official RSS and new-item detail pages |
+| `mofcom_policy_releases` | 中华人民共和国商务部 / 政策发布 | Public policy list and new-item detail pages |
+| `mofcom_spokesperson_statements` | 中华人民共和国商务部 / 新闻发言人谈话 | Public news-release list and new-item detail pages |
+
+The first production discovery for each source is a baseline and does not replay historical items by default. New items normalize to `official_policy` content and enter the unified article store/runtime. The `trade_friction_escalation` rule is source-neutral and therefore also evaluates domestic media, industry media, research summaries, flashes and future sources. Reuters, FT and Bloomberg are not part of this source batch.
 
 ## TrendForce
 

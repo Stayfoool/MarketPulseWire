@@ -22,6 +22,20 @@ def test_news_sources_include_expected_batch_and_exclude_sina_flash() -> None:
     assert "cls_telegraph_page" not in sources
 
 
+def test_official_trade_policy_sources_join_news_collector_timer() -> None:
+    source_ids = {source.name for source in news_collector.official_trade_policy_sources()}
+    assert source_ids == {
+        "federal_register_china_trade",
+        "ustr_press_releases",
+        "eu_press_corner_trade_policy",
+        "mofcom_policy_releases",
+        "mofcom_spokesperson_statements",
+    }
+    media, policy = news_collector.selected_source_groups(["ustr_press_releases"])
+    assert media == {}
+    assert [source.name for source in policy] == ["ustr_press_releases"]
+
+
 def test_disabled_source_is_filtered() -> None:
     with TemporaryDirectory() as tmpdir:
         config_path = Path(tmpdir) / "source_profiles.local.json"
@@ -244,14 +258,42 @@ def test_production_collect_delegates_to_existing_china_media_pipeline() -> None
     assert calls == [(["yicai_brief", "cls_telegraph_api"], True)]
 
 
+def test_production_collect_runs_official_trade_policy_family() -> None:
+    calls: list[tuple[list[str], bool]] = []
+    original_run_once = news_collector.trade_policy.run_once
+    policy = news_collector.official_trade_policy_sources()[:2]
+
+    def fake_run_once(sources, notify_baseline: bool = False) -> int:
+        calls.append(([source.name for source in sources], notify_baseline))
+        return 2
+
+    try:
+        news_collector.trade_policy.run_once = fake_run_once
+        payload = news_collector.collect_production(
+            sources={},
+            policy_sources=policy,
+            notify_baseline=False,
+        )
+    finally:
+        news_collector.trade_policy.run_once = original_run_once
+
+    assert payload["counts"]["sources"] == 2
+    assert payload["counts"]["trade_policy_sources"] == 2
+    assert payload["counts"]["trade_policy_new_items"] == 2
+    assert payload["counts"]["new_items"] == 2
+    assert calls == [([source.name for source in policy], False)]
+
+
 def main() -> int:
     test_news_sources_include_expected_batch_and_exclude_sina_flash()
+    test_official_trade_policy_sources_join_news_collector_timer()
     test_disabled_source_is_filtered()
     test_shadow_collect_does_not_write_prod_seen_reviews_or_source_state()
     test_shadow_collect_can_attach_direct_decision()
     test_respect_prod_cls_state_passes_force_false()
     test_json_report_shape()
     test_production_collect_delegates_to_existing_china_media_pipeline()
+    test_production_collect_runs_official_trade_policy_family()
     print("news collector checks passed")
     return 0
 

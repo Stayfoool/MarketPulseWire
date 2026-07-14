@@ -19,6 +19,7 @@ from china_media_sources import CHINA_MEDIA_FEEDS, CHINA_MEDIA_LABELS
 from db_utils import connect_sqlite
 from market_db import DEFAULT_DB_PATH
 from media_sources import OVERSEAS_MEDIA_FEEDS, OVERSEAS_MEDIA_LABELS
+from trade_policy_sources import TRADE_POLICY_SOURCES
 from trendforce_sources import DEFAULT_RSS_FEEDS, TREND_FORCE_PAGE_SOURCES
 
 
@@ -26,6 +27,7 @@ CATEGORY_ORDER = [
     "x_serenity",
     "research_industry_media",
     "official_company",
+    "official_policy",
     "news_media",
     "portfolio_stock_news",
     "company_disclosures",
@@ -35,9 +37,10 @@ CATEGORY_LABELS = {
     "x_serenity": "0. X / Serenity",
     "research_industry_media": "1. 研究机构/行业媒体",
     "official_company": "2. 公司官网",
-    "news_media": "3. 新闻媒体",
-    "portfolio_stock_news": "4. 新浪个股新闻",
-    "company_disclosures": "5. iFinD 公司公告",
+    "official_policy": "3. 官方贸易政策",
+    "news_media": "4. 新闻媒体",
+    "portfolio_stock_news": "5. 新浪个股新闻",
+    "company_disclosures": "6. iFinD 公司公告",
 }
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -324,6 +327,40 @@ def build_profiles() -> list[SourceProfile]:
                 text_length_policy="默认官网新闻流；普通营销/活动降级",
                 url=url,
                 notes="公司官网源属于一手信息，默认进入 official_news_reviews。",
+            )
+        )
+
+    source_type_labels = {
+        "federal_register_json": "官方 JSON API",
+        "eu_rss": "官方 RSS + 详情页",
+        "ustr_html": "官方列表页 + 详情页",
+        "mofcom_policy_html": "官方列表页 + 详情页",
+        "mofcom_spokesperson_html": "官方新闻发布页 + 详情页",
+    }
+    for policy_source in TRADE_POLICY_SOURCES:
+        profiles.append(
+            SourceProfile(
+                id=policy_source.name,
+                category="official_policy",
+                name=policy_source.module,
+                source_type=source_type_labels.get(policy_source.parser, "官方公开页面/API"),
+                fetch_range="官方公开标题、摘要、程序/机构元数据和可访问详情正文；首次发现建立基线",
+                filter_policy="所有条目进入统一来源中立贸易摩擦规则；具体程序/工具或明确升级即时推送，弱紧张信号进入 daily",
+                frequency="每 2 分钟 news collector timer",
+                runtime_shape="timer one-shot",
+                pipeline="官方贸易政策采集 -> NormalizedMarketItem -> 统一决策/解读 -> article_reviews -> 统一去重/投递/view",
+                service_units=("surveil-news-collector.timer", "surveil-news-collector.service"),
+                health_keys=(("trade_policy", policy_source.name),),
+                fetcher="scripts/news_collector.py -> scripts/trade_policy_monitor.py",
+                publisher_role="government_official",
+                skeptic_enabled=True,
+                web_evidence_enabled=True,
+                tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key",
+                proxy_profile="默认直连；必要时可走 SURVEIL_HTTP_PROXY",
+                text_length_policy="列表/API 发现后只富化新条目；统一决策按局部证据判断",
+                source_priority="官方一手政策与前置程序；来源身份本身不创建推送资格",
+                url=policy_source.url,
+                notes=policy_source.access_note,
             )
         )
 

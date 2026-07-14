@@ -4,7 +4,7 @@ This document is an as-built map of the current code and production shape. Engin
 
 ## Runtime Spine
 
-All general research, industry-media, news-media, official-company, flash, portfolio-news, AlphaAbstract, ValueList, and iFinD items use one runtime entry:
+All general research, industry-media, news-media, official-company, official trade-policy, flash, portfolio-news, AlphaAbstract, ValueList, and iFinD items use one runtime entry:
 
 ```text
 collector
@@ -47,6 +47,8 @@ The former direct/compat route switch and these wrapper modules have been remove
 |---|---|
 | `market_runtime.py` | Normalization boundary, store adapter selection, orchestration, fail-closed contract handling |
 | `decision_engine.py` | Deterministic `DecisionResult`, including final push action |
+| `trade_friction.py` | Source-neutral China-US / China-EU trade-friction classification and evidence extraction |
+| `trade_policy_monitor.py` | Official API/RSS/list discovery, new-item detail enrichment, baseline and source health |
 | `market_interpreter.py` | Thin interpretation and bounded LLM output normalization |
 | `market_content_adapter.py` | Article and official-news compatibility payload/store shape |
 | `market_event_adapter.py` | Event compatibility payload/store shape |
@@ -62,6 +64,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | Research and industry media | `research_collector.py` -> `rss_monitor.py` / `trendforce_page_monitor.py` / `alphabstract_monitor.py` | Unified runtime, article store |
 | Official company feeds | `official_collector.py` -> `rss_monitor.py` | Unified runtime, official-news store |
 | Domestic and overseas news media | `news_collector.py` -> `china_finance_media_monitor.py` / RSS helpers | Unified runtime, article store |
+| Official trade policy | `news_collector.py` -> `trade_policy_monitor.py` | Federal Register, USTR, European Commission and MOFCOM public sources; unified runtime, article store |
 | Sina 7x24 flash | `sina_flash.py` | Unified runtime, event store |
 | Sina portfolio stock news | `sina_stock_news.py` | Relevance enrichment, then unified runtime and event store |
 | iFinD company disclosures | `ifind_batch.py` | Unified runtime and event store; the batch summary is an operational card |
@@ -69,6 +72,8 @@ The former direct/compat route switch and these wrapper modules have been remove
 | ValueList research directory | `value_directory_monitor.py` | Private browser/OCR enrichment, then unified runtime and article store |
 
 Source-specific login, WAF, API, sitemap discovery, polling, browser profile, OCR and attachment behavior ends before the normalized runtime boundary.
+
+The `trade_friction_escalation` rule is not tied to the official source group. It runs in `decision_engine.py` for every normalized current or future source. Explicit policy procedures, instruments, retaliation or worsening China-US / China-EU relations can produce `push`; weaker explicit tension can produce `daily`; routine administrative reviews and generic diplomacy do not receive an alert action.
 
 ## Storage
 
