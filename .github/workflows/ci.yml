@@ -66,6 +66,7 @@ jobs:
           python scripts/test_market_delivery.py
           python scripts/test_sina_zy_client.py
           python scripts/test_industry_hardline.py
+          python scripts/test_ai_credit_risk.py
           python scripts/test_macro_policy.py
           python scripts/test_holdings_web.py
           python scripts/test_time_utils.py

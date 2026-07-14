@@ -85,6 +85,12 @@ def test_quantified_data_center_investment_is_a_hard_variable() -> None:
     assert "$40 billion" in rule["quantified_evidence"]
 
 
+def test_ai_debt_issuance_is_not_treated_as_capex_investment() -> None:
+    text = "Microsoft issued $40 billion of bonds to finance AI infrastructure."
+    for source in ("cls_telegraph_api", "wallstreetcn_global"):
+        assert industry_topic_hard_variable_rule(source, {"title": text}) is None
+
+
 def test_investor_question_is_not_treated_as_an_investment_hard_variable() -> None:
     item = {
         "title": "公司参与字节、阿里全球数据中心建设吗？锐捷网络回应",
@@ -153,6 +159,7 @@ def main() -> int:
     test_topic_and_hard_variable_are_both_required()
     test_topics_and_hard_variables_cannot_be_combined_across_sections()
     test_quantified_data_center_investment_is_a_hard_variable()
+    test_ai_debt_issuance_is_not_treated_as_capex_investment()
     test_investor_question_is_not_treated_as_an_investment_hard_variable()
     test_expansion_before_capacity_is_detected_in_the_same_sentence()
     test_unquantified_roadmap_shift_is_a_hard_variable()
