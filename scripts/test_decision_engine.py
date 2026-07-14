@@ -15,7 +15,7 @@ def test_direct_holding_bank_rule_matches_legacy_push_rule() -> None:
     item = NormalizedMarketItem(
         source="sina_stock_news",
         content_type="article",
-        title="高盛看衰绿地谐波：488股价 vs 138目标价",
+        title="高盛看衰绿的谐波：488股价 vs 138目标价",
         summary="高盛-绿的谐波(688017)：目标价显著低于现价。",
         symbols=["688017.SH"],
     )

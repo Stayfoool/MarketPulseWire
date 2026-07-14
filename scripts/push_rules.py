@@ -16,37 +16,22 @@ from typing import Any
 from investment_bank_theme_config import load_config
 from investment_bank_theme_taxonomy import ROTATION_THEME_BUCKETS, ROTATION_THEME_BY_ID
 from investment_universe import investment_universe_match
-from international_banks import INTERNATIONAL_BANK_ALIASES, bank_alias_matches, matched_bank_names
+from international_banks import INTERNATIONAL_BANK_ALIASES, matched_bank_names
 from media_keyword_config import keyword_matches_text
 from rule_center import effective_list, rule_enabled, rule_priority, rule_settings
 from stock_relations import portfolio_relation_matches
 
 
-RATING_OR_TARGET_KEYWORDS = (
-    "目标价",
-    "target price",
-    "tp",
-    "评级",
-    "rating",
-    "上调",
-    "下调",
-    "调高",
-    "调低",
-    "看多",
-    "看空",
+RATING_STANCES = (
     "买入",
     "卖出",
     "中性",
     "增持",
     "减持",
-    "首次覆盖",
-    "恢复覆盖",
-    "覆盖",
-    "upgrade",
-    "downgrade",
-    "initiates",
-    "initiate",
-    "coverage",
+    "超配",
+    "低配",
+    "强于大盘",
+    "弱于大盘",
     "buy",
     "sell",
     "neutral",
@@ -54,6 +39,27 @@ RATING_OR_TARGET_KEYWORDS = (
     "underweight",
     "outperform",
     "underperform",
+)
+
+RATING_ACTION_PATTERNS = (
+    re.compile(r"(?:目标价|target\s+price|\bTP\b)", re.I),
+    re.compile(r"(?:首次|初次|恢复|启动).{0,12}(?:覆盖|评级)|(?:initiat\w*|resume\w*).{0,16}coverage", re.I),
+    re.compile(r"(?:上调|下调|调高|调低|维持|重申).{0,16}(?:评级|目标价)", re.I),
+    re.compile(r"(?:评级|目标价).{0,16}(?:上调|下调|调高|调低|维持|重申|至|为)", re.I),
+    re.compile(r"(?:upgrade\w*|downgrade\w*|raise\w*|lower\w*|reiterate\w*).{0,20}(?:rating|target\s+price)", re.I),
+    re.compile(r"(?:rating|target\s+price).{0,20}(?:upgrade\w*|downgrade\w*|raise\w*|lower\w*|reiterate\w*)", re.I),
+    re.compile(
+        rf"(?:给予|评为|评级为|维持|重申|上调至|下调至).{{0,16}}(?:{'|'.join(map(re.escape, RATING_STANCES[:8]))})",
+        re.I,
+    ),
+    re.compile(
+        rf"(?:{'|'.join(map(re.escape, RATING_STANCES))}).{{0,12}}(?:评级|rating)",
+        re.I,
+    ),
+    re.compile(
+        rf"[:：-]\s*(?:{'|'.join(map(re.escape, RATING_STANCES))})\s*(?=[:：-]|$)",
+        re.I,
+    ),
 )
 
 THEME_STRATEGY_ACTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -361,6 +367,100 @@ VALUE_DIRECTORY_SOURCES = {"value_directory_ib_stocks", "value_directory_ib_indu
 
 def compact_text(*values: object) -> str:
     return re.sub(r"\s+", " ", " ".join(str(value or "") for value in values)).strip()
+
+
+def _research_evidence_segments(item: dict[str, Any]) -> list[str]:
+    segments: list[str] = []
+    for value in (item.get("title"), item.get("summary"), item.get("content"), item.get("full_text")):
+        text = str(value or "").strip()
+        if not text:
+            continue
+        for part in re.split(r"(?<=[。！？!?；;])|(?<=\.)\s+|\n+", text):
+            normalized = compact_text(part)
+            if normalized and normalized not in segments:
+                segments.append(normalized)
+    return segments
+
+
+def _research_actions(text: str, extra_keywords: tuple[str, ...]) -> list[str]:
+    actions: list[str] = []
+    if re.search(r"(?:目标价|target\s+price|\bTP\b)", text, flags=re.I):
+        actions.append("目标价")
+    if re.search(r"(?:首次|初次|恢复|启动).{0,12}(?:覆盖|评级)|(?:initiat\w*|resume\w*).{0,16}coverage", text, flags=re.I):
+        actions.append("覆盖")
+    if any(pattern.search(text) for pattern in RATING_ACTION_PATTERNS[2:]):
+        actions.append("评级")
+    for keyword in extra_keywords:
+        if contains_keyword(text, (keyword,)):
+            actions.append(f"自定义:{keyword}")
+    return list(dict.fromkeys(actions))
+
+
+def _rating_transition(text: str) -> tuple[str, str]:
+    stance = "|".join(map(re.escape, RATING_STANCES))
+    patterns = (
+        rf"(?:从|由)\s*(?P<previous>{stance})\s*(?:评级)?\s*(?:上调|下调|调整)?\s*(?:至|为)\s*(?P<revised>{stance})",
+        rf"(?P<action>上调至|下调至|调高至|调低至)\s*(?P<revised>{stance})",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.I)
+        if match:
+            return str(match.groupdict().get("previous") or ""), str(match.group("revised") or "")
+    return "", ""
+
+
+def _local_bank_research_claims(
+    item: dict[str, Any],
+    holdings: list[dict[str, Any]],
+    *,
+    allowed_banks: set[str] | None,
+    extra_keywords: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    segments = _research_evidence_segments(item)
+    claims: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def append_claim(window: str, banks: list[str], subjects: list[dict[str, Any]], actions: list[str]) -> None:
+        if len(banks) != 1 or len(subjects) != 1 or not actions:
+            return
+        subject = subjects[0]
+        subject_key = str(subject.get("symbol") or subject.get("name") or "").upper()
+        key = (banks[0], subject_key, "|".join(actions))
+        if key in seen:
+            return
+        seen.add(key)
+        previous_rating, revised_rating = _rating_transition(window)
+        claims.append(
+            {
+                "institution": banks[0],
+                "subject": subject,
+                "research_actions": actions,
+                "previous_rating": previous_rating,
+                "revised_rating": revised_rating,
+                "target_gap": extract_target_gap(window),
+                "evidence_quote": window[:700],
+            }
+        )
+
+    for window in segments:
+        banks = matched_bank_names(window, allowed_banks=allowed_banks)
+        subjects = matched_holdings(window, holdings, symbols=None)
+        actions = _research_actions(window, extra_keywords)
+        append_claim(window, banks, subjects, actions)
+
+    for index in range(len(segments) - 1):
+        attribution, continuation = segments[index], segments[index + 1]
+        banks = matched_bank_names(attribution, allowed_banks=allowed_banks)
+        if len(banks) != 1 or _research_actions(attribution, extra_keywords):
+            continue
+        if matched_bank_names(continuation, allowed_banks=allowed_banks):
+            continue
+        if not re.match(r"^(?:该行|其|报告|研报|the\s+bank\b|it\b)", continuation, flags=re.I):
+            continue
+        subjects = matched_holdings(continuation, holdings, symbols=None)
+        actions = _research_actions(continuation, extra_keywords)
+        append_claim(compact_text(attribution, continuation), banks, subjects, actions)
+    return claims
 
 
 def contains_keyword(text: str, keywords: tuple[str, ...]) -> bool:
@@ -902,38 +1002,36 @@ def investment_bank_research_rule(
     symbols: set[str] | None = None,
 ) -> dict[str, Any] | None:
     """Force direct-holding international bank rating/target-price news to push."""
-    text = compact_text(
-        item.get("title"),
-        item.get("summary"),
-        item.get("content"),
-        item.get("full_text"),
-        item.get("source_module"),
-        item.get("source_display"),
-    )
-    if not text:
-        return None
+    del symbols
     if not rule_enabled("investment_bank_rating_target_direct_holding"):
         return None
-    allowed_banks = {item.casefold() for item in effective_list("investment_bank_rating_target_direct_holding", "allowed_banks", ())}
-    banks = matched_bank_names(text, allowed_banks=allowed_banks or None)
-    keywords = effective_list("investment_bank_rating_target_direct_holding", "extra_keywords", RATING_OR_TARGET_KEYWORDS)
-    if not banks or not contains_keyword(text, keywords):
+    allowed_banks = {
+        value.casefold()
+        for value in effective_list("investment_bank_rating_target_direct_holding", "allowed_banks", ())
+    }
+    configured = rule_settings("investment_bank_rating_target_direct_holding").get("extra_keywords")
+    extra_keywords = tuple(str(value).strip() for value in configured or [] if str(value).strip())
+    claims = _local_bank_research_claims(
+        item,
+        holdings,
+        allowed_banks=allowed_banks or None,
+        extra_keywords=extra_keywords,
+    )
+    if not claims:
         return None
-    direct_holdings = matched_holdings(text, holdings, symbols=symbols)
-    if not direct_holdings:
-        return None
-    gap = extract_target_gap(text)
+    claim = claims[0]
+    institution = str(claim["institution"])
+    holding = claim["subject"]
+    gap = dict(claim["target_gap"])
     gap_text = ""
     if gap:
         gap_text = f"；目标价较现价约 {gap['target_gap_pct'] * 100:.1f}%"
-    target_labels = []
-    for holding in direct_holdings[:5]:
-        name = str(holding.get("name") or "").strip()
-        code = str(holding.get("symbol") or "").strip()
-        target_labels.append(" ".join(part for part in (name, code) if part))
-    bank_label = "、".join(banks[:3])
+    name = str(holding.get("name") or "").strip()
+    code = str(holding.get("symbol") or "").strip()
+    target_label = " ".join(part for part in (name, code) if part)
+    action_label = "、".join(str(value) for value in claim["research_actions"])
     reason = (
-        f"国际投行/头部券商研报硬规则：{bank_label} 对直接持仓或观察标的给出目标价/评级相关观点{gap_text}。"
+        f"国际投行/头部券商研报硬规则：局部证据确认{institution}对{target_label}给出{action_label}相关观点{gap_text}。"
         "这类估值锚变化必须即时提醒；LLM 的“已有预期/已定价”只能作为备注，不能压制推送。"
     )
     return {
@@ -944,17 +1042,23 @@ def investment_bank_research_rule(
         "should_push": True,
         "reason": reason,
         "brief_reason": reason,
-        "affected_targets": target_labels,
+        "affected_targets": [target_label],
         "related_targets": [
             {
-                "name": str(holding.get("name") or "").strip(),
-                "code": str(holding.get("symbol") or "").strip(),
+                "name": name,
+                "code": code,
                 "relation": "直接持仓/观察",
                 "direction": "uncertain",
             }
-            for holding in direct_holdings[:5]
         ],
-        "banks": banks,
+        "banks": [institution],
+        "institution": institution,
+        "subject": {"name": name, "code": code},
+        "research_action": list(claim["research_actions"]),
+        "previous_rating": str(claim["previous_rating"]),
+        "revised_rating": str(claim["revised_rating"]),
+        "evidence_quote": str(claim["evidence_quote"]),
+        "source_tier": _source_tier(source, item),
         "target_gap": gap,
         "source": source,
     }
