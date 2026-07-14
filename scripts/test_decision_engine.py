@@ -47,6 +47,36 @@ def test_international_bank_theme_rule_reports_delivery_dedup_metadata_only() ->
     assert "reservation stays in the delivery layer" in decision.dedup["note"]
 
 
+def test_rotation_strategy_action_is_source_neutral() -> None:
+    chinese = {
+        "source": "cls_telegraph_api",
+        "source_category": "news_media",
+        "publisher_role": "news_media",
+        "content_type": "flash",
+        "title": "摩根士丹利提示投资者从芯片股轮动到 AI 云服务商和超大规模云厂商",
+    }
+    english = {
+        "source": "alphabstract_summaries",
+        "source_category": "research_industry_media",
+        "publisher_role": "research_publisher",
+        "content_type": "research_summary",
+        "title": "Morgan Stanley recommends investors rotate from chip stocks into AI cloud providers and hyperscalers",
+    }
+    decisions = [decide_market_item(item, holdings=[]) for item in (chinese, english)]
+    assert {decision.action for decision in decisions} == {"push"}
+    assert {decision.importance for decision in decisions} == {"high"}
+    assert {decision.rule_hits[0]["strategy_type"] for decision in decisions} == {"rotation"}
+    assert {tuple(decision.rule_hits[0]["from_themes"]) for decision in decisions} == {
+        ("semiconductor_equities",)
+    }
+    assert {tuple(decision.rule_hits[0]["to_themes"]) for decision in decisions} == {
+        ("ai_cloud_hyperscalers",)
+    }
+    assert {decision.dedup["dedup_key"] for decision in decisions} == {
+        decisions[0].dedup["dedup_key"]
+    }
+
+
 def test_industry_hard_variable_is_source_neutral() -> None:
     item = {
         "source": "trendforce_page",
@@ -233,6 +263,7 @@ def test_no_deterministic_match_archives_for_legacy_gate_to_continue() -> None:
 def main() -> int:
     test_direct_holding_bank_rule_matches_legacy_push_rule()
     test_international_bank_theme_rule_reports_delivery_dedup_metadata_only()
+    test_rotation_strategy_action_is_source_neutral()
     test_industry_hard_variable_is_source_neutral()
     test_transport_metadata_does_not_change_content_importance()
     test_semianalysis_source_identity_alone_does_not_raise_importance()
