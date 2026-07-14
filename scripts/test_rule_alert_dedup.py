@@ -71,6 +71,31 @@ def test_release_makes_failed_send_retryable() -> None:
         assert retry["reserved"] is True
 
 
+def test_fed_path_rule_uses_cross_source_reservation() -> None:
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        first = reserve_rule_alert(
+            review_with_rule("ib_fed_path:test", rule_id="international_bank_fed_rate_path_revision"),
+            source="wallstreetcn_news",
+            item_id="article:3775241",
+            title="美银转为预计美联储加息三次",
+            published_at="2026-06-22T16:39:42+00:00",
+            db_path=db_path,
+        )
+        assert first["reserved"] is True
+        confirm_rule_alert(first, db_path=db_path)
+        duplicate = reserve_rule_alert(
+            review_with_rule("ib_fed_path:test", rule_id="international_bank_fed_rate_path_revision"),
+            source="sina_finance_articles",
+            item_id="repost-1",
+            title="美银加息预测转载",
+            published_at="2026-06-23T01:00:00+00:00",
+            db_path=db_path,
+        )
+        assert duplicate["duplicate"] is True
+        assert duplicate["first"]["source"] == "wallstreetcn_news"
+
+
 def test_attributed_research_rule_uses_the_same_cross_source_reservation() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
@@ -104,6 +129,7 @@ def test_attributed_research_rule_uses_the_same_cross_source_reservation() -> No
 def main() -> int:
     test_reserve_confirm_and_duplicate()
     test_release_makes_failed_send_retryable()
+    test_fed_path_rule_uses_cross_source_reservation()
     test_attributed_research_rule_uses_the_same_cross_source_reservation()
     print("rule alert dedup checks passed")
     return 0

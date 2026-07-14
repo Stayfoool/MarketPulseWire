@@ -367,19 +367,28 @@ def build_profiles() -> list[SourceProfile]:
     for source_id, url in CHINA_MEDIA_FEEDS.items():
         if source_id in {"yicai_brief_rsshub", "cls_telegraph_page"}:
             continue
+        wallstreetcn = source_id == "wallstreetcn_news"
         profiles.append(
             SourceProfile(
                 id=source_id,
                 category="news_media",
                 name=CHINA_MEDIA_LABELS.get(source_id, source_id),
-                source_type="公开 API/页面/RSSHub",
-                fetch_range="公开快讯、短新闻、专题列表；不绕过登录或付费墙",
+                source_type="公开资讯/快讯页面 + 官方 sitemap" if wallstreetcn else "公开 API/页面/RSSHub",
+                fetch_range=(
+                    "公开文章与快讯；分类页和 /live 近实时发现，官方 sitemap 补漏；不访问会员正文"
+                    if wallstreetcn
+                    else "公开快讯、短新闻、专题列表；不绕过登录或付费墙"
+                ),
                 filter_policy="新闻媒体来源规则快判；宏观关键事件和产业硬变量优先；长内容只影响解读成本",
                 frequency="每 2 分钟 timer",
                 runtime_shape="timer one-shot",
                 pipeline="新闻媒体来源 -> 统一决策层 -> 薄解读；兼容 article_reviews",
                 service_units=("surveil-news-collector.timer", "surveil-news-collector.service"),
-                health_keys=(("china_finance_media", source_id),),
+                health_keys=(
+                    (("wallstreetcn", "articles"), ("wallstreetcn", "livenews"), ("wallstreetcn", "detail"))
+                    if wallstreetcn
+                    else (("china_finance_media", source_id),)
+                ),
                 fetcher="scripts/news_collector.py -> scripts/china_finance_media_monitor.py",
                 publisher_role="news_media",
                 skeptic_enabled=True,

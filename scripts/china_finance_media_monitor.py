@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import feedparser
+import wallstreetcn_monitor as wallstreetcn
 
 from china_media_sources import (
     CHINA_MEDIA_ACCESS_NOTES,
@@ -37,6 +38,7 @@ from db_utils import connect_sqlite, ensure_seen_tables, retry_on_locked
 from env_utils import load_env
 from http_utils import http_get
 from investment_universe import investment_universe_match, relevant_digest_for_mixed_item
+from international_bank_fed import fed_path_candidate
 from llm_analysis import llm_config
 from macro_policy import is_macro_event
 from market_flow import normalize_market_item, process_market_item
@@ -63,6 +65,7 @@ SINA_FINANCE_ROLL_URL = CHINA_MEDIA_FEEDS[SINA_FINANCE_SOURCE]
 SINA_FINANCE_REFERER = "https://finance.sina.com.cn/roll/"
 SINA_FINANCE_DEFAULT_LIDS = ("2517",)
 SINA_FINANCE_PENDING_ROLL_STATE: dict[str, Any] = {}
+WALLSTREETCN_SOURCE = wallstreetcn.SOURCE
 
 
 def connect_db() -> sqlite3.Connection:
@@ -829,6 +832,8 @@ def source_items(source: str, *, persist_state: bool = True, force: bool = False
         return parse_jin10_items()
     if source == SINA_FINANCE_SOURCE:
         return parse_sina_finance_article_items(persist_state=persist_state)
+    if source == WALLSTREETCN_SOURCE:
+        return wallstreetcn.collect_items(state=load_source_state(source))
     return []
 
 
@@ -841,6 +846,10 @@ def enrich_item(source: str, item: dict[str, Any]) -> dict[str, Any]:
         enriched.setdefault("source_module", china_media_module(source))
         enriched.setdefault("access_note", china_media_access_note(source, enriched["body_source"]))
         return enriched
+    if source == WALLSTREETCN_SOURCE:
+        if enriched.get("_wallstreetcn_enriched") or enriched.get("_skip_decision"):
+            return enriched
+        return wallstreetcn.enrich_item(enriched)
     if source == "yicai_brief" and enriched.get("url"):
         try:
             body, body_source = fetch_article_body(enriched["url"])
@@ -964,6 +973,8 @@ def save_new_items_with_retry(
 
 
 def should_focus_item(item: dict[str, Any], source: str = "") -> bool:
+    if fed_path_candidate(item):
+        return True
     match = investment_universe_match(source or str(item.get("source") or ""), item)
     item["_investment_universe_match"] = match
     if not match.get("matched"):
@@ -987,6 +998,8 @@ def is_mandatory_yicai_morning_brief(source: str, item: dict[str, Any]) -> bool:
 
 def notify_item(source: str, item: dict[str, Any]) -> None:
     enriched = enrich_item(source, item)
+    if enriched.get("_skip_decision"):
+        return
     mandatory_morning = is_mandatory_yicai_morning_brief(source, enriched)
     if not mandatory_morning and not should_focus_item(enriched, source):
         return
@@ -1034,6 +1047,15 @@ def run_once(sources: list[str], notify_baseline: bool = False) -> int:
                 fetched[source] = future.result()
                 with connect_db() as conn:
                     record_source_success(conn, "china_finance_media", source)
+                    if source == WALLSTREETCN_SOURCE:
+                        article_results = wallstreetcn.discovery_surface_results("article")
+                        live_results = wallstreetcn.discovery_surface_results("livenews")
+                        for health_source, rows in (("articles", article_results), ("livenews", live_results)):
+                            failures = [row for row in rows if not row.get("ok")]
+                            if failures:
+                                record_source_failure(conn, "wallstreetcn", health_source, RuntimeError(str(failures)))
+                            elif rows:
+                                record_source_success(conn, "wallstreetcn", health_source)
                 save_source_state(source, clear_backoff_state(load_source_state(source)))
             except Exception as exc:
                 save_source_state(source, backoff_state_after_failure(source, load_source_state(source)))
@@ -1044,10 +1066,38 @@ def run_once(sources: list[str], notify_baseline: bool = False) -> int:
         if source not in fetched:
             continue
         items = fetched[source]
+        if source == WALLSTREETCN_SOURCE:
+            with connect_db() as conn:
+                baseline = not seen_source(conn, source)
+                seen_ids = {
+                    str(row[0])
+                    for row in conn.execute("SELECT item_id FROM seen_items WHERE source = ?", (source,))
+                }
+            if not baseline:
+                detail_failures: list[str] = []
+                prepared: list[dict[str, Any]] = []
+                for item in items:
+                    if str(item.get("id") or "") in seen_ids:
+                        continue
+                    try:
+                        prepared.append(wallstreetcn.enrich_item(item))
+                    except Exception as exc:  # noqa: BLE001 - failed detail must remain unseen for retry
+                        detail_failures.append(f"{item.get('id')}: {type(exc).__name__}: {exc}")
+                items = prepared
+                with connect_db() as conn:
+                    if detail_failures:
+                        record_source_failure(conn, "wallstreetcn", "detail", RuntimeError("; ".join(detail_failures[:5])))
+                    else:
+                        record_source_success(conn, "wallstreetcn", "detail")
         try:
             new_items = save_new_items_with_retry(source, items, notify_baseline=notify_baseline)
             if source == SINA_FINANCE_SOURCE:
                 commit_sina_finance_roll_state()
+            if source == WALLSTREETCN_SOURCE and wallstreetcn.PENDING_STATE:
+                next_state = dict(load_source_state(source))
+                next_state.update(wallstreetcn.PENDING_STATE)
+                save_source_state(source, next_state)
+                wallstreetcn.PENDING_STATE.clear()
         except Exception as exc:
             with connect_db() as conn:
                 record_source_failure(conn, "china_finance_media", source, exc)

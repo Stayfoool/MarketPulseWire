@@ -18,7 +18,7 @@ The catalog is public configuration and code. Credentials, cookies, paid-content
 | Official company feeds | First-party announcements from OpenAI, NVIDIA, Samsung Semiconductor, SK hynix, and Micron are primary sources for architecture, product, capex, platform, and supply-chain changes. |
 | Official trade-policy sources | Federal Register, USTR, European Commission and MOFCOM expose investigations, public comments, hearings, tariffs, export controls, trade remedies and official escalation language before or at formal action. |
 | Sina Finance / iFinD / JYGS | China-market channels for holdings-related news, official company notices, announcements, and A-share event/action monitoring. |
-| First Yicai / CLS / Star Market Daily / Jin10 | Domestic market-moving context for A-share risk appetite, hard-tech company updates, macro/Fed policy reaction, and China-side semiconductor/AI narratives. |
+| First Yicai / CLS / Star Market Daily / Jin10 / WallstreetCN | Domestic market-moving context for A-share risk appetite, hard-tech company updates, macro/Fed policy reaction, and China-side semiconductor/AI narratives. |
 
 ## X Accounts
 
@@ -151,6 +151,7 @@ These sources are defined in `scripts/china_media_sources.py` and run through `s
 | `cls_telegraph_api` | CLS / telegraph | `https://api3.cls.cn/v1/roll/get_roll_list` | Public frontend endpoint with low-frequency polling. Star Market Daily items inside CLS telegraph are labeled as `科创板日报 / 财联社电报`. |
 | `star_market_daily_subject` | Star Market Daily / 科创板最新动态 | `https://www.cls.cn/subject/1777` | Public topic page. The monitor reads the page's public Next.js data for title, summary, stocks, subjects, timestamp, and article link. |
 | `jin10_rsshub_important` | Jin10 / important events | RSSHub route | Public RSSHub backup route for important events; it may be rate-limited or temporarily unavailable. |
+| `wallstreetcn_news` | WallstreetCN / 华尔街见闻 | Public `/news/global`, `/live`, and official monthly sitemaps | Peer general news-media source. Public list pages provide near-real-time ids; sitemaps provide baseline/catch-up. Public detail only; member content is not opened or used as full evidence. |
 
 Star Market Daily is useful for China hard-tech and STAR Market signals, including semiconductors, AI, advanced manufacturing, materials, IPO/refinancing, and listed-company research notes. It is not pushed unconditionally: items still pass the media keyword/macro filters, LLM article gate, skeptic evaluator, and duplicate checks before immediate Feishu delivery.
 

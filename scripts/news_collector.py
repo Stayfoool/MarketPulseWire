@@ -44,6 +44,7 @@ NEWS_BATCH_SOURCES = {
     "star_market_daily_subject": CHINA_MEDIA_FEEDS["star_market_daily_subject"],
     "jin10_rsshub_important": CHINA_MEDIA_FEEDS["jin10_rsshub_important"],
     "sina_finance_articles": CHINA_MEDIA_FEEDS["sina_finance_articles"],
+    "wallstreetcn_news": CHINA_MEDIA_FEEDS["wallstreetcn_news"],
 }
 
 

@@ -16,24 +16,11 @@ from typing import Any
 from investment_bank_theme_config import load_config
 from investment_bank_theme_taxonomy import ROTATION_THEME_BUCKETS, ROTATION_THEME_BY_ID
 from investment_universe import investment_universe_match
+from international_banks import INTERNATIONAL_BANK_ALIASES, bank_alias_matches, matched_bank_names
 from media_keyword_config import keyword_matches_text
 from rule_center import effective_list, rule_enabled, rule_priority, rule_settings
 from stock_relations import portfolio_relation_matches
 
-
-INTERNATIONAL_BANK_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("高盛", ("高盛", "goldman sachs")),
-    ("摩根士丹利", ("摩根士丹利", "morgan stanley")),
-    ("摩根大通", ("摩根大通", "jpmorgan", "jp morgan", "j.p. morgan")),
-    ("花旗", ("花旗", "citi", "citigroup")),
-    ("瑞银", ("瑞银", "ubs")),
-    ("美银", ("美银", "bank of america", "bofa")),
-    ("伯恩斯坦", ("伯恩斯坦", "bernstein")),
-    ("杰富瑞", ("杰富瑞", "jefferies")),
-    ("汇丰", ("汇丰", "hsbc")),
-    ("野村", ("野村", "nomura")),
-    ("麦格理", ("麦格理", "macquarie")),
-)
 
 RATING_OR_TARGET_KEYWORDS = (
     "目标价",
@@ -388,29 +375,6 @@ def contains_keyword(text: str, keywords: tuple[str, ...]) -> bool:
         elif normalized in lowered:
             return True
     return False
-
-
-def matched_bank_names(text: str, allowed_banks: set[str] | None = None) -> list[str]:
-    lowered = text.lower()
-    banks: list[str] = []
-    for display, aliases in INTERNATIONAL_BANK_ALIASES:
-        if allowed_banks and display.casefold() not in allowed_banks and not any(
-            alias.casefold() in allowed_banks for alias in aliases
-        ):
-            continue
-        if any(bank_alias_matches(lowered, alias) for alias in aliases):
-            banks.append(display)
-    return banks
-
-
-def bank_alias_matches(lowered_text: str, alias: str) -> bool:
-    normalized = alias.lower().strip()
-    if not normalized:
-        return False
-    if re.search(r"[a-z0-9]", normalized):
-        pattern = re.escape(normalized).replace(r"\ ", r"\s+")
-        return re.search(rf"(?<![a-z0-9]){pattern}(?![a-z0-9])", lowered_text) is not None
-    return normalized in lowered_text
 
 
 def holding_tokens(holding: dict[str, Any]) -> list[str]:

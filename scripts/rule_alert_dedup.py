@@ -13,6 +13,7 @@ from market_item import decision_result_from_payload
 
 
 RULE_IDS = {
+    "international_bank_fed_rate_path_revision",
     "international_bank_theme_strategy",
     "attributed_research_hard_variable",
 }
