@@ -15,6 +15,12 @@ from market_db import DEFAULT_DB_PATH, db_table_exists, init_db
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "push_rules.local.json"
+ORDERED_FIRST_MATCH = "ordered_first_match"
+PARALLEL_MERGE = "parallel_merge"
+EXECUTION_MODE_LABELS = {
+    ORDERED_FIRST_MATCH: "顺序首命中",
+    PARALLEL_MERGE: "并行合并",
+}
 
 
 RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
@@ -24,6 +30,7 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "group": "投行研究",
         "description": "认可国际投行对直接持仓/观察标的给出评级、目标价或覆盖变化时即时提醒。",
         "runtime": "push_rules / article + event",
+        "execution_mode": ORDERED_FIRST_MATCH,
         "hit_markers": ("investment_bank_rating_target_direct_holding",),
         "priority": 100,
         "fields": (
@@ -51,6 +58,7 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "group": "投行研究",
         "description": "保留给未来的上下游、多对多和方向传导关系映射；当前日常实时提醒优先使用持仓管理中的“关联新闻关键词”。",
         "runtime": "push_rules / value directory article",
+        "execution_mode": ORDERED_FIRST_MATCH,
         "hit_markers": ("investment_bank_portfolio_relation",),
         "priority": 95,
         "fields": (
@@ -80,6 +88,7 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "group": "持仓与公司",
         "description": "任一已接入文章或事件命中直接持仓名称/别名，或该持仓配置的“关联新闻关键词”时即时薄推送；不由 LLM 决定。",
         "runtime": "push_rules / article + event",
+        "execution_mode": ORDERED_FIRST_MATCH,
         "hit_markers": ("holding_keyword_immediate_alert",),
         "priority": 98,
         "fields": (
@@ -93,11 +102,10 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "group": "宏观与政策",
         "description": "认可国际大行明确修正美联储加息/降息次数、时点、累计基点或终端利率时即时提醒；具体但未证明发生修正的预测进入 daily。",
         "runtime": "international_bank_fed / decision_engine / all normalized sources",
+        "execution_mode": PARALLEL_MERGE,
         "hit_markers": ("international_bank_fed_rate_path_revision",),
-        "priority": 92,
         "fields": (
             {"key": "enabled", "label": "启用", "type": "bool", "default": True},
-            {"key": "priority", "label": "规则顺序", "type": "int", "default": 92, "min": 1, "max": 999},
             {
                 "key": "allowed_banks",
                 "label": "主要银行白名单",
@@ -113,6 +121,7 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "group": "投行研究",
         "description": "明确做多/做空/超配等重大主题策略，或给出完整 from -> to 配置轮动时即时提醒；轮动关系由代码内审计语法判定。",
         "runtime": "push_rules / article + event",
+        "execution_mode": ORDERED_FIRST_MATCH,
         "hit_markers": ("international_bank_theme_strategy",),
         "priority": 90,
         "external_config": "investment_bank_theme",
@@ -165,6 +174,7 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "group": "投行研究",
         "description": "价值目录国际投行-行业宏观来源中，认可机构且命中半导体/AI 基础设施、持仓关联关键词或配置主题的研报即时提醒。",
         "runtime": "push_rules / value_directory article",
+        "execution_mode": ORDERED_FIRST_MATCH,
         "hit_markers": ("value_directory_industry_macro_research",),
         "priority": 88,
         "fields": (
@@ -192,6 +202,7 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "group": "新闻媒体",
         "description": "第一财经“券商晨会观点速递”为用户指定每日必读栏目，固定进入即时薄推送。",
         "runtime": "push_rules / news media article",
+        "execution_mode": ORDERED_FIRST_MATCH,
         "hit_markers": ("yicai_morning_brief",),
         "priority": 85,
         "fields": (
@@ -205,6 +216,7 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "group": "持仓与公司",
         "description": "持仓/观察标的命中订单、涨价、产能、客户认证、资本开支、并购、管制或业绩指引等硬变量时即时提醒。",
         "runtime": "push_rules / article + event",
+        "execution_mode": ORDERED_FIRST_MATCH,
         "hit_markers": ("direct_holding_hard_variable",),
         "priority": 80,
         "fields": (
@@ -219,6 +231,7 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "group": "持仓与公司",
         "description": "核心公司官网的 HBM/存储、GPU/AI 平台、量产、客户认证、产能、资本开支、液冷和先进封装等硬变量即时提醒。",
         "runtime": "push_rules / official article",
+        "execution_mode": ORDERED_FIRST_MATCH,
         "hit_markers": ("official_company_hard_variable",),
         "priority": 70,
         "fields": (
@@ -240,6 +253,7 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "group": "宏观流动性",
         "description": "非农、CPI、PCE、FOMC/主席讲话及伴随大幅市场反应的次重点数据即时提醒。",
         "runtime": "macro_policy + push_rules / article + event",
+        "execution_mode": ORDERED_FIRST_MATCH,
         "hit_markers": ("macro_policy_line",),
         "priority": 60,
         "fields": (
@@ -255,11 +269,10 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "group": "宏观与政策",
         "description": "任一通用来源出现中美或中欧贸易政策工具、前置程序、报复威胁或明确关系升级时提前提醒；弱但明确的紧张信号进入 daily。",
         "runtime": "trade_friction / decision_engine / all normalized sources",
+        "execution_mode": PARALLEL_MERGE,
         "hit_markers": ("trade_friction_escalation",),
-        "priority": 65,
         "fields": (
             {"key": "enabled", "label": "启用", "type": "bool", "default": True},
-            {"key": "priority", "label": "规则顺序", "type": "int", "default": 65, "min": 1, "max": 999},
         ),
     },
     {
@@ -268,8 +281,8 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "group": "研究机构/行业媒体",
         "description": "任一通用来源明确署名引用受信任行业研究源，并包含半导体/AI 产业硬变量或重大预期变化时即时提醒；来源分类不参与重要性判断。",
         "runtime": "attributed_research / market_flow + decision_engine",
+        "execution_mode": PARALLEL_MERGE,
         "hit_markers": ("attributed_research_hard_variable",),
-        "priority": 0,
         "fields": (
             {"key": "enabled", "label": "启用", "type": "bool", "default": True},
             {
@@ -294,8 +307,8 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "group": "通用内容规则",
         "description": "任一通用来源同时命中重点主题，以及价格、产能、资本开支、订单、交付、供需、监管、技术路线或业绩规模等实质变量时即时提醒。",
         "runtime": "industry_hardline / market_flow + decision_engine",
+        "execution_mode": PARALLEL_MERGE,
         "hit_markers": ("industry_hardline_override", "industry_quantified_hardline"),
-        "priority": 0,
         "fields": (
             {"key": "enabled", "label": "启用", "type": "bool", "default": True},
             {"key": "extra_keywords", "label": "额外硬变量触发词", "type": "list", "default": []},
@@ -424,6 +437,8 @@ def rule_enabled(rule_id: str) -> bool:
 
 def rule_priority(rule_id: str) -> int:
     rule = RULE_BY_ID.get(str(rule_id))
+    if rule and rule.get("execution_mode") != ORDERED_FIRST_MATCH:
+        raise ValueError(f"并行合并规则没有执行顺序：{rule_id}")
     default = int((rule or {}).get("priority") or 0)
     return int(rule_settings(rule_id).get("priority") or default)
 
@@ -447,12 +462,15 @@ def _rule_view(rule: dict[str, Any], settings: dict[str, Any], stats: dict[str, 
     for field in rule.get("fields") or ():
         key = str(field["key"])
         fields.append({**field, "value": settings.get(key, field.get("default"))})
+    execution_mode = str(rule.get("execution_mode") or "")
     return {
         "id": rule["id"],
         "name": rule["name"],
         "group": rule["group"],
         "description": rule["description"],
         "runtime": rule["runtime"],
+        "execution_mode": execution_mode,
+        "execution_mode_label": EXECUTION_MODE_LABELS.get(execution_mode, execution_mode),
         "fields": fields,
         "stats": stats,
     }

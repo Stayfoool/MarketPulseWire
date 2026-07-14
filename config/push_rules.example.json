@@ -32,7 +32,6 @@
     },
     "international_bank_fed_rate_path_revision": {
       "enabled": true,
-      "priority": 92,
       "allowed_banks": []
     },
     "direct_holding_hard_variable": {
@@ -53,8 +52,7 @@
       "extra_secondary_keywords": []
     },
     "trade_friction_escalation": {
-      "enabled": true,
-      "priority": 65
+      "enabled": true
     },
     "attributed_research_hard_variable": {
       "enabled": true,

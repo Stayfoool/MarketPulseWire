@@ -10,9 +10,12 @@ from tempfile import TemporaryDirectory
 from market_review_store import ensure_article_reviews_table
 from db_utils import connect_sqlite
 from rule_center import (
+    ORDERED_FIRST_MATCH,
+    PARALLEL_MERGE,
     RULE_BY_ID,
     _write_audit,
     configured_rule_settings,
+    rule_priority,
     rule_center_payload,
     save_rule_config,
     simulate_rules,
@@ -38,6 +41,12 @@ def test_rule_registry_payload_has_all_current_hard_rules() -> None:
     attributed = next(item for item in payload["rules"] if item["id"] == "attributed_research_hard_variable")
     trusted = next(field for field in attributed["fields"] if field["key"] == "trusted_institutions")
     assert {"semianalysis", "trendforce", "semi", "digitimes", "the_elec", "nikkei_xtech"} == set(trusted["default"])
+    fed = next(item for item in payload["rules"] if item["id"] == "international_bank_fed_rate_path_revision")
+    assert fed["execution_mode"] == PARALLEL_MERGE
+    assert fed["execution_mode_label"] == "并行合并"
+    assert not any(field["key"] == "priority" for field in fed["fields"])
+    assert keyword_alert["execution_mode"] == ORDERED_FIRST_MATCH
+    assert keyword_alert["execution_mode_label"] == "顺序首命中"
 
 
 def test_private_config_normalizes_and_preserves_explicit_fields() -> None:
@@ -55,6 +64,35 @@ def test_private_config_normalizes_and_preserves_explicit_fields() -> None:
     assert configured["enabled"] is False
     assert configured["priority"] == 77
     assert configured["extra_primary_keywords"] == ["就业成本"]
+
+
+def test_parallel_rule_config_drops_stale_priority_fields() -> None:
+    with TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "push_rules.local.json"
+        saved = save_rule_config(
+            {
+                "rules": {
+                    "international_bank_fed_rate_path_revision": {
+                        "enabled": False,
+                        "priority": 999,
+                        "allowed_banks": ["美银"],
+                    },
+                    "trade_friction_escalation": {"enabled": False, "priority": 1},
+                }
+            },
+            path,
+        )
+    assert saved["rules"]["international_bank_fed_rate_path_revision"] == {
+        "enabled": False,
+        "allowed_banks": ["美银"],
+    }
+    assert saved["rules"]["trade_friction_escalation"] == {"enabled": False}
+    try:
+        rule_priority("international_bank_fed_rate_path_revision")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("parallel rules must not expose an effective priority")
 
 
 def test_audit_and_dry_run_are_non_delivery_operations() -> None:
@@ -112,6 +150,7 @@ def test_audit_and_dry_run_are_non_delivery_operations() -> None:
 def main() -> int:
     test_rule_registry_payload_has_all_current_hard_rules()
     test_private_config_normalizes_and_preserves_explicit_fields()
+    test_parallel_rule_config_drops_stale_priority_fields()
     test_audit_and_dry_run_are_non_delivery_operations()
     print("rule center checks passed")
     return 0
