@@ -19,6 +19,7 @@ from llm_analysis import format_llm_analysis
 from market_card_view import card_targets, decision_reason, interpretation_core, interpretation_reason
 from market_db import DEFAULT_DB_PATH
 from market_item import DecisionResult
+from market_move_dedup import MARKET_MOVE_RULE_ID, intraday_market_move_dedup_hit
 from market_review_store import (
     article_item_id,
     event_row_by_id,
@@ -135,10 +136,16 @@ def _duplicate_article_review(
     db_path: Path,
 ) -> None:
     first = reservation.get("first") or {}
-    note = (
-        "同一规则观点跨来源去重：已由 "
-        f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
-    )
+    if reservation.get("rule_id") == MARKET_MOVE_RULE_ID:
+        note = (
+            "同一盘中行情事件跨来源去重：已由 "
+            f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
+        )
+    else:
+        note = (
+            "同一规则观点跨来源去重：已由 "
+            f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
+        )
     updated = dict(review)
     updated["push_now"] = False
     updated["reason"] = f"{updated.get('reason') or ''}\n{note}".strip()
@@ -147,6 +154,26 @@ def _duplicate_article_review(
     updated["raw"] = raw
     with connect_sqlite(db_path) as conn:
         save_article_review(conn, source, item, updated)
+
+
+def _reserve_delivery_alert(
+    payload: dict[str, Any],
+    item: dict[str, Any],
+    decision: DecisionResult,
+    *,
+    source: str,
+    item_id: str,
+    db_path: Path,
+) -> dict[str, Any]:
+    return reserve_rule_alert(
+        payload,
+        source=source,
+        item_id=item_id,
+        title=str(item.get("title") or ""),
+        published_at=str(item.get("published_at") or ""),
+        delivery_hit=intraday_market_move_dedup_hit(item, decision),
+        db_path=db_path,
+    )
 
 
 def deliver_article_review(
@@ -165,12 +192,12 @@ def deliver_article_review(
     item_id = article_item_id(item)
     reservation: dict[str, Any] = {}
     if use_rule_dedup:
-        reservation = reserve_rule_alert(
+        reservation = _reserve_delivery_alert(
             review,
+            item,
+            decision,
             source=source,
             item_id=item_id,
-            title=str(item.get("title") or ""),
-            published_at=str(item.get("published_at") or ""),
             db_path=db_path,
         )
         if reservation.get("duplicate"):
@@ -282,29 +309,32 @@ def deliver_event(
     full_text = str(event_row["full_text"] or "")
     url = str(event_row["url"] or "")
     published_at = str(event_row["published_at"] or "")
-    reservation = reserve_rule_alert(
+    reservation = _reserve_delivery_alert(
         analysis,
+        event_row,
+        decision,
         source=source,
         item_id=str(event_id),
-        title=title,
-        published_at=published_at,
         db_path=db_path,
     )
     if reservation.get("duplicate"):
         first = reservation.get("first") or {}
+        market_move_duplicate = reservation.get("rule_id") == MARKET_MOVE_RULE_ID
         record_delivery(
             event_id,
             "feishu",
-            "skipped",
+            "duplicate" if market_move_duplicate else "skipped",
             {
-                "reason": "同一规则观点跨来源去重",
+                "reason": "同一盘中行情事件跨来源去重" if market_move_duplicate else "同一规则观点跨来源去重",
                 "first_source": first.get("source"),
+                "first_item_id": first.get("item_id"),
                 "first_published_at": first.get("published_at"),
                 "dedup_key": reservation.get("dedup_key"),
+                "dedup_kind": "intraday_market_move" if market_move_duplicate else "rule_alert",
             },
             db_path=db_path,
         )
-        return "skipped"
+        return "duplicate" if market_move_duplicate else "skipped"
     if not os.getenv("FEISHU_WEBHOOK", "").strip():
         release_rule_alert(reservation, db_path=db_path)
         record_delivery(event_id, "feishu", "skipped", {"reason": "FEISHU_WEBHOOK 未配置"}, db_path=db_path)

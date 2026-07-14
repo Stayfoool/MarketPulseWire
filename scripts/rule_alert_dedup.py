@@ -1,4 +1,4 @@
-"""Cross-source delivery deduplication for narrow deterministic alert rules."""
+"""Atomic cross-source delivery deduplication for deterministic alert facts."""
 
 from __future__ import annotations
 
@@ -47,21 +47,29 @@ def reserve_rule_alert(
     item_id: str,
     title: str,
     published_at: str,
+    delivery_hit: dict[str, Any] | None = None,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> dict[str, Any]:
-    """Reserve a single rule alert before Feishu delivery.
+    """Reserve a single delivery fact before Feishu delivery.
 
-    A reservation makes concurrent collectors deterministic. Expired records are
-    reused so the same strategy can alert again after its configurable window.
+    Explicit rule identities take precedence. ``delivery_hit`` permits another
+    deterministic execution-only identity after a DecisionResult already made
+    the item eligible to push. A reservation makes concurrent collectors
+    deterministic; expired records are reused after the configured window.
     """
-    hit = rule_hit(review_or_analysis)
+    hit = rule_hit(review_or_analysis) or delivery_hit
     if not hit:
         return {"reserved": False, "applicable": False}
     dedup_key = str(hit.get("dedup_key") or "")
     rule_id = str(hit.get("rule_id") or "")
-    lookback_days = max(1, min(int(hit.get("dedup_lookback_days") or 14), 90))
+    if not dedup_key or not rule_id:
+        return {"reserved": False, "applicable": False}
+    lookback_minutes = hit.get("dedup_lookback_minutes")
+    if lookback_minutes is None:
+        lookback_minutes = max(1, min(int(hit.get("dedup_lookback_days") or 14), 90)) * 24 * 60
+    lookback_minutes = max(1, min(int(lookback_minutes), 90 * 24 * 60))
     now = datetime.now(timezone.utc)
-    cutoff = (now - timedelta(days=lookback_days)).isoformat()
+    cutoff = (now - timedelta(minutes=lookback_minutes)).isoformat()
     init_db(db_path).close()
     conn = sqlite3.connect(db_path, timeout=60, isolation_level="IMMEDIATE")
     try:
@@ -117,7 +125,7 @@ def reserve_rule_alert(
                 item_id,
                 title,
                 published_at,
-                json.dumps({"rule_hit": hit}, ensure_ascii=False),
+                json.dumps({"delivery_hit": hit}, ensure_ascii=False),
                 now_text,
                 now_text,
             ),

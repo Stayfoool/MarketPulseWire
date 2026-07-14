@@ -8,6 +8,7 @@ from market_item import NormalizedMarketItem
 
 
 GREEN = {"symbol": "688017.SH", "name": "绿的谐波", "full_name": "绿的谐波传动科技股份有限公司", "aliases": []}
+YUANJIE = {"symbol": "688498.SH", "name": "源杰科技", "full_name": "源杰科技股份有限公司", "aliases": []}
 
 
 def test_direct_holding_bank_rule_matches_legacy_push_rule() -> None:
@@ -122,6 +123,28 @@ def test_transport_metadata_does_not_change_content_importance() -> None:
     assert {decision.action for decision in decisions} == {"push"}
     assert {decision.importance for decision in decisions} == {"high"}
     assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"industry_quantified_hardline"}
+
+
+def test_holding_market_move_push_action_is_source_neutral() -> None:
+    texts = (
+        {
+            "source": "yicai_brief",
+            "source_category": "news_media",
+            "publisher_role": "news_media",
+            "content_type": "article",
+            "title": "CPO概念股午后直线拉升，则成电子涨超27%，源杰科技涨超10%。",
+        },
+        {
+            "source": "jin10_rsshub_important",
+            "source_category": "news_media",
+            "publisher_role": "news_media",
+            "content_type": "article",
+            "title": "A股CPO概念股午后直线拉升，源杰科技、则成电子等涨超10%。",
+        },
+    )
+    decisions = [decide_market_item(item, holdings=[YUANJIE]) for item in texts]
+    assert {decision.action for decision in decisions} == {"push"}
+    assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"holding_keyword_immediate_alert"}
 
 
 def test_semianalysis_source_identity_alone_does_not_raise_importance() -> None:
@@ -266,6 +289,7 @@ def main() -> int:
     test_rotation_strategy_action_is_source_neutral()
     test_industry_hard_variable_is_source_neutral()
     test_transport_metadata_does_not_change_content_importance()
+    test_holding_market_move_push_action_is_source_neutral()
     test_semianalysis_source_identity_alone_does_not_raise_importance()
     test_news_media_attributed_semianalysis_hard_variable_pushes()
     test_holding_and_attributed_research_rules_are_preserved_together()
