@@ -88,6 +88,26 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
+        "id": "international_bank_fed_rate_path_revision",
+        "name": "国际大行美联储利率路径修正",
+        "group": "宏观与政策",
+        "description": "认可国际大行明确修正美联储加息/降息次数、时点、累计基点或终端利率时即时提醒；具体但未证明发生修正的预测进入 daily。",
+        "runtime": "international_bank_fed / decision_engine / all normalized sources",
+        "hit_markers": ("international_bank_fed_rate_path_revision",),
+        "priority": 92,
+        "fields": (
+            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
+            {"key": "priority", "label": "规则顺序", "type": "int", "default": 92, "min": 1, "max": 999},
+            {
+                "key": "allowed_banks",
+                "label": "主要银行白名单",
+                "type": "list",
+                "default": [],
+                "help": "留空使用代码审计的主要国际银行集合；只接受已审计中文名或英文别名。",
+            },
+        ),
+    },
+    {
         "id": "international_bank_theme_strategy",
         "name": "国际投行重大主题策略",
         "group": "投行研究",

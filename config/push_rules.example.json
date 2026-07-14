@@ -30,6 +30,11 @@
       "allow_secondary_sources": true,
       "dedup_lookback_days": 14
     },
+    "international_bank_fed_rate_path_revision": {
+      "enabled": true,
+      "priority": 92,
+      "allowed_banks": []
+    },
     "direct_holding_hard_variable": {
       "enabled": true,
       "priority": 80,

@@ -9,7 +9,7 @@ MarketPulseWire is not an investment adviser and does not generate buy/sell reco
 Market-moving semiconductor and AI infrastructure signals are scattered across X, sell-side-style research headlines, official company blogs, regional supply-chain media, company notices, and paid/authorized data services. MarketPulseWire turns that messy stream into a self-hosted research radar:
 
 - Track your own holdings and adjacent supply-chain names.
-- Watch high-signal sources such as Serenity on X, SEMI, TrendForce, DIGITIMES, Nikkei xTECH, The Elec, OpenAI, NVIDIA, Samsung, SK hynix, Micron, Sina Finance, iFinD, and JYGS.
+- Watch high-signal sources such as Serenity on X, SEMI, TrendForce, DIGITIMES, Nikkei xTECH, The Elec, OpenAI, NVIDIA, Samsung, SK hynix, Micron, Sina Finance, WallstreetCN, iFinD, and JYGS.
 - Use a rule-first decision layer to decide what deserves immediate attention and what can wait for a daily digest.
 - Keep credentials and personal research data on your own machine or server.
 
@@ -38,7 +38,7 @@ MarketPulseWire keeps a public, reusable source catalog for semiconductor and AI
 | Nikkei xTECH | Japan technology and manufacturing coverage, useful for materials, components, equipment, automotive electronics, and industrial technology shifts. |
 | The Elec | Korea-centered semiconductor/display/battery supply-chain media, useful for Samsung, SK hynix, OLED, memory, equipment, and materials signals. |
 | OpenAI / NVIDIA / Samsung / SK hynix / Micron official feeds | First-party product, architecture, capex, platform, memory, and AI infrastructure announcements. |
-| Sina Finance / iFinD / JYGS | China-market news, company notices, announcements, and A-share event/opportunity tracking. |
+| Sina Finance / WallstreetCN / iFinD / JYGS | China-market and global-macro news, company notices, announcements, and A-share event/opportunity tracking. |
 
 See [docs/sources.md](docs/sources.md) for URLs, access methods, and compliance notes.
 

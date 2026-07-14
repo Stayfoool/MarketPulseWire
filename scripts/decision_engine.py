@@ -13,6 +13,7 @@ from typing import Any
 
 from attributed_research import EXTRACTION_KEY, attributed_research_rule
 from industry_hardline import industry_topic_hard_variable_rule
+from international_bank_fed import international_bank_fed_rate_path_rule
 from macro_policy import macro_policy_match
 from market_item import VALID_ACTIONS, DecisionResult, NormalizedMarketItem, normalize_importance
 from push_rules import first_matching_push_rule
@@ -449,6 +450,7 @@ def decide_market_item(
     audit = _audit_base(resolved_source, item, legacy_item)
 
     attributed_rule = attributed_research_rule(item)
+    fed_path_rule = international_bank_fed_rate_path_rule(resolved_source, legacy_item)
     push_rule = first_matching_push_rule(
         source=resolved_source,
         item=legacy_item,
@@ -457,7 +459,8 @@ def decide_market_item(
     )
     industry_rule = industry_topic_hard_variable_rule(resolved_source, legacy_item)
     trade_rule = trade_friction_rule(item)
-    matched_rules = [rule for rule in (push_rule, attributed_rule, industry_rule, trade_rule) if rule]
+    fed_path_push = fed_path_rule if fed_path_rule and fed_path_rule.get("decision_action") == "push" else None
+    matched_rules = [rule for rule in (push_rule, fed_path_push, attributed_rule, industry_rule, trade_rule) if rule]
     if len(matched_rules) > 1:
         dedup_rule = next((rule for rule in matched_rules if rule.get("dedup_key")), None)
         return _decision_from_rules(
@@ -468,6 +471,12 @@ def decide_market_item(
         )
     if push_rule:
         return _decision_from_rule(push_rule, audit_json=audit, source_stage="push_rules_first_match")
+    if fed_path_push:
+        return _decision_from_rule(
+            fed_path_push,
+            audit_json=audit,
+            source_stage="international_bank_fed_rate_path_revision",
+        )
     if attributed_rule:
         return _decision_from_rule(
             attributed_rule,
@@ -485,6 +494,12 @@ def decide_market_item(
             trade_rule,
             audit_json=audit,
             source_stage="trade_friction_escalation",
+        )
+    if fed_path_rule:
+        return _decision_from_rule(
+            fed_path_rule,
+            audit_json=audit,
+            source_stage="international_bank_fed_rate_path_revision",
         )
 
     macro = macro_policy_match(legacy_item)

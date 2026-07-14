@@ -18,6 +18,7 @@ def test_news_sources_include_expected_batch_and_exclude_sina_flash() -> None:
     assert "star_market_daily_subject" in sources
     assert "jin10_rsshub_important" in sources
     assert "sina_finance_articles" in sources
+    assert "wallstreetcn_news" in sources
     assert "sina_flash" not in sources
     assert "yicai_brief_rsshub" not in sources
     assert "cls_telegraph_page" not in sources
@@ -45,6 +46,7 @@ def test_disabled_source_is_filtered() -> None:
                 "profiles": [
                     {"id": "jin10_rsshub_important", "enabled": False},
                     {"id": "sina_finance_articles", "enabled": False},
+                    {"id": "wallstreetcn_news", "enabled": False},
                 ]
             },
             path=config_path,
@@ -52,6 +54,7 @@ def test_disabled_source_is_filtered() -> None:
         sources = news_collector.selected_sources([], config_path=config_path)
         assert "jin10_rsshub_important" not in sources
         assert "sina_finance_articles" not in sources
+        assert "wallstreetcn_news" not in sources
         assert "cls_telegraph_api" in sources
 
 
