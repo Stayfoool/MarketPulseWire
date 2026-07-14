@@ -98,6 +98,25 @@ def required_decision(payload: dict) -> DecisionResult:
     return decision
 
 
+def test_simple_event_card_formats_published_time_for_beijing() -> None:
+    card = market_delivery.simple_event_card(
+        "sina_stock_news",
+        "测试事件",
+        "测试摘要。",
+        "",
+        "2026-07-14T11:31:00+00:00",
+        ["核心内容：测试。"],
+    )
+    expected_time = "**发布时间**：2026-07-14 19:31:00 北京时间（UTC 2026-07-14 11:31:00）"
+    assert card["elements"][1]["text"]["content"] == expected_time
+
+    invalid_card = market_delivery.simple_event_card("source", "title", "text", "", "not-a-time", [])
+    assert invalid_card["elements"][1]["text"]["content"] == "**发布时间**：not-a-time"
+
+    unknown_card = market_delivery.simple_event_card("source", "title", "text", "", "", [])
+    assert unknown_card["elements"][1]["text"]["content"] == "**发布时间**：unknown"
+
+
 def test_archive_and_missing_webhook_are_recorded_without_sending() -> None:
     original_webhook = os.environ.pop("FEISHU_WEBHOOK", None)
     try:
@@ -480,6 +499,7 @@ def test_event_delivery_records_intraday_market_move_duplicate() -> None:
 
 
 def main() -> int:
+    test_simple_event_card_formats_published_time_for_beijing()
     test_archive_and_missing_webhook_are_recorded_without_sending()
     test_send_failure_releases_reservation_and_records_failure()
     test_success_confirms_rule_dedup_and_duplicate_skips_second_send()

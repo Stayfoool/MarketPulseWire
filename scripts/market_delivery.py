@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from cards import build_article_card
+from cards import build_article_card, format_time
 from db_utils import connect_sqlite
 from feishu import send_card, send_card_with_response
 from llm_analysis import format_llm_analysis
@@ -254,7 +254,7 @@ def simple_event_card(
 
     elements: list[dict[str, Any]] = [
         div_markdown(f"**来源**：{md_escape(source)}"),
-        div_markdown(f"**发布时间**：{md_escape(published_at or '未知')}"),
+        div_markdown(f"**发布时间**：{md_escape(format_time(published_at))}"),
         div_markdown(f"**标题**\n{md_escape(title)}"),
     ]
     for index, chunk in enumerate(text_chunks(text or "", limit=1000), start=1):
