@@ -187,7 +187,7 @@ HARD_VARIABLES: dict[str, tuple[str, ...]] = {
         "设备投资",
         "工厂投资",
         "紧急投资",
-        "融资额",
+        "融资轮",
     ),
     "订单/采购": (
         "purchase order",
@@ -295,12 +295,11 @@ HARD_VARIABLE_PATTERNS: dict[str, tuple[str, ...]] = {
         r"(?:产能|产量|生产).{0,24}(?:扩张|扩产|增加|提升|增长|削减|减少|翻倍|目标|\d)",
     ),
     "资本开支/投资": (
-        r"(?:additional|planned|plans? to|will|emergency).{0,36}(?:investment|funding)",
-        r"(?:investment|funding|financing|capital raise).{0,24}(?:[$¥￥]\s*)?\d",
-        r"(?:[$¥￥]\s*)?\d[\d,.]*\s*(?:billion|million|bn|[bm](?![a-z])|亿|万).{0,24}(?:investment|funding|融资)",
-        r"raise[sd]?\s+(?:[$¥￥]\s*)?\d[\d,.]*\s*(?:billion|million|bn|[bm](?![a-z])).{0,30}(?:adr|offering|financing)",
-        r"(?:追加|新增|拟|计划|将|完成).{0,36}(?:投资(?!者)|融资)",
-        r"(?:投资(?!者)|融资).{0,20}\d",
+        r"(?:additional|planned|plans? to|will|emergency).{0,36}(?:investment|capital expenditure|capex)",
+        r"(?:investment|capital expenditure|capex|funding round).{0,24}(?:[$¥￥]\s*)?\d",
+        r"(?:[$¥￥]\s*)?\d[\d,.]*\s*(?:billion|million|bn|[bm](?![a-z])|亿|万).{0,24}(?:investment|capital expenditure|capex|funding round)",
+        r"(?:追加|新增|拟|计划|将|完成).{0,36}(?:投资(?!者)|资本开支|融资轮)",
+        r"(?:投资(?!者)|资本开支|融资轮).{0,20}\d",
     ),
     "预测调整": (
         r"(?:raise|raises|raised|cut|cuts|revised|lowered).{0,48}(?:forecast|guidance|estimate|projection)",

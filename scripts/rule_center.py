@@ -302,6 +302,18 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
+        "id": "ai_hyperscaler_credit_stress",
+        "name": "AI 信用与融资风险",
+        "group": "通用内容规则",
+        "description": "监测重点 AI 基础设施融资主体的发债、承接、二级表现、利差、融资成本、杠杆/现金流和资本开支融资约束；普通融资进入日报，明确硬结果或多个独立压力信号即时提醒。",
+        "runtime": "ai_credit_risk / market_flow + decision_engine",
+        "execution_mode": PARALLEL_MERGE,
+        "hit_markers": ("ai_hyperscaler_credit_stress",),
+        "fields": (
+            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
+        ),
+    },
+    {
         "id": "industry_quantified_hardline",
         "name": "重点主题与产业硬变量",
         "group": "通用内容规则",
@@ -689,6 +701,7 @@ def _event_candidates(conn, cutoff: str, limit: int) -> list[dict[str, Any]]:
 def simulate_rules(*, db_path: Path = DEFAULT_DB_PATH, days: int = 7, limit: int = 120) -> dict[str, Any]:
     """Evaluate recent stored entries with the live rules without sending Feishu."""
     from attributed_research import attributed_research_rule
+    from ai_credit_risk import ai_credit_risk_rule
     from industry_hardline import industry_topic_hard_variable_rule
     from push_rules import first_matching_push_rule, load_enabled_holdings_for_rules
     from source_profiles import runtime_source_profile
@@ -722,6 +735,16 @@ def simulate_rules(*, db_path: Path = DEFAULT_DB_PATH, days: int = 7, limit: int
                     "rule_id": "industry_quantified_hardline",
                     "name": "重点主题与产业硬变量",
                     "reason": str(industry.get("brief_reason") or industry.get("reason") or ""),
+                }
+            )
+        credit = ai_credit_risk_rule(str(item["source"]), item)
+        if credit:
+            matches.append(
+                {
+                    "rule_id": "ai_hyperscaler_credit_stress",
+                    "name": "AI 信用与融资风险",
+                    "reason": str(credit.get("brief_reason") or credit.get("reason") or ""),
+                    "action": str(credit.get("decision_action") or ""),
                 }
             )
         attributed = attributed_research_rule(item)

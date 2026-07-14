@@ -47,6 +47,9 @@ def test_rule_registry_payload_has_all_current_hard_rules() -> None:
     assert not any(field["key"] == "priority" for field in fed["fields"])
     assert keyword_alert["execution_mode"] == ORDERED_FIRST_MATCH
     assert keyword_alert["execution_mode_label"] == "顺序首命中"
+    credit = next(item for item in payload["rules"] if item["id"] == "ai_hyperscaler_credit_stress")
+    assert credit["execution_mode"] == PARALLEL_MERGE
+    assert not any(field["key"] == "priority" for field in credit["fields"])
 
 
 def test_private_config_normalizes_and_preserves_explicit_fields() -> None:

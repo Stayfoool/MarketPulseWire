@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ai_credit_risk import ai_credit_risk_rule
 from attributed_research import EXTRACTION_KEY, attributed_research_rule
 from industry_hardline import industry_topic_hard_variable_rule
 from international_bank_fed import international_bank_fed_rate_path_rule
@@ -85,6 +86,7 @@ def _audit_base(source: str, item: NormalizedMarketItem | dict[str, Any], legacy
         "deterministic_push_match": False,
         "legacy_entrypoints_wrapped": [
             "push_rules.first_matching_push_rule",
+            "ai_credit_risk.ai_credit_risk_rule",
             "attributed_research.attributed_research_rule",
             "industry_hardline.industry_topic_hard_variable_rule",
             "trade_friction.trade_friction_rule",
@@ -459,8 +461,10 @@ def decide_market_item(
     )
     industry_rule = industry_topic_hard_variable_rule(resolved_source, legacy_item)
     trade_rule = trade_friction_rule(item)
+    credit_rule = ai_credit_risk_rule(resolved_source, legacy_item)
     fed_path_push = fed_path_rule if fed_path_rule and fed_path_rule.get("decision_action") == "push" else None
-    matched_rules = [rule for rule in (push_rule, fed_path_push, attributed_rule, industry_rule, trade_rule) if rule]
+    credit_push = credit_rule if credit_rule and credit_rule.get("decision_action") == "push" else None
+    matched_rules = [rule for rule in (push_rule, fed_path_push, attributed_rule, industry_rule, trade_rule, credit_push) if rule]
     if len(matched_rules) > 1:
         dedup_rule = next((rule for rule in matched_rules if rule.get("dedup_key")), None)
         return _decision_from_rules(
@@ -494,6 +498,12 @@ def decide_market_item(
             trade_rule,
             audit_json=audit,
             source_stage="trade_friction_escalation",
+        )
+    if credit_rule:
+        return _decision_from_rule(
+            credit_rule,
+            audit_json=audit,
+            source_stage="ai_hyperscaler_credit_stress",
         )
     if fed_path_rule:
         return _decision_from_rule(
