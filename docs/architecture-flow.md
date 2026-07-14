@@ -29,7 +29,7 @@ flowchart LR
     Delivery --> Outcome["DeliveryOutcome"]
 ```
 
-`DecisionResult.action` is the only push-eligibility input accepted by delivery. Delivery execution may still produce `sent`, `duplicate`, `skipped`, or `failed`. Missing decisions cannot fall back to legacy push fields.
+`DecisionResult.action` is the only push-eligibility input accepted by delivery. Delivery execution may still produce `sent`, `duplicate`, `skipped`, or `failed`. Missing decisions cannot fall back to legacy push fields. For a push-eligible intraday Chinese equity market move, delivery may derive a conservative source-neutral fact identity from the Beijing market date, direction, literal concept, and an already matched holding/keyword target; the first reservation sends and later matching source retransmissions are recorded as duplicates without changing the decision.
 
 The former direct/compat route switch and these wrapper modules have been removed:
 
@@ -53,7 +53,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `market_content_adapter.py` | Article and official-news compatibility payload/store shape |
 | `market_event_adapter.py` | Event compatibility payload/store shape |
 | `market_review_store.py` | SQLite review/event persistence and historical row loading |
-| `market_delivery.py` | Dedup reservation, Feishu execution, delivery status, pushed markers |
+| `market_delivery.py` | Rule/fact dedup reservation, Feishu execution, delivery status, pushed markers |
 | `market_view.py` | Read-only unified projection across existing stores |
 | `source_profiles.py` | Source catalog, runtime ownership, health keys and editable source settings |
 
@@ -83,7 +83,7 @@ The project keeps the existing physical stores:
 - `official_news_reviews`
 - `events` / `event_analyses`
 - `seen_items`, `seen_posts`, `source_state`
-- `rule_alert_dedup`, `deliveries`
+- `rule_alert_dedup`, `deliveries` (`rule_alert_dedup` also records the delivery-only `intraday_market_move` reservation kind)
 - `source_health`, `x_stream_health`
 - portfolio, relation, evidence and signal tables
 

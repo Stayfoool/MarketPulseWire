@@ -22,15 +22,23 @@ from market_review_store import (
 )
 
 
-def insert_event(db_path: Path, source_event_id: str, title: str = "测试事件") -> int:
+def insert_event(
+    db_path: Path,
+    source_event_id: str,
+    title: str = "测试事件",
+    *,
+    source: str = "sina_flash",
+    summary: str = "测试摘要。",
+    published_at: str = "2026-07-12T12:00:00+00:00",
+) -> int:
     event_id, _ = upsert_event_record(
         {
-            "source": "sina_flash",
+            "source": source,
             "source_event_id": source_event_id,
             "event_type": "flash_news",
             "title": title,
-            "summary": "测试摘要。",
-            "published_at": "2026-07-12T12:00:00+00:00",
+            "summary": summary,
+            "published_at": published_at,
             "raw": {"source_event_id": source_event_id},
         },
         db_path,
@@ -75,6 +83,13 @@ def content_review(action: str = "push", *, rule_hits: list[dict] | None = None,
     if official:
         review.pop("push_now")
     return review
+
+
+def holding_market_move_rule(target_name: str, target_code: str) -> dict:
+    return {
+        "rule_id": "holding_keyword_immediate_alert",
+        "related_targets": [{"name": target_name, "code": target_code, "relation": "直接持仓"}],
+    }
 
 
 def required_decision(payload: dict) -> DecisionResult:
@@ -312,6 +327,158 @@ def test_article_delivery_dedup_skips_without_changing_decision_action() -> None
         market_delivery.send_card = original_send
 
 
+def test_intraday_market_move_cross_source_dedup_preserves_push_decision() -> None:
+    original_send = market_delivery.send_card
+    calls: list[dict] = []
+    first_item = {
+        "id": "yicai-cpo-1",
+        "title": "CPO概念股午后直线拉升，则成电子涨超27%，源杰科技涨超10%。",
+        "published_at": "2026-07-14T05:17:35+00:00",
+    }
+    second_item = {
+        "id": "jin10-cpo-1",
+        "title": "A股CPO概念股午后直线拉升，源杰科技、则成电子等涨超10%。",
+        "published_at": "2026-07-14T05:16:48+00:00",
+    }
+    rule_hit = holding_market_move_rule("源杰科技", "688498.SH")
+    try:
+        market_delivery.send_card = lambda card: calls.append(card) or True
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            review = content_review("push", rule_hits=[rule_hit])
+            with sqlite3.connect(db_path) as conn:
+                save_article_review(conn, "yicai_brief", first_item, review)
+                save_article_review(conn, "jin10_rsshub_important", second_item, review)
+            assert required_decision(review).action == "push"
+            assert (
+                market_delivery.deliver_article_review(
+                    "yicai_brief", first_item, review, decision=required_decision(review), db_path=db_path
+                )
+                == "sent"
+            )
+            assert (
+                market_delivery.deliver_article_review(
+                    "jin10_rsshub_important", second_item, review, decision=required_decision(review), db_path=db_path
+                )
+                == "duplicate"
+            )
+            with sqlite3.connect(db_path) as conn:
+                stored = article_review_exists(conn, "jin10_rsshub_important", "jin10-cpo-1")
+        assert len(calls) == 1
+        assert stored is not None
+        assert stored["raw"]["raw"]["rule_alert_dedup"]["rule_id"] == "intraday_market_move"
+        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
+    finally:
+        market_delivery.send_card = original_send
+
+
+def test_distinct_concepts_are_not_intraday_market_move_duplicates() -> None:
+    original_send = market_delivery.send_card
+    calls: list[dict] = []
+    cpo = {
+        "id": "cpo-1",
+        "title": "CPO概念股午后直线拉升，源杰科技涨超10%。",
+        "published_at": "2026-07-14T05:17:35+00:00",
+    }
+    pcb = {
+        "id": "pcb-1",
+        "title": "PCB概念涨势扩大，铜冠铜箔涨超10%。",
+        "published_at": "2026-07-14T05:34:16+00:00",
+    }
+    try:
+        market_delivery.send_card = lambda card: calls.append(card) or True
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            cpo_review = content_review("push", rule_hits=[holding_market_move_rule("源杰科技", "688498.SH")])
+            pcb_review = content_review("push", rule_hits=[holding_market_move_rule("铜冠铜箔", "301217.SZ")])
+            assert (
+                market_delivery.deliver_article_review(
+                    "yicai_brief", cpo, cpo_review, decision=required_decision(cpo_review), db_path=db_path
+                )
+                == "sent"
+            )
+            assert (
+                market_delivery.deliver_article_review(
+                    "cls_telegraph_api", pcb, pcb_review, decision=required_decision(pcb_review), db_path=db_path
+                )
+                == "sent"
+            )
+        assert len(calls) == 2
+    finally:
+        market_delivery.send_card = original_send
+
+
+def test_intraday_market_move_send_failure_releases_reservation() -> None:
+    original_send = market_delivery.send_card
+    first_item = {
+        "id": "cpo-failed-1",
+        "title": "CPO概念股午后直线拉升，源杰科技涨超10%。",
+        "published_at": "2026-07-14T05:17:35+00:00",
+    }
+    retry_item = {**first_item, "id": "cpo-retry-1"}
+    review = content_review("push", rule_hits=[holding_market_move_rule("源杰科技", "688498.SH")])
+    try:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            market_delivery.send_card = lambda card: False
+            assert (
+                market_delivery.deliver_article_review(
+                    "yicai_brief", first_item, review, decision=required_decision(review), db_path=db_path
+                )
+                == "skipped"
+            )
+            market_delivery.send_card = lambda card: True
+            assert (
+                market_delivery.deliver_article_review(
+                    "jin10_rsshub_important", retry_item, review, decision=required_decision(review), db_path=db_path
+                )
+                == "sent"
+            )
+    finally:
+        market_delivery.send_card = original_send
+
+
+def test_event_delivery_records_intraday_market_move_duplicate() -> None:
+    original_webhook = os.environ.get("FEISHU_WEBHOOK")
+    original_send = market_delivery.send_card_with_response
+    rule_hit = holding_market_move_rule("源杰科技", "688498.SH")
+    try:
+        os.environ["FEISHU_WEBHOOK"] = "https://example.invalid/webhook"
+        market_delivery.send_card_with_response = lambda card: FeishuResponse(True, 0, "ok", '{"code":0}')
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            first_id = insert_event(
+                db_path,
+                "event-cpo-1",
+                "CPO概念股午后直线拉升，源杰科技涨超10%。",
+                source="yicai_brief",
+                published_at="2026-07-14T05:17:35+00:00",
+            )
+            second_id = insert_event(
+                db_path,
+                "event-cpo-2",
+                "A股CPO概念股午后直线拉升，源杰科技涨超10%。",
+                source="jin10_rsshub_important",
+                published_at="2026-07-14T05:16:48+00:00",
+            )
+            analysis = decision_analysis(rule_hits=[rule_hit])
+            assert market_delivery.deliver_event(first_id, analysis, decision=required_decision(analysis), db_path=db_path) == "sent"
+            assert market_delivery.deliver_event(second_id, analysis, decision=required_decision(analysis), db_path=db_path) == "duplicate"
+            rows = delivery_rows(db_path)
+        assert [row[0] for row in rows] == ["sent", "duplicate"]
+        assert json.loads(rows[1][2])["first_source"] == "yicai_brief"
+    finally:
+        market_delivery.send_card_with_response = original_send
+        if original_webhook is None:
+            os.environ.pop("FEISHU_WEBHOOK", None)
+        else:
+            os.environ["FEISHU_WEBHOOK"] = original_webhook
+
+
 def main() -> int:
     test_archive_and_missing_webhook_are_recorded_without_sending()
     test_send_failure_releases_reservation_and_records_failure()
@@ -319,6 +486,10 @@ def main() -> int:
     test_content_delivery_uses_decision_action_and_marks_legacy_rows()
     test_reloaded_article_review_still_uses_nested_decision_action()
     test_article_delivery_dedup_skips_without_changing_decision_action()
+    test_intraday_market_move_cross_source_dedup_preserves_push_decision()
+    test_distinct_concepts_are_not_intraday_market_move_duplicates()
+    test_intraday_market_move_send_failure_releases_reservation()
+    test_event_delivery_records_intraday_market_move_duplicate()
     print("market delivery checks passed")
     return 0
 
