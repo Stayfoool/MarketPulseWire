@@ -789,6 +789,150 @@ def test_company_event_send_failure_releases_reservation() -> None:
         market_delivery.send_card = original_send
 
 
+def test_multi_company_event_fact_set_is_order_independent() -> None:
+    original_send = market_delivery.send_card
+    calls: list[dict] = []
+    first = {
+        "id": "storage-roundup-1",
+        "title": "深圳存储军团上半年业绩集体爆发",
+        "full_text": (
+            "佰维存储预计2026年半年度实现归母净利润70亿元至75亿元。"
+            "大普微预计2026年上半年净利润12亿元至13.5亿元，实现扭亏。"
+        ),
+        "published_at": "2026-07-15T12:19:35+00:00",
+    }
+    second = {
+        "id": "storage-roundup-2",
+        "title": "存储企业成绩单亮眼",
+        "full_text": (
+            "大普微公告，预计上半年净利润12亿元-13.5亿元，同比扭亏。"
+            "佰维存储公告称，预计2026年上半年净利润70亿元-75亿元。"
+        ),
+        "published_at": "2026-07-15T12:19:51+00:00",
+    }
+    review = content_review(
+        "push", rule_hits=[holding_market_move_rule("江波龙", "301308.SZ"), industry_rule()]
+    )
+    try:
+        market_delivery.send_card = lambda card: calls.append(card) or True
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            with sqlite3.connect(db_path) as conn:
+                save_article_review(conn, "sina_stock_news", first, review)
+                save_article_review(conn, "yicai_brief", second, review)
+            first_status = market_delivery.deliver_article_review(
+                "sina_stock_news", first, review, decision=required_decision(review), db_path=db_path
+            )
+            second_status = market_delivery.deliver_article_review(
+                "yicai_brief", second, review, decision=required_decision(review), db_path=db_path
+            )
+            with sqlite3.connect(db_path) as conn:
+                reservations = conn.execute(
+                    "SELECT dedup_key, status FROM rule_alert_dedup WHERE rule_id=? ORDER BY dedup_key",
+                    ("company_event_dedup",),
+                ).fetchall()
+                stored = article_review_exists(conn, "yicai_brief", "storage-roundup-2")
+        assert [first_status, second_status] == ["sent", "duplicate"]
+        assert len(calls) == 1
+        assert len(reservations) == 2
+        assert {row[1] for row in reservations} == {"sent"}
+        assert stored is not None and stored["push_now"] is False
+        dedup = stored["raw"]["raw"]["rule_alert_dedup"]
+        assert len(dedup["dedup_keys"]) == 2
+        assert len(dedup["covered"]) == 2
+        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
+    finally:
+        market_delivery.send_card = original_send
+
+
+def test_multi_company_event_send_failure_releases_every_reservation() -> None:
+    original_send = market_delivery.send_card
+    item = {
+        "id": "storage-failure-1",
+        "title": "存储公司业绩综述",
+        "full_text": (
+            "佰维存储预计2026年半年度净利润70亿元至75亿元。"
+            "大普微预计2026年上半年净利润12亿元至13.5亿元。"
+        ),
+        "published_at": "2026-07-15T12:19:35+00:00",
+    }
+    retry = {**item, "id": "storage-retry-1", "published_at": "2026-07-15T12:20:00+00:00"}
+    review = content_review("push", rule_hits=[industry_rule()])
+    try:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            market_delivery.send_card = lambda card: False
+            assert market_delivery.deliver_article_review(
+                "sina_stock_news", item, review, decision=required_decision(review), db_path=db_path
+            ) == "skipped"
+            with sqlite3.connect(db_path) as conn:
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM rule_alert_dedup WHERE rule_id=?", ("company_event_dedup",)
+                ).fetchone()[0] == 0
+            market_delivery.send_card = lambda card: True
+            assert market_delivery.deliver_article_review(
+                "yicai_brief", retry, review, decision=required_decision(review), db_path=db_path
+            ) == "sent"
+            with sqlite3.connect(db_path) as conn:
+                statuses = conn.execute(
+                    "SELECT status FROM rule_alert_dedup WHERE rule_id=?", ("company_event_dedup",)
+                ).fetchall()
+        assert statuses == [("sent",), ("sent",)]
+    finally:
+        market_delivery.send_card = original_send
+
+
+def test_official_company_event_dedup_uses_the_same_fact_set() -> None:
+    original_send = market_delivery.send_card
+    calls: list[dict] = []
+    first = {
+        "id": "official-earnings-1",
+        "title": "测试科技预计2026年半年度净利润4亿元至5亿元",
+        "published_at": "2026-07-15T12:00:00+00:00",
+    }
+    second = {
+        "id": "official-earnings-2",
+        "title": "测试科技公告，预计上半年净利润4亿元-5亿元",
+        "published_at": "2026-07-15T12:03:00+00:00",
+    }
+    review = content_review("push", rule_hits=[industry_rule()], official=True)
+    try:
+        market_delivery.send_card = lambda card: calls.append(card) or True
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            with sqlite3.connect(db_path) as conn:
+                save_official_review(conn, "company_site_a", first, review)
+                save_official_review(conn, "company_site_b", second, review)
+            first_status = market_delivery.deliver_official_review(
+                "company_site_a",
+                first,
+                review,
+                decision=required_decision(review),
+                analysis_lines=["核心内容：业绩预告"],
+                db_path=db_path,
+            )
+            second_status = market_delivery.deliver_official_review(
+                "company_site_b",
+                second,
+                review,
+                decision=required_decision(review),
+                analysis_lines=["核心内容：业绩预告"],
+                db_path=db_path,
+            )
+            with sqlite3.connect(db_path) as conn:
+                stored = official_review_exists(conn, "company_site_b", "official-earnings-2")
+        assert [first_status, second_status] == ["sent", "duplicate"]
+        assert len(calls) == 1
+        assert stored is not None and stored["should_push_now"] is False
+        assert stored["analysis"]["_decision_result"]["action"] == "push"
+        assert stored["analysis"]["rule_alert_dedup"]["rule_id"] == "company_event_dedup"
+    finally:
+        market_delivery.send_card = original_send
+
+
 def test_event_delivery_records_company_event_duplicate() -> None:
     original_webhook = os.environ.get("FEISHU_WEBHOOK")
     original_send = market_delivery.send_card_with_response
@@ -823,7 +967,7 @@ def test_event_delivery_records_company_event_duplicate() -> None:
             rows = delivery_rows(db_path)
         duplicate = json.loads(rows[1][2])
         assert [row[0] for row in rows] == ["sent", "duplicate"]
-        assert duplicate["dedup_kind"] == "company_event_fact"
+        assert duplicate["dedup_kind"] == "company_event_fact_set"
         assert duplicate["first_source"] == "cls_telegraph_api"
     finally:
         market_delivery.send_card_with_response = original_send
@@ -1019,6 +1163,9 @@ def main() -> int:
     test_cross_asset_fed_policy_reactions_deliver_once()
     test_company_event_cross_rule_article_dedup_preserves_push_decision()
     test_company_event_send_failure_releases_reservation()
+    test_multi_company_event_fact_set_is_order_independent()
+    test_multi_company_event_send_failure_releases_every_reservation()
+    test_official_company_event_dedup_uses_the_same_fact_set()
     test_event_delivery_records_company_event_duplicate()
     test_event_delivery_records_macro_release_duplicate()
     test_ibm_industry_fact_cross_source_article_dedup_preserves_push_decision()

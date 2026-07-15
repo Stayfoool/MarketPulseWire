@@ -37,7 +37,7 @@ Push-eligible US CPI, PCE and nonfarm coverage may also receive a delivery-only 
 
 Push-eligible industry-hardline coverage may receive a bounded 36-hour delivery-only fact identity when original text deterministically supplies subject, event, stage, object and direction. The initial event families cover IBM enterprise spending shifting toward memory hardware and CoreWeave exploring derivatives to hedge storage-chip price downside. Cross-source rewrites remain push decisions but are recorded as duplicates. Corrections, company confirmation or denial, execution-stage changes, material derivative terms and independently attributable HBM/DRAM/NAND supplier production facts bypass the prior identity.
 
-Push-eligible holding or industry-hardline coverage may also receive a bounded 14-day company-event delivery identity for feedback-confirmed event families. The initial audited subjects are Powerchip/PSMC, Biwin Storage, DapuStor, Jiangfeng Electronics and Shijia Photons; the initial families are earnings forecasts, proposed private placements/capacity financing and explicit storage-foundry price increases. Identities use subject, event family, reporting/effective period and stage rather than source or matched rule. Corrections, explicit forecast revisions and financing-stage changes bypass the prior identity. These reservations preserve the original push decision and record later source rewrites as duplicate execution results.
+Push-eligible holding or industry-hardline coverage may also receive source-neutral company-event delivery identities. Claim-local stock codes, direct holding entities and validated company-name/action grammar resolve explicit subjects without an issuer allowlist. Common company actions use strict structured slots, while the conservative generic path requires an explicit subject, action family, reference/effective time and distinctive counterparty, object or quantitative anchor. Each item may produce a fact set rather than one selected key. The delivery layer reserves every new identity in one immediate SQLite transaction, suppresses only when the entire set is already covered, confirms all reservations after send success and releases all after failure. Stable event identity is separated from lifecycle/material version so equivalent or subset restatements deduplicate while explicit corrections, revisions, approvals, completions and terminations remain deliverable. The predecessor's five bounded keys remain only as migration aliases. These execution records preserve the original `DecisionResult.action=push`.
 
 The former direct/compat route switch and these wrapper modules have been removed:
 
@@ -68,7 +68,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `feishu_app.py` / `feishu_feedback_service.py` | Feedback-enabled application-bot send and official long-connection card callbacks |
 | `macro_event_dedup.py` | Delivery-only US macro preview/release/reaction and Fed policy cross-asset reaction identities, including mixed-Warsh handling |
 | `industry_fact_dedup.py` | Bounded delivery-only industry fact identities and material-update exclusions |
-| `company_event_dedup.py` | Bounded delivery-only company earnings, financing and price-event identities derived from feedback-confirmed clusters |
+| `company_event_dedup.py` | Generic claim-local company-event fact sets, lifecycle versions and legacy reservation aliases |
 | `market_view.py` | Read-only unified projection across existing stores |
 | `source_profiles.py` | Source catalog, runtime ownership, health keys and editable source settings |
 
@@ -112,7 +112,7 @@ The project keeps the existing physical stores:
 - `official_news_reviews`
 - `events` / `event_analyses`
 - `seen_items`, `seen_posts`, `source_state`
-- `rule_alert_dedup`, `deliveries` (`rule_alert_dedup` also records delivery-only intraday market-move, US macro event, bounded industry-fact and company-event reservation kinds)
+- `rule_alert_dedup`, `deliveries` (`rule_alert_dedup` also records delivery-only intraday market-move, US macro event, bounded industry-fact and generic company-event fact-set reservations)
 - `market_feedback` (append-only Feishu feedback events; the latest valid operator/item click is the current projection)
 - `source_health`, `x_stream_health`
 - portfolio, relation, evidence and signal tables
