@@ -75,6 +75,11 @@ def test_preview_and_market_reaction_have_independent_identities() -> None:
     assert reaction_without_period is not None
     assert reaction_without_period["dedup_key"] == reaction["dedup_key"]
 
+    released_wording = hit("美国6月CPI发布后比特币上涨3.2%。")
+    assert released_wording is not None
+    assert released_wording["rule_id"] == MACRO_REACTION_RULE_ID
+    assert released_wording["dedup_key"] == reaction["dedup_key"]
+
     commentary = hit("美国6月CPI通胀数据的意义有限，能源价格仍是未来变数。")
     assert commentary is not None and commentary["rule_id"] == MACRO_PREVIEW_RULE_ID
 

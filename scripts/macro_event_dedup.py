@@ -293,7 +293,7 @@ def _is_released_reaction(text: str, fact: dict[str, Any] | None) -> bool:
     return bool(
         re.search(
             r"(?:受.{0,36}(?:CPI|PCE|非农|非農|消费者价格指数|个人消费支出).{0,18}影响|"
-            r"(?:CPI|PCE|非农|非農|消费者价格指数|个人消费支出).{0,24}(?:公布后|公佈後|全面降温|全面降溫|降温后|降溫後|意外))",
+            r"(?:CPI|PCE|非农|非農|消费者价格指数|个人消费支出).{0,24}(?:公布后|公佈後|发布后|發佈後|全面降温|全面降溫|降温后|降溫後|意外))",
             text,
             flags=re.IGNORECASE,
         )
