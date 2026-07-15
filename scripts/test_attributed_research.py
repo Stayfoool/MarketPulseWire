@@ -176,6 +176,39 @@ def test_cross_source_claims_share_a_dedup_key() -> None:
     assert cls_rule["dedup_lookback_days"] == 3
 
 
+def test_semi_equipment_forecast_rewrites_share_stable_report_identity() -> None:
+    variants = (
+        media_item(
+            "cls_telegraph_api",
+            "SEMI报告指出，预测2026年全球半导体制造设备销售额将创下1659亿美元历史新高，"
+            "同比增长23.2%，设备需求激增，2028年预计达到2295亿美元。",
+        ),
+        media_item(
+            "yicai_brief",
+            "SEMI发布设备市场预测报告。SEMI表示，2026年半导体设备销售额预计达到1659亿美元，"
+            "AI驱动设备需求激增。",
+        ),
+        media_item(
+            "digitimes_en_daily",
+            "According to SEMI, global semiconductor equipment sales and shipments are projected to reach "
+            "US$165.9 billion in 2026, a 23.2% increase.",
+        ),
+    )
+    rules = [attributed_research_rule(item) for item in variants]
+    assert all(rule is not None for rule in rules)
+    assert {rule["dedup_key"] for rule in rules if rule} == {
+        "attributed_research:semi:equipment_sales_forecast:2026"
+    }
+    assert all(rule.get("dedup_alias_keys") for rule in rules if rule)
+    assert all(rule["dedup_key"] not in rule["dedup_alias_keys"] for rule in rules if rule)
+
+    other_report = attributed_research_rule(
+        media_item("future_media", "SEMI报告指出，半导体设备投资将在2027年增长15%。")
+    )
+    assert other_report is not None
+    assert other_report["dedup_key"] != rules[0]["dedup_key"]
+
+
 def test_distinct_memory_subthemes_do_not_share_a_dedup_key() -> None:
     dram = attributed_research_rule(media_item("cls_telegraph_api", "TrendForce表示，DRAM价格上调20%。"))
     nand = attributed_research_rule(media_item("sina_flash", "TrendForce表示，NAND价格上调20%。"))
@@ -216,6 +249,7 @@ def main() -> int:
     test_llm_only_extracts_evidence_and_deterministic_engine_decides()
     test_llm_hallucinated_quote_is_rejected_without_breaking_ingestion()
     test_cross_source_claims_share_a_dedup_key()
+    test_semi_equipment_forecast_rewrites_share_stable_report_identity()
     test_distinct_memory_subthemes_do_not_share_a_dedup_key()
     test_sina_event_adapter_uses_the_same_attribution_decision()
     print("attributed research checks passed")

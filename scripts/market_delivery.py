@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from cards import build_article_card, format_time
+from company_event_dedup import COMPANY_EVENT_RULE_ID, company_event_dedup_hit
 from db_utils import connect_sqlite
 from feishu import send_card, send_card_with_response
 from feishu_app import configured as feishu_app_configured
@@ -163,6 +164,11 @@ def _duplicate_article_review(
             "同一产业事实跨来源去重：已由 "
             f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
         )
+    elif rule_id == COMPANY_EVENT_RULE_ID:
+        note = (
+            "同一公司事件事实跨来源去重：已由 "
+            f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
+        )
     else:
         note = (
             "同一规则观点跨来源去重：已由 "
@@ -197,6 +203,7 @@ def _reserve_delivery_alert(
             macro_event_dedup_hit(item, decision)
             or intraday_market_move_dedup_hit(item, decision)
             or industry_fact_dedup_hit(item, decision)
+            or company_event_dedup_hit(item, decision)
         ),
         db_path=db_path,
     )
@@ -377,7 +384,8 @@ def deliver_event(
         market_move_duplicate = rule_id == MARKET_MOVE_RULE_ID
         macro_duplicate = rule_id in MACRO_DEDUP_RULE_IDS
         industry_fact_duplicate = rule_id == INDUSTRY_FACT_RULE_ID
-        duplicate_status = market_move_duplicate or macro_duplicate or industry_fact_duplicate
+        company_event_duplicate = rule_id == COMPANY_EVENT_RULE_ID
+        duplicate_status = market_move_duplicate or macro_duplicate or industry_fact_duplicate or company_event_duplicate
         if market_move_duplicate:
             reason = "同一盘中行情事件跨来源去重"
             dedup_kind = "intraday_market_move"
@@ -387,6 +395,9 @@ def deliver_event(
         elif industry_fact_duplicate:
             reason = "同一产业事实跨来源去重"
             dedup_kind = "industry_fact"
+        elif company_event_duplicate:
+            reason = "同一公司事件事实跨来源去重"
+            dedup_kind = "company_event_fact"
         else:
             reason = "同一规则观点跨来源去重"
             dedup_kind = "rule_alert"

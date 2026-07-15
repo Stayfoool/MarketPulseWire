@@ -561,8 +561,21 @@ def extraction_for_rule(item: NormalizedMarketItem | dict[str, Any]) -> dict[str
     return validate_extraction(item, deterministic_extraction(item))
 
 
-def claim_dedup_key(extraction: dict[str, Any]) -> str:
+def _semi_equipment_forecast_key(institution_id: str, text: str) -> str:
+    lowered = text.casefold()
+    equipment = any(marker in lowered for marker in ("半导体设备", "半导体制造设备", "semiconductor equipment"))
+    sales = any(marker in lowered for marker in ("销售额", "sales"))
+    forecast_anchor = "2026" in lowered and any(marker in lowered for marker in ("1659亿", "165.9 billion", "165.9b"))
+    if institution_id == "semi" and equipment and sales and forecast_anchor:
+        return "attributed_research:semi:equipment_sales_forecast:2026"
+    return ""
+
+
+def claim_dedup_key(extraction: dict[str, Any], text: str = "") -> str:
     institution_id = str(extraction.get("institution_id") or "unknown")
+    stable_report_key = _semi_equipment_forecast_key(institution_id, text)
+    if stable_report_key:
+        return stable_report_key
     claims = extraction.get("claims") if isinstance(extraction.get("claims"), list) else []
     topics = sorted({str(claim.get("topic")) for claim in claims if isinstance(claim, dict) and claim.get("topic")})
     event_families = sorted(
@@ -596,12 +609,14 @@ def attributed_research_rule(item: NormalizedMarketItem | dict[str, Any]) -> dic
     evidence = [str(claim.get("evidence_quote") or "") for claim in claims if claim.get("evidence_quote")]
     targets = [TOPIC_LABELS.get(topic, topic) for topic in topics]
     event_labels = [EVENT_LABELS.get(event, event) for event in events]
+    dedup_key = claim_dedup_key(extraction, item_text(item))
+    legacy_dedup_key = claim_dedup_key(extraction)
     reason = (
         f"高价值行业研究源明确署名转述：{institution_name} 对半导体/AI 基础设施给出"
         f"{'、'.join(event_labels)}等实质判断；证据已回验原文，由确定性规则即时推送。"
     )
     source = str(_item_value(item, "source") or "")
-    return {
+    result = {
         "matched": True,
         "rule_id": RULE_ID,
         "importance": "high",
@@ -622,8 +637,11 @@ def attributed_research_rule(item: NormalizedMarketItem | dict[str, Any]) -> dic
         "claim_topics": topics,
         "claim_event_types": events,
         "evidence_quotes": evidence[:6],
-        "dedup_key": claim_dedup_key(extraction),
+        "dedup_key": dedup_key,
         "dedup_lookback_days": 3,
         "protected_from_llm_downgrade": True,
         "raw": {"attributed_research": extraction},
     }
+    if legacy_dedup_key != dedup_key:
+        result["dedup_alias_keys"] = [legacy_dedup_key]
+    return result

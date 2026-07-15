@@ -201,13 +201,12 @@ def _macro_rule_matched(decision: DecisionResult) -> bool:
 
 def _indicator_occurrences(claim: str) -> list[tuple[str, int]]:
     lowered = claim.casefold()
-    result: list[tuple[str, int]] = []
+    result: set[tuple[str, int]] = set()
     for indicator, aliases in INDICATORS:
         for alias in aliases:
-            start = lowered.find(alias.casefold())
-            if start >= 0:
-                result.append((indicator, start))
-    return result
+            for match in re.finditer(re.escape(alias.casefold()), lowered):
+                result.add((indicator, match.start()))
+    return sorted(result, key=lambda value: value[1])
 
 
 def _month_occurrences(claim: str) -> list[tuple[int, int | None, int]]:

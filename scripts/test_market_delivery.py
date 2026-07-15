@@ -714,6 +714,125 @@ def test_cross_asset_fed_policy_reactions_deliver_once() -> None:
         market_delivery.send_card = original_send
 
 
+def test_company_event_cross_rule_article_dedup_preserves_push_decision() -> None:
+    original_send = market_delivery.send_card
+    calls: list[dict] = []
+    first = {
+        "id": "shijia-placement-1",
+        "title": "仕佳光子：拟定增募资不超过28亿元，用于高速AWG芯片产能建设",
+        "published_at": "2026-07-15T11:09:43+00:00",
+    }
+    second = {
+        "id": "shijia-placement-2",
+        "title": "仕佳光子公告，拟向特定对象发行A股，募集资金不超28亿元",
+        "published_at": "2026-07-15T11:10:29+00:00",
+    }
+    first_review = content_review("push", rule_hits=[industry_rule()])
+    second_review = content_review("push", rule_hits=[holding_market_move_rule("仕佳光子", "688313.SH")])
+    try:
+        market_delivery.send_card = lambda card: calls.append(card) or True
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            with sqlite3.connect(db_path) as conn:
+                save_article_review(conn, "cls_telegraph_api", first, first_review)
+                save_article_review(conn, "wallstreetcn_news", second, second_review)
+            statuses = [
+                market_delivery.deliver_article_review(
+                    "cls_telegraph_api",
+                    first,
+                    first_review,
+                    decision=required_decision(first_review),
+                    db_path=db_path,
+                ),
+                market_delivery.deliver_article_review(
+                    "wallstreetcn_news",
+                    second,
+                    second_review,
+                    decision=required_decision(second_review),
+                    db_path=db_path,
+                ),
+            ]
+            with sqlite3.connect(db_path) as conn:
+                stored = article_review_exists(conn, "wallstreetcn_news", "shijia-placement-2")
+        assert statuses == ["sent", "duplicate"]
+        assert len(calls) == 1
+        assert stored is not None and stored["push_now"] is False
+        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
+        assert stored["raw"]["raw"]["rule_alert_dedup"]["rule_id"] == "company_event_dedup"
+    finally:
+        market_delivery.send_card = original_send
+
+
+def test_company_event_send_failure_releases_reservation() -> None:
+    original_send = market_delivery.send_card
+    first = {
+        "id": "biwin-failed-1",
+        "title": "佰维存储预计2026年半年度净利润70亿元至75亿元",
+        "published_at": "2026-07-15T09:35:06+00:00",
+    }
+    retry = {**first, "id": "biwin-retry-1", "published_at": "2026-07-15T09:35:35+00:00"}
+    review = content_review("push", rule_hits=[holding_market_move_rule("佰维存储", "688525.SH")])
+    try:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            market_delivery.send_card = lambda card: False
+            assert market_delivery.deliver_article_review(
+                "cls_telegraph_api", first, review, decision=required_decision(review), db_path=db_path
+            ) == "skipped"
+            market_delivery.send_card = lambda card: True
+            assert market_delivery.deliver_article_review(
+                "jin10_rsshub_important", retry, review, decision=required_decision(review), db_path=db_path
+            ) == "sent"
+    finally:
+        market_delivery.send_card = original_send
+
+
+def test_event_delivery_records_company_event_duplicate() -> None:
+    original_webhook = os.environ.get("FEISHU_WEBHOOK")
+    original_send = market_delivery.send_card_with_response
+    try:
+        os.environ["FEISHU_WEBHOOK"] = "https://example.invalid/webhook"
+        market_delivery.send_card_with_response = lambda card: FeishuResponse(True, 0, "ok", '{"code":0}')
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            first_id = insert_event(
+                db_path,
+                "event-dapustor-1",
+                "大普微：预计2026年半年度净利润12亿元-13.5亿元",
+                source="cls_telegraph_api",
+                published_at="2026-07-15T10:04:46+00:00",
+            )
+            second_id = insert_event(
+                db_path,
+                "event-dapustor-2",
+                "大普微公告，预计上半年净利润12亿元至13.5亿元",
+                source="yicai_brief",
+                published_at="2026-07-15T10:08:53+00:00",
+            )
+            first_analysis = decision_analysis(rule_hits=[industry_rule()])
+            second_analysis = decision_analysis(rule_hits=[industry_rule()])
+            assert market_delivery.deliver_event(
+                first_id, first_analysis, decision=required_decision(first_analysis), db_path=db_path
+            ) == "sent"
+            assert market_delivery.deliver_event(
+                second_id, second_analysis, decision=required_decision(second_analysis), db_path=db_path
+            ) == "duplicate"
+            rows = delivery_rows(db_path)
+        duplicate = json.loads(rows[1][2])
+        assert [row[0] for row in rows] == ["sent", "duplicate"]
+        assert duplicate["dedup_kind"] == "company_event_fact"
+        assert duplicate["first_source"] == "cls_telegraph_api"
+    finally:
+        market_delivery.send_card_with_response = original_send
+        if original_webhook is None:
+            os.environ.pop("FEISHU_WEBHOOK", None)
+        else:
+            os.environ["FEISHU_WEBHOOK"] = original_webhook
+
+
 def test_event_delivery_records_macro_release_duplicate() -> None:
     original_webhook = os.environ.get("FEISHU_WEBHOOK")
     original_send = market_delivery.send_card_with_response
@@ -898,6 +1017,9 @@ def main() -> int:
     test_event_delivery_records_intraday_market_move_duplicate()
     test_macro_release_and_reaction_each_send_once_while_warsh_speech_is_retained()
     test_cross_asset_fed_policy_reactions_deliver_once()
+    test_company_event_cross_rule_article_dedup_preserves_push_decision()
+    test_company_event_send_failure_releases_reservation()
+    test_event_delivery_records_company_event_duplicate()
     test_event_delivery_records_macro_release_duplicate()
     test_ibm_industry_fact_cross_source_article_dedup_preserves_push_decision()
     test_event_delivery_records_ibm_industry_fact_duplicate()
