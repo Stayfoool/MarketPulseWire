@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from env_utils import load_env
+from feishu_app import feedback_listener_enabled
 from market_feedback import FeedbackError, handle_feedback_callback
 from market_db import DEFAULT_DB_PATH, init_db
 
@@ -29,8 +30,8 @@ def callback_response(payload: dict[str, Any]) -> dict[str, Any]:
 
 def main() -> int:
     load_env(ROOT / ".env")
-    if os.getenv("FEISHU_FEEDBACK_ENABLED", "0").strip().lower() not in {"1", "true", "yes", "on"}:
-        raise SystemExit("FEISHU_FEEDBACK_ENABLED 未启用")
+    if not feedback_listener_enabled():
+        raise SystemExit("FEISHU_FEEDBACK_LISTENER_ENABLED / FEISHU_FEEDBACK_ENABLED 未启用")
     app_id = os.getenv("FEISHU_APP_ID", "").strip()
     app_secret = os.getenv("FEISHU_APP_SECRET", "").strip()
     if not app_id or not app_secret:

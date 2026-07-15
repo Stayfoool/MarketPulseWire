@@ -14,6 +14,7 @@ from feishu_image import tenant_access_token
 
 
 MESSAGE_URL = "https://open.feishu.cn/open-apis/im/v1/messages"
+TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -26,7 +27,12 @@ class FeishuAppResponse:
 
 
 def feedback_enabled() -> bool:
-    return os.getenv("FEISHU_FEEDBACK_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+    return os.getenv("FEISHU_FEEDBACK_ENABLED", "0").strip().lower() in TRUE_VALUES
+
+
+def feedback_listener_enabled() -> bool:
+    """Allow callback setup/testing without switching natural market delivery."""
+    return feedback_enabled() or os.getenv("FEISHU_FEEDBACK_LISTENER_ENABLED", "0").strip().lower() in TRUE_VALUES
 
 
 def feedback_chat_id() -> str:
@@ -35,8 +41,7 @@ def feedback_chat_id() -> str:
 
 def configured() -> bool:
     return bool(
-        feedback_enabled()
-        and os.getenv("FEISHU_APP_ID", "").strip()
+        os.getenv("FEISHU_APP_ID", "").strip()
         and os.getenv("FEISHU_APP_SECRET", "").strip()
         and feedback_chat_id()
         and os.getenv("FEISHU_FEEDBACK_TOKEN_SECRET", "").strip()

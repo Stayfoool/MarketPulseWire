@@ -161,11 +161,11 @@ else
   echo '韭研公社异动模块当前默认搁置；如需启用，请在 .env 设置 ENABLE_JYGS_TIMER=1。'
 fi
 systemctl enable --now surveil-holdings-web.service
-if grep -Eq '^FEISHU_FEEDBACK_ENABLED=(1|true|yes|on)$' '$REMOTE_DIR/.env' 2>/dev/null; then
+if grep -Eq '^FEISHU_FEEDBACK_(LISTENER_)?ENABLED=(1|true|yes|on)$' '$REMOTE_DIR/.env' 2>/dev/null; then
   systemctl enable --now surveil-feishu-feedback.service
 else
   systemctl disable --now surveil-feishu-feedback.service >/dev/null 2>&1 || true
-  echo 'FEISHU_FEEDBACK_ENABLED 未启用，保持 surveil-feishu-feedback.service 停用。'
+  echo 'FEISHU_FEEDBACK_LISTENER_ENABLED / FEISHU_FEEDBACK_ENABLED 未启用，保持 surveil-feishu-feedback.service 停用。'
 fi
 systemctl enable surveil-sina-flash.service
 systemctl restart surveil-sina-flash.service
