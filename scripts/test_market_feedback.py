@@ -101,7 +101,8 @@ def test_feedback_token_and_card_actions() -> None:
     action = card["elements"][-1]
     assert [button["value"]["label"] for button in action["actions"][:3]] == ["high_value", "duplicate", "invalid"]
     assert action["actions"][3]["tag"] == "overflow"
-    assert action["actions"][3]["options"][0]["value"]["reason_tag"] == "useful_not_urgent"
+    overflow_value = json.loads(action["actions"][3]["options"][0]["value"])
+    assert overflow_value["reason_tag"] == "useful_not_urgent"
 
 
 def test_last_click_wins_by_feishu_timestamp_and_keeps_history() -> None:
@@ -293,6 +294,27 @@ def test_more_reason_is_stored_with_invalid_feedback() -> None:
         assert stored == ("invalid", '["stale"]')
 
 
+def test_overflow_callback_value_is_parsed() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "feedback.sqlite3"
+        insert_delivered_article(db_path)
+        token = build_feedback_token(
+            FeedbackIdentity("article", "cls_telegraph_api", "item-1"), secret=TEST_SIGNING_KEY
+        )
+        payload = callback(token, "invalid", "evt-overflow", 100)
+        payload["event"]["action"] = {
+            "tag": "overflow",
+            "value": json.dumps({"feedback_token": token, "label": "invalid", "reason_tag": "stale"}),
+        }
+        response = handle_feedback_callback(
+            payload,
+            secret=TEST_SIGNING_KEY,
+            allowed_ids={OPERATOR},
+            db_path=db_path,
+        )
+        assert "旧闻" in response["toast"]["content"]
+
+
 def main() -> None:
     test_feedback_token_and_card_actions()
     test_last_click_wins_by_feishu_timestamp_and_keeps_history()
@@ -301,6 +323,7 @@ def main() -> None:
     test_listener_only_mode_keeps_natural_feedback_delivery_disabled()
     test_test_card_feedback_is_audited_but_excluded_from_quality_metrics()
     test_more_reason_is_stored_with_invalid_feedback()
+    test_overflow_callback_value_is_parsed()
     print("market feedback checks passed")
 
 

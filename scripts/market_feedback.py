@@ -133,7 +133,12 @@ def feedback_actions(identity: FeedbackIdentity, *, secret: str | None = None) -
             "options": [
                 {
                     "text": {"tag": "plain_text", "content": title},
-                    "value": {"feedback_token": token, "label": "invalid", "reason_tag": reason},
+                    # Feishu overflow-option values are strings, unlike button values.
+                    "value": json.dumps(
+                        {"feedback_token": token, "label": "invalid", "reason_tag": reason},
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
                 }
                 for reason, title in FEEDBACK_REASON_LABELS.items()
             ],
@@ -386,7 +391,17 @@ def callback_payload_fields(payload: dict[str, Any]) -> dict[str, Any]:
     event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
     operator = event.get("operator") if isinstance(event.get("operator"), dict) else {}
     action = event.get("action") if isinstance(event.get("action"), dict) else {}
-    value = action.get("value") if isinstance(action.get("value"), dict) else {}
+    raw_value = action.get("value")
+    if isinstance(raw_value, dict):
+        value = raw_value
+    elif isinstance(raw_value, str):
+        try:
+            parsed_value = json.loads(raw_value)
+        except json.JSONDecodeError:
+            parsed_value = {}
+        value = parsed_value if isinstance(parsed_value, dict) else {}
+    else:
+        value = {}
     context = event.get("context") if isinstance(event.get("context"), dict) else {}
     return {
         "event_id": str(header.get("event_id") or ""),
