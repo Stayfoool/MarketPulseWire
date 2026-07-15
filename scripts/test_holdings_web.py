@@ -12,11 +12,14 @@ from holdings_web import (
     RUN_ONCE_TARGETS,
     SERVICE_UNITS,
     build_health_tasks,
+    event_feedback_summary,
     fetch_events_rows,
     html_page,
     unit_actions,
     unit_display_metadata,
 )
+from market_db import init_db
+from market_review_store import ensure_article_reviews_table, ensure_official_news_table
 from source_profiles import (
     filter_enabled_named_sources,
     filter_enabled_source_mapping,
@@ -293,6 +296,135 @@ def test_event_center_source_filter_uses_grouped_dropdown() -> None:
     assert 'eventIncludeBaseline' in html
     assert '显示基线条目' in html
     assert "x:serenity" in html
+
+
+def insert_feedback(
+    conn: sqlite3.Connection,
+    *,
+    event_id: str,
+    item_kind: str,
+    source: str,
+    item_id: str,
+    label: str,
+    operator: str,
+    clicked_at_us: int,
+    reasons: str = "[]",
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO market_feedback (
+            feedback_event_id, item_kind, source, item_id, label, reason_tags_json,
+            operator_id, rule_ids_json, clicked_at_us, received_at, raw_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, '{}')
+        """,
+        (
+            event_id,
+            item_kind,
+            source,
+            item_id,
+            label,
+            reasons,
+            operator,
+            clicked_at_us,
+            f"2026-07-15T10:00:{clicked_at_us % 60:02d}+00:00",
+        ),
+    )
+
+
+def test_event_center_projects_current_feedback_across_active_stores() -> None:
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
+        with sqlite3.connect(db_path) as conn:
+            ensure_article_reviews_table(conn)
+            ensure_official_news_table(conn)
+            article_values = (
+                "cls_telegraph_api", "article-1", "", "文章", "财联社", "2026-07-15T09:00:00+00:00",
+                "high", 1, "", "", "[]", "", "摘要", "", "{}", "{}", "", "2026-07-15T10:00:00+00:00", "2026-07-15T09:00:01+00:00",
+            )
+            conn.execute("INSERT INTO article_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", article_values)
+            conn.execute(
+                "INSERT INTO article_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("cls_telegraph_api", "article-unsent", "", "未投递文章", "财联社", "2026-07-15T09:01:00+00:00", "low", 0, "", "", "[]", "", "", "", "{}", "{}", "", "", "2026-07-15T09:01:01+00:00"),
+            )
+            conn.execute(
+                "INSERT INTO official_news_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("nvidia_blog", "official-1", "", "官网新闻", "2026-07-15T09:02:00+00:00", "high", 1, "", "摘要", "{}", "{}", "", "2026-07-15T10:02:00+00:00", "2026-07-15T09:02:01+00:00"),
+            )
+            event_id = conn.execute(
+                """
+                INSERT INTO events (source, source_event_id, event_type, title, summary, full_text, url,
+                                    published_at, first_seen_at, symbols_json, themes_json, raw_json,
+                                    content_hash, baseline_only)
+                VALUES ('sina_flash', 'event-1', 'flash_news', '事件', '摘要', '', '',
+                        '2026-07-15T09:03:00+00:00', '2026-07-15T09:03:01+00:00', '[]', '[]', '{}', 'hash-1', 0)
+                """
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO event_analyses (event_id, task, importance, classification, should_push, analysis_json, created_at) VALUES (?, 'market', 'high', '', 1, '{}', '2026-07-15T09:03:02+00:00')",
+                (event_id,),
+            )
+            conn.execute(
+                "INSERT INTO deliveries (event_id, channel, status, sent_at, payload_json) VALUES (?, 'feishu', 'sent', '2026-07-15T10:03:00+00:00', '{}')",
+                (event_id,),
+            )
+            conn.execute(
+                "INSERT INTO seen_items VALUES ('baseline_source', 'baseline-1', '', '基线', '', '2026-07-15T09:04:00+00:00', '2026-07-15T09:04:01+00:00')"
+            )
+            insert_feedback(conn, event_id="f1", item_kind="article", source="cls_telegraph_api", item_id="article-1", label="high_value", operator="operator-a", clicked_at_us=100)
+            insert_feedback(conn, event_id="f2", item_kind="article", source="cls_telegraph_api", item_id="article-1", label="duplicate", operator="operator-a", clicked_at_us=300, reasons='["stale"]')
+            insert_feedback(conn, event_id="f3", item_kind="article", source="cls_telegraph_api", item_id="article-1", label="high_value", operator="operator-b", clicked_at_us=200)
+            insert_feedback(conn, event_id="f4", item_kind="official", source="nvidia_blog", item_id="official-1", label="invalid", operator="operator-a", clicked_at_us=400, reasons='["weak_evidence"]')
+            conn.commit()
+            before = conn.execute("SELECT COUNT(*) FROM market_feedback").fetchone()[0]
+
+        rows = fetch_events_rows(day="2026-07-15", include_baseline=True, limit=20, db_path=db_path)
+        by_id = {str(row["id"]): row for row in rows}
+        article = by_id["article-1"]
+        assert article["feedback_state"] == "mixed"
+        assert article["feedback_labels"] == ["high_value", "duplicate"]
+        assert article["feedback_operator_count"] == 2
+        assert "特别有用 1" in article["feedback_display"] and "重复 1" in article["feedback_display"]
+        assert by_id["official-1"]["feedback_display"] == "无效 · 证据不足"
+        assert by_id[str(event_id)]["feedback_state"] == "unlabelled"
+        assert by_id["article-unsent"]["feedback_state"] == "not_delivered"
+        assert by_id["baseline-1"]["feedback_state"] == "not_applicable"
+        assert "operator_id" not in article and "operator-a" not in str(article)
+        summary = event_feedback_summary(rows)
+        assert summary == {"delivered": 3, "labelled": 2, "high_value": 1, "duplicate": 1, "invalid": 1}
+
+        duplicate_rows = fetch_events_rows(day="2026-07-15", feedback="duplicate", db_path=db_path)
+        invalid_rows = fetch_events_rows(day="2026-07-15", feedback="invalid", db_path=db_path)
+        unlabelled_rows = fetch_events_rows(day="2026-07-15", feedback="unlabelled", db_path=db_path)
+        assert [row["id"] for row in duplicate_rows] == ["article-1"]
+        assert [row["id"] for row in invalid_rows] == ["official-1"]
+        assert [str(row["id"]) for row in unlabelled_rows] == [str(event_id)]
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM market_feedback").fetchone()[0] == before
+
+
+def test_event_center_feedback_filter_applies_before_article_limit() -> None:
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
+        with sqlite3.connect(db_path) as conn:
+            ensure_article_reviews_table(conn)
+            for index in range(301):
+                conn.execute(
+                    "INSERT INTO article_reviews VALUES (?, ?, '', ?, '财联社', ?, 'high', 1, '', '', '[]', '', '', '', '{}', '{}', '', ?, ?)",
+                    (
+                        "cls_telegraph_api",
+                        f"article-{index}",
+                        f"文章 {index}",
+                        "2026-07-15T09:00:00+00:00",
+                        "2026-07-15T10:00:00+00:00",
+                        f"2026-07-15T09:{index // 60:02d}:{index % 60:02d}+00:00",
+                    ),
+                )
+            insert_feedback(conn, event_id="oldest-feedback", item_kind="article", source="cls_telegraph_api", item_id="article-0", label="duplicate", operator="operator-a", clicked_at_us=100)
+            conn.commit()
+        rows = fetch_events_rows(day="2026-07-15", feedback="duplicate", db_path=db_path)
+    assert [row["id"] for row in rows] == ["article-0"]
 
 
 def test_source_profiles_group_six_categories() -> None:
@@ -652,6 +784,8 @@ def main() -> int:
     test_feedback_quality_view_is_exposed()
     test_holdings_page_marks_environment_and_related_keywords()
     test_event_center_search_filters_before_per_pipeline_limit()
+    test_event_center_projects_current_feedback_across_active_stores()
+    test_event_center_feedback_filter_applies_before_article_limit()
     test_event_center_can_show_baselines_and_filter_by_published_time()
     test_event_center_source_filter_uses_grouped_dropdown()
     test_source_profiles_group_six_categories()

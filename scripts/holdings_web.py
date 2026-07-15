@@ -28,7 +28,7 @@ from holdings_store import (
     validate_holdings,
 )
 from market_db import DEFAULT_DB_PATH
-from market_feedback import feedback_quality_payload
+from market_feedback import FEEDBACK_LABELS, feedback_projection_by_item, feedback_quality_payload
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
 from investment_bank_theme_config import config_payload as investment_bank_theme_config_payload
 from investment_bank_theme_config import save_config as save_investment_bank_theme_config
@@ -383,6 +383,97 @@ def displayed_event_time(item: dict[str, Any], basis: str) -> str:
     return str(item.get("seen_at") or item.get("published_at") or "")
 
 
+def normalized_event_feedback_filter(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in {*FEEDBACK_LABELS, "unlabelled"} else ""
+
+
+def event_feedback_filter_clause(
+    conn: sqlite3.Connection,
+    *,
+    feedback_filter: str,
+    item_kind: str,
+    source_expr: str,
+    item_id_expr: str,
+    delivered_expr: str,
+) -> tuple[str, list[str]]:
+    if not feedback_filter:
+        return "", []
+    if not table_exists(conn, "market_feedback"):
+        return (f"AND ({delivered_expr})", []) if feedback_filter == "unlabelled" else ("AND 0", [])
+    current_feedback = f"""
+        SELECT 1 FROM market_feedback f
+        WHERE f.item_kind = ?
+          AND f.source = {source_expr}
+          AND CAST(f.item_id AS TEXT) = CAST({item_id_expr} AS TEXT)
+          AND NOT EXISTS (
+            SELECT 1 FROM market_feedback newer
+            WHERE newer.item_kind = f.item_kind
+              AND newer.source = f.source
+              AND newer.item_id = f.item_id
+              AND newer.operator_id = f.operator_id
+              AND (
+                newer.clicked_at_us > f.clicked_at_us
+                OR (newer.clicked_at_us = f.clicked_at_us AND newer.id > f.id)
+              )
+          )
+    """
+    if feedback_filter == "unlabelled":
+        return f"AND ({delivered_expr}) AND NOT EXISTS ({current_feedback})", [item_kind]
+    return f"AND ({delivered_expr}) AND EXISTS ({current_feedback} AND f.label = ?)", [item_kind, feedback_filter]
+
+
+def apply_event_feedback(
+    item: dict[str, Any],
+    *,
+    item_kind: str = "",
+    source: str = "",
+    item_id: str = "",
+    delivered: bool = False,
+    projection: dict[tuple[str, str, str], dict[str, Any]] | None = None,
+) -> None:
+    capable = item_kind in {"article", "official", "event"}
+    item["feedback_capable"] = capable
+    item["feedback_delivered"] = bool(capable and delivered)
+    item["feedback_labels"] = []
+    item["feedback_reason_labels"] = []
+    item["feedback_operator_count"] = 0
+    item["feedback_received_at"] = ""
+    if not capable:
+        item["feedback_state"] = "not_applicable"
+        item["feedback_display"] = "不适用"
+        return
+    if not delivered:
+        item["feedback_state"] = "not_delivered"
+        item["feedback_display"] = "—"
+        return
+    current = (projection or {}).get((item_kind, source, str(item_id)))
+    if not current:
+        item["feedback_state"] = "unlabelled"
+        item["feedback_display"] = "未反馈"
+        return
+    labels = [str(label) for label in current.get("labels") or [] if str(label) in FEEDBACK_LABELS]
+    item["feedback_state"] = labels[0] if len(labels) == 1 else "mixed"
+    item["feedback_labels"] = labels
+    item["feedback_display"] = str(current.get("display") or "已反馈")
+    item["feedback_reason_labels"] = list(current.get("reason_labels") or [])
+    item["feedback_operator_count"] = int(current.get("operator_count") or 0)
+    item["feedback_received_at"] = normalize_time(current.get("received_at"))
+
+
+def event_feedback_summary(rows: list[dict[str, Any]]) -> dict[str, int]:
+    delivered = [item for item in rows if item.get("feedback_delivered")]
+    labelled = [item for item in delivered if item.get("feedback_labels")]
+    return {
+        "delivered": len(delivered),
+        "labelled": len(labelled),
+        **{
+            label: sum(1 for item in labelled if label in (item.get("feedback_labels") or []))
+            for label in FEEDBACK_LABELS
+        },
+    }
+
+
 def fetch_events_rows(
     day: str = "",
     source: str = "",
@@ -390,6 +481,7 @@ def fetch_events_rows(
     q: str = "",
     time_basis: str = "seen",
     include_baseline: bool = False,
+    feedback: str = "",
     limit: int = 100,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> list[dict[str, Any]]:
@@ -397,10 +489,12 @@ def fetch_events_rows(
     q_lower = q.strip().lower()
     source_lower = source.strip().lower()
     kind_lower = kind.strip().lower()
+    feedback_filter = normalized_event_feedback_filter(feedback)
     time_basis = normalized_event_time_basis(time_basis)
     rows: list[dict[str, Any]] = []
     with connect_sqlite(db_path) as conn:
         conn.row_factory = sqlite3.Row
+        feedback_projection = feedback_projection_by_item(conn)
         if table_exists(conn, "events"):
             where, params = event_center_where_clause(
                 time_field=event_time_field(
@@ -414,6 +508,14 @@ def fetch_events_rows(
                 source_fields=("e.source",),
                 q_lower=q_lower,
                 q_fields=("e.title", "e.summary", "e.full_text", "e.url", "e.symbols_json", "e.themes_json"),
+            )
+            feedback_where, feedback_params = event_feedback_filter_clause(
+                conn,
+                feedback_filter=feedback_filter,
+                item_kind="event",
+                source_expr="e.source",
+                item_id_expr="e.id",
+                delivered_expr="EXISTS (SELECT 1 FROM deliveries fd WHERE fd.event_id = e.id AND fd.channel = 'feishu' AND fd.status = 'sent')",
             )
             for row in conn.execute(
                 f"""
@@ -452,15 +554,24 @@ def fetch_events_rows(
                        e.themes_json
                 FROM events e
                 WHERE {where}
+                  {feedback_where}
                   {" " if include_baseline else "AND COALESCE(e.baseline_only, 0) = 0"}
                 ORDER BY e.first_seen_at DESC
                 LIMIT 300
                 """,
-                params,
+                [*params, *feedback_params],
             ):
                 view = event_view_from_row(row).to_web_row()
                 view["published_at"] = normalize_time(row["published_at"])
                 view["seen_at"] = normalize_time(row["first_seen_at"])
+                apply_event_feedback(
+                    view,
+                    item_kind="event",
+                    source=str(row["source"] or ""),
+                    item_id=str(row["id"]),
+                    delivered=bool(row["pushed_at"]),
+                    projection=feedback_projection,
+                )
                 rows.append(view)
         if table_exists(conn, "article_reviews"):
             article_columns = table_columns(conn, "article_reviews")
@@ -481,6 +592,14 @@ def fetch_events_rows(
                 q_lower=q_lower,
                 q_fields=("title", "daily_summary", "reason", "affected_targets_json", "url"),
             )
+            feedback_where, feedback_params = event_feedback_filter_clause(
+                conn,
+                feedback_filter=feedback_filter,
+                item_kind="article",
+                source_expr="article_reviews.source",
+                item_id_expr="article_reviews.item_id",
+                delivered_expr="COALESCE(pushed_at, '') <> ''",
+            )
             for row in conn.execute(
                 f"""
                 SELECT source, item_id, url, title, source_module, published_at, importance,
@@ -488,14 +607,23 @@ def fetch_events_rows(
                        {affected_targets_expr}, {gate_json_expr}
                 FROM article_reviews
                 WHERE {where}
+                  {feedback_where}
                 ORDER BY created_at DESC
                 LIMIT 300
                 """,
-                params,
+                [*params, *feedback_params],
             ):
                 view = article_view_from_row(row).to_web_row()
                 view["published_at"] = normalize_time(row["published_at"])
                 view["seen_at"] = normalize_time(row["created_at"])
+                apply_event_feedback(
+                    view,
+                    item_kind="article",
+                    source=str(row["source"] or ""),
+                    item_id=str(row["item_id"]),
+                    delivered=bool(row["pushed_at"]),
+                    projection=feedback_projection,
+                )
                 rows.append(view)
         if table_exists(conn, "official_news_reviews"):
             official_columns = table_columns(conn, "official_news_reviews")
@@ -514,22 +642,39 @@ def fetch_events_rows(
                 q_lower=q_lower,
                 q_fields=("title", "daily_summary", "reason", "url"),
             )
+            feedback_where, feedback_params = event_feedback_filter_clause(
+                conn,
+                feedback_filter=feedback_filter,
+                item_kind="official",
+                source_expr="official_news_reviews.source",
+                item_id_expr="official_news_reviews.item_id",
+                delivered_expr="COALESCE(pushed_at, '') <> ''",
+            )
             for row in conn.execute(
                 f"""
                 SELECT source, item_id, url, title, published_at, importance, daily_summary,
                        reason, pushed_at, created_at, {should_push_expr}, {analysis_json_expr}
                 FROM official_news_reviews
                 WHERE {where}
+                  {feedback_where}
                 ORDER BY created_at DESC
                 LIMIT 200
                 """,
-                params,
+                [*params, *feedback_params],
             ):
                 view = official_view_from_row(row).to_web_row()
                 view["published_at"] = normalize_time(row["published_at"])
                 view["seen_at"] = normalize_time(row["created_at"])
+                apply_event_feedback(
+                    view,
+                    item_kind="official",
+                    source=str(row["source"] or ""),
+                    item_id=str(row["item_id"]),
+                    delivered=bool(row["pushed_at"]),
+                    projection=feedback_projection,
+                )
                 rows.append(view)
-        if include_baseline and table_exists(conn, "seen_items"):
+        if include_baseline and not feedback_filter and table_exists(conn, "seen_items"):
             where, params = event_center_where_clause(
                 time_field=event_time_field(
                     basis=time_basis,
@@ -581,7 +726,7 @@ def fetch_events_rows(
                         "baseline_only": True,
                     }
                 )
-        if table_exists(conn, "seen_posts"):
+        if not feedback_filter and table_exists(conn, "seen_posts"):
             seen_columns = table_columns(conn, "seen_posts")
             delivery_expr = "delivery_status" if "delivery_status" in seen_columns else "'sent'"
             where, params = event_center_where_clause(
@@ -627,7 +772,7 @@ def fetch_events_rows(
                         "baseline_only": False,
                     }
                 )
-        if table_exists(conn, "jygs_events"):
+        if not feedback_filter and table_exists(conn, "jygs_events"):
             jygs_time_field = event_time_field(
                 basis=time_basis,
                 seen_field="first_seen_at",
@@ -663,6 +808,10 @@ def fetch_events_rows(
                     }
                 )
 
+    for item in rows:
+        if "feedback_state" not in item:
+            apply_event_feedback(item)
+
     def matches(item: dict[str, Any]) -> bool:
         if source_lower and source_lower not in str(item["source"]).lower() and source_lower not in str(
             item.get("source_id") or ""
@@ -674,6 +823,10 @@ def fetch_events_rows(
             hay = json.dumps(item, ensure_ascii=False).lower()
             if q_lower not in hay:
                 return False
+        if feedback_filter == "unlabelled" and item.get("feedback_state") != "unlabelled":
+            return False
+        if feedback_filter in FEEDBACK_LABELS and feedback_filter not in (item.get("feedback_labels") or []):
+            return False
         return True
 
     rows = [item for item in rows if matches(item)]
@@ -1403,6 +1556,12 @@ def html_page(token_required: bool) -> str:
     td.full {{ width: 170px; }}
     td textarea {{ min-height: 38px; resize: vertical; }}
     .events-table td.summary-cell {{ color: var(--muted); }}
+    .event-feedback-summary {{ display: flex; gap: 14px; flex-wrap: wrap; margin: 0 0 10px; color: var(--muted); font-size: 12px; }}
+    .feedback-chip {{ display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; font-size: 12px; background: #f8fafc; color: #526273; }}
+    .feedback-chip.high_value {{ color: #075985; border-color: #7dd3fc; background: #f0f9ff; }}
+    .feedback-chip.duplicate {{ color: #92400e; border-color: #fcd34d; background: #fffbeb; }}
+    .feedback-chip.invalid {{ color: #b42318; border-color: #fda29b; background: #fff5f4; }}
+    .feedback-chip.mixed {{ color: #5b3a8a; border-color: #c4b5fd; background: #faf5ff; }}
     #view-feedback table {{ min-width: 840px; }}
     .events-table a {{ color: var(--accent); text-decoration: none; }}
     .table-wrap {{ max-height: calc(100vh - 190px); overflow: auto; }}
@@ -1487,11 +1646,19 @@ def html_page(token_required: bool) -> str:
         <select id="eventSource" aria-label="来源过滤" style="width:320px" onchange="loadEvents()">
           <option value="">全部来源</option>
         </select>
+        <select id="eventFeedback" aria-label="反馈过滤" style="width:150px" onchange="loadEvents()">
+          <option value="">全部反馈</option>
+          <option value="high_value">特别有用</option>
+          <option value="duplicate">重复</option>
+          <option value="invalid">无效</option>
+          <option value="unlabelled">未反馈</option>
+        </select>
         <label class="source-checks"><input id="eventIncludeBaseline" type="checkbox" onchange="loadEvents()"> 显示基线条目</label>
         <input id="eventQuery" placeholder="搜索标题、摘要、标的" style="width:260px">
         <button class="primary" onclick="loadEvents()">查询</button>
       </div>
       <section class="panel">
+        <div id="eventFeedbackSummary" class="event-feedback-summary"></div>
         <div class="table-wrap">
           <table class="events-table">
             <thead>
@@ -1502,6 +1669,7 @@ def html_page(token_required: bool) -> str:
                 <th>标题/摘要</th>
                 <th style="width:110px">重要性</th>
                 <th style="width:130px">状态</th>
+                <th style="width:130px">反馈</th>
               </tr>
             </thead>
             <tbody id="eventRows"></tbody>
@@ -2115,6 +2283,14 @@ function badge(value) {{
   return `<span class="badge ${{cls}}">${{escapeHtml(raw)}}</span>`;
 }}
 
+function feedbackBadge(item) {{
+  const state = String(item.feedback_state || 'not_applicable');
+  const display = String(item.feedback_display || '不适用');
+  const cls = ['high_value', 'duplicate', 'invalid', 'mixed'].includes(state) ? state : '';
+  const time = item.feedback_received_at ? `<div class="hint">${{formatTime(item.feedback_received_at)}}</div>` : '';
+  return `<span class="feedback-chip ${{cls}}">${{escapeHtml(display)}}</span>${{time}}`;
+}}
+
 function serviceActionLabel(action) {{
   const labels = {{
     restart: '重启服务',
@@ -2387,14 +2563,24 @@ async function loadEvents() {{
     const date = document.getElementById('eventDate').value;
     const timeBasis = document.getElementById('eventTimeBasis').value;
     const source = document.getElementById('eventSource').value.trim();
+    const feedback = document.getElementById('eventFeedback').value.trim();
     const q = document.getElementById('eventQuery').value.trim();
     if (date) params.set('date', date);
     if (timeBasis !== 'seen') params.set('time_basis', timeBasis);
     if (source) params.set('source', source);
+    if (feedback) params.set('feedback', feedback);
     if (q) params.set('q', q);
     if (document.getElementById('eventIncludeBaseline').checked) params.set('include_baseline', '1');
     const data = await api('/api/events?' + params.toString());
     document.getElementById('eventTimeHeader').textContent = timeBasis === 'published' ? '原文发布时间' : '采集/处理时间';
+    const feedbackSummary = data.feedback_summary || {{}};
+    document.getElementById('eventFeedbackSummary').innerHTML = [
+      `可反馈且已投递 ${{feedbackSummary.delivered || 0}}`,
+      `已反馈 ${{feedbackSummary.labelled || 0}}`,
+      `特别有用 ${{feedbackSummary.high_value || 0}}`,
+      `重复 ${{feedbackSummary.duplicate || 0}}`,
+      `无效 ${{feedbackSummary.invalid || 0}}`,
+    ].map(text => `<span>${{escapeHtml(text)}}</span>`).join('');
     const rows = document.getElementById('eventRows');
     rows.innerHTML = (data.events || []).map(item => `
       <tr>
@@ -2407,8 +2593,9 @@ async function loadEvents() {{
         </td>
         <td>${{badge(item.importance)}}<div class="hint">${{escapeHtml(item.classification || '')}}</div></td>
         <td>${{escapeHtml(item.delivery_status || '')}}${{item.push ? '<div class="hint">push</div>' : ''}}</td>
+        <td>${{feedbackBadge(item)}}</td>
       </tr>
-    `).join('') || '<tr><td colspan="6">没有匹配事件。</td></tr>';
+    `).join('') || '<tr><td colspan="7">没有匹配事件。</td></tr>';
   }} catch (err) {{
     showStatus(err.message, 'err');
   }}
@@ -3646,9 +3833,10 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                     time_basis=(qs.get("time_basis") or ["seen"])[0],
                     include_baseline=(qs.get("include_baseline") or [""])[0].strip().lower()
                     in {"1", "true", "yes", "on"},
+                    feedback=(qs.get("feedback") or [""])[0],
                     limit=limit,
                 )
-                self.send_json({"ok": True, "events": events})
+                self.send_json({"ok": True, "events": events, "feedback_summary": event_feedback_summary(events)})
             except Exception as exc:  # noqa: BLE001
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return

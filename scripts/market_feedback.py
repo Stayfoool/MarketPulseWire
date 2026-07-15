@@ -417,9 +417,14 @@ def record_feedback(
     }
 
 
-def current_feedback_rows(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
-    with connect_sqlite(db_path) as conn:
-        conn.row_factory = sqlite3.Row
+def current_feedback_rows_from_conn(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    if not conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'market_feedback'"
+    ).fetchone():
+        return []
+    original_row_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
         rows = conn.execute(
             """
             SELECT f.*
@@ -438,7 +443,61 @@ def current_feedback_rows(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any
             ORDER BY f.clicked_at_us DESC, f.id DESC
             """
         ).fetchall()
+    finally:
+        conn.row_factory = original_row_factory
     return [dict(row) for row in rows]
+
+
+def current_feedback_rows(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+    with connect_sqlite(db_path) as conn:
+        return current_feedback_rows_from_conn(conn)
+
+
+def feedback_projection_by_item(conn: sqlite3.Connection) -> dict[tuple[str, str, str], dict[str, Any]]:
+    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for row in current_feedback_rows_from_conn(conn):
+        item_kind = str(row.get("item_kind") or "")
+        if item_kind == "test":
+            continue
+        key = (item_kind, str(row.get("source") or ""), str(row.get("item_id") or ""))
+        grouped.setdefault(key, []).append(row)
+
+    projection: dict[tuple[str, str, str], dict[str, Any]] = {}
+    label_order = tuple(FEEDBACK_LABELS)
+    for key, rows in grouped.items():
+        counts = {label: 0 for label in label_order}
+        reason_tags: list[str] = []
+        latest_received_at = ""
+        latest_clicked_at_us = 0
+        for row in rows:
+            label = str(row.get("label") or "")
+            if label in counts:
+                counts[label] += 1
+            for tag in _reason_tags_from_json(row.get("reason_tags_json")):
+                if tag not in reason_tags:
+                    reason_tags.append(tag)
+            clicked_at_us = int(row.get("clicked_at_us") or 0)
+            if clicked_at_us >= latest_clicked_at_us:
+                latest_clicked_at_us = clicked_at_us
+                latest_received_at = str(row.get("received_at") or "")
+        active_labels = [label for label in label_order if counts[label]]
+        if len(rows) == 1 and len(active_labels) == 1:
+            display = FEEDBACK_LABELS[active_labels[0]]
+            reasons = [FEEDBACK_REASON_LABELS[tag] for tag in reason_tags if tag in FEEDBACK_REASON_LABELS]
+            if reasons:
+                display += " · " + "、".join(reasons)
+        else:
+            display = " · ".join(f"{FEEDBACK_LABELS[label]} {counts[label]}" for label in active_labels)
+        projection[key] = {
+            "labels": active_labels,
+            "label_counts": {label: counts[label] for label in active_labels},
+            "display": display,
+            "reason_tags": reason_tags,
+            "reason_labels": [FEEDBACK_REASON_LABELS[tag] for tag in reason_tags if tag in FEEDBACK_REASON_LABELS],
+            "operator_count": len(rows),
+            "received_at": latest_received_at,
+        }
+    return projection
 
 
 def callback_payload_fields(payload: dict[str, Any]) -> dict[str, Any]:
