@@ -6,14 +6,25 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from macro_policy import MARKET_REACTION_KEYWORDS
+from macro_policy import (
+    MARKET_REACTION_KEYWORDS,
+    TRANSMISSION_ASSET_MARKERS,
+    fed_policy_impulse,
+    generic_fed_transmission_classification,
+)
 from market_item import DecisionResult
 
 
 MACRO_PREVIEW_RULE_ID = "macro_data_preview"
 MACRO_RELEASE_RULE_ID = "macro_data_release"
 MACRO_REACTION_RULE_ID = "macro_market_reaction"
-MACRO_DEDUP_RULE_IDS = {MACRO_PREVIEW_RULE_ID, MACRO_RELEASE_RULE_ID, MACRO_REACTION_RULE_ID}
+FED_POLICY_REACTION_RULE_ID = "fed_policy_market_reaction"
+MACRO_DEDUP_RULE_IDS = {
+    MACRO_PREVIEW_RULE_ID,
+    MACRO_RELEASE_RULE_ID,
+    MACRO_REACTION_RULE_ID,
+    FED_POLICY_REACTION_RULE_ID,
+}
 MACRO_LOOKBACK_DAYS = 90
 BEIJING_TIMEZONE = timezone(timedelta(hours=8))
 
@@ -220,6 +231,13 @@ def _published_year_month(value: object) -> tuple[int, int]:
     return parsed.year, parsed.month
 
 
+def _previous_reference_period(value: object) -> str:
+    year, month = _published_year_month(value)
+    if month == 1:
+        return f"{year - 1:04d}-12"
+    return f"{year:04d}-{month - 1:02d}"
+
+
 def _reaction_session(value: object) -> str:
     raw = str(value or "").strip()
     try:
@@ -231,6 +249,17 @@ def _reaction_session(value: object) -> str:
     if parsed.hour < 6:
         parsed -= timedelta(days=1)
     return parsed.date().isoformat()
+
+
+def _legacy_reaction_keys(country: str, indicator: str, reaction_session: str) -> list[str]:
+    try:
+        session_date = datetime.fromisoformat(reaction_session)
+    except ValueError:
+        return []
+    return [
+        f"macro:market_reaction:{country}:{indicator}:{(session_date - timedelta(days=offset)).date().isoformat()}"
+        for offset in range(3)
+    ]
 
 
 def _reference_year(explicit_year: int | None, month: int, published_at: object) -> int:
@@ -317,7 +346,8 @@ def _extract_indicator_context(item: dict[str, Any]) -> dict[str, Any] | None:
             return {
                 "country": "US",
                 "indicator": indicator,
-                "reference_period": "",
+                "reference_period": _previous_reference_period(item.get("published_at")),
+                "reference_period_inferred": True,
                 "actual": False,
                 "preview": _is_preview_claim(claim),
                 "evidence_quote": claim[:500],
@@ -335,8 +365,16 @@ def _has_direct_warsh_statement(text: str) -> bool:
 
 
 def _has_market_reaction(text: str) -> bool:
-    market_terms = tuple(MARKET_REACTION_KEYWORDS) + EXTRA_REACTION_MARKERS
+    market_terms = tuple(MARKET_REACTION_KEYWORDS) + EXTRA_REACTION_MARKERS + tuple(TRANSMISSION_ASSET_MARKERS)
     return _contains_any(text, market_terms) and _contains_any(text, REACTION_DIRECTION_MARKERS)
+
+
+def _fed_policy_reaction_impulse(text: str) -> str:
+    for claim in _claims(text):
+        impulse = fed_policy_impulse(claim)
+        if impulse and _has_market_reaction(claim):
+            return impulse
+    return ""
 
 
 def macro_event_dedup_hit(item: dict[str, Any], decision: DecisionResult) -> dict[str, Any] | None:
@@ -344,19 +382,45 @@ def macro_event_dedup_hit(item: dict[str, Any], decision: DecisionResult) -> dic
     if not decision.should_push or not _macro_rule_matched(decision):
         return None
     text = _text(item)
-    if _contains_any(text, CORRECTION_MARKERS) or _has_direct_warsh_statement(text):
+    if _contains_any(text, CORRECTION_MARKERS):
         return None
     reaction = _has_market_reaction(text)
+    direct_warsh_statement = _has_direct_warsh_statement(text)
+    if direct_warsh_statement:
+        return None
+    retained_exceptions = set(generic_fed_transmission_classification(item).get("exceptions") or [])
+    if retained_exceptions.intersection(
+        {"policy_decision", "quantified_repricing", "asset_hard_fact", "unexpected_relationship"}
+    ):
+        return None
     fact = _extract_release_fact(item)
     if reaction and _is_released_reaction(text, fact):
         fact = fact or _extract_indicator_context(item)
         reaction_session = _reaction_session(item.get("published_at"))
-        if not fact or fact["preview"] or not reaction_session:
+        if not fact or not reaction_session:
             return None
+        fact = {**fact, "preview": False}
         rule_id = MACRO_REACTION_RULE_ID
         phase = "market_reaction"
         fact["reaction_session"] = reaction_session
-        identity_suffix = reaction_session
+        identity_suffix = fact["reference_period"] or reaction_session
+    elif reaction and (impulse := _fed_policy_reaction_impulse(text)):
+        reaction_session = _reaction_session(item.get("published_at"))
+        if not reaction_session:
+            return None
+        rule_id = FED_POLICY_REACTION_RULE_ID
+        phase = "fed_policy_market_reaction"
+        fact = {
+            "country": "US",
+            "indicator": "FED_POLICY",
+            "reference_period": "",
+            "actual": False,
+            "preview": False,
+            "reaction_session": reaction_session,
+            "policy_impulse": impulse,
+            "evidence_quote": text[:500],
+        }
+        identity_suffix = impulse
     elif fact and fact["preview"]:
         rule_id = MACRO_PREVIEW_RULE_ID
         phase = "preview"
@@ -368,10 +432,16 @@ def macro_event_dedup_hit(item: dict[str, Any], decision: DecisionResult) -> dic
         phase = "release"
         identity_suffix = fact["reference_period"]
     key = f"macro:{phase}:{fact['country']}:{fact['indicator']}:{identity_suffix}"
-    return {
+    lookback_days = 14 if rule_id == FED_POLICY_REACTION_RULE_ID else MACRO_LOOKBACK_DAYS
+    result = {
         "rule_id": rule_id,
         "dedup_key": key,
-        "dedup_lookback_days": MACRO_LOOKBACK_DAYS,
+        "dedup_lookback_days": lookback_days,
         "dedup_kind": rule_id,
         "event_facts": {**fact, "phase": phase},
     }
+    if rule_id == MACRO_REACTION_RULE_ID and fact.get("reference_period") and fact.get("reaction_session"):
+        result["dedup_alias_keys"] = _legacy_reaction_keys(
+            str(fact["country"]), str(fact["indicator"]), str(fact["reaction_session"])
+        )
+    return result

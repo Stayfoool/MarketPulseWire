@@ -65,6 +65,12 @@ def reserve_rule_alert(
     rule_id = str(hit.get("rule_id") or "")
     if not dedup_key or not rule_id:
         return {"reserved": False, "applicable": False}
+    alias_keys = [
+        str(value)
+        for value in hit.get("dedup_alias_keys") or []
+        if str(value).strip() and str(value) != dedup_key
+    ][:16]
+    candidate_keys = [dedup_key, *dict.fromkeys(alias_keys)]
     lookback_minutes = hit.get("dedup_lookback_minutes")
     if lookback_minutes is None:
         lookback_minutes = max(1, min(int(hit.get("dedup_lookback_days") or 14), 90)) * 24 * 60
@@ -76,29 +82,59 @@ def reserve_rule_alert(
     try:
         conn.execute("PRAGMA busy_timeout = 60000")
         conn.execute("BEGIN IMMEDIATE")
+        placeholders = ",".join("?" for _ in candidate_keys)
         row = conn.execute(
-            """
-            SELECT status, first_source, first_item_id, first_title, first_published_at, updated_at
+            f"""
+            SELECT dedup_key, status, first_source, first_item_id, first_title, first_published_at, updated_at
             FROM rule_alert_dedup
-            WHERE dedup_key = ? AND created_at >= ?
+            WHERE dedup_key IN ({placeholders}) AND created_at >= ?
+            ORDER BY CASE WHEN dedup_key = ? THEN 0 ELSE 1 END, created_at
+            LIMIT 1
             """,
-            (dedup_key, cutoff),
+            (*candidate_keys, cutoff, dedup_key),
         ).fetchone()
         if row:
-            conn.rollback()
+            matched_key = str(row[0])
+            if matched_key != dedup_key and row[1] == "sent":
+                now_text = now.isoformat()
+                conn.execute(
+                    """
+                    INSERT INTO rule_alert_dedup (
+                        dedup_key, rule_id, status, first_source, first_item_id, first_title,
+                        first_published_at, metadata_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(dedup_key) DO NOTHING
+                    """,
+                    (
+                        dedup_key,
+                        rule_id,
+                        row[1],
+                        row[2],
+                        row[3],
+                        row[4],
+                        row[5],
+                        json.dumps({"migrated_from_alias_key": matched_key, "delivery_hit": hit}, ensure_ascii=False),
+                        now_text,
+                        now_text,
+                    ),
+                )
+                conn.commit()
+            else:
+                conn.rollback()
             return {
                 "reserved": False,
                 "applicable": True,
                 "duplicate": True,
                 "dedup_key": dedup_key,
                 "rule_id": rule_id,
+                "matched_dedup_key": matched_key,
                 "first": {
-                    "status": row[0],
-                    "source": row[1],
-                    "item_id": row[2],
-                    "title": row[3],
-                    "published_at": row[4],
-                    "updated_at": row[5],
+                    "status": row[1],
+                    "source": row[2],
+                    "item_id": row[3],
+                    "title": row[4],
+                    "published_at": row[5],
+                    "updated_at": row[6],
                 },
             }
         now_text = now.isoformat()

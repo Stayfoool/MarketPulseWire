@@ -15,7 +15,7 @@ from ai_credit_risk import ai_credit_risk_rule
 from attributed_research import EXTRACTION_KEY, attributed_research_rule
 from industry_hardline import industry_topic_hard_variable_rule
 from international_bank_fed import international_bank_fed_rate_path_rule
-from macro_policy import macro_policy_match
+from macro_policy import generic_fed_transmission_classification, macro_policy_match
 from market_item import VALID_ACTIONS, DecisionResult, NormalizedMarketItem, normalize_importance
 from push_rules import first_matching_push_rule
 from trade_friction import trade_friction_rule
@@ -432,6 +432,41 @@ def apply_deterministic_source_controls(
     )
 
 
+def apply_generic_fed_transmission_control(
+    item: dict[str, Any],
+    decision: DecisionResult,
+) -> DecisionResult:
+    """Downgrade obvious policy transmission narratives after macro decision."""
+    if not decision.should_push:
+        return decision
+    if {str(hit.get("rule_id") or "") for hit in decision.rule_hits} != {"macro_policy_line"}:
+        return decision
+    classification = generic_fed_transmission_classification(item)
+    if not classification.get("matched"):
+        return decision
+    control_reason = "仅重复美联储政策对资产的常识性传导关系，无新增政策、量化重定价或实际异常行情；转入日报。"
+    audit = dict(decision.audit_json)
+    audit["deterministic_postprocessor"] = {
+        "control_id": "generic_fed_policy_transmission",
+        "initial_action": decision.action,
+        "final_action": "daily",
+        "classification": classification,
+    }
+    return DecisionResult(
+        action="daily",
+        importance="medium",
+        reason=f"{decision.reason}\n{control_reason}".strip(),
+        brief_reason=control_reason,
+        rule_hits=list(decision.rule_hits),
+        candidate_rules=list(decision.candidate_rules),
+        skeptic=dict(decision.skeptic),
+        dedup=dict(decision.dedup),
+        need_llm_interpretation=False,
+        need_limited_llm_judgement=True,
+        audit_json=audit,
+    )
+
+
 def decide_market_item(
     item: NormalizedMarketItem | dict[str, Any],
     *,
@@ -516,7 +551,8 @@ def decide_market_item(
     if macro.get("matched"):
         rule = _macro_rule(resolved_source, macro)
         if rule["should_push"]:
-            return _decision_from_rule(rule, audit_json=audit, source_stage="macro_policy_match")
+            decision = _decision_from_rule(rule, audit_json=audit, source_stage="macro_policy_match")
+            return apply_generic_fed_transmission_control(legacy_item, decision)
         audit["source_stage"] = "macro_policy_candidate"
         audit["legacy_rule"] = dict(rule)
         return DecisionResult(

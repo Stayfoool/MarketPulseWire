@@ -534,19 +534,25 @@ def test_macro_release_and_reaction_each_send_once_while_warsh_speech_is_retaine
         "title": "美国6月CPI环比下降0.4%。美联储主席沃什表示，不会容忍通胀过高。",
         "published_at": "2026-07-14T12:46:37+00:00",
     }
+    mixed_warsh_reaction = {
+        "id": "cpi-warsh-reaction-1",
+        "title": "美联储主席沃什表示通胀任务未完成；美国6月CPI公布后美元走低。",
+        "published_at": "2026-07-14T13:02:00+00:00",
+    }
     review = content_review("push", rule_hits=[macro_rule()])
     try:
         market_delivery.send_card = lambda card: calls.append(card) or True
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
-            items = (release_one, release_two, reaction_one, reaction_two, warsh)
+            items = (release_one, release_two, reaction_one, reaction_two, warsh, mixed_warsh_reaction)
             sources = (
                 "cls_telegraph_api",
                 "yicai_brief",
                 "cls_telegraph_api",
                 "wallstreetcn_news",
                 "sina_finance_articles",
+                "jin10_rsshub_important",
             )
             with sqlite3.connect(db_path) as conn:
                 for source, item in zip(sources, items, strict=True):
@@ -562,11 +568,50 @@ def test_macro_release_and_reaction_each_send_once_while_warsh_speech_is_retaine
                 dedup_rows = conn.execute(
                     "SELECT rule_id, status FROM rule_alert_dedup ORDER BY created_at"
                 ).fetchall()
-        assert statuses == ["sent", "duplicate", "sent", "duplicate", "sent"]
-        assert len(calls) == 3
+        assert statuses == ["sent", "duplicate", "sent", "duplicate", "sent", "sent"]
+        assert len(calls) == 4
         assert stored is not None and stored["push_now"] is False
         assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
         assert dedup_rows == [("macro_data_release", "sent"), ("macro_market_reaction", "sent")]
+    finally:
+        market_delivery.send_card = original_send
+
+
+def test_cross_asset_fed_policy_reactions_deliver_once() -> None:
+    original_send = market_delivery.send_card
+    calls: list[dict] = []
+    gold = {
+        "id": "fed-gold-reaction-1",
+        "title": "美联储降息预期升温，黄金上涨1.5%。",
+        "published_at": "2026-07-14T12:40:00+00:00",
+    }
+    bitcoin = {
+        "id": "fed-bitcoin-reaction-1",
+        "title": "交易员重新定价美联储降息路径，比特币上涨3.2%。",
+        "published_at": "2026-07-15T01:20:00+00:00",
+    }
+    review = content_review("push", rule_hits=[macro_rule()])
+    try:
+        market_delivery.send_card = lambda card: calls.append(card) or True
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            with sqlite3.connect(db_path) as conn:
+                save_article_review(conn, "cls_telegraph_api", gold, review)
+                save_article_review(conn, "wallstreetcn_news", bitcoin, review)
+            statuses = [
+                market_delivery.deliver_article_review(
+                    source, item, review, decision=required_decision(review), db_path=db_path
+                )
+                for source, item in (("cls_telegraph_api", gold), ("wallstreetcn_news", bitcoin))
+            ]
+            with sqlite3.connect(db_path) as conn:
+                stored = article_review_exists(conn, "wallstreetcn_news", "fed-bitcoin-reaction-1")
+        assert statuses == ["sent", "duplicate"]
+        assert len(calls) == 1
+        assert stored is not None
+        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
+        assert stored["raw"]["raw"]["rule_alert_dedup"]["rule_id"] == "fed_policy_market_reaction"
     finally:
         market_delivery.send_card = original_send
 
@@ -754,6 +799,7 @@ def main() -> int:
     test_intraday_market_move_send_failure_releases_reservation()
     test_event_delivery_records_intraday_market_move_duplicate()
     test_macro_release_and_reaction_each_send_once_while_warsh_speech_is_retained()
+    test_cross_asset_fed_policy_reactions_deliver_once()
     test_event_delivery_records_macro_release_duplicate()
     test_ibm_industry_fact_cross_source_article_dedup_preserves_push_decision()
     test_event_delivery_records_ibm_industry_fact_duplicate()

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from macro_event_dedup import (
+    FED_POLICY_REACTION_RULE_ID,
     MACRO_PREVIEW_RULE_ID,
     MACRO_REACTION_RULE_ID,
     MACRO_RELEASE_RULE_ID,
@@ -40,21 +41,19 @@ def test_nearest_month_binds_to_indicator_not_publication_or_meeting_date() -> N
     assert result["event_facts"]["reference_period"] == "2026-06"
     assert no_period is not None
     assert no_period["rule_id"] == MACRO_REACTION_RULE_ID
-    assert no_period["event_facts"]["reference_period"] == ""
+    assert no_period["event_facts"]["reference_period"] == "2026-06"
+    assert no_period["event_facts"]["reference_period_inferred"] is True
     assert no_period["event_facts"]["reaction_session"] == "2026-07-14"
 
     meeting_month = hit("美债在美国CPI降温后走强，市场将7月美联储加息押注下调至20%。")
-    assert meeting_month is not None
-    assert meeting_month["rule_id"] == MACRO_REACTION_RULE_ID
-    assert meeting_month["event_facts"]["reference_period"] == ""
-    assert meeting_month["dedup_key"] == "macro:market_reaction:US:CPI:2026-07-14"
+    assert meeting_month is None
 
     overnight = hit(
         "美债在美国CPI降温后走强，市场削减加息押注。",
         published_at="2026-07-14T16:09:00+00:00",
     )
     assert overnight is not None
-    assert overnight["dedup_key"] == meeting_month["dedup_key"]
+    assert overnight["dedup_key"] == "macro:market_reaction:US:CPI:2026-06"
 
 
 def test_preview_and_market_reaction_have_independent_identities() -> None:
@@ -66,7 +65,11 @@ def test_preview_and_market_reaction_have_independent_identities() -> None:
     assert preview["dedup_key"] == "macro:preview:US:CPI:2026-06"
     assert table_preview["rule_id"] == MACRO_PREVIEW_RULE_ID
     assert reaction["rule_id"] == MACRO_REACTION_RULE_ID
-    assert reaction["dedup_key"] == "macro:market_reaction:US:CPI:2026-07-14"
+    assert reaction["dedup_key"] == "macro:market_reaction:US:CPI:2026-06"
+    assert reaction["dedup_alias_keys"][:2] == [
+        "macro:market_reaction:US:CPI:2026-07-14",
+        "macro:market_reaction:US:CPI:2026-07-13",
+    ]
 
     reaction_without_period = hit("受弱于预期的美国CPI数据影响，比特币上涨3.2%。")
     assert reaction_without_period is not None
@@ -95,11 +98,30 @@ def test_direct_warsh_statement_and_correction_are_not_suppressed() -> None:
     correction = hit("更正：美国6月CPI环比下降0.3%，此前数据误报为下降0.4%。")
     warsh_response = hit("美国国债价格回吐涨幅，沃什淡化美国6月CPI通胀数据的意义。")
     warsh_colon = hit("美联储主席沃什：美国6月CPI数据出炉后，任务并未完成。")
+    mixed_reaction = hit("美联储主席沃什表示通胀任务未完成；美国6月CPI公布后美元走低。")
     assert warsh is None
     assert warsh_response is None
     assert warsh_colon is None
+    assert mixed_reaction is None
     assert correction is None
     assert scheduled is not None and scheduled["rule_id"] == MACRO_RELEASE_RULE_ID
+
+
+def test_cross_asset_fed_policy_reactions_share_one_catalyst_identity() -> None:
+    gold = hit("美联储降息预期升温，黄金上涨1.5%。")
+    bitcoin = hit("交易员重新定价美联储降息路径，比特币上涨3.2%。")
+    tightening = hit("美联储加息预期升温，美元指数上涨0.6%。")
+    assert gold is not None and bitcoin is not None and tightening is not None
+    assert gold["rule_id"] == bitcoin["rule_id"] == FED_POLICY_REACTION_RULE_ID
+    assert gold["dedup_key"] == bitcoin["dedup_key"] == (
+        "macro:fed_policy_market_reaction:US:FED_POLICY:easing"
+    )
+    assert tightening["dedup_key"] == "macro:fed_policy_market_reaction:US:FED_POLICY:tightening"
+    assert gold["dedup_lookback_days"] == 14
+    unrelated_brief = hit("A股指数下跌1%。美联储尚未加息，三季度风险偏好仍然较高。")
+    assert unrelated_brief is None
+    quantified_repricing = hit("交易员将美联储降息概率从40%上调至65%，黄金上涨1.2%。")
+    assert quantified_repricing is None
 
 
 def test_pce_nonfarm_and_year_rollover_are_supported() -> None:
@@ -125,6 +147,7 @@ def main() -> int:
     test_nearest_month_binds_to_indicator_not_publication_or_meeting_date()
     test_preview_and_market_reaction_have_independent_identities()
     test_direct_warsh_statement_and_correction_are_not_suppressed()
+    test_cross_asset_fed_policy_reactions_share_one_catalyst_identity()
     test_pce_nonfarm_and_year_rollover_are_supported()
     test_fail_closed_without_macro_push_or_local_period()
     print("macro event dedup checks passed")
