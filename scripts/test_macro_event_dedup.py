@@ -33,6 +33,15 @@ def test_release_identity_is_source_neutral_and_period_specific() -> None:
     assert cls["dedup_key"] == sina["dedup_key"] == "macro:release:US:CPI:2026-06"
     assert may["dedup_key"] == "macro:release:US:CPI:2026-05"
 
+    repeated_indicator = hit(
+        "评价CPI数据——美国总统表示，劳工部报告显示，6月整体通胀年率为3.5%，"
+        "季调后CPI月率为-0.4%。",
+        published_at="2026-07-15T10:31:29+00:00",
+    )
+    assert repeated_indicator is not None
+    assert repeated_indicator["rule_id"] == MACRO_RELEASE_RULE_ID
+    assert repeated_indicator["dedup_key"] == "macro:release:US:CPI:2026-06"
+
 
 def test_nearest_month_binds_to_indicator_not_publication_or_meeting_date() -> None:
     result = hit("金十数据7月14日讯，美国6月核心CPI年率录得2.6%，低于预期。")
