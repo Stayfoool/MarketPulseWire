@@ -91,6 +91,14 @@ def test_ai_debt_issuance_is_not_treated_as_capex_investment() -> None:
         assert industry_topic_hard_variable_rule(source, {"title": text}) is None
 
 
+def test_generic_enterprise_storage_with_shortage_remains_a_memory_topic() -> None:
+    text = "IBM's enterprise customers are locking in server storage and memory supply amid a shortage."
+    for source in ("wallstreetcn_news", "sina_flash"):
+        rule = industry_topic_hard_variable_rule(source, {"title": text})
+        assert rule is not None
+        assert "存储/HBM" in rule["claim_topics"]
+
+
 def test_investor_question_is_not_treated_as_an_investment_hard_variable() -> None:
     item = {
         "title": "公司参与字节、阿里全球数据中心建设吗？锐捷网络回应",
@@ -160,6 +168,7 @@ def main() -> int:
     test_topics_and_hard_variables_cannot_be_combined_across_sections()
     test_quantified_data_center_investment_is_a_hard_variable()
     test_ai_debt_issuance_is_not_treated_as_capex_investment()
+    test_generic_enterprise_storage_with_shortage_remains_a_memory_topic()
     test_investor_question_is_not_treated_as_an_investment_hard_variable()
     test_expansion_before_capacity_is_detected_in_the_same_sentence()
     test_unquantified_roadmap_shift_is_a_hard_variable()
