@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from cards import div_markdown
+
 from db_utils import connect_sqlite
 from market_db import DEFAULT_DB_PATH
 from market_item import decision_result_from_payload
@@ -111,7 +113,29 @@ def allowed_operator_ids(raw: str | None = None) -> set[str]:
     return {part.strip() for part in value.replace("；", ",").replace(";", ",").split(",") if part.strip()}
 
 
-def feedback_actions(identity: FeedbackIdentity, *, secret: str | None = None) -> dict[str, Any]:
+def _reason_tags_from_json(value: Any) -> list[str]:
+    try:
+        parsed = json.loads(str(value or "[]"))
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(tag) for tag in parsed if str(tag) in FEEDBACK_REASON_LABELS]
+
+
+def feedback_status_display(label: str, reason_tags: Iterable[str] = ()) -> str:
+    display = FEEDBACK_LABELS.get(label, "已记录")
+    reasons = [FEEDBACK_REASON_LABELS[tag] for tag in reason_tags if tag in FEEDBACK_REASON_LABELS]
+    return f"已标记为「{display}{'（' + '、'.join(reasons) + '）' if reasons else ''}」"
+
+
+def feedback_actions(
+    identity: FeedbackIdentity,
+    *,
+    secret: str | None = None,
+    selected_label: str = "",
+    selected_reason_tags: Iterable[str] = (),
+) -> dict[str, Any]:
     token = build_feedback_token(identity, secret=secret if secret is not None else feedback_token_secret())
     actions = []
     for label, title, button_type in (
@@ -119,11 +143,12 @@ def feedback_actions(identity: FeedbackIdentity, *, secret: str | None = None) -
         ("duplicate", "重复", "default"),
         ("invalid", "无效", "danger"),
     ):
+        selected = label == selected_label
         actions.append(
             {
                 "tag": "button",
-                "text": {"tag": "plain_text", "content": title},
-                "type": button_type,
+                "text": {"tag": "plain_text", "content": f"✓ {title}" if selected else title},
+                "type": button_type if not selected or label == "invalid" else "primary",
                 "value": {"feedback_token": token, "label": label},
             }
         )
@@ -152,13 +177,41 @@ def append_feedback_actions(
     identity: FeedbackIdentity,
     *,
     secret: str | None = None,
+    selected_label: str = "",
+    selected_reason_tags: Iterable[str] = (),
 ) -> dict[str, Any]:
     updated = dict(card)
     elements = list(card.get("elements") or [])
     elements.append({"tag": "hr"})
-    elements.append(feedback_actions(identity, secret=secret))
+    if selected_label in FEEDBACK_LABELS:
+        elements.append(div_markdown(f"**反馈状态**：{feedback_status_display(selected_label, selected_reason_tags)}"))
+    elements.append(
+        feedback_actions(
+            identity,
+            secret=secret,
+            selected_label=selected_label,
+            selected_reason_tags=selected_reason_tags,
+        )
+    )
     updated["elements"] = elements
     return updated
+
+
+def feedback_test_card_base() -> dict[str, Any]:
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": "blue",
+            "title": {"tag": "plain_text", "content": "MarketPulseWire 反馈测试"},
+        },
+        "elements": [
+            div_markdown("此卡仅验证飞书反馈回调，不代表市场信息，也不会进入质量统计。"),
+        ],
+    }
+
+
+def feedback_test_card(identity: FeedbackIdentity, *, secret: str | None = None) -> dict[str, Any]:
+    return append_feedback_actions(feedback_test_card_base(), identity, secret=secret)
 
 
 def _load_json(value: Any) -> dict[str, Any]:
@@ -264,7 +317,7 @@ def _current_feedback_row(
 ) -> sqlite3.Row | tuple[Any, ...] | None:
     return conn.execute(
         """
-        SELECT id, label, clicked_at_us
+        SELECT id, label, clicked_at_us, reason_tags_json
         FROM market_feedback
         WHERE item_kind = ? AND source = ? AND item_id = ? AND operator_id = ?
         ORDER BY clicked_at_us DESC, id DESC
@@ -310,6 +363,7 @@ def record_feedback(
                 "duplicate_event": True,
                 "is_current": bool(current and int(current[0]) == int(existing[0])),
                 "current_label": str(current[1]) if current else str(existing[1]),
+                "current_reason_tags": _reason_tags_from_json(current[3]) if current else [],
             }
         snapshot = resolve_feedback_snapshot(conn, identity)
         if snapshot.get("delivery_status") != "sent":
@@ -358,6 +412,7 @@ def record_feedback(
         "duplicate_event": False,
         "is_current": bool(current_after and int(current_after[0]) == inserted_id),
         "current_label": str(current_after[1]) if current_after else label,
+        "current_reason_tags": _reason_tags_from_json(current_after[3]) if current_after else [],
         "supersedes_id": supersedes_id,
     }
 
@@ -443,15 +498,72 @@ def handle_feedback_callback(
         raw={"event_type": "card.action.trigger"},
         db_path=db_path,
     )
-    current_label = FEEDBACK_LABELS.get(str(result.get("current_label") or result.get("label")), "已记录")
-    reason_display = FEEDBACK_REASON_LABELS.get(fields["reason_tag"], "")
-    if reason_display and result.get("is_current", True):
-        current_label = f"{current_label}（{reason_display}）"
+    current_reason_tags = list(result.get("current_reason_tags") or [])
+    current_display = feedback_status_display(str(result.get("current_label") or result.get("label")), current_reason_tags)
     suffix = "（当前选择）" if result.get("is_current", True) else "（较新的选择已保留）"
     return {
-        "toast": {"type": "success", "content": f"已记录：{current_label}{suffix}"},
+        "toast": {"type": "success", "content": f"已记录：{current_display}{suffix}"},
         "result": result,
+        "card_state": {
+            "identity": identity,
+            "label": str(result.get("current_label") or result.get("label") or ""),
+            "reason_tags": current_reason_tags,
+        },
     }
+
+
+def _feedback_card_base(conn: sqlite3.Connection, identity: FeedbackIdentity) -> dict[str, Any] | None:
+    if identity.item_kind == "test":
+        return feedback_test_card_base()
+    if identity.item_kind == "article":
+        row = conn.execute(
+            "SELECT gate_json FROM article_reviews WHERE source = ? AND item_id = ?",
+            (identity.source, identity.item_id),
+        ).fetchone()
+        payload = _load_json(row[0]) if row else {}
+        raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
+    elif identity.item_kind == "official":
+        row = conn.execute(
+            "SELECT analysis_json FROM official_news_reviews WHERE source = ? AND item_id = ?",
+            (identity.source, identity.item_id),
+        ).fetchone()
+        raw = _load_json(row[0]) if row else {}
+    else:
+        row = conn.execute(
+            """
+            SELECT payload_json FROM deliveries d
+            JOIN events e ON e.id = d.event_id
+            WHERE e.id = ? AND e.source = ? AND d.channel = 'feishu' AND d.status = 'sent'
+            ORDER BY d.id DESC LIMIT 1
+            """,
+            (identity.item_id, identity.source),
+        ).fetchone()
+        raw = _load_json(row[0]) if row else {}
+    card = raw.get("_feedback_card_base")
+    return card if isinstance(card, dict) else None
+
+
+def feedback_card_for_callback(
+    identity: FeedbackIdentity,
+    label: str,
+    reason_tags: Iterable[str] = (),
+    *,
+    secret: str | None = None,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict[str, Any] | None:
+    if label not in FEEDBACK_LABELS:
+        return None
+    with connect_sqlite(db_path) as conn:
+        base = _feedback_card_base(conn, identity)
+    if base is None:
+        return None
+    return append_feedback_actions(
+        base,
+        identity,
+        secret=secret,
+        selected_label=label,
+        selected_reason_tags=reason_tags,
+    )
 
 
 def _delivered_items(conn: sqlite3.Connection, cutoff: str) -> list[dict[str, Any]]:

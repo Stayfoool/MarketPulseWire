@@ -7,27 +7,16 @@ import argparse
 import time
 from pathlib import Path
 
-from cards import div_markdown
 from env_utils import load_env
 from feishu_app import configured, feedback_listener_enabled, send_interactive_card
-from market_feedback import FeedbackIdentity, append_feedback_actions
+from market_feedback import FeedbackIdentity, feedback_test_card
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def build_test_card(item_id: str) -> dict:
-    card = {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "template": "blue",
-            "title": {"tag": "plain_text", "content": "MarketPulseWire 反馈测试"},
-        },
-        "elements": [
-            div_markdown("此卡仅验证飞书反馈回调，不代表市场信息，也不会进入质量统计。"),
-        ],
-    }
-    return append_feedback_actions(card, FeedbackIdentity("test", "feishu_feedback", item_id))
+    return feedback_test_card(FeedbackIdentity("test", "feishu_feedback", item_id))
 
 
 def main() -> int:

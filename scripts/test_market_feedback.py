@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import feishu_app
+import feishu_feedback_service
 
 from market_feedback import (
     FeedbackError,
@@ -18,6 +19,7 @@ from market_feedback import (
     append_feedback_actions,
     build_feedback_token,
     current_feedback_rows,
+    feedback_card_for_callback,
     feedback_quality_payload,
     handle_feedback_callback,
     parse_feedback_token,
@@ -53,7 +55,17 @@ def insert_delivered_article(db_path: Path) -> None:
             (
                 "cls_telegraph_api",
                 "item-1",
-                json.dumps({"raw": {"decision_result": decision}}),
+                json.dumps(
+                    {
+                        "raw": {
+                            "decision_result": decision,
+                            "_feedback_card_base": {
+                                "header": {"title": {"tag": "plain_text", "content": "Feedback fixture"}},
+                                "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": "fixture"}}],
+                            },
+                        }
+                    }
+                ),
                 "2026-07-15T00:00:00+00:00",
                 "2026-07-15T00:00:00+00:00",
             ),
@@ -104,6 +116,17 @@ def test_feedback_token_and_card_actions() -> None:
     overflow_value = json.loads(action["actions"][3]["options"][0]["value"])
     assert overflow_value["reason_tag"] == "useful_not_urgent"
 
+    selected = append_feedback_actions(
+        {"elements": [{"tag": "div"}]},
+        identity,
+        secret=TEST_SIGNING_KEY,
+        selected_label="duplicate",
+    )
+    assert "已标记为「重复」" in selected["elements"][-2]["text"]["content"]
+    selected_actions = selected["elements"][-1]["actions"]
+    assert selected_actions[1]["text"]["content"] == "✓ 重复"
+    assert selected_actions[1]["type"] == "primary"
+
 
 def test_last_click_wins_by_feishu_timestamp_and_keeps_history() -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -145,6 +168,17 @@ def test_last_click_wins_by_feishu_timestamp_and_keeps_history() -> None:
             ).fetchone()
         assert stored == ("push", '["industry_quantified_hardline"]', "sent")
 
+        state_card = feedback_card_for_callback(
+            identity,
+            "invalid",
+            ["stale"],
+            secret=TEST_SIGNING_KEY,
+            db_path=db_path,
+        )
+        assert state_card is not None
+        assert "已标记为「无效（旧闻）」" in state_card["elements"][-2]["text"]["content"]
+        assert state_card["elements"][-1]["actions"][2]["text"]["content"] == "✓ 无效"
+
         quality = feedback_quality_payload(db_path=db_path, days=30)
         assert quality["summary"]["delivered"] == 1
         assert quality["summary"]["labelled"] == 1
@@ -167,6 +201,15 @@ def test_last_click_wins_by_feishu_timestamp_and_keeps_history() -> None:
         )
         assert repeated_old["result"]["is_current"] is False
         assert repeated_old["result"]["current_label"] == "invalid"
+        unchanged_card = feedback_card_for_callback(
+            identity,
+            repeated_old["card_state"]["label"],
+            repeated_old["card_state"]["reason_tags"],
+            secret=TEST_SIGNING_KEY,
+            db_path=db_path,
+        )
+        assert unchanged_card is not None
+        assert unchanged_card["elements"][-1]["actions"][2]["text"]["content"] == "✓ 无效"
         with sqlite3.connect(db_path) as conn:
             assert conn.execute("SELECT COUNT(*) FROM market_feedback").fetchone()[0] == 3
 
@@ -294,6 +337,51 @@ def test_more_reason_is_stored_with_invalid_feedback() -> None:
         assert stored == ("invalid", '["stale"]')
 
 
+def test_legacy_card_without_snapshot_keeps_toast_only() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "feedback.sqlite3"
+        insert_delivered_article(db_path)
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute("SELECT gate_json FROM article_reviews").fetchone()
+            payload = json.loads(row[0])
+            payload["raw"].pop("_feedback_card_base")
+            conn.execute("UPDATE article_reviews SET gate_json = ?", (json.dumps(payload),))
+            conn.commit()
+        identity = FeedbackIdentity("article", "cls_telegraph_api", "item-1")
+        assert feedback_card_for_callback(identity, "duplicate", secret=TEST_SIGNING_KEY, db_path=db_path) is None
+
+
+def test_callback_response_replaces_card_when_snapshot_is_available() -> None:
+    identity = FeedbackIdentity("test", "feishu_feedback", "test-1")
+    replacement = {"elements": [{"tag": "div"}]}
+    result = {
+        "toast": {"type": "success", "content": "已记录"},
+        "card_state": {"identity": identity, "label": "duplicate", "reason_tags": []},
+    }
+    with patch.object(feishu_feedback_service, "handle_feedback_callback", return_value=result), patch.object(
+        feishu_feedback_service, "feedback_card_for_callback", return_value=replacement
+    ) as render:
+        response = feishu_feedback_service.callback_response({"event": {}})
+    assert response == {
+        "toast": {"type": "success", "content": "已记录"},
+        "card": {"type": "raw", "data": replacement},
+    }
+    assert render.call_args.args[:2] == (identity, "duplicate")
+
+
+def test_callback_response_keeps_successful_feedback_toast_when_card_projection_fails() -> None:
+    identity = FeedbackIdentity("test", "feishu_feedback", "test-1")
+    result = {
+        "toast": {"type": "success", "content": "已记录"},
+        "card_state": {"identity": identity, "label": "duplicate", "reason_tags": []},
+    }
+    with patch.object(feishu_feedback_service, "handle_feedback_callback", return_value=result), patch.object(
+        feishu_feedback_service, "feedback_card_for_callback", side_effect=RuntimeError("update unavailable")
+    ):
+        response = feishu_feedback_service.callback_response({"event": {}})
+    assert response == {"toast": {"type": "success", "content": "已记录"}}
+
+
 def test_overflow_callback_value_is_parsed() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "feedback.sqlite3"
@@ -323,6 +411,9 @@ def main() -> None:
     test_listener_only_mode_keeps_natural_feedback_delivery_disabled()
     test_test_card_feedback_is_audited_but_excluded_from_quality_metrics()
     test_more_reason_is_stored_with_invalid_feedback()
+    test_legacy_card_without_snapshot_keeps_toast_only()
+    test_callback_response_replaces_card_when_snapshot_is_available()
+    test_callback_response_keeps_successful_feedback_toast_when_card_projection_fails()
     test_overflow_callback_value_is_parsed()
     print("market feedback checks passed")
 

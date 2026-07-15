@@ -309,10 +309,63 @@ def test_feedback_enabled_event_uses_application_card_actions() -> None:
             ) == "sent"
             payload = json.loads(delivery_rows(db_path)[0][2])
         assert payload["feishu_message_id"] == "om_feedback"
+        assert payload["_feedback_card_base"]["header"]["title"]["content"] == "测试事件"
         assert len(calls) == 1
         buttons = calls[0]["elements"][-1]["actions"]
         assert [button["value"]["label"] for button in buttons[:3]] == ["high_value", "duplicate", "invalid"]
         assert buttons[3]["tag"] == "overflow"
+    finally:
+        market_delivery.send_interactive_card = original_send
+        for key, value in original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def test_feedback_enabled_article_and_official_store_card_base() -> None:
+    keys = {
+        "FEISHU_FEEDBACK_ENABLED": "1",
+        "FEISHU_APP_ID": "cli_test",
+        "FEISHU_APP_SECRET": "app_secret",
+        "FEISHU_FEEDBACK_CHAT_ID": "oc_test",
+        "FEISHU_FEEDBACK_TOKEN_SECRET": "feedback_secret",
+        "FEISHU_FEEDBACK_ALLOWED_OPEN_IDS": "ou_test",
+    }
+    original_env = {key: os.environ.get(key) for key in keys}
+    original_send = market_delivery.send_interactive_card
+    try:
+        os.environ.update(keys)
+        market_delivery.send_interactive_card = lambda _card: SimpleNamespace(
+            ok=True, code=0, message="ok", message_id="om_feedback", body='{"code":0}'
+        )
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            article_item = {"id": "feedback-article", "title": "反馈文章", "summary": "正文"}
+            official_item = {"id": "feedback-official", "title": "反馈官网新闻", "summary": "正文"}
+            article_review = content_review("push")
+            official_review = content_review("push", official=True)
+            with sqlite3.connect(db_path) as conn:
+                save_article_review(conn, "cls_telegraph_api", article_item, article_review)
+                save_official_review(conn, "nvidia_blog", official_item, official_review)
+            assert market_delivery.deliver_article_review(
+                "cls_telegraph_api", article_item, article_review,
+                decision=required_decision(article_review), db_path=db_path, use_rule_dedup=False,
+            ) == "sent"
+            assert market_delivery.deliver_official_review(
+                "nvidia_blog", official_item, official_review,
+                decision=required_decision(official_review), analysis_lines=["核心内容：测试"], db_path=db_path,
+            ) == "sent"
+            with sqlite3.connect(db_path) as conn:
+                article_gate = json.loads(conn.execute(
+                    "SELECT gate_json FROM article_reviews WHERE source='cls_telegraph_api' AND item_id='feedback-article'"
+                ).fetchone()[0])
+                official_analysis = json.loads(conn.execute(
+                    "SELECT analysis_json FROM official_news_reviews WHERE source='nvidia_blog' AND item_id='feedback-official'"
+                ).fetchone()[0])
+        assert article_gate["raw"]["_feedback_card_base"]["header"]["title"]["content"]
+        assert official_analysis["_feedback_card_base"]["header"]["title"]["content"]
     finally:
         market_delivery.send_interactive_card = original_send
         for key, value in original_env.items():
@@ -850,6 +903,7 @@ def main() -> int:
     test_event_delivery_records_ibm_industry_fact_duplicate()
     test_coreweave_hedge_cross_source_article_dedup_preserves_push_decision()
     test_feedback_enabled_event_uses_application_card_actions()
+    test_feedback_enabled_article_and_official_store_card_base()
     print("market delivery checks passed")
     return 0
 
