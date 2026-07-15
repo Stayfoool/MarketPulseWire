@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -225,6 +226,54 @@ def test_application_sender_returns_message_id() -> None:
     assert payload["msg_type"] == "interactive"
 
 
+def test_listener_only_mode_keeps_natural_feedback_delivery_disabled() -> None:
+    keys = {
+        "FEISHU_FEEDBACK_ENABLED": "0",
+        "FEISHU_FEEDBACK_LISTENER_ENABLED": "1",
+        "FEISHU_APP_ID": "cli_test",
+        "FEISHU_APP_SECRET": "app_secret",
+        "FEISHU_FEEDBACK_CHAT_ID": "oc_test",
+        "FEISHU_FEEDBACK_TOKEN_SECRET": "feedback_secret",
+        "FEISHU_FEEDBACK_ALLOWED_OPEN_IDS": "ou_test",
+    }
+    original_env = {key: os.environ.get(key) for key in keys}
+    try:
+        os.environ.update(keys)
+        assert feishu_app.feedback_enabled() is False
+        assert feishu_app.feedback_listener_enabled() is True
+        assert feishu_app.configured() is True
+    finally:
+        for key, value in original_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def test_test_card_feedback_is_audited_but_excluded_from_quality_metrics() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "feedback.sqlite3"
+        init_db(db_path).close()
+        token = build_feedback_token(
+            FeedbackIdentity("test", "feishu_feedback", "test-1"), secret=TEST_SIGNING_KEY
+        )
+        result = handle_feedback_callback(
+            callback(token, "duplicate", "evt-test", 100),
+            secret=TEST_SIGNING_KEY,
+            allowed_ids={OPERATOR},
+            db_path=db_path,
+        )
+        assert result["result"]["is_current"] is True
+        with sqlite3.connect(db_path) as conn:
+            stored = conn.execute(
+                "SELECT item_kind, decision_action, delivery_status FROM market_feedback"
+            ).fetchone()
+        assert stored == ("test", "test", "sent")
+        quality = feedback_quality_payload(db_path=db_path, days=30)
+        assert quality["summary"]["delivered"] == 0
+        assert quality["summary"]["labelled"] == 0
+
+
 def test_more_reason_is_stored_with_invalid_feedback() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "feedback.sqlite3"
@@ -249,6 +298,8 @@ def main() -> None:
     test_last_click_wins_by_feishu_timestamp_and_keeps_history()
     test_unauthorized_operator_is_rejected()
     test_application_sender_returns_message_id()
+    test_listener_only_mode_keeps_natural_feedback_delivery_disabled()
+    test_test_card_feedback_is_audited_but_excluded_from_quality_metrics()
     test_more_reason_is_stored_with_invalid_feedback()
     print("market feedback checks passed")
 

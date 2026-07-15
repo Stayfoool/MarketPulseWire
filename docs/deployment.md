@@ -315,7 +315,9 @@ Keep these only in server `.env` or local `.env`:
 
 ## Feishu Market Feedback
 
-Feedback-enabled cards use an enterprise self-built Feishu application rather than the existing custom-bot webhook. The application sender and callback listener remain disabled unless `FEISHU_FEEDBACK_ENABLED=1` is set in the server Web panel/private `.env`.
+Feedback-enabled cards use an enterprise self-built Feishu application rather than the existing custom-bot webhook. A group can contain both: the old custom webhook (for example, a historical `surveil-huawei` display name) remains in place, while the enterprise application bot (currently `stocksurveil`) sends cards with actionable feedback buttons. A custom webhook is not an application bot and therefore normally does not appear in the Feishu application-bot list.
+
+Use listener-only mode for the first real-group test. `FEISHU_FEEDBACK_LISTENER_ENABLED=1` starts only the callback long connection and permits one explicit test card; it does not switch natural market cards away from the existing webhook. `FEISHU_FEEDBACK_ENABLED=1` is the later, separate switch that sends unified article/official/event cards through the application bot with feedback actions.
 
 Required private settings:
 
@@ -325,19 +327,21 @@ FEISHU_APP_SECRET
 FEISHU_FEEDBACK_CHAT_ID
 FEISHU_FEEDBACK_ALLOWED_OPEN_IDS
 FEISHU_FEEDBACK_TOKEN_SECRET
+FEISHU_FEEDBACK_LISTENER_ENABLED
 FEISHU_FEEDBACK_ENABLED
 ```
 
 Setup order:
 
 1. In the Feishu developer console, use an enterprise self-built application, enable its bot, grant only the message-send permissions required by the official API, and publish the application version.
-2. Add the application bot to a private test chat. Put that chat's `oc_...` id in `FEISHU_FEEDBACK_CHAT_ID`.
+2. Add the application bot to the chosen test group. The existing production group may be used provided it is understood that only the explicit test card is sent in listener-only mode. Put that group's `oc_...` id in `FEISHU_FEEDBACK_CHAT_ID`.
 3. Generate an independent random `FEISHU_FEEDBACK_TOKEN_SECRET`; do not reuse the app secret, webhook secret or Web workbench token.
-4. Configure the new `card.action.trigger` callback and choose the official long-connection subscription mode. Keep `FEISHU_FEEDBACK_ENABLED=0` until the test service connects.
-5. For the first identity-discovery click in the private test chat only, `FEISHU_FEEDBACK_ALLOWED_OPEN_IDS=*` may be used briefly. Read the resulting operator `open_id` from the stored feedback, replace `*` with the explicit id, then restart the feedback service.
-6. Enable feedback, install/restart systemd, send one explicitly approved test card, and verify Toast acknowledgement, last-click-wins behavior, `market_feedback`, callback health and the Web `反馈质量` view before changing the target to the production chat.
+4. Configure the new `card.action.trigger` callback and choose the official long-connection subscription mode. Keep `FEISHU_FEEDBACK_ENABLED=0`, set `FEISHU_FEEDBACK_LISTENER_ENABLED=1`, then install/restart the feedback service and confirm it connects.
+5. For the first identity-discovery click only, `FEISHU_FEEDBACK_ALLOWED_OPEN_IDS=*` may be used briefly. Read the resulting operator `open_id` from the stored feedback, replace `*` with the explicit id, then restart the feedback service.
+6. Send exactly one explicitly approved test card with `python scripts/send_feishu_feedback_test.py --confirm`. Verify its Toast acknowledgement, last-click-wins behavior, `market_feedback` and callback health. Test rows never enter the `反馈质量` delivered or labelled denominators.
+7. Only after this passes and is approved, set `FEISHU_FEEDBACK_ENABLED=1` to switch unified market cards to the application bot. The old webhook configuration remains untouched.
 
-The installer enables `surveil-feishu-feedback.service` only when feedback is enabled. If feedback settings are incomplete, unified delivery fails closed on the feedback application path rather than sending a second copy through the custom webhook. Disable `FEISHU_FEEDBACK_ENABLED` to return unified cards to the existing webhook sender.
+The installer enables `surveil-feishu-feedback.service` when either listener-only or full feedback mode is enabled. If full-feedback settings are incomplete, unified delivery fails closed on the feedback application path rather than sending a second copy through the custom webhook. Disable `FEISHU_FEEDBACK_ENABLED` to return unified cards to the existing webhook sender.
 
 Official dependency provenance:
 

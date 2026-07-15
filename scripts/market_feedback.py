@@ -99,7 +99,7 @@ def parse_feedback_token(token: str, *, secret: str) -> FeedbackIdentity:
         source=str(payload.get("s") or "").strip(),
         item_id=str(payload.get("i") or "").strip(),
     )
-    if identity.item_kind not in {"article", "official", "event"}:
+    if identity.item_kind not in {"article", "official", "event", "test"}:
         raise FeedbackError("反馈对象类型无效")
     if not identity.source or not identity.item_id:
         raise FeedbackError("反馈对象标识不完整")
@@ -189,6 +189,14 @@ def resolve_feedback_snapshot(
     conn: sqlite3.Connection,
     identity: FeedbackIdentity,
 ) -> dict[str, Any]:
+    if identity.item_kind == "test":
+        return {
+            "decision_action": "test",
+            "rule_ids": [],
+            "decision_version": runtime_revision(),
+            "delivery_status": "sent",
+            "delivery_id": None,
+        }
     if identity.item_kind == "article":
         row = conn.execute(
             "SELECT gate_json, pushed_at FROM article_reviews WHERE source = ? AND item_id = ?",
