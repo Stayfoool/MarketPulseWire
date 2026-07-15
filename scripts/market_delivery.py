@@ -152,6 +152,11 @@ def _duplicate_article_review(
             "同一美国宏观/政策催化事件跨来源去重：已由 "
             f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
         )
+    elif rule_id == "ai_compute_supply_demand":
+        note = (
+            "同一AI算力供需催化事件跨来源去重：已由 "
+            f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
+        )
     elif rule_id == INDUSTRY_FACT_RULE_ID:
         note = (
             "同一产业事实跨来源去重：已由 "

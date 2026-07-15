@@ -242,6 +242,32 @@ def test_trade_friction_rule_is_stable_across_transport_metadata() -> None:
     assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"trade_friction_escalation"}
 
 
+def test_ai_compute_rule_is_stable_across_transport_metadata() -> None:
+    text = "Meta正在构建一项云业务，以出售其过剩的AI算力。"
+    variants = (
+        NormalizedMarketItem(
+            source="cls_telegraph_api",
+            source_category="news_media",
+            publisher_role="news_media",
+            collector="china_finance_media_monitor",
+            content_type="article",
+            title=text,
+        ),
+        NormalizedMarketItem(
+            source="future_company_feed",
+            source_category="official_company",
+            publisher_role="company_official",
+            collector="rss_monitor",
+            content_type="official_news",
+            title=text,
+        ),
+    )
+    decisions = [decide_market_item(item, holdings=[]) for item in variants]
+    assert {decision.action for decision in decisions} == {"push"}
+    assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"ai_compute_supply_demand"}
+    assert {decision.dedup["dedup_key"] for decision in decisions} == {decisions[0].dedup["dedup_key"]}
+
+
 def main() -> int:
     test_unified_collectors_use_runtime_without_owning_delivery()
     test_removed_compatibility_modules_do_not_return()
@@ -250,6 +276,7 @@ def main() -> int:
     test_source_profiles_have_complete_runtime_ownership()
     test_common_rule_is_stable_across_transport_metadata()
     test_trade_friction_rule_is_stable_across_transport_metadata()
+    test_ai_compute_rule_is_stable_across_transport_metadata()
     print("architecture invariant checks passed")
     return 0
 
