@@ -228,6 +228,19 @@ def test_macro_secondary_match_becomes_limited_judgement_candidate() -> None:
     assert decision.candidate_rules[0]["macro_policy_line"]["tier"] == "secondary_major"
 
 
+def test_compute_daily_candidate_does_not_suppress_macro_push() -> None:
+    decision = decide_market_item(
+        {
+            "source": "news_media",
+            "title": "美国CPI数据大幅低于市场预期，2年期美债收益率大跌。",
+            "summary": "联想高管认为长期AI算力需求巨大，算力没有过剩。",
+        },
+        holdings=[],
+    )
+    assert decision.action == "push"
+    assert decision.rule_hits[0]["rule_id"] == "macro_policy_line"
+
+
 def test_generic_fed_asset_transmission_is_downgraded_across_sources() -> None:
     text = "美联储降息将利好黄金、比特币、非美货币和有色金属。"
     variants = (
@@ -343,6 +356,7 @@ def main() -> int:
     test_holding_and_attributed_research_rules_are_preserved_together()
     test_macro_primary_text_decides_push_without_raw_event_marker()
     test_macro_secondary_match_becomes_limited_judgement_candidate()
+    test_compute_daily_candidate_does_not_suppress_macro_push()
     test_generic_fed_asset_transmission_is_downgraded_across_sources()
     test_new_policy_repricing_market_move_and_hard_fact_remain_pushes()
     test_trade_friction_rule_is_source_neutral()

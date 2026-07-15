@@ -302,6 +302,18 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
+        "id": "ai_compute_supply_demand",
+        "name": "AI算力供需变化",
+        "group": "通用内容规则",
+        "description": "监测AI算力的外部供给、过剩/闲置、容量约束、利用率、合同与取消、价格、容量增减及供电/选址约束；具体事实即时提醒，普通观点进入日报。",
+        "runtime": "ai_compute_supply_demand / market_flow + decision_engine",
+        "execution_mode": PARALLEL_MERGE,
+        "hit_markers": ("ai_compute_supply_demand",),
+        "fields": (
+            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
+        ),
+    },
+    {
         "id": "ai_hyperscaler_credit_stress",
         "name": "AI 信用与融资风险",
         "group": "通用内容规则",
@@ -701,6 +713,7 @@ def _event_candidates(conn, cutoff: str, limit: int) -> list[dict[str, Any]]:
 def simulate_rules(*, db_path: Path = DEFAULT_DB_PATH, days: int = 7, limit: int = 120) -> dict[str, Any]:
     """Evaluate recent stored entries with the live rules without sending Feishu."""
     from attributed_research import attributed_research_rule
+    from ai_compute_supply_demand import ai_compute_supply_demand_rule
     from ai_credit_risk import ai_credit_risk_rule
     from industry_hardline import industry_topic_hard_variable_rule
     from push_rules import first_matching_push_rule, load_enabled_holdings_for_rules
@@ -735,6 +748,16 @@ def simulate_rules(*, db_path: Path = DEFAULT_DB_PATH, days: int = 7, limit: int
                     "rule_id": "industry_quantified_hardline",
                     "name": "重点主题与产业硬变量",
                     "reason": str(industry.get("brief_reason") or industry.get("reason") or ""),
+                }
+            )
+        compute = ai_compute_supply_demand_rule(str(item["source"]), item)
+        if compute:
+            matches.append(
+                {
+                    "rule_id": "ai_compute_supply_demand",
+                    "name": "AI算力供需变化",
+                    "reason": str(compute.get("brief_reason") or compute.get("reason") or ""),
+                    "action": str(compute.get("decision_action") or ""),
                 }
             )
         credit = ai_credit_risk_rule(str(item["source"]), item)

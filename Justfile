@@ -21,6 +21,7 @@ test:
     python3 scripts/test_rule_alert_dedup.py
     python3 scripts/test_macro_event_dedup.py
     python3 scripts/test_industry_fact_dedup.py
+    python3 scripts/test_ai_compute_supply_demand.py
     python3 scripts/test_market_delivery.py
     python3 scripts/test_market_feedback.py
     python3 scripts/test_decision_engine.py

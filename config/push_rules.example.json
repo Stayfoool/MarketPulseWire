@@ -59,6 +59,9 @@
       "trusted_institutions": ["semianalysis", "trendforce", "semi", "digitimes", "the_elec", "nikkei_xtech"],
       "extra_aliases": []
     },
+    "ai_compute_supply_demand": {
+      "enabled": true
+    },
     "ai_hyperscaler_credit_stress": {
       "enabled": true
     },
