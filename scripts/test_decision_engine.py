@@ -228,6 +228,38 @@ def test_macro_secondary_match_becomes_limited_judgement_candidate() -> None:
     assert decision.candidate_rules[0]["macro_policy_line"]["tier"] == "secondary_major"
 
 
+def test_generic_fed_asset_transmission_is_downgraded_across_sources() -> None:
+    text = "美联储降息将利好黄金、比特币、非美货币和有色金属。"
+    variants = (
+        {"source": "sina_finance_articles", "source_category": "news_media", "title": text},
+        {"source": "wallstreetcn_news", "source_category": "news_media", "title": text},
+    )
+    decisions = [decide_market_item(item, holdings=[]) for item in variants]
+    assert {decision.action for decision in decisions} == {"daily"}
+    assert {decision.importance for decision in decisions} == {"medium"}
+    assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"macro_policy_line"}
+    for decision in decisions:
+        control = decision.audit_json["deterministic_postprocessor"]
+        assert control["control_id"] == "generic_fed_policy_transmission"
+        assert control["initial_action"] == "push"
+        assert control["final_action"] == "daily"
+
+
+def test_new_policy_repricing_market_move_and_hard_fact_remain_pushes() -> None:
+    samples = (
+        "美联储宣布降息25个基点，降息将利好黄金。",
+        "交易员将美联储降息概率从40%上调至65%，黄金因此受益。",
+        "美联储降息预期利好比特币，比特币实际上涨3.2%。",
+        "美联储降息本应利好黄金，但金价反而下跌。",
+        "美联储降息利好黄金，同时黄金ETF流入创三个月新高。",
+        "美联储主席沃什表示降息有利于经济，黄金可能受益。",
+        "美联储主席沃什：降息将利好黄金。",
+    )
+    decisions = [decide_market_item({"source": "news_media", "title": text}, holdings=[]) for text in samples]
+    assert {decision.action for decision in decisions} == {"push"}
+    assert all("deterministic_postprocessor" not in decision.audit_json for decision in decisions)
+
+
 def test_trade_friction_rule_is_source_neutral() -> None:
     text = "USTR seeks public comment on proposed Section 301 tariffs covering China semiconductor imports."
     variants = (
@@ -311,6 +343,8 @@ def main() -> int:
     test_holding_and_attributed_research_rules_are_preserved_together()
     test_macro_primary_text_decides_push_without_raw_event_marker()
     test_macro_secondary_match_becomes_limited_judgement_candidate()
+    test_generic_fed_asset_transmission_is_downgraded_across_sources()
+    test_new_policy_repricing_market_move_and_hard_fact_remain_pushes()
     test_trade_friction_rule_is_source_neutral()
     test_weak_trade_tension_becomes_daily()
     test_rule_business_action_does_not_override_delivery_action()

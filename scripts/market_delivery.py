@@ -146,7 +146,7 @@ def _duplicate_article_review(
         )
     elif rule_id in MACRO_DEDUP_RULE_IDS:
         note = (
-            "同一美国宏观数据事件跨来源去重：已由 "
+            "同一美国宏观/政策催化事件跨来源去重：已由 "
             f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
         )
     elif rule_id == INDUSTRY_FACT_RULE_ID:
@@ -345,7 +345,7 @@ def deliver_event(
             reason = "同一盘中行情事件跨来源去重"
             dedup_kind = "intraday_market_move"
         elif macro_duplicate:
-            reason = "同一美国宏观数据事件跨来源去重"
+            reason = "同一美国宏观/政策催化事件跨来源去重"
             dedup_kind = rule_id
         elif industry_fact_duplicate:
             reason = "同一产业事实跨来源去重"

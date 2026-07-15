@@ -144,6 +144,130 @@ SURPRISE_PATTERNS = (
     r"(?:意外|超预期|不及预期|大幅偏离|显著偏离)",
 )
 
+FED_EASING_MARKERS = (
+    "降息",
+    "货币宽松",
+    "寬鬆",
+    "鸽派",
+    "鴿派",
+    "利率下降",
+    "利率下行",
+    "rate cut",
+    "lower rates",
+    "monetary easing",
+    "dovish",
+)
+
+FED_TIGHTENING_MARKERS = (
+    "加息",
+    "货币收紧",
+    "貨幣收緊",
+    "鹰派",
+    "鷹派",
+    "利率上升",
+    "利率上行",
+    "rate hike",
+    "higher rates",
+    "monetary tightening",
+    "hawkish",
+)
+
+TRANSMISSION_ASSET_MARKERS = (
+    "黄金",
+    "黃金",
+    "金价",
+    "金價",
+    "白银",
+    "白銀",
+    "比特币",
+    "比特幣",
+    "以太坊",
+    "数字货币",
+    "數字貨幣",
+    "加密货币",
+    "加密貨幣",
+    "美元",
+    "非美货币",
+    "非美貨幣",
+    "人民币",
+    "人民幣",
+    "有色金属",
+    "有色金屬",
+    "贵金属",
+    "貴金屬",
+    "工业金属",
+    "工業金屬",
+    "大宗商品",
+    "美债",
+    "美債",
+    "股票",
+    "股市",
+    "gold",
+    "silver",
+    "bitcoin",
+    "crypto",
+    "dollar",
+    "currencies",
+    "metals",
+    "commodities",
+    "treasuries",
+    "equities",
+)
+
+GENERIC_TRANSMISSION_PATTERNS = (
+    r"(?:降息|宽松|寬鬆|鸽派|鴿派|利率(?:下降|下行)).{0,36}(?:利好|受益|有利于|有利於|提振|支撑|支撐|推动|推動|助推|承压|承壓|利空)",
+    r"(?:利好|受益|有利于|有利於|提振|支撑|支撐|推动|推動|助推|承压|承壓|利空).{0,36}(?:降息|宽松|寬鬆|鸽派|鴿派|利率(?:下降|下行))",
+    r"(?:rate cuts?|lower rates|monetary easing|dovish).{0,48}(?:benefit|boost|support|bullish|tailwind|weigh on)",
+)
+
+POLICY_DECISION_PATTERNS = (
+    r"(?:宣布|决定|決定|投票|实施|實施|正式).{0,24}(?:降息|加息|下调.{0,8}利率|下調.{0,8}利率|上调.{0,8}利率|上調.{0,8}利率)",
+    r"(?:降息|加息|下调.{0,8}利率|下調.{0,8}利率|上调.{0,8}利率|上調.{0,8}利率).{0,24}(?:个基点|個基點|基点|基點|bp|bps)",
+    r"(?:announced|decided|voted|implemented).{0,32}(?:rate cut|rate hike|lowered rates|raised rates)",
+)
+
+QUANTIFIED_REPRICING_PATTERNS = (
+    r"(?:降息|加息|利率).{0,40}(?:概率|機率|几率|幾率|可能性).{0,16}\d+(?:\.\d+)?\s*[%％]",
+    r"\d+(?:\.\d+)?\s*[%％].{0,16}(?:概率|機率|几率|幾率|可能性).{0,40}(?:降息|加息|利率)",
+    r"(?:降息|加息).{0,28}\d+(?:\.\d+)?\s*(?:次|个基点|個基點|基点|基點|bp|bps)",
+    r"(?:押注|预期|預期|定价|定價).{0,32}(?:上调|上調|下调|下調|推迟至|推遲至|提前至).{0,24}(?:降息|加息|利率|\d)",
+    r"(?:cut|hike).{0,28}\d+(?:\.\d+)?\s*(?:times?|bp|bps|%)",
+)
+
+OBSERVED_ASSET_MOVE_PATTERNS = (
+    r"(?:上涨|上漲|下跌|涨超|漲超|跌超|走高|走低|跳涨|跳漲|跳水|拉升|回落|涨至|漲至|升至|跌至).{0,18}\d+(?:\.\d+)?\s*(?:[%％]|美元|点|點|个基点|個基點|基点|基點|bp|bps)",
+    r"\d+(?:\.\d+)?\s*(?:[%％]|美元|点|點|个基点|個基點|基点|基點|bp|bps).{0,18}(?:上涨|上漲|下跌|涨|漲|跌|走高|走低|拉升|回落)",
+    r"(?:rose|fell|gained|lost|rallied|slid).{0,18}\d+(?:\.\d+)?\s*(?:%|dollars?|points?|bp|bps)",
+)
+
+DIRECT_FED_STATEMENT_PATTERN = re.compile(
+    r"(?:沃什|沃尔什|沃爾什|沃勒|鲍威尔|鮑威爾|美联储主席|美聯儲主席|美联储理事|美聯儲理事|Fed (?:chair|governor))"
+    r".{0,24}(?:[:：]|表示|称|稱|指出|强调|強調|重申|警告|认为|認為|said|stated|warned|testified)",
+    re.IGNORECASE,
+)
+
+ASSET_HARD_FACT_MARKERS = (
+    "央行购金",
+    "央行購金",
+    "etf流入",
+    "etf 流入",
+    "etf增持",
+    "etf 增持",
+    "资金流入",
+    "資金流入",
+    "库存下降",
+    "庫存下降",
+    "供应中断",
+    "供應中斷",
+    "矿山停产",
+    "礦山停產",
+    "制裁",
+    "central bank buying",
+    "etf inflow",
+    "supply disruption",
+    "mine closure",
+)
+
 
 def text_blob(*values: Any) -> str:
     return " ".join(str(value or "") for value in values)
@@ -160,6 +284,53 @@ def has_large_move(text: str) -> bool:
 
 def has_surprise(text: str) -> bool:
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in SURPRISE_PATTERNS)
+
+
+def fed_policy_impulse(text: str) -> str:
+    easing = contains_any(text, FED_EASING_MARKERS)
+    tightening = contains_any(text, FED_TIGHTENING_MARKERS)
+    if easing and tightening:
+        return ""
+    if easing:
+        return "easing"
+    if tightening:
+        return "tightening"
+    return ""
+
+
+def generic_fed_transmission_classification(item: dict[str, Any]) -> dict[str, Any]:
+    """Classify obvious policy-to-asset explanations using only local evidence."""
+    text = text_blob(item.get("title"), item.get("summary"), item.get("content"), item.get("full_text"))
+    impulse = fed_policy_impulse(text)
+    assets = [marker for marker in TRANSMISSION_ASSET_MARKERS if marker.casefold() in text.casefold()]
+    relationship = next(
+        (match.group(0) for pattern in GENERIC_TRANSMISSION_PATTERNS if (match := re.search(pattern, text, re.IGNORECASE))),
+        "",
+    )
+    exceptions: list[str] = []
+    checks = (
+        ("policy_decision", POLICY_DECISION_PATTERNS),
+        ("quantified_repricing", QUANTIFIED_REPRICING_PATTERNS),
+        ("observed_asset_move", OBSERVED_ASSET_MOVE_PATTERNS),
+    )
+    for name, patterns in checks:
+        if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns):
+            exceptions.append(name)
+    if DIRECT_FED_STATEMENT_PATTERN.search(text):
+        exceptions.append("direct_fed_statement")
+    if contains_any(text, ASSET_HARD_FACT_MARKERS):
+        exceptions.append("asset_hard_fact")
+    if contains_any(text, ("更正", "修正", "误报", "誤報", "correction", "corrected")):
+        exceptions.append("correction")
+    if re.search(r"(?:但|却|卻|反而|不涨反跌|不漲反跌|despite|even as).{0,36}(?:上涨|上漲|下跌|走高|走低|走强|走強|走弱|涨|漲|跌|rose|fell)", text, re.IGNORECASE):
+        exceptions.append("unexpected_relationship")
+    return {
+        "matched": bool(impulse and assets and relationship and not exceptions),
+        "impulse": impulse,
+        "assets": list(dict.fromkeys(assets))[:8],
+        "evidence_quote": relationship[:500],
+        "exceptions": exceptions,
+    }
 
 
 def is_retail_sales_only(text: str) -> bool:
