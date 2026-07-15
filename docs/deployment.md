@@ -313,4 +313,36 @@ Keep these only in server `.env` or local `.env`:
 - JYGS cookie/session
 - Proxy subscription or node configs
 
+## Feishu Market Feedback
+
+Feedback-enabled cards use an enterprise self-built Feishu application rather than the existing custom-bot webhook. The application sender and callback listener remain disabled unless `FEISHU_FEEDBACK_ENABLED=1` is set in the server Web panel/private `.env`.
+
+Required private settings:
+
+```text
+FEISHU_APP_ID
+FEISHU_APP_SECRET
+FEISHU_FEEDBACK_CHAT_ID
+FEISHU_FEEDBACK_ALLOWED_OPEN_IDS
+FEISHU_FEEDBACK_TOKEN_SECRET
+FEISHU_FEEDBACK_ENABLED
+```
+
+Setup order:
+
+1. In the Feishu developer console, use an enterprise self-built application, enable its bot, grant only the message-send permissions required by the official API, and publish the application version.
+2. Add the application bot to a private test chat. Put that chat's `oc_...` id in `FEISHU_FEEDBACK_CHAT_ID`.
+3. Generate an independent random `FEISHU_FEEDBACK_TOKEN_SECRET`; do not reuse the app secret, webhook secret or Web workbench token.
+4. Configure the new `card.action.trigger` callback and choose the official long-connection subscription mode. Keep `FEISHU_FEEDBACK_ENABLED=0` until the test service connects.
+5. For the first identity-discovery click in the private test chat only, `FEISHU_FEEDBACK_ALLOWED_OPEN_IDS=*` may be used briefly. Read the resulting operator `open_id` from the stored feedback, replace `*` with the explicit id, then restart the feedback service.
+6. Enable feedback, install/restart systemd, send one explicitly approved test card, and verify Toast acknowledgement, last-click-wins behavior, `market_feedback`, callback health and the Web `反馈质量` view before changing the target to the production chat.
+
+The installer enables `surveil-feishu-feedback.service` only when feedback is enabled. If feedback settings are incomplete, unified delivery fails closed on the feedback application path rather than sending a second copy through the custom webhook. Disable `FEISHU_FEEDBACK_ENABLED` to return unified cards to the existing webhook sender.
+
+Official dependency provenance:
+
+- Feishu callback structure and three-second response contract: `https://open.feishu.cn/document/feishu-cards/card-callback-communication`
+- Official long-connection setup and Python SDK example: `https://open.feishu.cn/document/event-subscription-guide/callback-subscription/step-1-choose-a-subscription-mode/configure-callback-request-address`
+- Python package: official PyPI `https://pypi.org/project/lark-oapi/`, pinned as `lark-oapi==1.7.1` for current Python compatibility.
+
 See [security.md](security.md) before making a repository public.

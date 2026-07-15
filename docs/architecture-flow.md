@@ -61,6 +61,8 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `market_event_adapter.py` | Event compatibility payload/store shape |
 | `market_review_store.py` | SQLite review/event persistence and historical row loading |
 | `market_delivery.py` | Rule/fact dedup reservation, Feishu execution, delivery status, pushed markers |
+| `market_feedback.py` | Cross-source append-only human feedback, signed item identity, last-click-wins projection and quality aggregates |
+| `feishu_app.py` / `feishu_feedback_service.py` | Feedback-enabled application-bot send and official long-connection card callbacks |
 | `macro_event_dedup.py` | Delivery-only US macro preview/release/reaction and Fed policy cross-asset reaction identities, including mixed-Warsh handling |
 | `industry_fact_dedup.py` | Bounded delivery-only industry fact identities and material-update exclusions |
 | `market_view.py` | Read-only unified projection across existing stores |
@@ -103,10 +105,13 @@ The project keeps the existing physical stores:
 - `events` / `event_analyses`
 - `seen_items`, `seen_posts`, `source_state`
 - `rule_alert_dedup`, `deliveries` (`rule_alert_dedup` also records delivery-only intraday market-move, US macro event and bounded industry-fact reservation kinds)
+- `market_feedback` (append-only Feishu feedback events; the latest valid operator/item click is the current projection)
 - `source_health`, `x_stream_health`
 - portfolio, relation, evidence and signal tables
 
 `push_now`, `should_push_now` and `should_push` remain compatibility columns for historical readers and old rows. New delivery code does not read them as action inputs. `pushed_at` and delivery rows record what happened, not what should be sent.
+
+When Feishu market feedback is explicitly enabled, unified article, official-news and event cards are sent by the configured enterprise application bot and carry signed `特别有用` / `重复` / `无效` actions. The official long-connection listener writes only `market_feedback`; it cannot modify reviews, decisions, delivery reservations, source settings or rule settings. Current feedback is selected by Feishu action time, then insertion id, so delayed callbacks cannot overwrite a newer choice. The Web workbench exposes feedback coverage and observed labelled-card outcomes by source, primary rule, all rule associations and source-by-primary-rule. Unlabelled deliveries remain unknown.
 
 ## Independent Routes
 

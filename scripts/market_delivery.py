@@ -15,12 +15,15 @@ from typing import Any
 from cards import build_article_card, format_time
 from db_utils import connect_sqlite
 from feishu import send_card, send_card_with_response
+from feishu_app import configured as feishu_app_configured
+from feishu_app import feedback_enabled, send_interactive_card
 from industry_fact_dedup import INDUSTRY_FACT_RULE_ID, industry_fact_dedup_hit
 from llm_analysis import format_llm_analysis
 from market_card_view import card_targets, decision_reason, interpretation_core, interpretation_reason
 from market_db import DEFAULT_DB_PATH
 from macro_event_dedup import MACRO_DEDUP_RULE_IDS, macro_event_dedup_hit
 from market_item import DecisionResult
+from market_feedback import FeedbackIdentity, append_feedback_actions
 from market_move_dedup import MARKET_MOVE_RULE_ID, intraday_market_move_dedup_hit
 from market_review_store import (
     article_item_id,
@@ -226,7 +229,17 @@ def deliver_article_review(
     prepared["analysis_max_tokens"] = int(os.getenv("LLM_HIGH_IMPORTANCE_MAX_OUTPUT_TOKENS", "1800"))
     if analysis_lines_prefix:
         prepared["analysis_lines_prefix"] = list(analysis_lines_prefix)
-    sent = send_card(build_article_card(source, prepared))
+    card = build_article_card(source, prepared)
+    if feedback_enabled():
+        if not feishu_app_configured():
+            release_rule_alert(reservation, db_path=db_path)
+            return "skipped"
+        response = send_interactive_card(
+            append_feedback_actions(card, FeedbackIdentity("article", source, item_id))
+        )
+        sent = response.ok
+    else:
+        sent = send_card(card)
     if sent:
         confirm_rule_alert(reservation, db_path=db_path)
         with connect_sqlite(db_path) as conn:
@@ -251,11 +264,21 @@ def deliver_official_review(
     prepared = dict(item)
     prepared["article_review"] = review
     prepared["analysis_lines"] = list(analysis_lines)
-    sent = send_card(build_article_card(source, prepared))
+    item_id = official_news_item_id(item)
+    card = build_article_card(source, prepared)
+    if feedback_enabled():
+        if not feishu_app_configured():
+            return "skipped"
+        response = send_interactive_card(
+            append_feedback_actions(card, FeedbackIdentity("official", source, item_id))
+        )
+        sent = response.ok
+    else:
+        sent = send_card(card)
     if not sent:
         return "skipped"
     with connect_sqlite(db_path) as conn:
-        mark_official_pushed(conn, source, official_news_item_id(item))
+        mark_official_pushed(conn, source, item_id)
     return "sent"
 
 
@@ -368,7 +391,17 @@ def deliver_event(
             db_path=db_path,
         )
         return "duplicate" if duplicate_status else "skipped"
-    if not os.getenv("FEISHU_WEBHOOK", "").strip():
+    if feedback_enabled() and not feishu_app_configured():
+        release_rule_alert(reservation, db_path=db_path)
+        record_delivery(
+            event_id,
+            "feishu",
+            "skipped",
+            {"reason": "飞书反馈已启用但应用机器人配置不完整"},
+            db_path=db_path,
+        )
+        return "skipped"
+    if not feedback_enabled() and not os.getenv("FEISHU_WEBHOOK", "").strip():
         release_rule_alert(reservation, db_path=db_path)
         record_delivery(event_id, "feishu", "skipped", {"reason": "FEISHU_WEBHOOK 未配置"}, db_path=db_path)
         return "skipped"
@@ -381,7 +414,12 @@ def deliver_event(
         display_text = summary or full_text
     card = simple_event_card(source, title, display_text, url, published_at, lines)
     try:
-        response = send_card_with_response(card)
+        if feedback_enabled():
+            response = send_interactive_card(
+                append_feedback_actions(card, FeedbackIdentity("event", source, str(event_id)))
+            )
+        else:
+            response = send_card_with_response(card)
     except Exception as exc:  # noqa: BLE001 - delivery failures must not stop collectors
         release_rule_alert(reservation, db_path=db_path)
         record_delivery(
@@ -407,6 +445,7 @@ def deliver_event(
             "webhook_fingerprint": feishu_webhook_fingerprint(),
             "feishu_code": response.code,
             "feishu_message": response.message,
+            "feishu_message_id": getattr(response, "message_id", ""),
             "feishu_body": response.body[:1000],
         },
         db_path=db_path,

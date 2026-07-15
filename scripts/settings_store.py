@@ -122,12 +122,21 @@ SETTING_GROUPS: list[dict[str, Any]] = [
     {
         "id": "feishu",
         "title": "飞书",
-        "restart_hint": "飞书配置通常下一条推送即可生效；常驻服务如已缓存环境变量，重启后立即生效。",
+        "restart_hint": "普通 webhook 配置下一条推送生效；反馈配置保存后需安装或重启 surveil-feishu-feedback.service，并先在测试群验证。",
         "fields": [
             SettingField("FEISHU_WEBHOOK", "机器人 Webhook", "feishu", sensitive=True),
             SettingField("FEISHU_SECRET", "签名 Secret", "feishu", sensitive=True, help="机器人未开启签名校验时可留空。"),
             SettingField("FEISHU_APP_ID", "App ID", "feishu"),
             SettingField("FEISHU_APP_SECRET", "App Secret", "feishu", sensitive=True),
+            SettingField("FEISHU_FEEDBACK_ENABLED", "启用卡片反馈", "feishu", placeholder="0"),
+            SettingField("FEISHU_FEEDBACK_CHAT_ID", "反馈测试/生产群 Chat ID", "feishu"),
+            SettingField(
+                "FEISHU_FEEDBACK_ALLOWED_OPEN_IDS",
+                "允许反馈的 Open ID",
+                "feishu",
+                help="多个 Open ID 使用英文逗号分隔；空值时拒绝所有反馈。测试群首次识别身份时可短暂使用 *，随后立即改为实际 Open ID。",
+            ),
+            SettingField("FEISHU_FEEDBACK_TOKEN_SECRET", "反馈标识签名 Secret", "feishu", sensitive=True),
             SettingField("FEISHU_RETRY_COUNT", "重试次数", "feishu", placeholder="2"),
         ],
     },
