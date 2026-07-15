@@ -222,7 +222,7 @@ def _attach_article_flow_audit(review: dict[str, Any], flow_result: MarketFlowRe
     raw["_market_flow_result"] = flow_result.audit_payload()
     source_enrichment = {
         key: flow_result.item.raw[key]
-        for key in ("value_directory_preview", "value_directory_policy")
+        for key in ("value_directory_preview", "value_directory_policy", "cls_metadata")
         if key in flow_result.item.raw
     }
     if source_enrichment:

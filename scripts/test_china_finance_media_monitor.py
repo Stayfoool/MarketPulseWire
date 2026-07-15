@@ -38,6 +38,79 @@ def test_parse_cls_time_keeps_timezone_aware_iso() -> None:
     assert parse_cls_time("2026-06-29T08:00:00+08:00") == "2026-06-29T00:00:00+00:00"
 
 
+def test_cls_items_preserve_vip_product_and_author_targets() -> None:
+    payload = {
+        "errno": 0,
+        "data": {
+            "roll_data": [
+                {
+                    "id": 2426205,
+                    "ctime": 1784028159,
+                    "type": 20026,
+                    "title": "【机构龙虎榜解读】光通信+AI PCB，机构大额净买入这家公司",
+                    "content": "①光通信+AI PCB，机构大额净买入这家公司。",
+                    "shareurl": "https://api3.cls.cn/share/article/2426205?os=web",
+                    "share_img": "https://img.cls.cn/share/vip.png",
+                    "author_extends": "sz002245@@蔚蓝锂芯##sz002384@@东山精密",
+                }
+            ]
+        },
+    }
+    original_http_get = cfm.http_get
+    try:
+        class Response:
+            content = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+        cfm.http_get = lambda *args, **kwargs: Response()
+        items = cfm.parse_cls_items(persist_state=False, force=True)
+    finally:
+        cfm.http_get = original_http_get
+
+    assert len(items) == 1
+    metadata = items[0]["cls_metadata"]
+    assert items[0]["title"] == "①光通信+AI PCB，机构大额净买入这家公司。"
+    assert metadata["type"] == "20026"
+    assert metadata["product_label"] == "机构龙虎榜解读"
+    assert metadata["share_img_name"] == "vip.png"
+    assert metadata["is_vip"] is True
+    assert metadata["author_targets"] == [
+        {"name": "蔚蓝锂芯", "code": "002245.SZ", "raw_code": "sz002245"},
+        {"name": "东山精密", "code": "002384.SZ", "raw_code": "sz002384"},
+    ]
+    assert items[0]["raw"]["cls_metadata"] == metadata
+
+
+def test_cls_observation_metadata_does_not_change_decision_action() -> None:
+    holding = {
+        "symbol": "301217.SZ",
+        "name": "铜冠铜箔",
+        "aliases": [],
+        "news_keywords": ["pcb"],
+        "news_exclude_keywords": [],
+    }
+    item = {
+        "source": "cls_telegraph_api",
+        "source_category": "news_media",
+        "publisher_role": "news_media",
+        "content_type": "article",
+        "title": "AI PCB项目计划扩产，这家公司获机构净买入。",
+        "summary": "AI PCB项目计划扩产，这家公司获机构净买入。",
+    }
+    metadata = {
+        "type": "20026",
+        "product_label": "机构龙虎榜解读",
+        "share_img_name": "vip.png",
+        "is_vip": True,
+        "author_targets": [{"name": "东山精密", "code": "002384.SZ", "raw_code": "sz002384"}],
+    }
+    without_metadata = decide_market_item(item, holdings=[holding])
+    with_metadata = decide_market_item({**item, "raw": {"cls_metadata": metadata}}, holdings=[holding])
+    assert without_metadata.action == with_metadata.action == "push"
+    assert [hit["rule_id"] for hit in without_metadata.rule_hits] == [
+        hit["rule_id"] for hit in with_metadata.rule_hits
+    ]
+
+
 def test_cls_poll_interval_skips_recent_fetch() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         original_db = cfm.DB_PATH
@@ -568,6 +641,8 @@ def main() -> int:
     test_cls_sign_includes_empty_values_and_sorts_keys()
     test_parse_cls_time_accepts_seconds_and_milliseconds()
     test_parse_cls_time_keeps_timezone_aware_iso()
+    test_cls_items_preserve_vip_product_and_author_targets()
+    test_cls_observation_metadata_does_not_change_decision_action()
     test_cls_poll_interval_skips_recent_fetch()
     test_run_once_fetches_sources_independently()
     test_yicai_morning_brief_is_mandatory_push()

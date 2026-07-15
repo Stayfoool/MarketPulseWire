@@ -212,6 +212,48 @@ def value_directory_preview_lines(item: dict[str, Any]) -> list[str]:
     return lines[:4]
 
 
+def cls_metadata_lines(item: dict[str, Any], review: dict[str, Any] | None = None) -> list[str]:
+    metadata = item.get("cls_metadata")
+    if not isinstance(metadata, dict):
+        raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+        metadata = raw.get("cls_metadata")
+    if not isinstance(metadata, dict) and isinstance(review, dict):
+        review_raw = review.get("raw") if isinstance(review.get("raw"), dict) else {}
+        enrichment = review_raw.get("_source_enrichment") if isinstance(review_raw.get("_source_enrichment"), dict) else {}
+        metadata = enrichment.get("cls_metadata")
+    if not isinstance(metadata, dict):
+        return []
+
+    type_value = str(metadata.get("type") or "").strip()
+    product_label = str(metadata.get("product_label") or "").strip()
+    share_img_name = str(metadata.get("share_img_name") or "").strip()
+    targets: list[str] = []
+    for target in as_list(metadata.get("author_targets")):
+        if not isinstance(target, dict):
+            continue
+        name = str(target.get("name") or "").strip()
+        code = str(target.get("code") or "").strip()
+        label = " ".join(part for part in (name, code) if part)
+        if label and label not in targets:
+            targets.append(label)
+
+    lines: list[str] = []
+    header = []
+    if type_value:
+        header.append(f"type：{type_value}")
+    if product_label:
+        header.append(f"栏目：{product_label}")
+    if header:
+        lines.append("；".join(header))
+    if share_img_name:
+        lines.append(f"share_img：{share_img_name}")
+    if targets:
+        lines.append("author_extends：" + "；".join(targets))
+    elif metadata.get("author_extends"):
+        lines.append("author_extends：" + truncate(str(metadata.get("author_extends") or ""), 500))
+    return lines
+
+
 def thin_push_reason(item: dict[str, Any], review: dict[str, Any]) -> str:
     unified = card_push_reason(item, review)
     if unified:
@@ -238,6 +280,7 @@ def build_thin_article_card(source: str, item: dict[str, Any], review: dict[str,
     notes = compact_notes_from_review(review)
     core = thin_core_content(item, review)
     preview_lines = value_directory_preview_lines(item)
+    cls_lines = cls_metadata_lines(item, review)
     elements: list[dict[str, Any]] = [
         div_markdown(f"**发送时间**：{md_escape(now_beijing())}"),
         div_markdown(f"**来源模块**：{md_escape(source_label)}"),
@@ -249,6 +292,8 @@ def build_thin_article_card(source: str, item: dict[str, Any], review: dict[str,
         elements.append(div_markdown(f"**核心内容**\n{md_escape(core)}"))
     if preview_lines:
         elements.append(div_markdown("**第一页提取**\n" + md_escape("\n".join(preview_lines))))
+    if cls_lines:
+        elements.append(div_markdown("**财联社元数据**\n" + md_escape("\n".join(cls_lines))))
     if push_reason:
         elements.append(div_markdown(f"**为什么推送**\n{md_escape(truncate(push_reason, 260))}"))
     if targets:
@@ -523,15 +568,17 @@ def build_article_card(source: str, item: dict[str, Any]) -> dict[str, Any]:
     prefix_lines = item.get("analysis_lines_prefix") or []
     if prefix_lines and len(analysis_lines) > 1:
         analysis_lines = [analysis_lines[0], *prefix_lines, *analysis_lines[1:]]
+    cls_lines = cls_metadata_lines(item, review if isinstance(review, dict) else None)
     elements: list[dict[str, Any]] = [
         div_markdown(f"**发送时间**：{md_escape(now_beijing())}"),
         div_markdown(f"**来源模块**：{md_escape(item.get('source_module') or source_module(source, url))}"),
         div_markdown(f"**免费/付费**：{md_escape(item.get('access_note') or access_note(source, url, body_source))}"),
         div_markdown(f"**发布时间**：{md_escape(format_time(str(item.get('published_at', ''))))}"),
         div_markdown(f"**正文来源**：{md_escape(body_source)}"),
-        {"tag": "hr"},
-        div_markdown(f"**标题**\n{md_escape(title)}"),
     ]
+    if cls_lines:
+        elements.append(div_markdown("**财联社元数据**\n" + md_escape("\n".join(cls_lines))))
+    elements.extend([{"tag": "hr"}, div_markdown(f"**标题**\n{md_escape(title)}")])
     for index, chunk in enumerate(text_chunks(text), start=1):
         chunk_title = "**原文全文**" if index == 1 else f"**原文全文（续 {index}）**"
         elements.append(div_markdown(f"{chunk_title}\n{md_escape(chunk)}"))
