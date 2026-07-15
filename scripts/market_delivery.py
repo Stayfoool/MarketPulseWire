@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from cards import build_article_card, format_time
-from company_event_dedup import COMPANY_EVENT_RULE_ID, company_event_dedup_hit
+from company_event_dedup import COMPANY_EVENT_RULE_ID, company_event_dedup_hits
 from db_utils import connect_sqlite
 from feishu import send_card, send_card_with_response
 from feishu_app import configured as feishu_app_configured
@@ -36,7 +36,7 @@ from market_review_store import (
     save_article_review,
     save_official_review,
 )
-from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert
+from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert, reserve_rule_alert_set
 
 
 def thin_event_card_enabled() -> bool:
@@ -184,6 +184,36 @@ def _duplicate_article_review(
         save_article_review(conn, source, item, updated)
 
 
+def _duplicate_official_review(
+    source: str,
+    item: dict[str, Any],
+    review: dict[str, Any],
+    reservation: dict[str, Any],
+    db_path: Path,
+) -> None:
+    first = reservation.get("first") or {}
+    rule_id = str(reservation.get("rule_id") or "")
+    if rule_id == MARKET_MOVE_RULE_ID:
+        label = "同一盘中行情事件跨来源去重"
+    elif rule_id in MACRO_DEDUP_RULE_IDS:
+        label = "同一美国宏观/政策催化事件跨来源去重"
+    elif rule_id == INDUSTRY_FACT_RULE_ID:
+        label = "同一产业事实跨来源去重"
+    elif rule_id == COMPANY_EVENT_RULE_ID:
+        label = "同一公司事件事实跨来源去重"
+    else:
+        label = "同一规则观点跨来源去重"
+    note = f"{label}：已由 {first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
+    updated = dict(review)
+    updated["should_push_now"] = False
+    updated["reason"] = f"{updated.get('reason') or ''}\n{note}".strip()
+    analysis = dict(updated.get("analysis") or {})
+    analysis["rule_alert_dedup"] = reservation
+    updated["analysis"] = analysis
+    with connect_sqlite(db_path) as conn:
+        save_official_review(conn, source, item, updated)
+
+
 def _reserve_delivery_alert(
     payload: dict[str, Any],
     item: dict[str, Any],
@@ -193,18 +223,28 @@ def _reserve_delivery_alert(
     item_id: str,
     db_path: Path,
 ) -> dict[str, Any]:
-    return reserve_rule_alert(
+    specialized_hit = (
+        macro_event_dedup_hit(item, decision)
+        or intraday_market_move_dedup_hit(item, decision)
+        or industry_fact_dedup_hit(item, decision)
+    )
+    reservation = reserve_rule_alert(
         payload,
         source=source,
         item_id=item_id,
         title=str(item.get("title") or ""),
         published_at=str(item.get("published_at") or ""),
-        delivery_hit=(
-            macro_event_dedup_hit(item, decision)
-            or intraday_market_move_dedup_hit(item, decision)
-            or industry_fact_dedup_hit(item, decision)
-            or company_event_dedup_hit(item, decision)
-        ),
+        delivery_hit=specialized_hit,
+        db_path=db_path,
+    )
+    if reservation.get("applicable"):
+        return reservation
+    return reserve_rule_alert_set(
+        company_event_dedup_hits(item, decision),
+        source=source,
+        item_id=item_id,
+        title=str(item.get("title") or ""),
+        published_at=str(item.get("published_at") or ""),
         db_path=db_path,
     )
 
@@ -282,9 +322,21 @@ def deliver_official_review(
     prepared["article_review"] = review
     prepared["analysis_lines"] = list(analysis_lines)
     item_id = official_news_item_id(item)
+    reservation = _reserve_delivery_alert(
+        review,
+        item,
+        decision,
+        source=source,
+        item_id=item_id,
+        db_path=db_path,
+    )
+    if reservation.get("duplicate"):
+        _duplicate_official_review(source, item, review, reservation, db_path)
+        return "duplicate"
     card = build_article_card(source, prepared)
     if feedback_enabled():
         if not feishu_app_configured():
+            release_rule_alert(reservation, db_path=db_path)
             return "skipped"
         feedback_card = append_feedback_actions(card, FeedbackIdentity("official", source, item_id))
         response = send_interactive_card(feedback_card)
@@ -292,7 +344,9 @@ def deliver_official_review(
     else:
         sent = send_card(card)
     if not sent:
+        release_rule_alert(reservation, db_path=db_path)
         return "skipped"
+    confirm_rule_alert(reservation, db_path=db_path)
     with connect_sqlite(db_path) as conn:
         if feedback_enabled():
             analysis = dict(review.get("analysis") or {})
@@ -397,7 +451,7 @@ def deliver_event(
             dedup_kind = "industry_fact"
         elif company_event_duplicate:
             reason = "同一公司事件事实跨来源去重"
-            dedup_kind = "company_event_fact"
+            dedup_kind = "company_event_fact_set"
         else:
             reason = "同一规则观点跨来源去重"
             dedup_kind = "rule_alert"
@@ -411,6 +465,7 @@ def deliver_event(
                 "first_item_id": first.get("item_id"),
                 "first_published_at": first.get("published_at"),
                 "dedup_key": reservation.get("dedup_key"),
+                "dedup_keys": reservation.get("dedup_keys") or [reservation.get("dedup_key")],
                 "dedup_kind": dedup_kind,
             },
             db_path=db_path,
