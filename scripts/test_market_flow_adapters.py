@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 
 import market_delivery
 import market_flow_adapters
+from market_content_adapter import _attach_article_flow_audit
 from market_db import init_db
 from market_flow_adapters import (
     ingest_event_item,
@@ -17,7 +18,7 @@ from market_flow_adapters import (
     store_event_flow_analysis,
     store_official_flow_review,
 )
-from market_item import DecisionResult, NormalizedMarketItem
+from market_item import DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem
 from market_review_store import article_review_exists, official_review_exists
 
 
@@ -114,6 +115,28 @@ def test_article_and_official_store_adapters_keep_legacy_tables() -> None:
     assert stored_official is not None and stored_official["should_push_now"] is True
 
 
+def test_article_flow_audit_preserves_cls_metadata() -> None:
+    metadata = {
+        "type": "20023",
+        "product_label": "研选•研报数据",
+        "share_img_name": "vip.png",
+        "author_targets": [{"name": "罗博特科", "code": "300757.SZ"}],
+    }
+    flow_result = MarketFlowResult(
+        item=NormalizedMarketItem(
+            source="cls_telegraph_api",
+            source_category="news_media",
+            content_type="article",
+            title="测试设备是光模块产线核心环节",
+            raw={"id": "2425602", "cls_metadata": metadata},
+        ),
+        decision=DecisionResult(action="push", importance="high"),
+        interpretation=InterpretationResult(core_content="测试摘要"),
+    )
+    review = _attach_article_flow_audit({"raw": {}}, flow_result)
+    assert review["raw"]["_source_enrichment"]["cls_metadata"] == metadata
+
+
 def test_event_analysis_adapter_inserts_and_updates_legacy_row() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
@@ -183,6 +206,7 @@ def test_adapters_do_not_own_rules_or_interpretation() -> None:
 def main() -> int:
     test_ingestion_adapter_preserves_normalized_event_audit()
     test_article_and_official_store_adapters_keep_legacy_tables()
+    test_article_flow_audit_preserves_cls_metadata()
     test_event_analysis_adapter_inserts_and_updates_legacy_row()
     test_adapters_do_not_own_rules_or_interpretation()
     print("market flow adapter checks passed")

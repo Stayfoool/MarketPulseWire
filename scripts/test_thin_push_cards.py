@@ -107,6 +107,69 @@ def test_thin_article_card_prefers_unified_decision_and_interpretation_metadata(
     assert "旧 daily summary" not in text
 
 
+def test_thin_article_card_shows_cls_vip_product_metadata_and_author_targets() -> None:
+    card = build_article_card(
+        "cls_telegraph_api",
+        {
+            "title": "①光通信+AI PCB，机构大额净买入这家公司。",
+            "summary": "公开摘要未披露公司名称。",
+            "published_at": "2026-07-14T11:22:39+00:00",
+            "source_module": "财联社 / 电报 API",
+            "cls_metadata": {
+                "type": "20026",
+                "product_label": "机构龙虎榜解读",
+                "share_img_name": "vip.png",
+                "is_vip": True,
+                "author_extends": "sz002245@@蔚蓝锂芯##sz002384@@东山精密",
+                "author_targets": [
+                    {"name": "蔚蓝锂芯", "code": "002245.SZ"},
+                    {"name": "东山精密", "code": "002384.SZ"},
+                ],
+            },
+            "article_review": {"daily_summary": "公开摘要未披露公司名称。"},
+        },
+    )
+    text = flatten_card_text(card)
+    assert "财联社元数据" in text
+    assert "type：20026" in text
+    assert "栏目：机构龙虎榜解读" in text
+    assert r"share\_img：vip.png" in text
+    assert r"author\_extends：蔚蓝锂芯 002245.SZ；东山精密 002384.SZ" in text
+
+
+def test_full_article_card_shows_cls_metadata() -> None:
+    original = os.environ.get("SURVEIL_THIN_ARTICLE_CARD")
+    try:
+        os.environ["SURVEIL_THIN_ARTICLE_CARD"] = "0"
+        card = build_article_card(
+            "cls_telegraph_api",
+            {
+                "title": "光模块产线测试设备受益扩产",
+                "summary": "公开摘要。",
+                "published_at": "2026-07-14T23:05:10+00:00",
+                "source_module": "财联社 / 电报 API",
+                "analysis_lines": ["标题", "解读"],
+                "raw": {
+                    "cls_metadata": {
+                        "type": "20023",
+                        "product_label": "研选•研报数据",
+                        "share_img_name": "vip.png",
+                        "author_targets": [{"name": "罗博特科", "code": "300757.SZ"}],
+                    }
+                },
+            },
+        )
+    finally:
+        if original is None:
+            os.environ.pop("SURVEIL_THIN_ARTICLE_CARD", None)
+        else:
+            os.environ["SURVEIL_THIN_ARTICLE_CARD"] = original
+    text = flatten_card_text(card)
+    assert "财联社元数据" in text
+    assert "栏目：研选•研报数据" in text
+    assert "罗博特科 300757.SZ" in text
+
+
 def test_compact_event_analysis_lines_only_keep_core_and_targets() -> None:
     lines = compact_event_analysis_lines(
         {
@@ -153,6 +216,8 @@ def main() -> int:
     test_thin_article_card_keeps_llm_gate_reason_out_of_default_push_reason()
     test_thin_article_card_shows_deterministic_push_reason_when_present()
     test_thin_article_card_prefers_unified_decision_and_interpretation_metadata()
+    test_thin_article_card_shows_cls_vip_product_metadata_and_author_targets()
+    test_full_article_card_shows_cls_metadata()
     test_compact_event_analysis_lines_only_keep_core_and_targets()
     test_compact_event_analysis_lines_prefers_unified_metadata_reason_and_targets()
     print("thin push card checks passed")

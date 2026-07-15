@@ -180,6 +180,50 @@ def parse_cls_time(value: Any) -> str:
     return parse_datetime_to_utc_iso(raw)
 
 
+def cls_product_label(value: Any) -> str:
+    match = re.match(r"^【([^】]+)】", str(value or "").strip())
+    return match.group(1).strip() if match else ""
+
+
+def cls_author_targets(value: Any) -> list[dict[str, str]]:
+    targets: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for part in str(value or "").split("##"):
+        raw_code, separator, raw_name = part.strip().partition("@@")
+        if not raw_code and not raw_name:
+            continue
+        code_text = raw_code.strip()
+        name = raw_name.strip() if separator else ""
+        match = re.fullmatch(r"(?i)(sh|sz|bj|hk)(\d{5,6})", code_text)
+        if match:
+            exchange = match.group(1).upper()
+            code = f"{match.group(2)}.{exchange}"
+        else:
+            code = code_text
+        identity = (name.casefold(), code.casefold())
+        if identity in seen:
+            continue
+        seen.add(identity)
+        targets.append({"name": name, "code": code, "raw_code": code_text})
+    return targets
+
+
+def cls_product_metadata(row: dict[str, Any]) -> dict[str, Any]:
+    official_title = str(row.get("title") or "").strip()
+    share_img = str(row.get("share_img") or "").strip()
+    author_extends = str(row.get("author_extends") or "").strip()
+    return {
+        "type": str(row.get("type") if row.get("type") is not None else ""),
+        "product_label": cls_product_label(official_title),
+        "official_title": official_title,
+        "share_img": share_img,
+        "share_img_name": share_img.rsplit("/", 1)[-1] if share_img else "",
+        "is_vip": share_img.rsplit("/", 1)[-1].casefold() == "vip.png" if share_img else False,
+        "author_extends": author_extends,
+        "author_targets": cls_author_targets(author_extends),
+    }
+
+
 def sina_finance_roll_lids() -> list[str]:
     raw = os.getenv("SINA_FINANCE_ROLL_LIDS", "").strip()
     parts = raw.split(",") if raw else list(SINA_FINANCE_DEFAULT_LIDS)
@@ -671,6 +715,7 @@ def parse_cls_items(*, persist_state: bool = True, force: bool = False) -> list[
         source_module = CHINA_MEDIA_LABELS["cls_telegraph_api"]
         if is_star_market_daily_text(title, author):
             source_module = "科创板日报 / 财联社电报"
+        cls_metadata = cls_product_metadata(row)
         items.append(
             {
                 "id": item_id,
@@ -682,6 +727,8 @@ def parse_cls_items(*, persist_state: bool = True, force: bool = False) -> list[
                 "source_module": source_module,
                 "access_note": CHINA_MEDIA_ACCESS_NOTES["cls_telegraph_api"],
                 "body_source": "公开前端 API",
+                "cls_metadata": cls_metadata,
+                "raw": {"cls_metadata": cls_metadata},
             }
         )
     return items
