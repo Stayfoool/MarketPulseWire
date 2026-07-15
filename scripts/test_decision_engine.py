@@ -125,6 +125,22 @@ def test_transport_metadata_does_not_change_content_importance() -> None:
     assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"industry_quantified_hardline"}
 
 
+def test_ibm_enterprise_storage_shortage_remains_push_eligible_across_sources() -> None:
+    text = (
+        "高盛韩国一线评论：IBM暴跌验证了存储短缺，散户投降但韩股关键支撑位挺住了，"
+        "机构相信存储扩产不会太猛。高盛韩国一线评论指出，IBM暴跌验证了企业IT支出大规模"
+        "转向服务器/存储/内存以锁定供应，确认存储短缺广度与深度；机构认为受设备零部件"
+        "短缺制约，存储实际扩产不会太猛。"
+    )
+    variants = (
+        {"source": "wallstreetcn_news", "source_category": "news_media", "title": text},
+        {"source": "sina_flash", "source_category": "news_media", "title": text},
+    )
+    decisions = [decide_market_item(item, holdings=[]) for item in variants]
+    assert {decision.action for decision in decisions} == {"push"}
+    assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"industry_quantified_hardline"}
+
+
 def test_holding_market_move_push_action_is_source_neutral() -> None:
     texts = (
         {

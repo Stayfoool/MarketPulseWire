@@ -33,6 +33,8 @@ flowchart LR
 
 Push-eligible US CPI, PCE and nonfarm coverage may also receive a delivery-only identity from locally bound evidence. Preview and actual-release identities use country, indicator and reference period; market reactions use country, indicator and a Beijing reaction session with a 06:00 rollover so the evening release and after-midnight follow-through converge even when a report omits the reference month. Each phase can deliver once across sources. Corrections and content carrying a direct Kevin Warsh statement are not suppressed by this macro-data identity. The extractor uses original item text and deterministic evidence only; it does not change the decision or use an LLM.
 
+Push-eligible industry-hardline coverage may receive a bounded 36-hour delivery-only fact identity when original text deterministically supplies subject, event, stage, object and direction. The initial event families cover IBM enterprise spending shifting toward memory hardware and CoreWeave exploring derivatives to hedge storage-chip price downside. Cross-source rewrites remain push decisions but are recorded as duplicates. Corrections, company confirmation or denial, execution-stage changes, material derivative terms and independently attributable HBM/DRAM/NAND supplier production facts bypass the prior identity.
+
 The former direct/compat route switch and these wrapper modules have been removed:
 
 - `article_gate.py`
@@ -58,6 +60,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `market_review_store.py` | SQLite review/event persistence and historical row loading |
 | `market_delivery.py` | Rule/fact dedup reservation, Feishu execution, delivery status, pushed markers |
 | `macro_event_dedup.py` | Delivery-only US macro preview/release/reaction identities and direct-Warsh/correction exclusions |
+| `industry_fact_dedup.py` | Bounded delivery-only industry fact identities and material-update exclusions |
 | `market_view.py` | Read-only unified projection across existing stores |
 | `source_profiles.py` | Source catalog, runtime ownership, health keys and editable source settings |
 
@@ -95,7 +98,7 @@ The project keeps the existing physical stores:
 - `official_news_reviews`
 - `events` / `event_analyses`
 - `seen_items`, `seen_posts`, `source_state`
-- `rule_alert_dedup`, `deliveries` (`rule_alert_dedup` also records delivery-only `intraday_market_move` and US macro preview/release/reaction reservation kinds)
+- `rule_alert_dedup`, `deliveries` (`rule_alert_dedup` also records delivery-only intraday market-move, US macro event and bounded industry-fact reservation kinds)
 - `source_health`, `x_stream_health`
 - portfolio, relation, evidence and signal tables
 

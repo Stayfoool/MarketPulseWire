@@ -96,6 +96,10 @@ def macro_rule() -> dict:
     return {"rule_id": "macro_policy_line"}
 
 
+def industry_rule() -> dict:
+    return {"rule_id": "industry_quantified_hardline"}
+
+
 def required_decision(payload: dict) -> DecisionResult:
     decision = decision_result_from_payload(payload)
     assert decision is not None
@@ -610,6 +614,133 @@ def test_event_delivery_records_macro_release_duplicate() -> None:
             os.environ["FEISHU_WEBHOOK"] = original_webhook
 
 
+def test_ibm_industry_fact_cross_source_article_dedup_preserves_push_decision() -> None:
+    original_send = market_delivery.send_card
+    calls: list[dict] = []
+    first = {
+        "id": "ibm-thesis-1",
+        "title": "IBM称客户将资本支出转向服务器、存储和内存采购",
+        "summary": "企业为在涨价前锁定供应紧张的基础设施而调整预算。",
+        "published_at": "2026-07-14T11:04:49+00:00",
+    }
+    second = {
+        "id": "ibm-thesis-2",
+        "title": "IBM暴跌验证存储短缺，企业IT支出转向硬件",
+        "summary": "IBM客户将预算转向服务器、存储和内存采购以保障供应。",
+        "published_at": "2026-07-14T17:13:45+00:00",
+    }
+    review = content_review("push", rule_hits=[industry_rule()])
+    try:
+        market_delivery.send_card = lambda card: calls.append(card) or True
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            with sqlite3.connect(db_path) as conn:
+                save_article_review(conn, "cls_telegraph_api", first, review)
+                save_article_review(conn, "wallstreetcn_news", second, review)
+            first_status = market_delivery.deliver_article_review(
+                "cls_telegraph_api", first, review, decision=required_decision(review), db_path=db_path
+            )
+            second_status = market_delivery.deliver_article_review(
+                "wallstreetcn_news", second, review, decision=required_decision(review), db_path=db_path
+            )
+            with sqlite3.connect(db_path) as conn:
+                stored = article_review_exists(conn, "wallstreetcn_news", "ibm-thesis-2")
+        assert [first_status, second_status] == ["sent", "duplicate"]
+        assert len(calls) == 1
+        assert stored is not None and stored["push_now"] is False
+        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
+        assert stored["raw"]["raw"]["rule_alert_dedup"]["rule_id"] == "industry_fact_dedup"
+    finally:
+        market_delivery.send_card = original_send
+
+
+def test_event_delivery_records_ibm_industry_fact_duplicate() -> None:
+    original_webhook = os.environ.get("FEISHU_WEBHOOK")
+    original_send = market_delivery.send_card_with_response
+    try:
+        os.environ["FEISHU_WEBHOOK"] = "https://example.invalid/webhook"
+        market_delivery.send_card_with_response = lambda card: FeishuResponse(True, 0, "ok", '{"code":0}')
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            first_id = insert_event(
+                db_path,
+                "event-ibm-1",
+                "IBM称客户将资本支出转向服务器、存储和内存采购",
+                source="cls_telegraph_api",
+                summary="企业为锁定供应紧张的基础设施而调整预算。",
+            )
+            second_id = insert_event(
+                db_path,
+                "event-ibm-2",
+                "IBM暴跌验证存储短缺，企业IT支出转向硬件",
+                source="wallstreetcn_news",
+                summary="IBM客户将支出转向服务器和内存采购以保障供应。",
+            )
+            analysis = decision_analysis(rule_hits=[industry_rule()])
+            assert market_delivery.deliver_event(
+                first_id, analysis, decision=required_decision(analysis), db_path=db_path
+            ) == "sent"
+            assert market_delivery.deliver_event(
+                second_id, analysis, decision=required_decision(analysis), db_path=db_path
+            ) == "duplicate"
+            rows = delivery_rows(db_path)
+        duplicate = json.loads(rows[1][2])
+        assert [row[0] for row in rows] == ["sent", "duplicate"]
+        assert duplicate["dedup_kind"] == "industry_fact"
+        assert duplicate["first_source"] == "cls_telegraph_api"
+    finally:
+        market_delivery.send_card_with_response = original_send
+        if original_webhook is None:
+            os.environ.pop("FEISHU_WEBHOOK", None)
+        else:
+            os.environ["FEISHU_WEBHOOK"] = original_webhook
+
+
+def test_coreweave_hedge_cross_source_article_dedup_preserves_push_decision() -> None:
+    original_send = market_delivery.send_card
+    calls: list[dict] = []
+    first = {
+        "id": "coreweave-hedge-1",
+        "title": "人工智能云计算公司CoreWeave借鉴华尔街策略 对冲内存芯片价格风险",
+        "summary": "CoreWeave正在探索使用看跌期权，对冲未来存储芯片价格下跌风险。",
+        "published_at": "2026-07-14T23:47:24+00:00",
+    }
+    second = {
+        "id": "coreweave-hedge-2",
+        "title": "消息人士称，Coreweave(CRWV.O)正在探索使用金融衍生品",
+        "summary": "该公司拟以衍生品对冲未来存储芯片价格下跌的风险。",
+        "published_at": "2026-07-14T23:48:36+00:00",
+    }
+    review = content_review("push", rule_hits=[industry_rule()])
+    try:
+        market_delivery.send_card = lambda card: calls.append(card) or True
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            with sqlite3.connect(db_path) as conn:
+                save_article_review(conn, "sina_finance_articles", first, review)
+                save_article_review(conn, "jin10_rsshub_important", second, review)
+            first_status = market_delivery.deliver_article_review(
+                "sina_finance_articles", first, review, decision=required_decision(review), db_path=db_path
+            )
+            second_status = market_delivery.deliver_article_review(
+                "jin10_rsshub_important", second, review, decision=required_decision(review), db_path=db_path
+            )
+            with sqlite3.connect(db_path) as conn:
+                stored = article_review_exists(conn, "jin10_rsshub_important", "coreweave-hedge-2")
+        assert [first_status, second_status] == ["sent", "duplicate"]
+        assert len(calls) == 1
+        assert stored is not None and stored["push_now"] is False
+        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
+        assert stored["raw"]["raw"]["rule_alert_dedup"]["dedup_key"] == (
+            "industry_fact:coreweave:price_risk_hedge:exploring:storage_chip:down"
+        )
+    finally:
+        market_delivery.send_card = original_send
+
+
 def main() -> int:
     test_simple_event_card_formats_published_time_for_beijing()
     test_archive_and_missing_webhook_are_recorded_without_sending()
@@ -624,6 +755,9 @@ def main() -> int:
     test_event_delivery_records_intraday_market_move_duplicate()
     test_macro_release_and_reaction_each_send_once_while_warsh_speech_is_retained()
     test_event_delivery_records_macro_release_duplicate()
+    test_ibm_industry_fact_cross_source_article_dedup_preserves_push_decision()
+    test_event_delivery_records_ibm_industry_fact_duplicate()
+    test_coreweave_hedge_cross_source_article_dedup_preserves_push_decision()
     print("market delivery checks passed")
     return 0
 

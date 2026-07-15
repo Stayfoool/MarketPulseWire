@@ -15,6 +15,7 @@ from typing import Any
 from cards import build_article_card, format_time
 from db_utils import connect_sqlite
 from feishu import send_card, send_card_with_response
+from industry_fact_dedup import INDUSTRY_FACT_RULE_ID, industry_fact_dedup_hit
 from llm_analysis import format_llm_analysis
 from market_card_view import card_targets, decision_reason, interpretation_core, interpretation_reason
 from market_db import DEFAULT_DB_PATH
@@ -148,6 +149,11 @@ def _duplicate_article_review(
             "同一美国宏观数据事件跨来源去重：已由 "
             f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
         )
+    elif rule_id == INDUSTRY_FACT_RULE_ID:
+        note = (
+            "同一产业事实跨来源去重：已由 "
+            f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
+        )
     else:
         note = (
             "同一规则观点跨来源去重：已由 "
@@ -178,7 +184,11 @@ def _reserve_delivery_alert(
         item_id=item_id,
         title=str(item.get("title") or ""),
         published_at=str(item.get("published_at") or ""),
-        delivery_hit=macro_event_dedup_hit(item, decision) or intraday_market_move_dedup_hit(item, decision),
+        delivery_hit=(
+            macro_event_dedup_hit(item, decision)
+            or intraday_market_move_dedup_hit(item, decision)
+            or industry_fact_dedup_hit(item, decision)
+        ),
         db_path=db_path,
     )
 
@@ -329,13 +339,17 @@ def deliver_event(
         rule_id = str(reservation.get("rule_id") or "")
         market_move_duplicate = rule_id == MARKET_MOVE_RULE_ID
         macro_duplicate = rule_id in MACRO_DEDUP_RULE_IDS
-        duplicate_status = market_move_duplicate or macro_duplicate
+        industry_fact_duplicate = rule_id == INDUSTRY_FACT_RULE_ID
+        duplicate_status = market_move_duplicate or macro_duplicate or industry_fact_duplicate
         if market_move_duplicate:
             reason = "同一盘中行情事件跨来源去重"
             dedup_kind = "intraday_market_move"
         elif macro_duplicate:
             reason = "同一美国宏观数据事件跨来源去重"
             dedup_kind = rule_id
+        elif industry_fact_duplicate:
+            reason = "同一产业事实跨来源去重"
+            dedup_kind = "industry_fact"
         else:
             reason = "同一规则观点跨来源去重"
             dedup_kind = "rule_alert"
