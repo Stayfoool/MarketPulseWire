@@ -10,7 +10,7 @@ from typing import Any
 
 from env_utils import load_env
 from feishu_app import feedback_listener_enabled
-from market_feedback import FeedbackError, handle_feedback_callback
+from market_feedback import FeedbackError, feedback_card_for_callback, handle_feedback_callback
 from market_db import DEFAULT_DB_PATH, init_db
 
 
@@ -20,7 +20,21 @@ ROOT = Path(__file__).resolve().parents[1]
 def callback_response(payload: dict[str, Any]) -> dict[str, Any]:
     try:
         result = handle_feedback_callback(payload)
-        return {"toast": result["toast"]}
+        response: dict[str, Any] = {"toast": result["toast"]}
+        state = result.get("card_state") if isinstance(result.get("card_state"), dict) else {}
+        identity = state.get("identity")
+        try:
+            card = feedback_card_for_callback(
+                identity,
+                str(state.get("label") or ""),
+                state.get("reason_tags") or [],
+            ) if identity is not None else None
+        except Exception as exc:  # noqa: BLE001 - feedback is already durable; state projection is best effort
+            print(f"飞书反馈卡片状态更新失败：{exc}", flush=True)
+            card = None
+        if card is not None:
+            response["card"] = {"type": "raw", "data": card}
+        return response
     except FeedbackError as exc:
         return {"toast": {"type": "warning", "content": str(exc)}}
     except Exception as exc:  # noqa: BLE001 - acknowledge safely within Feishu's three-second limit

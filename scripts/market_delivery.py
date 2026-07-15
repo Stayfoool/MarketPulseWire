@@ -33,6 +33,7 @@ from market_review_store import (
     official_news_item_id,
     record_event_delivery,
     save_article_review,
+    save_official_review,
 )
 from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert
 
@@ -239,15 +240,19 @@ def deliver_article_review(
         if not feishu_app_configured():
             release_rule_alert(reservation, db_path=db_path)
             return "skipped"
-        response = send_interactive_card(
-            append_feedback_actions(card, FeedbackIdentity("article", source, item_id))
-        )
+        feedback_card = append_feedback_actions(card, FeedbackIdentity("article", source, item_id))
+        response = send_interactive_card(feedback_card)
         sent = response.ok
     else:
         sent = send_card(card)
     if sent:
         confirm_rule_alert(reservation, db_path=db_path)
         with connect_sqlite(db_path) as conn:
+            if feedback_enabled():
+                raw = dict(review.get("raw") or {})
+                raw["_feedback_card_base"] = card
+                review["raw"] = raw
+                save_article_review(conn, source, item, review)
             mark_article_pushed(conn, source, item_id)
         return "sent"
     release_rule_alert(reservation, db_path=db_path)
@@ -274,15 +279,19 @@ def deliver_official_review(
     if feedback_enabled():
         if not feishu_app_configured():
             return "skipped"
-        response = send_interactive_card(
-            append_feedback_actions(card, FeedbackIdentity("official", source, item_id))
-        )
+        feedback_card = append_feedback_actions(card, FeedbackIdentity("official", source, item_id))
+        response = send_interactive_card(feedback_card)
         sent = response.ok
     else:
         sent = send_card(card)
     if not sent:
         return "skipped"
     with connect_sqlite(db_path) as conn:
+        if feedback_enabled():
+            analysis = dict(review.get("analysis") or {})
+            analysis["_feedback_card_base"] = card
+            review["analysis"] = analysis
+            save_official_review(conn, source, item, review)
         mark_official_pushed(conn, source, item_id)
     return "sent"
 
@@ -420,9 +429,8 @@ def deliver_event(
     card = simple_event_card(source, title, display_text, url, published_at, lines)
     try:
         if feedback_enabled():
-            response = send_interactive_card(
-                append_feedback_actions(card, FeedbackIdentity("event", source, str(event_id)))
-            )
+            feedback_card = append_feedback_actions(card, FeedbackIdentity("event", source, str(event_id)))
+            response = send_interactive_card(feedback_card)
         else:
             response = send_card_with_response(card)
     except Exception as exc:  # noqa: BLE001 - delivery failures must not stop collectors
@@ -452,6 +460,7 @@ def deliver_event(
             "feishu_message": response.message,
             "feishu_message_id": getattr(response, "message_id", ""),
             "feishu_body": response.body[:1000],
+            "_feedback_card_base": card if feedback_enabled() else {},
         },
         db_path=db_path,
     )
