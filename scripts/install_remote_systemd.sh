@@ -44,6 +44,7 @@ SUDOERS_PATH=/etc/sudoers.d/surveil-web-systemctl
 cat > \"\$SUDOERS_PATH\" <<SUDOERS
 Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-x-stream.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-feishu-feedback.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-rss-monitor.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-trendforce-page-monitor.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-sina-flash.service, \\
@@ -160,6 +161,12 @@ else
   echo '韭研公社异动模块当前默认搁置；如需启用，请在 .env 设置 ENABLE_JYGS_TIMER=1。'
 fi
 systemctl enable --now surveil-holdings-web.service
+if grep -Eq '^FEISHU_FEEDBACK_ENABLED=(1|true|yes|on)$' '$REMOTE_DIR/.env' 2>/dev/null; then
+  systemctl enable --now surveil-feishu-feedback.service
+else
+  systemctl disable --now surveil-feishu-feedback.service >/dev/null 2>&1 || true
+  echo 'FEISHU_FEEDBACK_ENABLED 未启用，保持 surveil-feishu-feedback.service 停用。'
+fi
 systemctl enable surveil-sina-flash.service
 systemctl restart surveil-sina-flash.service
 if grep -Eq '^X_BEARER_TOKEN=[^[:space:]]+' '$REMOTE_DIR/.env' 2>/dev/null; then
@@ -171,6 +178,7 @@ fi
 systemctl list-timers --all 'surveil-*' --no-pager
 systemctl --no-pager --full status surveil-sina-flash.service || true
 systemctl --no-pager --full status surveil-holdings-web.service || true
+systemctl --no-pager --full status surveil-feishu-feedback.service || true
 systemctl --no-pager --full status surveil-rss-monitor.service || true
 systemctl --no-pager --full status surveil-trendforce-page-monitor.service || true
 systemctl --no-pager --full status surveil-research-collector.timer || true

@@ -77,6 +77,15 @@ def test_rule_center_view_is_exposed() -> None:
     assert "runRuleSimulation" in html
 
 
+def test_feedback_quality_view_is_exposed() -> None:
+    html = html_page(token_required=False)
+    assert "反馈质量" in html
+    assert "showView('feedback')" in html
+    assert "/api/feedback-quality" in html
+    assert "loadFeedbackQuality" in html
+    assert "未反馈保持未知" in html
+
+
 def test_holdings_page_marks_environment_and_related_keywords() -> None:
     html = html_page(token_required=False)
     assert "环境：本地开发配置" in html
@@ -640,6 +649,7 @@ def main() -> int:
     test_source_profile_view_is_exposed()
     test_investment_bank_theme_rule_configuration_is_exposed()
     test_rule_center_view_is_exposed()
+    test_feedback_quality_view_is_exposed()
     test_holdings_page_marks_environment_and_related_keywords()
     test_event_center_search_filters_before_per_pipeline_limit()
     test_event_center_can_show_baselines_and_filter_by_published_time()

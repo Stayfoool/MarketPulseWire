@@ -125,6 +125,40 @@ CREATE TABLE IF NOT EXISTS deliveries (
     FOREIGN KEY(event_id) REFERENCES events(id)
 );
 
+CREATE TABLE IF NOT EXISTS market_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    feedback_event_id TEXT NOT NULL UNIQUE,
+    item_kind TEXT NOT NULL,
+    source TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    delivery_id INTEGER,
+    label TEXT NOT NULL,
+    reason_tags_json TEXT NOT NULL DEFAULT '[]',
+    note TEXT,
+    operator_id TEXT NOT NULL,
+    message_id TEXT,
+    chat_id TEXT,
+    decision_action TEXT,
+    rule_ids_json TEXT NOT NULL DEFAULT '[]',
+    delivery_status TEXT,
+    decision_version TEXT,
+    clicked_at_us INTEGER NOT NULL,
+    received_at TEXT NOT NULL,
+    supersedes_id INTEGER,
+    raw_json TEXT NOT NULL DEFAULT '{}',
+    FOREIGN KEY(delivery_id) REFERENCES deliveries(id),
+    FOREIGN KEY(supersedes_id) REFERENCES market_feedback(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_feedback_item
+ON market_feedback(item_kind, source, item_id, operator_id, clicked_at_us, id);
+
+CREATE INDEX IF NOT EXISTS idx_market_feedback_received
+ON market_feedback(received_at);
+
+CREATE INDEX IF NOT EXISTS idx_market_feedback_label
+ON market_feedback(label, received_at);
+
 CREATE TABLE IF NOT EXISTS rule_alert_dedup (
     dedup_key TEXT PRIMARY KEY,
     rule_id TEXT NOT NULL,
@@ -540,6 +574,12 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
         "ON rule_alert_dedup(rule_id, created_at)"
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_config_audit_changed ON rule_config_audit(changed_at)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_market_feedback_item "
+        "ON market_feedback(item_kind, source, item_id, operator_id, clicked_at_us, id)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_market_feedback_received ON market_feedback(received_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_market_feedback_label ON market_feedback(label, received_at)")
 
 
 def init_db(path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:

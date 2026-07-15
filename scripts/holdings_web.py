@@ -28,6 +28,7 @@ from holdings_store import (
     validate_holdings,
 )
 from market_db import DEFAULT_DB_PATH
+from market_feedback import feedback_quality_payload
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
 from investment_bank_theme_config import config_payload as investment_bank_theme_config_payload
 from investment_bank_theme_config import save_config as save_investment_bank_theme_config
@@ -58,6 +59,7 @@ BJ = ZoneInfo("Asia/Shanghai")
 
 SERVICE_UNITS = [
     "surveil-x-stream.service",
+    "surveil-feishu-feedback.service",
     "surveil-rss-monitor.service",
     "surveil-trendforce-page-monitor.service",
     "surveil-sina-flash.service",
@@ -180,6 +182,7 @@ UNIT_METADATA = {
     "surveil-signal-review.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 交易日 16:35"},
     "surveil-signal-digest.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 20:35"},
     "surveil-holdings-web.service": {"group": "infrastructure", "type": "基础设施", "schedule": "Web 工作台"},
+    "surveil-feishu-feedback.service": {"group": "infrastructure", "type": "基础设施", "schedule": "飞书长连接"},
     "surveil-proxy.service": {"group": "infrastructure", "type": "基础设施", "schedule": "本地代理"},
     "surveil-sina-stock-news.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 30 分钟"},
     "surveil-overseas-media.timer": {"group": "fetching_legacy", "type": "历史兼容定时器", "schedule": "已切流；旧每 5 分钟"},
@@ -213,6 +216,7 @@ UNIT_GROUP_LABELS = {
 
 UNIT_TASK_LABELS = {
     "surveil-x-stream": "X / Serenity",
+    "surveil-feishu-feedback": "飞书反馈",
     "surveil-sina-flash": "新浪财经快讯",
     "surveil-sina-stock-news": "新浪持仓个股新闻",
     "surveil-ifind-notice": "iFinD 公司公告",
@@ -249,6 +253,7 @@ LOG_FILES = [
     "ifind-notice.err.log",
     "jygs-actions.err.log",
     "holdings-web.err.log",
+    "feishu-feedback.err.log",
     "signal-review.err.log",
     "signal-digest.err.log",
     "stock-relations-import.err.log",
@@ -1359,6 +1364,7 @@ def html_page(token_required: bool) -> str:
     .metric .label {{ color: var(--muted); font-size: 12px; }}
     .metric .value {{ font-size: 24px; font-weight: 700; margin-top: 6px; }}
     .split {{ display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }}
+    .feedback-stack {{ display: grid; gap: 12px; }}
     .list {{ padding: 10px 12px; }}
     .list-row {{ border-bottom: 1px solid var(--line); padding: 9px 0; font-size: 13px; }}
     .list-row:last-child {{ border-bottom: 0; }}
@@ -1397,6 +1403,7 @@ def html_page(token_required: bool) -> str:
     td.full {{ width: 170px; }}
     td textarea {{ min-height: 38px; resize: vertical; }}
     .events-table td.summary-cell {{ color: var(--muted); }}
+    #view-feedback table {{ min-width: 840px; }}
     .events-table a {{ color: var(--accent); text-decoration: none; }}
     .table-wrap {{ max-height: calc(100vh - 190px); overflow: auto; }}
     .health-table {{ min-width: 1180px; }}
@@ -1442,6 +1449,7 @@ def html_page(token_required: bool) -> str:
   <nav class="tabs">
     <button id="tab-overview" onclick="showView('overview')">今日总览</button>
     <button id="tab-events" onclick="showView('events')">事件中心</button>
+    <button id="tab-feedback" onclick="showView('feedback')">反馈质量</button>
     <button id="tab-signals" onclick="showView('signals')">信号复盘</button>
     <button id="tab-relations" onclick="showView('relations')">关系映射</button>
     <button id="tab-sources" onclick="showView('sources')">信息源</button>
@@ -1498,6 +1506,53 @@ def html_page(token_required: bool) -> str:
             </thead>
             <tbody id="eventRows"></tbody>
           </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="view-feedback" class="view">
+      <div class="toolbar">
+        <select id="feedbackDays" aria-label="反馈统计窗口" style="width:140px" onchange="loadFeedbackQuality()">
+          <option value="7">最近 7 天</option>
+          <option value="30" selected>最近 30 天</option>
+          <option value="90">最近 90 天</option>
+        </select>
+        <button class="primary" onclick="loadFeedbackQuality()">刷新</button>
+        <span class="summary">未反馈保持未知；比例仅以已反馈卡片为分母。</span>
+      </div>
+      <div id="feedbackMetrics" class="metric-grid"></div>
+      <div class="feedback-stack">
+        <section class="panel">
+          <div class="list-row" style="padding:10px 12px"><strong>来源质量</strong></div>
+          <div class="table-wrap" style="max-height:440px">
+            <table><thead><tr><th>来源</th><th style="width:76px">推送</th><th style="width:76px">反馈</th><th style="width:82px">覆盖率</th><th style="width:86px">特别有用</th><th style="width:76px">重复</th><th style="width:76px">无效</th></tr></thead><tbody id="feedbackSourceRows"></tbody></table>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="list-row" style="padding:10px 12px"><strong>主规则质量</strong></div>
+          <div class="table-wrap" style="max-height:440px">
+            <table><thead><tr><th>规则</th><th style="width:76px">推送</th><th style="width:76px">反馈</th><th style="width:82px">覆盖率</th><th style="width:86px">特别有用</th><th style="width:76px">重复</th><th style="width:76px">无效</th></tr></thead><tbody id="feedbackRuleRows"></tbody></table>
+          </div>
+        </section>
+      </div>
+      <div class="feedback-stack" style="margin-top:12px">
+        <section class="panel">
+          <div class="list-row" style="padding:10px 12px"><strong>所有规则关联</strong></div>
+          <div class="table-wrap" style="max-height:380px">
+            <table><thead><tr><th>规则</th><th style="width:76px">推送</th><th style="width:76px">反馈</th><th style="width:82px">覆盖率</th><th style="width:86px">特别有用</th><th style="width:76px">重复</th><th style="width:76px">无效</th></tr></thead><tbody id="feedbackAssociationRows"></tbody></table>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="list-row" style="padding:10px 12px"><strong>来源 × 主规则</strong></div>
+          <div class="table-wrap" style="max-height:380px">
+            <table><thead><tr><th>组合</th><th style="width:76px">推送</th><th style="width:76px">反馈</th><th style="width:82px">覆盖率</th><th style="width:86px">特别有用</th><th style="width:76px">重复</th><th style="width:76px">无效</th></tr></thead><tbody id="feedbackCrossRows"></tbody></table>
+          </div>
+        </section>
+      </div>
+      <section class="panel" style="margin-top:12px">
+        <div class="list-row" style="padding:10px 12px"><strong>最近反馈样例</strong></div>
+        <div class="table-wrap" style="max-height:420px">
+          <table><thead><tr><th style="width:100px">反馈</th><th style="width:160px">来源</th><th style="width:220px">主规则</th><th>标题</th><th style="width:160px">推送时间</th></tr></thead><tbody id="feedbackExampleRows"></tbody></table>
         </div>
       </section>
     </section>
@@ -2172,6 +2227,7 @@ function showView(name) {{
   document.getElementById(`tab-${{name}}`).classList.add('active');
   if (name === 'overview') loadOverview();
   if (name === 'events') loadEventsView();
+  if (name === 'feedback') loadFeedbackQuality();
   if (name === 'signals') loadSignals();
   if (name === 'relations') loadRelationManager();
   if (name === 'sources') loadSourceProfiles();
@@ -2196,6 +2252,51 @@ function formatRate(value) {{
   const num = Number(value);
   if (Number.isNaN(num)) return String(value);
   return `${{(num * 100).toFixed(0)}}%`;
+}}
+
+function feedbackQualityRows(rows) {{
+  return (rows || []).map(item => `
+    <tr>
+      <td>${{escapeHtml(item.key || '-')}}${{item.low_sample ? '<div class="hint">样本不足</div>' : ''}}</td>
+      <td>${{item.delivered || 0}}</td>
+      <td>${{item.labelled || 0}}</td>
+      <td>${{formatRate(item.coverage)}}</td>
+      <td>${{item.high_value || 0}} <span class="hint">${{formatRate(item.high_value_rate)}}</span></td>
+      <td>${{item.duplicate || 0}} <span class="hint">${{formatRate(item.duplicate_rate)}}</span></td>
+      <td>${{item.invalid || 0}} <span class="hint">${{formatRate(item.invalid_rate)}}</span></td>
+    </tr>
+  `).join('') || '<tr><td colspan="7">暂无反馈样本。</td></tr>';
+}}
+
+async function loadFeedbackQuality() {{
+  const days = document.getElementById('feedbackDays').value || '30';
+  try {{
+    const data = await api(`/api/feedback-quality?days=${{encodeURIComponent(days)}}`);
+    const summary = data.summary || {{}};
+    const metrics = [
+      ['推送卡片', summary.delivered || 0],
+      ['已反馈', summary.labelled || 0],
+      ['反馈覆盖率', formatRate(summary.coverage)],
+      ['特别有用', `${{summary.high_value || 0}} / ${{formatRate(summary.high_value_rate)}}`],
+      ['重复 / 无效', `${{summary.duplicate || 0}} / ${{summary.invalid || 0}}`],
+    ];
+    document.getElementById('feedbackMetrics').innerHTML = metrics.map(item => `<div class="metric"><div class="label">${{escapeHtml(item[0])}}</div><div class="value">${{escapeHtml(item[1])}}</div></div>`).join('');
+    document.getElementById('feedbackSourceRows').innerHTML = feedbackQualityRows(data.sources);
+    document.getElementById('feedbackRuleRows').innerHTML = feedbackQualityRows(data.primary_rules);
+    document.getElementById('feedbackAssociationRows').innerHTML = feedbackQualityRows(data.rule_associations);
+    document.getElementById('feedbackCrossRows').innerHTML = feedbackQualityRows(data.source_primary_rules);
+    document.getElementById('feedbackExampleRows').innerHTML = (data.examples || []).map(item => `
+      <tr>
+        <td>${{escapeHtml(item.feedback_label_display || item.feedback_label || '-')}}</td>
+        <td>${{escapeHtml(item.source || '-')}}</td>
+        <td>${{escapeHtml((item.rule_ids || [])[0] || '未记录规则')}}</td>
+        <td>${{escapeHtml(item.title || '-')}}</td>
+        <td>${{formatTime(item.sent_at)}}</td>
+      </tr>
+    `).join('') || '<tr><td colspan="5">暂无反馈样例。</td></tr>';
+  }} catch (err) {{
+    showStatus('反馈质量加载失败：' + err.message, 'err');
+  }}
 }}
 
 function eventSourceFilterValue(profile) {{
@@ -3656,6 +3757,18 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 return
             try:
                 self.send_json(health_payload())
+            except Exception as exc:  # noqa: BLE001
+                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path == "/api/feedback-quality":
+            if not self.require_auth():
+                return
+            try:
+                qs = parse_qs(parsed.query)
+                days = int((qs.get("days") or ["30"])[0])
+                payload = feedback_quality_payload(db_path=DEFAULT_DB_PATH, days=days)
+                payload["ok"] = True
+                self.send_json(payload)
             except Exception as exc:  # noqa: BLE001
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
