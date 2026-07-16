@@ -26,6 +26,7 @@ FEEDBACK_LABELS = {
     "duplicate": "重复",
     "invalid": "无效",
 }
+CLEARED_FEEDBACK_LABEL = "cleared"
 FEEDBACK_REASON_LABELS = {
     "useful_not_urgent": "有用但不紧急",
     "stale": "旧闻",
@@ -124,6 +125,8 @@ def _reason_tags_from_json(value: Any) -> list[str]:
 
 
 def feedback_status_display(label: str, reason_tags: Iterable[str] = ()) -> str:
+    if label == CLEARED_FEEDBACK_LABEL:
+        return "未选择"
     display = FEEDBACK_LABELS.get(label, "已记录")
     reasons = [FEEDBACK_REASON_LABELS[tag] for tag in reason_tags if tag in FEEDBACK_REASON_LABELS]
     return f"已标记为「{display}{'（' + '、'.join(reasons) + '）' if reasons else ''}」"
@@ -370,8 +373,21 @@ def record_feedback(
             conn.rollback()
             raise FeedbackError("对应信息没有已发送的飞书投递记录")
         current = _current_feedback_row(conn, identity, operator_id)
+        stored_label = (
+            CLEARED_FEEDBACK_LABEL
+            if current
+            and clicked_at_us >= int(current[2])
+            and str(current[1]) == label
+            else label
+        )
+        stored_reason_tags = [] if stored_label == CLEARED_FEEDBACK_LABEL else list(
+            dict.fromkeys(str(tag).strip() for tag in reason_tags if str(tag).strip())
+        )
         supersedes_id = int(current[0]) if current and clicked_at_us >= int(current[2]) else None
         received_at = datetime.now(timezone.utc).isoformat()
+        raw_payload = dict(raw or {})
+        if stored_label == CLEARED_FEEDBACK_LABEL:
+            raw_payload.update({"toggle": "cancel", "requested_label": label})
         cursor = conn.execute(
             """
             INSERT INTO market_feedback (
@@ -387,8 +403,8 @@ def record_feedback(
                 identity.source,
                 identity.item_id,
                 snapshot.get("delivery_id"),
-                label,
-                json.dumps(list(dict.fromkeys(str(tag).strip() for tag in reason_tags if str(tag).strip())), ensure_ascii=False),
+                stored_label,
+                json.dumps(stored_reason_tags, ensure_ascii=False),
                 note.strip(),
                 operator_id,
                 message_id,
@@ -400,7 +416,7 @@ def record_feedback(
                 clicked_at_us,
                 received_at,
                 supersedes_id,
-                json.dumps(raw or {}, ensure_ascii=False),
+                json.dumps(raw_payload, ensure_ascii=False),
             ),
         )
         inserted_id = int(cursor.lastrowid)
@@ -408,10 +424,11 @@ def record_feedback(
         current_after = _current_feedback_row(conn, identity, operator_id)
     return {
         "id": inserted_id,
-        "label": label,
+        "label": stored_label,
+        "requested_label": label,
         "duplicate_event": False,
         "is_current": bool(current_after and int(current_after[0]) == inserted_id),
-        "current_label": str(current_after[1]) if current_after else label,
+        "current_label": str(current_after[1]) if current_after else stored_label,
         "current_reason_tags": _reason_tags_from_json(current_after[3]) if current_after else [],
         "supersedes_id": supersedes_id,
     }
@@ -458,6 +475,8 @@ def feedback_projection_by_item(conn: sqlite3.Connection) -> dict[tuple[str, str
     for row in current_feedback_rows_from_conn(conn):
         item_kind = str(row.get("item_kind") or "")
         if item_kind == "test":
+            continue
+        if str(row.get("label") or "") not in FEEDBACK_LABELS:
             continue
         key = (item_kind, str(row.get("source") or ""), str(row.get("item_id") or ""))
         grouped.setdefault(key, []).append(row)
@@ -558,14 +577,19 @@ def handle_feedback_callback(
         db_path=db_path,
     )
     current_reason_tags = list(result.get("current_reason_tags") or [])
-    current_display = feedback_status_display(str(result.get("current_label") or result.get("label")), current_reason_tags)
+    current_label = str(result.get("current_label") or result.get("label"))
+    current_display = feedback_status_display(current_label, current_reason_tags)
     suffix = "（当前选择）" if result.get("is_current", True) else "（较新的选择已保留）"
+    if result.get("is_current", True) and current_label == CLEARED_FEEDBACK_LABEL:
+        toast_content = "已取消选择"
+    else:
+        toast_content = f"已记录：{current_display}{suffix}"
     return {
-        "toast": {"type": "success", "content": f"已记录：{current_display}{suffix}"},
+        "toast": {"type": "success", "content": toast_content},
         "result": result,
         "card_state": {
             "identity": identity,
-            "label": str(result.get("current_label") or result.get("label") or ""),
+            "label": current_label,
             "reason_tags": current_reason_tags,
         },
     }
@@ -610,7 +634,7 @@ def feedback_card_for_callback(
     secret: str | None = None,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> dict[str, Any] | None:
-    if label not in FEEDBACK_LABELS:
+    if label not in {*FEEDBACK_LABELS, CLEARED_FEEDBACK_LABEL}:
         return None
     with connect_sqlite(db_path) as conn:
         base = _feedback_card_base(conn, identity)
@@ -739,6 +763,8 @@ def feedback_quality_payload(*, db_path: Path = DEFAULT_DB_PATH, days: int = 30)
         current = current_feedback_rows(db_path)
     current_by_item: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in current:
+        if str(row.get("label") or "") not in FEEDBACK_LABELS:
+            continue
         key = (str(row["item_kind"]), str(row["source"]), str(row["item_id"]))
         current_by_item.setdefault(key, row)
     for item in delivered:

@@ -375,6 +375,7 @@ def test_event_center_projects_current_feedback_across_active_stores() -> None:
             insert_feedback(conn, event_id="f2", item_kind="article", source="cls_telegraph_api", item_id="article-1", label="duplicate", operator="operator-a", clicked_at_us=300, reasons='["stale"]')
             insert_feedback(conn, event_id="f3", item_kind="article", source="cls_telegraph_api", item_id="article-1", label="high_value", operator="operator-b", clicked_at_us=200)
             insert_feedback(conn, event_id="f4", item_kind="official", source="nvidia_blog", item_id="official-1", label="invalid", operator="operator-a", clicked_at_us=400, reasons='["weak_evidence"]')
+            insert_feedback(conn, event_id="f5", item_kind="official", source="nvidia_blog", item_id="official-1", label="cleared", operator="operator-a", clicked_at_us=500)
             conn.commit()
             before = conn.execute("SELECT COUNT(*) FROM market_feedback").fetchone()[0]
 
@@ -385,20 +386,21 @@ def test_event_center_projects_current_feedback_across_active_stores() -> None:
         assert article["feedback_labels"] == ["high_value", "duplicate"]
         assert article["feedback_operator_count"] == 2
         assert "特别有用 1" in article["feedback_display"] and "重复 1" in article["feedback_display"]
-        assert by_id["official-1"]["feedback_display"] == "无效 · 证据不足"
+        assert by_id["official-1"]["feedback_state"] == "unlabelled"
+        assert by_id["official-1"]["feedback_display"] == "未反馈"
         assert by_id[str(event_id)]["feedback_state"] == "unlabelled"
         assert by_id["article-unsent"]["feedback_state"] == "not_delivered"
         assert by_id["baseline-1"]["feedback_state"] == "not_applicable"
         assert "operator_id" not in article and "operator-a" not in str(article)
         summary = event_feedback_summary(rows)
-        assert summary == {"delivered": 3, "labelled": 2, "high_value": 1, "duplicate": 1, "invalid": 1}
+        assert summary == {"delivered": 3, "labelled": 1, "high_value": 1, "duplicate": 1, "invalid": 0}
 
         duplicate_rows = fetch_events_rows(day="2026-07-15", feedback="duplicate", db_path=db_path)
         invalid_rows = fetch_events_rows(day="2026-07-15", feedback="invalid", db_path=db_path)
         unlabelled_rows = fetch_events_rows(day="2026-07-15", feedback="unlabelled", db_path=db_path)
         assert [row["id"] for row in duplicate_rows] == ["article-1"]
-        assert [row["id"] for row in invalid_rows] == ["official-1"]
-        assert [str(row["id"]) for row in unlabelled_rows] == [str(event_id)]
+        assert invalid_rows == []
+        assert {str(row["id"]) for row in unlabelled_rows} == {"official-1", str(event_id)}
         with sqlite3.connect(db_path) as conn:
             assert conn.execute("SELECT COUNT(*) FROM market_feedback").fetchone()[0] == before
 

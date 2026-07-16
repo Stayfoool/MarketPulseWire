@@ -14,12 +14,14 @@ import feishu_app
 import feishu_feedback_service
 
 from market_feedback import (
+    CLEARED_FEEDBACK_LABEL,
     FeedbackError,
     FeedbackIdentity,
     append_feedback_actions,
     build_feedback_token,
     current_feedback_rows,
     feedback_card_for_callback,
+    feedback_projection_by_item,
     feedback_quality_payload,
     handle_feedback_callback,
     parse_feedback_token,
@@ -214,6 +216,96 @@ def test_last_click_wins_by_feishu_timestamp_and_keeps_history() -> None:
             assert conn.execute("SELECT COUNT(*) FROM market_feedback").fetchone()[0] == 3
 
 
+def test_same_label_second_click_cancels_and_third_click_reselects() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "feedback.sqlite3"
+        insert_delivered_article(db_path)
+        identity = FeedbackIdentity("article", "cls_telegraph_api", "item-1")
+        token = build_feedback_token(identity, secret=TEST_SIGNING_KEY, issued_at=1)
+
+        selected = handle_feedback_callback(
+            callback(token, "duplicate", "evt-select", 100),
+            secret=TEST_SIGNING_KEY,
+            allowed_ids={OPERATOR},
+            db_path=db_path,
+        )
+        cancelled = handle_feedback_callback(
+            callback(token, "duplicate", "evt-cancel", 200),
+            secret=TEST_SIGNING_KEY,
+            allowed_ids={OPERATOR},
+            db_path=db_path,
+        )
+        assert selected["result"]["current_label"] == "duplicate"
+        assert cancelled["result"]["label"] == CLEARED_FEEDBACK_LABEL
+        assert cancelled["result"]["current_label"] == CLEARED_FEEDBACK_LABEL
+        assert cancelled["toast"]["content"] == "已取消选择"
+
+        current = current_feedback_rows(db_path)
+        assert len(current) == 1 and current[0]["label"] == CLEARED_FEEDBACK_LABEL
+        with sqlite3.connect(db_path) as conn:
+            history = conn.execute(
+                "SELECT label, reason_tags_json, supersedes_id, raw_json FROM market_feedback ORDER BY id"
+            ).fetchall()
+            projection = feedback_projection_by_item(conn)
+        assert history[0][0] == "duplicate"
+        assert history[1][0:3] == (CLEARED_FEEDBACK_LABEL, "[]", 1)
+        assert json.loads(history[1][3]) == {
+            "event_type": "card.action.trigger",
+            "toggle": "cancel",
+            "requested_label": "duplicate",
+        }
+        assert projection == {}
+
+        cleared_card = feedback_card_for_callback(
+            identity,
+            cancelled["card_state"]["label"],
+            secret=TEST_SIGNING_KEY,
+            db_path=db_path,
+        )
+        assert cleared_card is not None
+        assert all("反馈状态" not in str(element) for element in cleared_card["elements"])
+        assert all(
+            not str(button["text"]["content"]).startswith("✓")
+            for button in cleared_card["elements"][-1]["actions"][:3]
+        )
+        quality = feedback_quality_payload(db_path=db_path, days=30)
+        assert quality["summary"]["delivered"] == 1
+        assert quality["summary"]["labelled"] == 0
+        assert quality["examples"] == []
+
+        reselected = handle_feedback_callback(
+            callback(token, "duplicate", "evt-reselect", 300),
+            secret=TEST_SIGNING_KEY,
+            allowed_ids={OPERATOR},
+            db_path=db_path,
+        )
+        assert reselected["result"]["current_label"] == "duplicate"
+        assert reselected["result"]["label"] == "duplicate"
+
+        retried_cancel = handle_feedback_callback(
+            callback(token, "duplicate", "evt-cancel", 200),
+            secret=TEST_SIGNING_KEY,
+            allowed_ids={OPERATOR},
+            db_path=db_path,
+        )
+        assert retried_cancel["result"]["duplicate_event"] is True
+        assert retried_cancel["result"]["is_current"] is False
+        assert retried_cancel["result"]["current_label"] == "duplicate"
+
+        delayed_same_label = handle_feedback_callback(
+            callback(token, "duplicate", "evt-delayed-same", 250),
+            secret=TEST_SIGNING_KEY,
+            allowed_ids={OPERATOR},
+            db_path=db_path,
+        )
+        assert delayed_same_label["result"]["label"] == "duplicate"
+        assert delayed_same_label["result"]["is_current"] is False
+        assert delayed_same_label["result"]["current_label"] == "duplicate"
+        quality = feedback_quality_payload(db_path=db_path, days=30)
+        assert quality["summary"]["labelled"] == 1
+        assert quality["summary"]["duplicate"] == 1
+
+
 def test_unauthorized_operator_is_rejected() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "feedback.sqlite3"
@@ -406,6 +498,7 @@ def test_overflow_callback_value_is_parsed() -> None:
 def main() -> None:
     test_feedback_token_and_card_actions()
     test_last_click_wins_by_feishu_timestamp_and_keeps_history()
+    test_same_label_second_click_cancels_and_third_click_reselects()
     test_unauthorized_operator_is_rejected()
     test_application_sender_returns_message_id()
     test_listener_only_mode_keeps_natural_feedback_delivery_disabled()
