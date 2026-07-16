@@ -484,7 +484,7 @@ def test_overflow_callback_value_is_parsed() -> None:
         payload = callback(token, "invalid", "evt-overflow", 100)
         payload["event"]["action"] = {
             "tag": "overflow",
-            "value": json.dumps({"feedback_token": token, "label": "invalid", "reason_tag": "stale"}),
+            "option": json.dumps({"feedback_token": token, "label": "invalid", "reason_tag": "stale"}),
         }
         response = handle_feedback_callback(
             payload,
@@ -493,6 +493,22 @@ def test_overflow_callback_value_is_parsed() -> None:
             db_path=db_path,
         )
         assert "旧闻" in response["toast"]["content"]
+
+        malformed = callback(token, "invalid", "evt-overflow-malformed", 200)
+        malformed["event"]["action"] = {"tag": "overflow", "option": "not-json"}
+        try:
+            handle_feedback_callback(
+                malformed,
+                secret=TEST_SIGNING_KEY,
+                allowed_ids={OPERATOR},
+                db_path=db_path,
+            )
+        except FeedbackError as exc:
+            assert "格式" in str(exc)
+        else:
+            raise AssertionError("malformed overflow option must fail")
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM market_feedback").fetchone()[0] == 1
 
 
 def main() -> None:
