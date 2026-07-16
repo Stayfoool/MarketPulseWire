@@ -40,7 +40,7 @@ CATEGORY_LABELS = {
     "official_policy": "3. 官方贸易政策",
     "news_media": "4. 新闻媒体",
     "portfolio_stock_news": "5. 新浪个股新闻",
-    "company_disclosures": "6. iFinD 公司公告",
+    "company_disclosures": "6. 公司公告",
 }
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,6 +51,8 @@ EDITABLE_OVERRIDE_FIELDS = {
     "skeptic_enabled",
     "web_evidence_enabled",
     "proxy_profile",
+    "provider",
+    "operation_mode",
     "notes",
 }
 
@@ -77,6 +79,8 @@ class SourceProfile:
     text_length_policy: str = ""
     source_priority: str = ""
     url: str = ""
+    provider: str = ""
+    operation_mode: str = ""
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -439,21 +443,23 @@ def build_profiles() -> list[SourceProfile]:
                 text_length_policy="按持仓相关性优先；长文/旧闻争议后续可接 Skeptic",
             ),
             SourceProfile(
-                id="ifind_notice",
+                id="company_disclosures",
                 category="company_disclosures",
-                name="iFinD 公司公告",
-                source_type="iFinD notices/filings",
-                fetch_range="启用持仓最近公告和 PDF 文本",
-                filter_policy="持仓范围、公告类型、事件去重；公告原文优先",
+                name="巨潮资讯公司公告",
+                source_type="巨潮资讯公开查询；可切换 provider adapter",
+                fetch_range="启用持仓最近两日普通公告、投资者关系活动记录及官方 PDF",
+                filter_policy="持仓范围、provider-neutral 公告身份、技术去重；官方公告原文优先",
                 frequency="每天 08:00 / 20:00 timer",
                 runtime_shape="timer one-shot",
                 pipeline="公告采集 -> NormalizedMarketItem -> 正式披露优先决策/解读 -> delivery/view",
-                service_units=("surveil-ifind-notice.timer", "surveil-ifind-notice.service"),
-                health_keys=(("ifind_notice", "notice"), ("signal_pipeline", "ifind_notice")),
-                fetcher="scripts/ifind_batch.py",
+                service_units=("surveil-company-disclosures.timer", "surveil-company-disclosures.service"),
+                health_keys=(("company_disclosures", "*"), ("company_disclosure_document", "*")),
+                fetcher="scripts/company_disclosures.py -> scripts/cninfo_disclosure_provider.py",
                 skeptic_enabled=False,
                 web_evidence_enabled=False,
-                notes="正式披露以公告原文和 iFinD 数据为准。",
+                provider="cninfo_public",
+                operation_mode="report_only",
+                notes="正式披露以官方公告原文为准；首次部署默认只报告，不进入决策或投递。",
             ),
         ]
     )
@@ -557,7 +563,7 @@ def save_source_profile_config(
             disabled_sources.append(source_id)
 
         item: dict[str, Any] = {}
-        for field in ("frequency", "proxy_profile", "notes"):
+        for field in ("frequency", "proxy_profile", "provider", "operation_mode", "notes"):
             value = str(row.get(field) or "").strip()
             if value and value != str(default.get(field) or ""):
                 item[field] = value
@@ -598,7 +604,13 @@ def apply_local_config(profile: SourceProfile, config: dict[str, Any]) -> dict[s
     payload["overrides"] = overrides
     payload["config_modified"] = (not payload["enabled"]) or bool(overrides)
     payload["runtime_effective"] = True
-    payload["runtime_note"] = "来源开关由运行时读取；频率和代理暂仅记录。"
+    if payload.get("provider"):
+        payload["runtime_note"] = (
+            f"来源开关、provider={payload.get('provider')}、mode={payload.get('operation_mode') or 'report_only'} 由运行时读取；"
+            "频率和代理暂仅记录。"
+        )
+    else:
+        payload["runtime_note"] = "来源开关由运行时读取；频率和代理暂仅记录。"
     return payload
 
 

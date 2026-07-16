@@ -32,6 +32,11 @@ EVENT_SOURCE_CONTEXT: dict[str, dict[str, str]] = {
     "sina_flash": {"source_category": "news_media", "publisher_role": "news_media", "collector": "sina_flash"},
     "sina_stock_news": {"source_category": "portfolio_stock_news", "publisher_role": "news_media", "collector": "sina_stock_news"},
     "ifind_notice": {"source_category": "company_disclosures", "collector": "ifind_batch"},
+    "company_disclosures": {
+        "source_category": "company_disclosures",
+        "publisher_role": "company_official",
+        "collector": "company_disclosures",
+    },
 }
 
 

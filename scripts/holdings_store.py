@@ -291,7 +291,7 @@ def validate_holdings(items: list[dict[str, Any]], *, verify_remote: bool = True
                 {
                     "level": "warning",
                     "field": "symbol",
-                    "message": f"第 {index} 行 {name or '<未命名>'} 缺少股票代码；部分 iFinD/Sina 监控无法准确覆盖。",
+                    "message": f"第 {index} 行 {name or '<未命名>'} 缺少股票代码；公司公告/Sina 监控无法准确覆盖。",
                 }
             )
             continue

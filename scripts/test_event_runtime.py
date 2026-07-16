@@ -10,6 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import ifind_batch
+import company_disclosures
 import market_runtime
 import sina_flash
 import sina_stock_news
@@ -27,7 +28,7 @@ def test_runtime_selects_only_unified_adapters() -> None:
 
 
 def test_all_event_collectors_import_runtime_entrypoints() -> None:
-    for module in (sina_flash, sina_stock_news, ifind_batch):
+    for module in (sina_flash, sina_stock_news, ifind_batch, company_disclosures):
         assert module.process_market_item.__module__ == "market_runtime"
         source = inspect.getsource(module)
         for forbidden in (

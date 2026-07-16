@@ -472,7 +472,7 @@ def holding_name_tokens(holding: dict[str, Any]) -> list[str]:
 
 
 def is_announcement_like(item: dict[str, str], holding: dict[str, Any]) -> bool:
-    """Sina stock-news often republishes company disclosures; iFinD is authoritative for those."""
+    """Sina stock-news often republishes disclosures; the official disclosure document is authoritative."""
     title = item.get("title", "").strip()
     if not title:
         return False

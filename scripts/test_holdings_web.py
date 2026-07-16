@@ -25,6 +25,7 @@ from source_profiles import (
     filter_enabled_source_mapping,
     load_source_profile_config,
     save_source_profile_config,
+    source_profile_enabled,
     source_profile_skeptic_enabled,
     source_profiles_payload,
 )
@@ -440,7 +441,7 @@ def test_source_profiles_group_six_categories() -> None:
         "3. 官方贸易政策",
         "4. 新闻媒体",
         "5. 新浪个股新闻",
-        "6. iFinD 公司公告",
+        "6. 公司公告",
     ]
     profile_ids = {item["id"] for item in payload["profiles"]}
     assert {
@@ -452,7 +453,7 @@ def test_source_profiles_group_six_categories() -> None:
         "ustr_press_releases",
         "cls_telegraph_api",
         "sina_stock_news",
-        "ifind_notice",
+        "company_disclosures",
     } <= profile_ids
     semianalysis = next(item for item in payload["profiles"] if item["id"] == "semianalysis")
     alphabstract = next(item for item in payload["profiles"] if item["id"] == "alphabstract_summaries")
@@ -593,6 +594,42 @@ def test_source_profile_runtime_filters_and_flags() -> None:
         assert source_profile_skeptic_enabled("cls_telegraph_api", config_path=config_path) is False
 
 
+def test_company_disclosure_provider_and_mode_are_private_runtime_overrides() -> None:
+    with TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        config_path = root / "source_profiles.local.json"
+        saved = save_source_profile_config(
+            {
+                "profiles": [
+                    {
+                        "id": "company_disclosures",
+                        "enabled": True,
+                        "provider": "future_provider",
+                        "operation_mode": "live",
+                    }
+                ]
+            },
+            path=config_path,
+        )
+        payload = source_profiles_payload(root / "surveil.sqlite3", config_path=config_path)
+    profile = next(item for item in payload["profiles"] if item["id"] == "company_disclosures")
+    assert saved["override_count"] == 1
+    assert profile["provider"] == "future_provider"
+    assert profile["operation_mode"] == "live"
+    assert profile["overrides"] == {"operation_mode": "live", "provider": "future_provider"}
+    assert "provider=future_provider" in profile["runtime_note"]
+
+
+def test_company_disclosure_source_can_be_disabled_privately() -> None:
+    with TemporaryDirectory() as tmpdir:
+        config_path = Path(tmpdir) / "source_profiles.local.json"
+        save_source_profile_config(
+            {"profiles": [{"id": "company_disclosures", "enabled": False}]},
+            path=config_path,
+        )
+        assert source_profile_enabled("company_disclosures", config_path=config_path) is False
+
+
 def test_source_profile_can_explicitly_remove_news_media_role() -> None:
     with TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
@@ -654,7 +691,7 @@ def test_systemd_actions_are_whitelisted() -> None:
     assert RUN_ONCE_TARGETS["surveil-china-media.timer"] == "surveil-china-media.service"
     assert unit_actions("surveil-holdings-web.service") == ["status"]
     assert unit_actions("ssh.service") == []
-    assert "surveil-ifind-notice.service" in SERVICE_UNITS
+    assert "surveil-company-disclosures.service" in SERVICE_UNITS
 
 
 def systemd_fixture(unit: str, values: dict[str, str]) -> dict[str, object]:
@@ -666,7 +703,7 @@ def systemd_fixture(unit: str, values: dict[str, str]) -> dict[str, object]:
 
 def test_health_tasks_pair_timer_with_service_and_prefer_execution_result() -> None:
     timer = systemd_fixture(
-        "surveil-ifind-notice.timer",
+        "surveil-company-disclosures.timer",
         {
             "ActiveState": "active",
             "SubState": "waiting",
@@ -675,7 +712,7 @@ def test_health_tasks_pair_timer_with_service_and_prefer_execution_result() -> N
         },
     )
     service = systemd_fixture(
-        "surveil-ifind-notice.service",
+        "surveil-company-disclosures.service",
         {
             "ActiveState": "failed",
             "SubState": "failed",
@@ -685,13 +722,13 @@ def test_health_tasks_pair_timer_with_service_and_prefer_execution_result() -> N
         },
     )
     tasks = build_health_tasks([timer, service])
-    task = next(item for item in tasks if item["Id"] == "surveil-ifind-notice")
-    assert task["label"] == "iFinD 公司公告"
+    task = next(item for item in tasks if item["Id"] == "surveil-company-disclosures")
+    assert task["label"] == "公司公告 / 巨潮资讯"
     assert task["schedule_status"] == "等待下次触发"
     assert task["execution_status"] == "最近运行失败（exit 1）"
-    assert task["action_unit"]["Id"] == "surveil-ifind-notice.timer"
-    assert task["timer"]["Id"] == "surveil-ifind-notice.timer"
-    assert task["service"]["Id"] == "surveil-ifind-notice.service"
+    assert task["action_unit"]["Id"] == "surveil-company-disclosures.timer"
+    assert task["timer"]["Id"] == "surveil-company-disclosures.timer"
+    assert task["service"]["Id"] == "surveil-company-disclosures.service"
 
 
 def test_health_tasks_show_disabled_timer_and_last_success_separately() -> None:
@@ -794,6 +831,8 @@ def main() -> int:
     test_source_profiles_aggregate_wildcard_health()
     test_source_profile_local_config_roundtrip()
     test_source_profile_runtime_filters_and_flags()
+    test_company_disclosure_provider_and_mode_are_private_runtime_overrides()
+    test_company_disclosure_source_can_be_disabled_privately()
     test_source_profile_can_explicitly_remove_news_media_role()
     test_source_profile_runtime_note_reports_effective_counts()
     test_systemd_actions_are_whitelisted()

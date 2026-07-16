@@ -60,6 +60,8 @@ jobs:
           python scripts/test_content_flow.py
           python scripts/test_architecture_invariants.py
           python scripts/test_event_runtime.py
+          python scripts/test_cninfo_disclosure_provider.py
+          python scripts/test_company_disclosures.py
           python scripts/test_event_pipeline_convergence.py
           python scripts/test_market_item.py
           python scripts/test_decision_engine.py

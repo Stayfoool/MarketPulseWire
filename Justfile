@@ -22,6 +22,8 @@ test:
     python3 scripts/test_macro_event_dedup.py
     python3 scripts/test_industry_fact_dedup.py
     python3 scripts/test_company_event_dedup.py
+    python3 scripts/test_cninfo_disclosure_provider.py
+    python3 scripts/test_company_disclosures.py
     python3 scripts/test_ai_compute_supply_demand.py
     python3 scripts/test_market_delivery.py
     python3 scripts/test_market_feedback.py

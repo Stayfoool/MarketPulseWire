@@ -119,7 +119,7 @@ def render_report(start: str, end: str, notice_analysis_limit: int) -> str:
         """
         SELECT id, title, summary, full_text, published_at, symbols_json, raw_json
         FROM events
-        WHERE source='ifind_notice' AND (published_at >= ? OR first_seen_at >= ?)
+        WHERE source IN ('company_disclosures', 'ifind_notice') AND (published_at >= ? OR first_seen_at >= ?)
         ORDER BY published_at DESC, id DESC
         """,
         (start, start),
@@ -193,7 +193,7 @@ def render_report(start: str, end: str, notice_analysis_limit: int) -> str:
     lines.append("## 数据完整性说明")
     lines.append("")
     lines.append("- 新浪财经快讯：当前数据库仅包含服务上线以来捕获的持仓相关新闻；新浪快讯源未在本系统里完成上周历史全量回溯，所以不能代表上周五以来全部新闻。")
-    lines.append(f"- iFinD 公告：已按持仓股从 {start} 回溯至今抓取公告，并抽取 PDF 正文；本次共覆盖 {len(notices)} 条公告。")
+    lines.append(f"- 公司公告：已按持仓股从 {start} 回溯至今抓取公告，并抽取 PDF 正文；本次共覆盖 {len(notices)} 条公告。")
     lines.append("- 韭研公社：已回补 2026-06-12、06-15、06-16、06-17、06-18 的 16:00 全日异动池；2026-06-19 当前返回 0 条。")
     lines.append("- 模型：当前使用服务器配置的 DeepSeek/OpenAI-compatible 模型；本报告只对部分公告做样张分析，未对全部韭研异动逐条调用模型。")
     lines.append("")
@@ -221,13 +221,13 @@ def render_report(start: str, end: str, notice_analysis_limit: int) -> str:
             lines.append("新浪快讯：当前数据库未捕获到相关快讯。")
         notice_rows = notice_by_symbol.get(symbol, [])
         if notice_rows:
-            lines.append("iFinD 公告：")
+            lines.append("公司公告：")
             for row in notice_rows[:8]:
                 lines.append(f"- {row['published_at']}：{row['title']}（正文 {len(row['full_text'] or '')} 字）")
             if len(notice_rows) > 8:
                 lines.append(f"- 另有 {len(notice_rows) - 8} 条公告未展开。")
         else:
-            lines.append("iFinD 公告：本区间未抓到公告。")
+            lines.append("公司公告：本区间未抓到公告。")
         lines.append("")
 
     lines.append("## 新浪财经持仓相关新闻/快讯")
@@ -239,7 +239,7 @@ def render_report(start: str, end: str, notice_analysis_limit: int) -> str:
         lines.append(f"- {row['published_at']} | {symbols} | {row['title']}")
     lines.append("")
 
-    lines.append("## iFinD 公告与样张解读")
+    lines.append("## 公司公告与样张解读")
     lines.append("")
     lines.append(f"本区间公告共 {len(notices)} 条；以下先列模型样张解读，再列公告清单。")
     lines.append("")

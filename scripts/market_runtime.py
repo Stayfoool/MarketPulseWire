@@ -30,6 +30,7 @@ EVENT_SOURCE_CONTEXT: dict[str, tuple[str, str, str]] = {
     "sina_flash": ("news_media", "sina_flash", "flash"),
     "sina_stock_news": ("portfolio_stock_news", "sina_stock_news", "portfolio_news"),
     "ifind_notice": ("company_disclosures", "ifind_batch", "notice"),
+    "company_disclosures": ("company_disclosures", "company_disclosures", "announcement"),
 }
 ARTICLE_COMPAT_SOURCE_CATEGORIES = {"trendforce_page": "research_industry_media"}
 

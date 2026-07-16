@@ -193,7 +193,7 @@ systemctl status --no-pager \
   surveil-official-collector.timer \
   surveil-news-collector.timer \
   surveil-sina-stock-news.timer \
-  surveil-ifind-notice.timer
+  surveil-company-disclosures.timer
 ```
 
 The high-frequency persistent fetchers remain:
@@ -201,6 +201,16 @@ The high-frequency persistent fetchers remain:
 ```bash
 systemctl status --no-pager surveil-x-stream.service surveil-sina-flash.service
 ```
+
+`surveil-company-disclosures.timer` retains the former announcement schedule at
+08:00 and 20:00. Its source profile defaults to `provider=cninfo_public` and
+`operation_mode=report_only`; report-only runs may update source state, PDF
+cache and source health but do not create reviews, decisions or deliveries.
+After the observation window and explicit approval, change only this private
+source profile to `operation_mode=live`. A newly selected provider always
+baselines its first successful result before processing later records. The
+systemd installer disables and removes the expired
+`surveil-ifind-notice.timer`/service and never starts them again.
 
 Open the Web workbench through an SSH tunnel:
 

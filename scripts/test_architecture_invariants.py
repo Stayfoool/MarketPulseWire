@@ -25,6 +25,7 @@ UNIFIED_ITEM_COLLECTORS = (
     "sina_flash.py",
     "sina_stock_news.py",
     "ifind_batch.py",
+    "company_disclosures.py",
     "value_directory_monitor.py",
 )
 

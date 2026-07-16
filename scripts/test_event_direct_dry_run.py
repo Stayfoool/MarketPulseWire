@@ -59,6 +59,7 @@ def test_canonical_report_covers_all_event_sources_and_declares_no_side_effects(
     }
     assert contexts["sina_flash"]["source_category"] == "news_media"
     assert contexts["sina_stock_news"]["source_category"] == "portfolio_stock_news"
+    assert contexts["company_disclosures"]["collector"] == "company_disclosures"
     assert contexts["ifind_notice"]["collector"] == "ifind_batch"
 
 

@@ -4,7 +4,7 @@ This document is an as-built map of the current code and production shape. Engin
 
 ## Runtime Spine
 
-All general research, industry-media, news-media, official-company, official trade-policy, flash, portfolio-news, AlphaAbstract, ValueList, and iFinD items use one runtime entry:
+All general research, industry-media, news-media, official-company, official trade-policy, flash, portfolio-news, company-disclosure, AlphaAbstract, and ValueList items use one runtime entry:
 
 ```text
 collector
@@ -59,6 +59,9 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `ai_compute_supply_demand.py` | Source-neutral deterministic AI compute supply, demand, capacity and constraint classification |
 | `trade_friction.py` | Source-neutral China-US / China-EU trade-friction classification and evidence extraction |
 | `trade_policy_monitor.py` | Official API/RSS/list discovery, new-item detail enrichment, baseline and source health |
+| `company_disclosures.py` | One logical portfolio-disclosure collector, provider selection, baseline, source state and health |
+| `disclosure_providers.py` / `cninfo_disclosure_provider.py` | Provider-neutral disclosure contract and CNINFO public-query transport |
+| `disclosure_document.py` | Shared bounded PDF download, SHA-256 and `pypdf` text extraction |
 | `market_interpreter.py` | Thin interpretation and bounded LLM output normalization |
 | `market_content_adapter.py` | Article and official-news compatibility payload/store shape |
 | `market_event_adapter.py` | Event compatibility payload/store shape |
@@ -82,11 +85,13 @@ The former direct/compat route switch and these wrapper modules have been remove
 | Official trade policy | `news_collector.py` -> `trade_policy_monitor.py` | Federal Register, USTR, European Commission and MOFCOM public sources; unified runtime, article store |
 | Sina 7x24 flash | `sina_flash.py` | Unified runtime, event store |
 | Sina portfolio stock news | `sina_stock_news.py` | Relevance enrichment, then unified runtime and event store |
-| iFinD company disclosures | `ifind_batch.py` | Unified runtime and event store; the batch summary is an operational card |
+| Company disclosures | `company_disclosures.py` -> `cninfo_disclosure_provider.py` | Twice daily CNINFO fulltext/relation discovery and official-PDF enrichment; report-only by default, then unified runtime and event store when approved live |
 | AlphaAbstract research summaries | `alphabstract_monitor.py` through `research_collector.py` | Public sitemap/page enrichment, then unified runtime and article store |
 | ValueList research directory | `value_directory_monitor.py` | Private browser/OCR enrichment, then unified runtime and article store |
 
 Source-specific login, WAF, API, sitemap discovery, polling, browser profile, OCR and attachment behavior ends before the normalized runtime boundary.
+
+Company disclosures use the logical source `company_disclosures`. `transport_provider` remains raw audit metadata and cannot affect importance or action. The current fixed provider factory contains `cninfo_public`; a future provider implements the same security-resolution and paginated-list contract and is selected through the private source profile. CNINFO `orgId` mappings, provider baselines and provider-neutral known identities use the existing `source_state`. Fulltext announcements and `relation/category_dyhd_szdy` investor-relations records are queried separately, then normalized identically. A provider's first successful run is baseline-only, and `report_only` never calls the decision/store/delivery runtime. Historical `ifind_notice` event rows remain readable compatibility data; the expired iFinD announcement timer is removed.
 
 CLS telegraph collection preserves bounded official product metadata in the normalized raw audit: numeric `type`, the official bracketed product label, `share_img`/VIP status, and parsed `author_extends` stock names/codes. Article cards display these fields for an observation phase approved by the user. The metadata does not enter deterministic rule matching, importance or `DecisionResult.action`; the existing public `content` remains the decision text.
 
