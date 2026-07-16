@@ -406,6 +406,7 @@ def event_feedback_filter_clause(
         WHERE f.item_kind = ?
           AND f.source = {source_expr}
           AND CAST(f.item_id AS TEXT) = CAST({item_id_expr} AS TEXT)
+          AND f.label IN ('high_value', 'duplicate', 'invalid')
           AND NOT EXISTS (
             SELECT 1 FROM market_feedback newer
             WHERE newer.item_kind = f.item_kind
