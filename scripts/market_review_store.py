@@ -85,6 +85,9 @@ def upsert_event_record(event: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) 
     summary = str(event.get("summary") or "").strip()
     full_text = str(event.get("full_text") or "").strip()
     digest = event.get("content_hash") or event_content_hash(source, source_event_id, title, summary, full_text)
+    first_seen_at = now
+    if event.get("baseline_only") and event.get("first_seen_at"):
+        first_seen_at = str(event["first_seen_at"])
     payload = (
         source,
         source_event_id,
@@ -94,7 +97,7 @@ def upsert_event_record(event: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) 
         full_text,
         str(event.get("url") or ""),
         str(event.get("published_at") or ""),
-        now,
+        first_seen_at,
         json_dumps(event.get("symbols") or []),
         json_dumps(event.get("themes") or []),
         json_dumps(event.get("raw") or {}),

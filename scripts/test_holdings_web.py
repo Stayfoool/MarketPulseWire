@@ -287,6 +287,58 @@ def test_event_center_can_show_baselines_and_filter_by_published_time() -> None:
     assert published_rows[0]["source_id"] == "value_directory_ib_stocks"
 
 
+def test_event_center_shows_company_disclosure_baseline_only_when_requested() -> None:
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO events (
+                    source, source_event_id, event_type, title, summary, full_text, url,
+                    published_at, first_seen_at, symbols_json, themes_json, raw_json,
+                    content_hash, baseline_only
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "company_disclosures",
+                    "announcement:1225426155",
+                    "announcement",
+                    "股票交易异常波动公告",
+                    "基线公告",
+                    "",
+                    "https://static.cninfo.com.cn/example.pdf",
+                    "2026-07-16T18:00:00+08:00",
+                    "2026-07-16T11:41:48+00:00",
+                    '["001270.SZ"]',
+                    '["公司公告"]',
+                    "{}",
+                    "baseline-hash",
+                    1,
+                ),
+            )
+            conn.commit()
+
+        hidden = fetch_events_rows(
+            day="2026-07-16",
+            source="company_disclosures",
+            db_path=db_path,
+        )
+        visible = fetch_events_rows(
+            day="2026-07-16",
+            source="company_disclosures",
+            include_baseline=True,
+            db_path=db_path,
+        )
+
+    assert hidden == []
+    assert len(visible) == 1
+    assert visible[0]["id"] == "1"
+    assert visible[0]["source_id"] == "company_disclosures"
+    assert visible[0]["baseline_only"] is True
+    assert visible[0]["delivery_status"] == ""
+
+
 def test_event_center_source_filter_uses_grouped_dropdown() -> None:
     html = html_page(token_required=False)
     assert '<select id="eventSource"' in html
@@ -826,6 +878,7 @@ def main() -> int:
     test_event_center_projects_current_feedback_across_active_stores()
     test_event_center_feedback_filter_applies_before_article_limit()
     test_event_center_can_show_baselines_and_filter_by_published_time()
+    test_event_center_shows_company_disclosure_baseline_only_when_requested()
     test_event_center_source_filter_uses_grouped_dropdown()
     test_source_profiles_group_six_categories()
     test_source_profiles_aggregate_wildcard_health()
