@@ -146,6 +146,23 @@ def test_independent_routes_are_explicit_and_tested() -> None:
         assert (SCRIPTS / contract["test"]).exists(), contract["test"]
 
 
+def test_deployment_preserves_private_proxy_state_and_disables_shadows() -> None:
+    deploy = (SCRIPTS / "deploy_remote.sh").read_text(encoding="utf-8")
+    installer = (SCRIPTS / "install_remote_systemd.sh").read_text(encoding="utf-8")
+    assert 'PRIVATE_PROXY_PREFIX="shadowsocks_"' in deploy
+    assert 'PRIVATE_PROXY_YAML_PATTERN="${PRIVATE_PROXY_PREFIX}*.yaml"' in deploy
+    assert '--exclude "$PRIVATE_PROXY_YAML_PATTERN"' in deploy
+    shadow_timers = (
+        "surveil-research-collector-shadow.timer",
+        "surveil-official-collector-shadow.timer",
+        "surveil-news-collector-shadow.timer",
+        "surveil-collector-shadow-digest.timer",
+    )
+    for timer in shadow_timers:
+        assert f"systemctl disable --now {timer}" in installer
+        assert f"systemctl enable --now {timer}" not in installer
+
+
 def test_rule_center_execution_modes_match_runtime_ordering() -> None:
     ordered_runtime_ids = set(ORDERED_FIRST_MATCH_RULE_IDS)
     ordered_definition_ids: set[str] = set()
@@ -272,6 +289,7 @@ def main() -> int:
     test_unified_collectors_use_runtime_without_owning_delivery()
     test_removed_compatibility_modules_do_not_return()
     test_independent_routes_are_explicit_and_tested()
+    test_deployment_preserves_private_proxy_state_and_disables_shadows()
     test_rule_center_execution_modes_match_runtime_ordering()
     test_source_profiles_have_complete_runtime_ownership()
     test_common_rule_is_stable_across_transport_metadata()

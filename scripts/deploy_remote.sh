@@ -31,11 +31,14 @@ python3 --version
 "
 
 echo "==> sync code"
+PRIVATE_PROXY_PREFIX="shadowsocks_"
+PRIVATE_PROXY_YAML_PATTERN="${PRIVATE_PROXY_PREFIX}*.yaml"
 rsync -az --delete \
   --include '.env.example' \
   --exclude '.env' \
   --exclude '.env.*' \
   --exclude 'proxy.env' \
+  --exclude "$PRIVATE_PROXY_YAML_PATTERN" \
   --exclude 'config/portfolio.json' \
   --exclude 'config/media_keywords.json' \
   --exclude 'config/investment_bank_theme_rules.json' \

@@ -11,6 +11,12 @@ The recommended production setup is:
 - Web workbench bound to `127.0.0.1`
 - SSH tunnel for browser access
 
+The current production target is an Alibaba Cloud Debian 12 server with 2
+vCPU, 2 GiB plan memory, a persistent 2 GiB swap file, and a 40 GiB system
+disk. Host/IP and operator-key details remain in the private local operator
+notes, not this repository. Report-only collector shadow timers stay disabled
+on this constrained host unless a bounded observation explicitly requires them.
+
 Do not commit `.env`, runtime databases, logs, reports, proxy configs, or real portfolio files.
 
 ## Local Development
@@ -99,14 +105,15 @@ Install services and timers:
 ./scripts/install_remote_systemd.sh
 ```
 
-The installer also enables shadow collector timers:
+The installer copies but keeps these report-only shadow collector timers disabled:
 
 - `surveil-research-collector-shadow.timer`
 - `surveil-official-collector-shadow.timer`
 - `surveil-news-collector-shadow.timer`
 - `surveil-collector-shadow-digest.timer`
 
-These shadow jobs are migration aids. They write JSON/Markdown reports under
+These shadow jobs are migration aids that may be started explicitly for a
+bounded observation. They write JSON/Markdown reports under
 `reports/` and logs under `logs/`; they can run report-only `decision_engine`
 direct-shadow checks, but they do not send Feishu messages, do not run LLM
 gates, and do not write production `seen_items` or review tables.
