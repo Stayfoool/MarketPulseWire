@@ -14,6 +14,7 @@ test:
     python3 scripts/test_china_finance_media_monitor.py
     python3 scripts/test_value_directory_monitor.py
     python3 scripts/test_value_directory_flow.py
+    python3 scripts/test_http_utils.py
     python3 scripts/test_rss_monitor_fetch.py
     python3 scripts/test_push_rules.py
     python3 scripts/test_investment_bank_theme_config.py
