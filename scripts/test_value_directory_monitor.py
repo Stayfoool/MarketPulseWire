@@ -16,7 +16,13 @@ import value_directory_monitor
 from market_item import DecisionResult, InterpretationResult, MarketFlowResult
 from market_runtime import MarketProcessOutcome
 from source_profiles import runtime_source_profile
-from value_directory_browser import classify_page_state, dedupe_entries, normalize_entry, source_config
+from value_directory_browser import (
+    classify_page_state,
+    dedupe_entries,
+    evaluate_list_payload_with_empty_wait,
+    normalize_entry,
+    source_config,
+)
 from value_directory_preview import (
     apply_preview_llm_response_preferences,
     apply_preview_to_item,
@@ -64,6 +70,60 @@ def test_page_state_detection_separates_waf_login_and_empty() -> None:
     assert classify_page_state("请先 登录 后继续", article_count=0, url="https://www.valuelist.cn/login") == "login"
     assert classify_page_state("正常页面", article_count=0) == "empty"
     assert classify_page_state("正常页面", article_count=3) == "ok"
+
+
+class _ListWaitTimeout(Exception):
+    pass
+
+
+class _ListPage:
+    def __init__(self, payloads: list[dict[str, object]], *, timeout: bool = False) -> None:
+        self.payloads = list(payloads)
+        self.timeout = timeout
+        self.waits: list[tuple[str, int]] = []
+
+    def evaluate(self, _script, _limit):
+        if len(self.payloads) > 1:
+            return self.payloads.pop(0)
+        return self.payloads[0]
+
+    def wait_for_selector(self, selector: str, *, timeout: int) -> None:
+        self.waits.append((selector, timeout))
+        if self.timeout:
+            raise _ListWaitTimeout()
+
+
+def test_empty_list_waits_once_for_delayed_articles() -> None:
+    page = _ListPage(
+        [
+            {"url": "https://www.valuelist.cn/list", "title": "正常页面", "bodySample": "", "articleCount": 0},
+            {"url": "https://www.valuelist.cn/list", "title": "正常页面", "bodySample": "", "articleCount": 1},
+        ]
+    )
+    payload = evaluate_list_payload_with_empty_wait(page, 30, 45_000, timeout_error=_ListWaitTimeout)
+    assert payload["articleCount"] == 1
+    assert page.waits == [("article", 15_000)]
+
+
+def test_persistent_empty_list_remains_empty_after_bounded_wait() -> None:
+    page = _ListPage(
+        [{"url": "https://www.valuelist.cn/list", "title": "正常页面", "bodySample": "", "articleCount": 0}],
+        timeout=True,
+    )
+    payload = evaluate_list_payload_with_empty_wait(page, 30, 5_000, timeout_error=_ListWaitTimeout)
+    assert payload["articleCount"] == 0
+    assert page.waits == [("article", 5_000)]
+
+
+def test_waf_and_login_states_do_not_wait_for_articles() -> None:
+    for payload in (
+        {"url": "https://www.valuelist.cn/list", "title": "人机验证", "bodySample": "宝塔防火墙", "articleCount": 0},
+        {"url": "https://www.valuelist.cn/login", "title": "登录", "bodySample": "请登录", "articleCount": 0},
+    ):
+        page = _ListPage([payload])
+        result = evaluate_list_payload_with_empty_wait(page, 30, 45_000, timeout_error=_ListWaitTimeout)
+        assert result == payload
+        assert page.waits == []
 
 
 def test_dedupe_entries_keeps_first_valid_url() -> None:
@@ -556,6 +616,9 @@ def main() -> int:
     test_normalize_entry_extracts_stable_id_and_utc_date()
     test_normalize_entry_supports_industry_macro_source()
     test_page_state_detection_separates_waf_login_and_empty()
+    test_empty_list_waits_once_for_delayed_articles()
+    test_persistent_empty_list_remains_empty_after_bounded_wait()
+    test_waf_and_login_states_do_not_wait_for_articles()
     test_dedupe_entries_keeps_first_valid_url()
     test_shadow_payload_marks_seen_and_reviewed_without_delivery()
     test_source_profile_registers_value_directory()

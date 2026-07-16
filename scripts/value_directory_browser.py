@@ -25,6 +25,7 @@ INDUSTRY_MACRO_SOURCE_ID = "value_directory_ib_industry_macro"
 INDUSTRY_MACRO_LIST_URL = "https://www.valuelist.cn/ib-research/global-investment-banks"
 INDUSTRY_MACRO_SOURCE_MODULE = "价值目录 / 国际投行-行业宏观"
 CN_TZ = timezone(timedelta(hours=8))
+LIST_EMPTY_WAIT_MS = 15_000
 
 WAF_PATTERNS = (
     "人机验证",
@@ -264,11 +265,34 @@ def classify_page_state(text: str, *, article_count: int, url: str = "") -> str:
     return "ok"
 
 
+def evaluate_list_payload_with_empty_wait(
+    page: Any,
+    safe_limit: int,
+    timeout_ms: int,
+    *,
+    timeout_error: type[Exception],
+) -> dict[str, Any]:
+    payload = evaluate_list_payload(page, safe_limit, timeout_ms)
+    state = classify_page_state(
+        f"{payload.get('title', '')}\n{payload.get('bodySample', '')}",
+        article_count=int(payload.get("articleCount") or 0),
+        url=str(payload.get("url") or ""),
+    )
+    if state != "empty":
+        return payload
+    try:
+        page.wait_for_selector("article", timeout=min(LIST_EMPTY_WAIT_MS, timeout_ms))
+    except timeout_error:
+        pass
+    return evaluate_list_payload(page, safe_limit, timeout_ms)
+
+
 def collect_entries(limit: int = 30, url: str | None = None, source_id: str = SOURCE_ID) -> list[dict[str, Any]]:
     """Read visible list-page cards with a persistent server browser profile."""
     source = source_config(source_id)
     target_url = url or source.list_url
     try:
+        from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
     except Exception as exc:  # noqa: BLE001 - provide actionable setup message
         raise BrowserNotConfigured("缺少 Python Playwright 依赖。请先安装 requirements.txt。") from exc
@@ -286,7 +310,12 @@ def collect_entries(limit: int = 30, url: str | None = None, source_id: str = SO
             page = context.pages[0] if context.pages else context.new_page()
             page.goto(target_url, wait_until="domcontentloaded", timeout=config.timeout_ms)
             page.wait_for_timeout(int(os.getenv("VALUE_DIRECTORY_WAF_SETTLE_MS", "6000") or "6000"))
-            payload = evaluate_list_payload(page, safe_limit, config.timeout_ms)
+            payload = evaluate_list_payload_with_empty_wait(
+                page,
+                safe_limit,
+                config.timeout_ms,
+                timeout_error=PlaywrightTimeoutError,
+            )
         finally:
             context.close()
 
