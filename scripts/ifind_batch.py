@@ -320,8 +320,8 @@ def run_batch(
     limit: int | None,
     parse_pdf_dry_run: bool = False,
 ) -> int:
-    if not source_profile_enabled("ifind_notice"):
-        print("source profile: ifind_notice 已停用，跳过本轮。", flush=True)
+    if not source_profile_enabled("ifind_notice", default=False):
+        print("source profile: ifind_notice 已退役，跳过本轮。", flush=True)
         return 0
     init_db(DEFAULT_DB_PATH).close()
     import_holdings(DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH)

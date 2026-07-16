@@ -66,7 +66,7 @@ SERVICE_UNITS = [
     "surveil-overseas-media.service",
     "surveil-china-media.service",
     "surveil-sina-stock-news.service",
-    "surveil-ifind-notice.service",
+    "surveil-company-disclosures.service",
     "surveil-jygs-actions.service",
     "surveil-article-daily.service",
     "surveil-signals-extract.service",
@@ -94,7 +94,7 @@ TIMER_UNITS = [
     "surveil-signal-outcome.timer",
     "surveil-signal-review.timer",
     "surveil-signal-digest.timer",
-    "surveil-ifind-notice.timer",
+    "surveil-company-disclosures.timer",
     "surveil-jygs-actions.timer",
     "surveil-research-collector.timer",
     "surveil-official-collector.timer",
@@ -115,7 +115,7 @@ RUN_ONCE_TARGETS = {
     "surveil-signal-outcome.timer": "surveil-signal-outcome.service",
     "surveil-signal-review.timer": "surveil-signal-review.service",
     "surveil-signal-digest.timer": "surveil-signal-digest.service",
-    "surveil-ifind-notice.timer": "surveil-ifind-notice.service",
+    "surveil-company-disclosures.timer": "surveil-company-disclosures.service",
     "surveil-jygs-actions.timer": "surveil-jygs-actions.service",
     "surveil-research-collector.timer": "surveil-research-collector.service",
     "surveil-official-collector.timer": "surveil-official-collector.service",
@@ -166,7 +166,7 @@ UNIT_METADATA = {
     "surveil-overseas-media.service": {"group": "fetching_legacy", "type": "历史兼容", "schedule": "已切流；旧海外媒体批处理"},
     "surveil-china-media.service": {"group": "fetching_legacy", "type": "历史兼容", "schedule": "已切流；旧中国财经媒体批处理"},
     "surveil-sina-stock-news.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 30 分钟"},
-    "surveil-ifind-notice.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 08:00 / 20:00"},
+    "surveil-company-disclosures.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 08:00 / 20:00"},
     "surveil-jygs-actions.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 12:30 / 16:00"},
     "surveil-research-collector.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 5 分钟；页面源内部 15 分钟"},
     "surveil-official-collector.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 10 分钟"},
@@ -187,7 +187,7 @@ UNIT_METADATA = {
     "surveil-sina-stock-news.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 30 分钟"},
     "surveil-overseas-media.timer": {"group": "fetching_legacy", "type": "历史兼容定时器", "schedule": "已切流；旧每 5 分钟"},
     "surveil-china-media.timer": {"group": "fetching_legacy", "type": "历史兼容定时器", "schedule": "已切流；旧每 2 分钟"},
-    "surveil-ifind-notice.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "08:00 / 20:00"},
+    "surveil-company-disclosures.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "08:00 / 20:00"},
     "surveil-jygs-actions.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "12:30 / 16:00"},
     "surveil-research-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 5 分钟"},
     "surveil-official-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 10 分钟"},
@@ -219,7 +219,7 @@ UNIT_TASK_LABELS = {
     "surveil-feishu-feedback": "飞书反馈",
     "surveil-sina-flash": "新浪财经快讯",
     "surveil-sina-stock-news": "新浪持仓个股新闻",
-    "surveil-ifind-notice": "iFinD 公司公告",
+    "surveil-company-disclosures": "公司公告 / 巨潮资讯",
     "surveil-jygs-actions": "韭研公社异动",
     "surveil-research-collector": "研究机构 / 行业媒体采集",
     "surveil-official-collector": "公司官网采集",
@@ -250,7 +250,7 @@ LOG_FILES = [
     "collector-shadow-digest.err.log",
     "sina-flash.err.log",
     "sina-stock-news.err.log",
-    "ifind-notice.err.log",
+    "company-disclosures.err.log",
     "jygs-actions.err.log",
     "holdings-web.err.log",
     "feishu-feedback.err.log",
@@ -2996,6 +2996,7 @@ function sourceProfileSearchText(item) {{
     item.category_label, item.name, item.id, item.source_type, item.fetch_range,
     item.filter_policy, item.frequency, item.runtime_shape, item.pipeline,
     item.fetcher, item.publisher_role, item.tavily_policy, item.proxy_profile, item.text_length_policy,
+    item.provider, item.operation_mode,
     (item.service_units || []).join(' '), item.notes, item.enabled ? 'enabled' : 'disabled'
   ].join(' ').toLowerCase();
 }}
@@ -3025,6 +3026,8 @@ function sourceProfilesForSave() {{
     skeptic_enabled: Boolean(item.skeptic_enabled),
     web_evidence_enabled: Boolean(item.web_evidence_enabled),
     proxy_profile: item.proxy_profile || '',
+    provider: item.provider || '',
+    operation_mode: item.operation_mode || '',
     notes: item.notes || ''
   }}));
 }}
@@ -3049,6 +3052,19 @@ function renderSourceProfiles() {{
     const enabledChecked = item.enabled !== false ? 'checked' : '';
     const skepticChecked = item.skeptic_enabled ? 'checked' : '';
     const evidenceChecked = item.web_evidence_enabled ? 'checked' : '';
+    const providerControls = item.provider ? `
+      <div style="margin-top:6px">
+        <div class="hint">采集 provider</div>
+        <input class="source-control" data-source-id="${{escapeHtml(item.id || '')}}" data-field="provider" value="${{escapeHtml(item.provider || '')}}" oninput="updateSourceProfileDraft(this)">
+      </div>
+      <div style="margin-top:6px">
+        <div class="hint">运行模式</div>
+        <select class="source-control" data-source-id="${{escapeHtml(item.id || '')}}" data-field="operation_mode" onchange="updateSourceProfileDraft(this)">
+          <option value="report_only" ${{item.operation_mode === 'report_only' ? 'selected' : ''}}>只报告（不决策/不投递）</option>
+          <option value="live" ${{item.operation_mode === 'live' ? 'selected' : ''}}>正式运行</option>
+        </select>
+      </div>
+    ` : '';
     return `
       <tr>
         <td>${{escapeHtml(item.category_label || item.category || '')}}</td>
@@ -3089,6 +3105,7 @@ function renderSourceProfiles() {{
           <div class="hint">${{escapeHtml(item.filter_policy || '')}}</div>
           <div class="hint">${{escapeHtml(item.fetcher || '')}}</div>
           <div class="hint">${{services}}</div>
+          ${{providerControls}}
           <div style="margin-top:6px">
             <input class="source-control" data-source-id="${{escapeHtml(item.id || '')}}" data-field="proxy_profile" value="${{escapeHtml(item.proxy_profile || '')}}" oninput="updateSourceProfileDraft(this)">
           </div>
@@ -3462,7 +3479,7 @@ function settingsRestartAdvice(changedItems) {{
     lines.push('新浪配置：重启 surveil-sina-flash.service；可选立即运行 surveil-sina-stock-news.timer。');
   }}
   if (hasPrefix('IFIND_')) {{
-    lines.push('iFinD 配置：公告 timer 下一轮自动读取；如需马上验证，可在任务健康页立即运行 iFinD 公司公告。');
+    lines.push('iFinD 行情/兼容配置：依赖该接口的任务下一轮读取；公司公告来源已迁移到巨潮资讯。');
   }}
   if (hasAny(['SURVEIL_HTTP_PROXY', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'])) {{
     lines.push('代理环境：重启使用代理的常驻服务；collector timer 下一轮自动读取。若修改 mihomo 配置，重启 surveil-proxy.service。');

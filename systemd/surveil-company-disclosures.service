@@ -1,0 +1,13 @@
+[Unit]
+Description=Surveil company disclosures collector
+After=network-online.target surveil-db-init.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=surveil
+WorkingDirectory=/opt/surveil
+EnvironmentFile=-/opt/surveil/.env
+ExecStart=/opt/surveil/.venv/bin/python /opt/surveil/scripts/company_disclosures.py --days 2
+StandardOutput=append:/opt/surveil/logs/company-disclosures.log
+StandardError=append:/opt/surveil/logs/company-disclosures.err.log

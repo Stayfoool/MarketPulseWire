@@ -32,6 +32,7 @@ for unit in ./systemd/*.service ./systemd/*.timer; do
     -e "s/\/opt\/surveil/$REMOTE_DIR_ESCAPED/g" \
     "$unit" > "$RENDERED_SYSTEMD/$(basename "$unit")"
 done
+"${SSH[@]}" "rm -rf /tmp/surveil-systemd && mkdir -p /tmp/surveil-systemd"
 rsync -az -e "$RSYNC_RSH" "$RENDERED_SYSTEMD/" "$REMOTE_USER@$REMOTE_HOST:/tmp/surveil-systemd/"
 
 echo "==> install units"
@@ -73,7 +74,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-outcome.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-review.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-digest.timer, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-ifind-notice.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-company-disclosures.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-jygs-actions.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector.timer, \\
@@ -91,7 +92,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block start surveil-signal-outcome.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-signal-review.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-signal-digest.service, \\
-    \$SYSTEMCTL_BIN --no-block start surveil-ifind-notice.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-company-disclosures.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-jygs-actions.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-research-collector.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-official-collector.service, \\
@@ -109,7 +110,11 @@ systemctl enable surveil-db-init.service
 systemctl start surveil-db-init.service
 systemctl is-enabled surveil-db-init.service
 journalctl -u surveil-db-init.service -n 20 --no-pager
-systemctl enable --now surveil-ifind-notice.timer
+systemctl disable --now surveil-ifind-notice.timer >/dev/null 2>&1 || true
+systemctl stop surveil-ifind-notice.service >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/surveil-ifind-notice.timer /etc/systemd/system/surveil-ifind-notice.service
+systemctl daemon-reload
+systemctl enable --now surveil-company-disclosures.timer
 systemctl enable --now surveil-sina-stock-news.timer
 if grep -Eq '^DISABLE_LEGACY_RESEARCH_MONITORS=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
   systemctl disable --now surveil-overseas-media.timer >/dev/null 2>&1 || true
@@ -194,5 +199,5 @@ systemctl --no-pager --full status surveil-research-collector-shadow.timer || tr
 systemctl --no-pager --full status surveil-official-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-news-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-x-stream.service || true
-echo '已安装 surveil-db-init.service，启用 iFinD 公告、Sina 个股新闻、生产 collector timers（按 DISABLE_LEGACY_* 切换生产/历史入口）、文章日报、信号抽取/outcome/复盘/复盘日报、持仓 Web UI，并启动新浪快讯常驻服务；report-only collector shadow timers 默认停用。iFinD smoke test 可用：systemctl start surveil-ifind-smoke.service'
+echo '已安装 surveil-db-init.service，启用公司公告、Sina 个股新闻、生产 collector timers（按 DISABLE_LEGACY_* 切换生产/历史入口）、文章日报、信号抽取/outcome/复盘/复盘日报、持仓 Web UI，并启动新浪快讯常驻服务；report-only collector shadow timers 默认停用。公司公告默认 report_only，可在来源配置审阅后切换 live。'
 "
