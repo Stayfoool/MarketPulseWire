@@ -524,17 +524,21 @@ def callback_payload_fields(payload: dict[str, Any]) -> dict[str, Any]:
     event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
     operator = event.get("operator") if isinstance(event.get("operator"), dict) else {}
     action = event.get("action") if isinstance(event.get("action"), dict) else {}
-    raw_value = action.get("value")
-    if isinstance(raw_value, dict):
-        value = raw_value
-    elif isinstance(raw_value, str):
-        try:
-            parsed_value = json.loads(raw_value)
-        except json.JSONDecodeError:
-            parsed_value = {}
-        value = parsed_value if isinstance(parsed_value, dict) else {}
-    else:
-        value = {}
+    value: dict[str, Any] = {}
+    for raw_value in (action.get("value"), action.get("option")):
+        if isinstance(raw_value, dict):
+            candidate = raw_value
+        elif isinstance(raw_value, str):
+            try:
+                parsed_value = json.loads(raw_value)
+            except json.JSONDecodeError:
+                parsed_value = {}
+            candidate = parsed_value if isinstance(parsed_value, dict) else {}
+        else:
+            candidate = {}
+        if candidate.get("feedback_token"):
+            value = candidate
+            break
     context = event.get("context") if isinstance(event.get("context"), dict) else {}
     return {
         "event_id": str(header.get("event_id") or ""),
