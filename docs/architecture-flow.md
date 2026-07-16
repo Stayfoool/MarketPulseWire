@@ -139,7 +139,7 @@ Review condition: retire the path or move it behind `NormalizedMarketItem` and d
 
 ## Runtime And Deployment Facts
 
-- Production runs on the server under systemd; collector timers and persistent services are listed in `docs/deployment.md`.
+- Production runs on an Alibaba Cloud Debian 12 server under systemd; collector timers and persistent services are listed in `docs/deployment.md`.
 - The server Web panel and private server `.env` are the production configuration truth.
 - Private `.env`, portfolio data, SQLite, browser profiles, cookies and local source overrides are excluded from Git and deployment replacement.
 - X/Serenity and ValueList access stay within the API/account-visible boundary; the project does not bypass subscriptions, paywalls, WAF or authentication controls.

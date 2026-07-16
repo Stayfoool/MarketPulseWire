@@ -132,10 +132,15 @@ systemctl enable --now surveil-signals-extract.timer
 systemctl enable --now surveil-signal-outcome.timer
 systemctl enable --now surveil-signal-review.timer
 systemctl enable --now surveil-signal-digest.timer
-systemctl enable --now surveil-research-collector-shadow.timer
-systemctl enable --now surveil-official-collector-shadow.timer
-systemctl enable --now surveil-news-collector-shadow.timer
-systemctl enable --now surveil-collector-shadow-digest.timer
+systemctl disable --now surveil-research-collector-shadow.timer >/dev/null 2>&1 || true
+systemctl disable --now surveil-official-collector-shadow.timer >/dev/null 2>&1 || true
+systemctl disable --now surveil-news-collector-shadow.timer >/dev/null 2>&1 || true
+systemctl disable --now surveil-collector-shadow-digest.timer >/dev/null 2>&1 || true
+systemctl stop surveil-research-collector-shadow.service >/dev/null 2>&1 || true
+systemctl stop surveil-official-collector-shadow.service >/dev/null 2>&1 || true
+systemctl stop surveil-news-collector-shadow.service >/dev/null 2>&1 || true
+systemctl stop surveil-collector-shadow-digest.service >/dev/null 2>&1 || true
+echo 'Collector shadow timers are installed but disabled by default.'
 systemctl start surveil-stock-relations-import.service || true
 if grep -Eq '^DISABLE_LEGACY_RSS_MONITOR=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
   systemctl disable --now surveil-rss-monitor.service >/dev/null 2>&1 || true
@@ -189,5 +194,5 @@ systemctl --no-pager --full status surveil-research-collector-shadow.timer || tr
 systemctl --no-pager --full status surveil-official-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-news-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-x-stream.service || true
-echo '已安装 surveil-db-init.service，启用 iFinD 公告、Sina 个股新闻、collector timers（按 DISABLE_LEGACY_* 切换生产/历史入口）、collector shadow timers、文章日报、信号抽取/outcome/复盘/复盘日报、持仓 Web UI，并启动新浪快讯常驻服务。iFinD smoke test 可用：systemctl start surveil-ifind-smoke.service'
+echo '已安装 surveil-db-init.service，启用 iFinD 公告、Sina 个股新闻、生产 collector timers（按 DISABLE_LEGACY_* 切换生产/历史入口）、文章日报、信号抽取/outcome/复盘/复盘日报、持仓 Web UI，并启动新浪快讯常驻服务；report-only collector shadow timers 默认停用。iFinD smoke test 可用：systemctl start surveil-ifind-smoke.service'
 "

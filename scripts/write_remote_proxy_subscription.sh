@@ -9,7 +9,7 @@ LOCAL_PROXY="${LOCAL_PROXY:-}"
 
 echo "将把 mihomo/clash 订阅链接写入远程服务器：$REMOTE_HOST:$REMOTE_PROXY_DIR/subscription.url"
 echo "订阅链接是敏感信息，不会打印明文；直接回车会保留远程现有订阅。"
-echo "配置生成在本地 Mac 完成，适合订阅服务拒绝华为云 IP 直接访问的情况。"
+echo "配置生成在本地 Mac 完成，适合订阅服务拒绝云服务器 IP 直接访问的情况。"
 echo
 
 CURRENT_MARKER="$(ssh -n -i "$REMOTE_SSH_KEY" -o IdentitiesOnly=yes "$REMOTE_USER@$REMOTE_HOST" \
