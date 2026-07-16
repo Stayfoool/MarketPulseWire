@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -199,14 +199,26 @@ def collect_disclosures(
     deliver: bool = True,
     dry_run: bool = False,
     parse_documents: bool = True,
+    backfill_baselines: bool = False,
+    backfill_first_seen_at: str = "",
 ) -> dict[str, Any]:
     if mode not in VALID_MODES:
         raise ValueError(f"unsupported company disclosure mode: {mode}")
+    if backfill_first_seen_at and not backfill_baselines:
+        raise ValueError("backfill_first_seen_at requires backfill_baselines")
     init_db(db_path).close()
     holdings = list(holdings if holdings is not None else load_enabled_holdings(db_path))
     symbols = [str(item.get("symbol") or "").strip().upper() for item in holdings if item.get("symbol")]
     if not symbols:
-        return {"fetched": 0, "new": 0, "existing": 0, "baseline": 0, "processed": 0, "document_failures": 0}
+        return {
+            "fetched": 0,
+            "new": 0,
+            "existing": 0,
+            "baseline": 0,
+            "backfilled": 0,
+            "processed": 0,
+            "document_failures": 0,
+        }
 
     with connect_sqlite(db_path) as conn:
         state = load_source_state(conn, SOURCE_ID, prefix=STATE_PREFIX)
@@ -247,15 +259,25 @@ def collect_disclosures(
         "new": 0,
         "existing": 0,
         "baseline": 0,
+        "backfilled": 0,
         "processed": 0,
         "document_failures": 0,
     }
+    backfill_seen_at = ""
+    if backfill_first_seen_at:
+        parsed_seen_at = datetime.fromisoformat(backfill_first_seen_at.replace("Z", "+00:00"))
+        if parsed_seen_at.tzinfo is None:
+            raise ValueError("backfill_first_seen_at must include a timezone")
+        backfill_seen_at = parsed_seen_at.astimezone(timezone.utc).isoformat()
     for record in records:
         identity = disclosure_identity(record)
-        if identity in known:
+        identity_known = identity in known
+        if identity_known:
             stats["existing"] += 1
-            continue
-        stats["new"] += 1
+            if not backfill_baselines:
+                continue
+        else:
+            stats["new"] += 1
         if parse_documents:
             full_text, document_meta = parse_record_document(record)
         else:
@@ -263,11 +285,38 @@ def collect_disclosures(
         if document_meta.get("status") == "failed":
             stats["document_failures"] += 1
         event = event_from_disclosure(record, full_text, document_meta)
-        baseline_only = provider_baseline or mode == "report_only"
-        if dry_run or baseline_only:
-            label = "baseline" if provider_baseline else "report-only"
+        baseline_only = identity_known or provider_baseline or mode == "report_only"
+        if baseline_only:
+            event["baseline_only"] = True
+            if identity_known and backfill_seen_at:
+                event["first_seen_at"] = backfill_seen_at
+        if dry_run:
+            label = "backfill" if identity_known else ("baseline" if provider_baseline else "report-only")
             print(f"[{label}] {identity} {record.symbol} {record.title} pdf={document_meta.get('status')}", flush=True)
-            stats["baseline"] += 1
+            if not identity_known:
+                stats["baseline"] += 1
+        elif baseline_only:
+            normalized = normalize_market_item(SOURCE_ID, event, store_kind="event")
+            outcome = process_market_item(
+                normalized,
+                event,
+                store_kind="event",
+                source_profile_id=SOURCE_ID,
+                db_path=db_path,
+                baseline_only=True,
+                analyze=False,
+                deliver=False,
+            )
+            if identity_known:
+                stats["backfilled"] += 1 if outcome.inserted else 0
+                print(
+                    f"[backfill] {identity} {record.symbol} {record.title} "
+                    f"inserted={outcome.inserted} pdf={document_meta.get('status')}",
+                    flush=True,
+                )
+            else:
+                stats["baseline"] += 1
+                print(f"[baseline] {identity} {record.symbol} {record.title} pdf={document_meta.get('status')}", flush=True)
         else:
             normalized = normalize_market_item(SOURCE_ID, event, store_kind="event")
             outcome = process_market_item(
@@ -280,7 +329,7 @@ def collect_disclosures(
                 deliver=deliver,
             )
             stats["processed"] += 1 if outcome.inserted else 0
-        if not dry_run:
+        if not dry_run and not identity_known:
             known.add(identity)
             known_order.append(identity)
 
@@ -319,7 +368,12 @@ def main() -> int:
     parser.add_argument("--no-deliver", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-pdf", action="store_true")
+    parser.add_argument("--backfill-baselines", action="store_true")
+    parser.add_argument("--backfill-first-seen-at")
     args = parser.parse_args()
+
+    if args.backfill_first_seen_at and not args.backfill_baselines:
+        parser.error("--backfill-first-seen-at requires --backfill-baselines")
 
     load_env(ROOT / ".env")
     if not source_profile_enabled(SOURCE_ID):
@@ -339,6 +393,8 @@ def main() -> int:
             deliver=not args.no_deliver,
             dry_run=args.dry_run,
             parse_documents=not args.no_pdf,
+            backfill_baselines=args.backfill_baselines,
+            backfill_first_seen_at=str(args.backfill_first_seen_at or ""),
         )
     except Exception as exc:  # noqa: BLE001 - scheduled run records provider failure
         if not args.dry_run:

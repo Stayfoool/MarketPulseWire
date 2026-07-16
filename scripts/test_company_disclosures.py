@@ -72,7 +72,15 @@ def test_report_only_baselines_then_live_processes_only_new_record() -> None:
             parse_documents=False,
         )
         with sqlite3.connect(db_path) as conn:
-            assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+            baseline_rows = conn.execute(
+                "SELECT source, source_event_id, baseline_only FROM events ORDER BY source_event_id"
+            ).fetchall()
+            assert conn.execute("SELECT COUNT(*) FROM event_analyses").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
+        assert baseline_rows == [
+            ("company_disclosures", "announcement:1225286505", 1),
+            ("company_disclosures", "announcement:1225409631", 1),
+        ]
         assert first["baseline"] == 2 and first["processed"] == 0
 
         provider.records.append(record("1226000000"))
@@ -92,7 +100,11 @@ def test_report_only_baselines_then_live_processes_only_new_record() -> None:
                 "SELECT state_json FROM source_state WHERE source = ?",
                 ("collector:company_disclosures",),
             ).fetchone()[0]
-        assert rows == [("company_disclosures", "announcement:1226000000", 0)]
+        assert rows == [
+            ("company_disclosures", "announcement:1225286505", 1),
+            ("company_disclosures", "announcement:1225409631", 1),
+            ("company_disclosures", "announcement:1226000000", 0),
+        ]
         assert second["processed"] == 1 and second["existing"] == 2
         assert "cninfo_public" in json.loads(state_raw)["initialized_providers"]
 
@@ -122,8 +134,54 @@ def test_new_provider_is_baselined_before_live_processing() -> None:
             parse_documents=False,
         )
         with sqlite3.connect(db_path) as conn:
-            assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+            rows = conn.execute(
+                "SELECT source_event_id, baseline_only FROM events ORDER BY source_event_id"
+            ).fetchall()
+            assert conn.execute("SELECT COUNT(*) FROM event_analyses").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
+    assert rows == [("announcement:1225409631", 1), ("announcement:alternate-only", 1)]
     assert result["baseline"] == 1 and result["processed"] == 0
+
+
+def test_known_identity_backfill_is_idempotent_and_never_analyzed_or_delivered() -> None:
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
+        state = {
+            "schema_version": 1,
+            "known_identities": ["announcement:1225409631"],
+            "initialized_providers": ["cninfo_public"],
+        }
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO source_state (source, state_json, updated_at) VALUES (?, ?, ?)",
+                ("collector:company_disclosures", json.dumps(state), "2026-07-16T11:41:48+00:00"),
+            )
+        kwargs = {
+            "provider": FakeProvider([record("1225409631")]),
+            "mode": "live",
+            "days": 2,
+            "db_path": db_path,
+            "holdings": [{"symbol": "301308.SZ", "name": "江波龙"}],
+            "deliver": True,
+            "parse_documents": False,
+            "backfill_baselines": True,
+            "backfill_first_seen_at": "2026-07-16T19:41:48+08:00",
+        }
+        first = collect_disclosures(**kwargs)
+        second = collect_disclosures(**kwargs)
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                "SELECT source_event_id, first_seen_at, baseline_only FROM events"
+            ).fetchall()
+            analysis_count = conn.execute("SELECT COUNT(*) FROM event_analyses").fetchone()[0]
+            delivery_count = conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0]
+
+    assert rows == [("announcement:1225409631", "2026-07-16T11:41:48+00:00", 1)]
+    assert analysis_count == 0
+    assert delivery_count == 0
+    assert first["existing"] == 1 and first["backfilled"] == 1 and first["processed"] == 0
+    assert second["existing"] == 1 and second["backfilled"] == 0 and second["processed"] == 0
 
 
 def test_pagination_runs_to_completion_for_each_content_kind() -> None:
@@ -234,6 +292,7 @@ def test_malformed_pdf_is_a_bounded_metadata_failure() -> None:
 def main() -> int:
     test_report_only_baselines_then_live_processes_only_new_record()
     test_new_provider_is_baselined_before_live_processing()
+    test_known_identity_backfill_is_idempotent_and_never_analyzed_or_delivered()
     test_pagination_runs_to_completion_for_each_content_kind()
     test_stale_cached_security_mapping_is_refreshed_once()
     test_event_preserves_provider_audit_but_uses_logical_source()
