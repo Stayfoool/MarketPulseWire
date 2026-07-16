@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from threading import Lock
+from threading import local
 from typing import Any, Mapping
 
 import httpx
@@ -16,9 +16,7 @@ DEFAULT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 )
 
-_CLIENT: httpx.Client | None = None
-_CLIENT_KEY: tuple[str, str, float] | None = None
-_CLIENT_LOCK = Lock()
+_CLIENT_LOCAL = local()
 
 
 @dataclass(frozen=True)
@@ -42,37 +40,36 @@ def default_proxy() -> str:
 
 
 def get_http_client(timeout: float | None = None) -> httpx.Client:
-    global _CLIENT, _CLIENT_KEY
     proxy = default_proxy()
     user_agent = default_user_agent()
     timeout_value = timeout or float(os.getenv("SURVEIL_HTTP_TIMEOUT_SECONDS", "20") or "20")
     key = (proxy, user_agent, timeout_value)
-    with _CLIENT_LOCK:
-        if _CLIENT is not None and _CLIENT_KEY == key:
-            return _CLIENT
-        if _CLIENT is not None:
-            _CLIENT.close()
-        kwargs = {
-            "headers": {"User-Agent": user_agent},
-            "timeout": httpx.Timeout(timeout_value),
-            "follow_redirects": True,
-            "http2": True,
-            "trust_env": not bool(proxy),
-        }
-        if proxy:
-            kwargs["proxy"] = proxy
-        _CLIENT = httpx.Client(**kwargs)
-        _CLIENT_KEY = key
-        return _CLIENT
+    client = getattr(_CLIENT_LOCAL, "client", None)
+    if client is not None and getattr(_CLIENT_LOCAL, "key", None) == key:
+        return client
+    if client is not None:
+        client.close()
+    kwargs = {
+        "headers": {"User-Agent": user_agent},
+        "timeout": httpx.Timeout(timeout_value),
+        "follow_redirects": True,
+        "http2": True,
+        "trust_env": not bool(proxy),
+    }
+    if proxy:
+        kwargs["proxy"] = proxy
+    client = httpx.Client(**kwargs)
+    _CLIENT_LOCAL.client = client
+    _CLIENT_LOCAL.key = key
+    return client
 
 
 def reset_http_client() -> None:
-    global _CLIENT, _CLIENT_KEY
-    with _CLIENT_LOCK:
-        if _CLIENT is not None:
-            _CLIENT.close()
-        _CLIENT = None
-        _CLIENT_KEY = None
+    client = getattr(_CLIENT_LOCAL, "client", None)
+    if client is not None:
+        client.close()
+    _CLIENT_LOCAL.client = None
+    _CLIENT_LOCAL.key = None
 
 
 def retry_count(default: int = 2) -> int:
