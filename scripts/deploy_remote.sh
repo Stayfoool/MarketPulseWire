@@ -80,6 +80,10 @@ python3 -m venv .venv
 if [ -f requirements.txt ]; then
   .venv/bin/python -m pip install -r requirements.txt
 fi
+if ! .venv/bin/python scripts/check_ocr_runtime.py --env-file .env --requirements requirements-ocr.txt; then
+  PYTHON_BIN=.venv/bin/python scripts/install_ocr_dependencies.sh
+  .venv/bin/python scripts/check_ocr_runtime.py --env-file .env --requirements requirements-ocr.txt
+fi
 .venv/bin/python scripts/market_db.py
 chown -R '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' '$REMOTE_DIR'
 chmod 700 '$REMOTE_DIR'

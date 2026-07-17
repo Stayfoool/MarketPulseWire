@@ -290,6 +290,17 @@ Install the optional OCR packages on the runtime host after the normal Python vi
 
 The script installs the version-pinned CPU-compatible packages listed in `requirements-ocr.txt` and prints the installed PaddlePaddle, PaddleOCR, NumPy, and OpenCV versions. It defaults to official PyPI; where official downloads are repeatedly slow or unavailable, set `PIP_INDEX_URL` to an approved mainstream mirror for the same package versions. If OCR is not installed, ValueList hard-rule pushes still work; the preview extraction section will record the OCR failure instead of blocking delivery.
 
+Normal remote deployment checks the effective `VALUE_DIRECTORY_PREVIEW_ENABLED`
+and `VALUE_DIRECTORY_PREVIEW_OCR_ENABLED` settings after installing the base
+requirements. When preview OCR is enabled, deployment verifies the exact direct
+versions pinned in `requirements-ocr.txt` plus the `paddle`, `paddleocr`, `numpy`
+and `cv2` imports. A missing, mismatched or broken runtime invokes the same
+installer and then checks again; deployment fails if the post-install check does
+not pass. When preview or OCR is explicitly disabled, the optional dependency
+check is skipped. This deployment check does not initialize PaddleOCR or download
+model files; the service-account model cache is retained across normal deploys
+and populated on the first approved OCR run.
+
 ## Optional Proxy
 
 Some overseas media may be unreachable from certain cloud regions. Surveil supports a local-only Mihomo/Clash proxy for selected monitors.
