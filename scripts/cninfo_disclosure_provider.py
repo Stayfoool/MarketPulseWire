@@ -3,18 +3,17 @@
 from __future__ import annotations
 
 import json
-import random
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urljoin, urlparse
 from zoneinfo import ZoneInfo
 
+import httpx
+
 from disclosure_providers import DisclosurePage, DisclosureRecord, DisclosureSecurity
+from http_utils import http_post_json
 
 
 TOP_SEARCH_URL = "https://www.cninfo.com.cn/new/information/topSearch/query"
@@ -45,41 +44,31 @@ class CninfoPublicProvider:
         request_json: JsonRequester | None = None,
         timeout: float = 20.0,
         attempts: int = 3,
-        sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         self.timeout = max(1.0, float(timeout))
         self.attempts = max(1, int(attempts))
-        self.sleeper = sleeper
         self._request_json = request_json or self._post_json
 
     def _post_json(self, url: str, fields: dict[str, str]) -> Any:
         body = urllib.parse.urlencode(fields).encode("utf-8")
-        request = urllib.request.Request(
-            url,
-            data=body,
-            headers={
-                "Accept": "application/json, text/plain, */*",
-                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                "Origin": "https://www.cninfo.com.cn",
-                "Referer": SEARCH_REFERER,
-                "User-Agent": "Mozilla/5.0",
-            },
-            method="POST",
-        )
-        for attempt in range(1, self.attempts + 1):
-            try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                    payload = response.read()
-                return json.loads(payload.decode("utf-8"))
-            except urllib.error.HTTPError as exc:
-                retryable = exc.code == 429 or exc.code >= 500
-                if not retryable or attempt >= self.attempts:
-                    raise CninfoError(f"CNINFO HTTP {exc.code}") from exc
-            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-                if attempt >= self.attempts:
-                    raise CninfoError(f"CNINFO request failed: {exc}") from exc
-            self.sleeper(min(4.0, 0.5 * (2 ** (attempt - 1))) + random.uniform(0.0, 0.25))
-        raise CninfoError("CNINFO request failed")
+        try:
+            return http_post_json(
+                url,
+                content=body,
+                headers={
+                    "Accept": "application/json, text/plain, */*",
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                    "Origin": "https://www.cninfo.com.cn",
+                    "Referer": SEARCH_REFERER,
+                    "User-Agent": "Mozilla/5.0",
+                },
+                timeout=self.timeout,
+                retries=self.attempts - 1,
+            )
+        except httpx.HTTPStatusError as exc:
+            raise CninfoError(f"CNINFO HTTP {exc.response.status_code}") from exc
+        except (httpx.HTTPError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise CninfoError(f"CNINFO request failed: {exc}") from exc
 
     def resolve_securities(self, symbols: list[str]) -> dict[str, DisclosureSecurity]:
         resolved: dict[str, DisclosureSecurity] = {}

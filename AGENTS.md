@@ -22,6 +22,7 @@
 ## 测试与变更
 
 - `scripts/test_architecture_invariants.py` 执行统一 collector、禁止调用、兼容模块、来源 profile 和显式例外检查；新增来源不得绕过该测试。
+- 新增或实质修改生产 collector/provider 的普通有界 HTTP request/response 时，必须复用 `http_utils` 的线程隔离 client、代理、超时和重试语义；既有未迁移路径作为显式技术债登记，不得继续扩散。流式限长下载、长连接、官方 SDK 和独立运维工具可保留专用传输，但必须在架构不变量中登记具体边界和原因；不得为了形式统一而把流式安全边界改成整包内存缓冲。
 - 新增或调整通用规则时，至少提供两个不同来源元数据的同文回归样例，并验证 `DecisionResult.action` 一致。
 - 新来源至少验证规范化、停用、空内容/解析失败、重复、来源健康、最终 action、存储和投递审计。
 - 私有 `.env`、`LOCAL_COMMANDS.md`、`config/portfolio.json`、SQLite、browser profile、cookie/session 和生产 source override 不进入 Git，也不被部署覆盖。
