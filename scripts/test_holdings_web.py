@@ -192,7 +192,7 @@ def test_feedback_quality_view_is_exposed() -> None:
 
 def test_holdings_page_marks_environment_and_related_keywords() -> None:
     html = frontend_source()
-    assert "环境：本地开发配置" in html
+    assert f"环境：{holdings_web.workbench_environment_label()}" in html
     assert "关联新闻关键词" in html
 
     original_root = holdings_web.ROOT
