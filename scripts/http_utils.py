@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -93,31 +94,52 @@ def should_retry_status(status_code: int) -> bool:
     return status_code in {408, 425, 429, 500, 502, 503, 504}
 
 
-def http_get(
+def _request(
+    method: str,
     url: str,
     *,
     headers: Mapping[str, str] | None = None,
+    content: bytes | str | None = None,
+    json_data: Any = None,
     timeout: float | None = None,
     retries: int | None = None,
-) -> HttpResponse:
+    decode_json: bool = False,
+) -> HttpResponse | Any:
     attempts = (retry_count() if retries is None else max(0, retries)) + 1
     request_headers = dict(headers or {})
     last_error: Exception | None = None
     for attempt in range(attempts):
         client = get_http_client(timeout)
         try:
-            response = client.get(url, headers=request_headers)
+            response = client.request(
+                method,
+                url,
+                headers=request_headers,
+                content=content,
+                json=json_data,
+            )
             if should_retry_status(response.status_code) and attempt < attempts - 1:
                 time.sleep(retry_sleep(attempt))
                 continue
-            if response.status_code != 304:
+            if method == "GET" and response.status_code == 304:
+                pass
+            else:
                 response.raise_for_status()
-            return HttpResponse(
+            result = HttpResponse(
                 status_code=response.status_code,
                 url=str(response.url),
                 headers=response.headers,
                 content=response.content,
             )
+            if not decode_json:
+                return result
+            try:
+                return json.loads(result.content.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                last_error = exc
+                if attempt >= attempts - 1:
+                    raise
+                time.sleep(retry_sleep(attempt))
         except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
             last_error = exc
             reset_http_client()
@@ -126,7 +148,23 @@ def http_get(
             time.sleep(retry_sleep(attempt))
         except httpx.HTTPStatusError:
             raise
-    raise RuntimeError(f"HTTP 请求失败：{last_error}")
+    raise RuntimeError(f"HTTP {method} 请求失败：{last_error}")
+
+
+def http_get(
+    url: str,
+    *,
+    headers: Mapping[str, str] | None = None,
+    timeout: float | None = None,
+    retries: int | None = None,
+) -> HttpResponse:
+    return _request(
+        "GET",
+        url,
+        headers=headers,
+        timeout=timeout,
+        retries=retries,
+    )
 
 
 def http_post(
@@ -138,29 +176,35 @@ def http_post(
     timeout: float | None = None,
     retries: int | None = None,
 ) -> HttpResponse:
-    attempts = (retry_count() if retries is None else max(0, retries)) + 1
-    request_headers = dict(headers or {})
-    last_error: Exception | None = None
-    for attempt in range(attempts):
-        client = get_http_client(timeout)
-        try:
-            response = client.post(url, headers=request_headers, content=content, json=json_data)
-            if should_retry_status(response.status_code) and attempt < attempts - 1:
-                time.sleep(retry_sleep(attempt))
-                continue
-            response.raise_for_status()
-            return HttpResponse(
-                status_code=response.status_code,
-                url=str(response.url),
-                headers=response.headers,
-                content=response.content,
-            )
-        except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
-            last_error = exc
-            reset_http_client()
-            if attempt >= attempts - 1:
-                raise
-            time.sleep(retry_sleep(attempt))
-        except httpx.HTTPStatusError:
-            raise
-    raise RuntimeError(f"HTTP POST 请求失败：{last_error}")
+    return _request(
+        "POST",
+        url,
+        headers=headers,
+        content=content,
+        json_data=json_data,
+        timeout=timeout,
+        retries=retries,
+    )
+
+
+def http_post_json(
+    url: str,
+    *,
+    headers: Mapping[str, str] | None = None,
+    content: bytes | str | None = None,
+    json_data: Any = None,
+    timeout: float | None = None,
+    retries: int | None = None,
+) -> Any:
+    """POST and decode a UTF-8 JSON response inside the shared retry loop."""
+
+    return _request(
+        "POST",
+        url,
+        headers=headers,
+        content=content,
+        json_data=json_data,
+        timeout=timeout,
+        retries=retries,
+        decode_json=True,
+    )

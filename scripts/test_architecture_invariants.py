@@ -59,6 +59,81 @@ INDEPENDENT_ROUTE_EXCEPTIONS = {
     },
 }
 
+DIRECT_URLLIB_EXCEPTIONS = {
+    "disclosure_document.py": {
+        "kind": "bounded_stream",
+        "reason": "PDF downloads enforce a byte limit while streaming to an atomic temporary file.",
+        "test": "test_company_disclosures.py",
+    },
+    "download_mihomo.py": {
+        "kind": "operator_tool",
+        "reason": "Standalone installer runs before the project runtime and downloads an official release artifact.",
+    },
+    "feishu.py": {
+        "kind": "legacy_bounded_request",
+        "reason": "Legacy operational custom-webhook sender retains provider-specific signing and retry behavior pending separate migration.",
+        "test": "test_market_delivery.py",
+    },
+    "feishu_app.py": {
+        "kind": "legacy_bounded_request",
+        "reason": "Application-bot API error and response contracts require a separate Feishu transport change.",
+        "test": "test_market_feedback.py",
+    },
+    "feishu_image.py": {
+        "kind": "bounded_binary",
+        "reason": "Feishu image upload and download paths carry bounded binary payloads and provider-specific errors.",
+        "test": "test_market_delivery.py",
+    },
+    "holdings_store.py": {
+        "kind": "legacy_bounded_request",
+        "reason": "Legacy holdings enrichment APIs remain tracked migration debt outside collector-provider transport work.",
+        "test": "test_analysis.py",
+    },
+    "ifind_client.py": {
+        "kind": "legacy_bounded_request",
+        "reason": "The licensed iFinD client retains its current token and API error contract pending separate retirement or migration.",
+        "test": "test_analysis.py",
+    },
+    "jygs_actions.py": {
+        "kind": "independent_legacy_route",
+        "reason": "Disabled-by-default JYGS prediction is an explicit independent legacy route.",
+        "test": "test_jygs_actions.py",
+    },
+    "link_enrichment.py": {
+        "kind": "legacy_bounded_request",
+        "reason": "Generic link probing has redirect and content-boundary behavior that needs a dedicated migration.",
+        "test": "test_link_enrichment.py",
+    },
+    "llm_analysis.py": {
+        "kind": "provider_specialized",
+        "reason": "LLM calls retain balance detection, provider response-body errors, model controls, and retry logging.",
+        "test": "test_llm_analysis.py",
+    },
+    "portfolio_monitor.py": {
+        "kind": "legacy_bounded_request",
+        "reason": "Legacy portfolio enrichment combines several external API contracts and is not part of the CNINFO provider path.",
+        "test": "test_analysis.py",
+    },
+    "update_mihomo_config.py": {
+        "kind": "operator_tool",
+        "reason": "Standalone proxy configuration updater runs outside the collector HTTP runtime.",
+    },
+    "value_directory_preview.py": {
+        "kind": "bounded_binary",
+        "reason": "ValueList preview handling downloads bounded image payloads before OCR and has dedicated model fallbacks.",
+        "test": "test_value_directory_flow.py",
+    },
+    "x_check.py": {
+        "kind": "operator_tool",
+        "reason": "Standalone X credential diagnostic is not a production collector transport.",
+    },
+    "x_stream.py": {
+        "kind": "long_lived_stream",
+        "reason": "X uses an indefinite streaming response plus dedicated reconnect and thread/media semantics.",
+        "test": "test_x_stream_health.py",
+    },
+}
+
 FORBIDDEN_ITEM_CALLS = {
     "deliver_article_review",
     "deliver_official_review",
@@ -145,6 +220,33 @@ def test_independent_routes_are_explicit_and_tested() -> None:
         assert contract["reason"].strip()
         assert contract["boundary"].strip()
         assert (SCRIPTS / contract["test"]).exists(), contract["test"]
+
+
+def test_direct_urllib_request_usage_is_explicit_and_bounded() -> None:
+    actual: set[str] = set()
+    for path in SCRIPTS.glob("*.py"):
+        if path.name.startswith("test_"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=path.name)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import) and any(alias.name == "urllib.request" for alias in node.names):
+                actual.add(path.name)
+            elif isinstance(node, ast.ImportFrom) and (
+                node.module == "urllib.request"
+                or (node.module == "urllib" and any(alias.name == "request" for alias in node.names))
+            ):
+                actual.add(path.name)
+    assert actual == set(DIRECT_URLLIB_EXCEPTIONS), (
+        f"direct urllib.request imports changed; register a specialized exception or use http_utils: "
+        f"added={sorted(actual - set(DIRECT_URLLIB_EXCEPTIONS))} "
+        f"removed={sorted(set(DIRECT_URLLIB_EXCEPTIONS) - actual)}"
+    )
+    for filename, contract in DIRECT_URLLIB_EXCEPTIONS.items():
+        assert str(contract.get("kind") or "").strip(), filename
+        assert str(contract.get("reason") or "").strip(), filename
+        test = str(contract.get("test") or "").strip()
+        if test:
+            assert (SCRIPTS / test).exists(), (filename, test)
 
 
 def test_deployment_preserves_private_proxy_state_and_disables_shadows() -> None:
@@ -292,6 +394,7 @@ def main() -> int:
     test_unified_collectors_use_runtime_without_owning_delivery()
     test_removed_compatibility_modules_do_not_return()
     test_independent_routes_are_explicit_and_tested()
+    test_direct_urllib_request_usage_is_explicit_and_bounded()
     test_deployment_preserves_private_proxy_state_and_disables_shadows()
     test_rule_center_execution_modes_match_runtime_ordering()
     test_source_profiles_have_complete_runtime_ownership()
