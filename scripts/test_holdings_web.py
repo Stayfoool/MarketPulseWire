@@ -11,10 +11,12 @@ import holdings_web
 from holdings_web import (
     RUN_ONCE_TARGETS,
     SERVICE_UNITS,
+    build_health_summary,
     build_health_tasks,
     event_feedback_summary,
     fetch_events_rows,
     html_page,
+    parse_systemctl_show_output,
     unit_actions,
     unit_display_metadata,
 )
@@ -54,6 +56,35 @@ def test_health_page_exposes_service_action_controls() -> None:
     assert "最近执行" in html
     assert "重启定时器" in html
     assert "立即运行" in html
+    assert "/api/health/summary" in html
+    assert "healthAlertBadge" in html
+    assert "healthAlertSummary" in html
+    assert "任务健康，无当前故障" in html
+    assert "60000" in html
+    assert "visibilitychange" in html
+
+
+def test_parse_batched_systemctl_show_output() -> None:
+    parsed = parse_systemctl_show_output(
+        """NextElapseUSecRealtime=Sat 2026-07-18 08:00:00 CST
+Result=success
+Id=surveil-value-directory.timer
+LoadState=loaded
+ActiveState=active
+SubState=waiting
+
+Result=exit-code
+ExecMainStatus=1
+Id=surveil-value-directory.service
+LoadState=loaded
+ActiveState=failed
+SubState=failed
+"""
+    )
+    assert parsed["surveil-value-directory.timer"]["ActiveState"] == "active"
+    assert parsed["surveil-value-directory.timer"]["NextElapseUSecRealtime"].startswith("Sat 2026")
+    assert parsed["surveil-value-directory.service"]["Result"] == "exit-code"
+    assert parsed["surveil-value-directory.service"]["ExecMainStatus"] == "1"
 
 
 def test_source_profile_view_is_exposed() -> None:
@@ -795,6 +826,119 @@ def test_health_tasks_show_disabled_timer_and_last_success_separately() -> None:
     task = next(item for item in build_health_tasks([timer, service]) if item["Id"] == "surveil-news-collector")
     assert task["schedule_status"] == "定时器未启用"
     assert task["execution_status"] == "上次运行成功"
+
+
+def test_health_summary_counts_one_failed_logical_task() -> None:
+    timer = systemd_fixture(
+        "surveil-value-directory.timer",
+        {"ActiveState": "active", "SubState": "waiting", "Result": "success"},
+    )
+    service = systemd_fixture(
+        "surveil-value-directory.service",
+        {"ActiveState": "failed", "SubState": "failed", "Result": "failed", "ExecMainStatus": "1"},
+    )
+    tasks = build_health_tasks([timer, service])
+    summary = build_health_summary(tasks, [])
+    assert summary["total_failures"] == 1
+    assert summary["task_failures"] == 1
+    assert summary["source_failures"] == 0
+    assert summary["issues"][0]["id"] == "surveil-value-directory"
+    assert summary["issues"][0]["reason"] == "最近运行失败（exit 1）"
+
+
+def test_health_summary_flags_disabled_production_timer_and_stopped_service() -> None:
+    timer = systemd_fixture(
+        "surveil-news-collector.timer",
+        {"ActiveState": "inactive", "SubState": "dead", "Result": "success"},
+    )
+    timer_service = systemd_fixture(
+        "surveil-news-collector.service",
+        {"ActiveState": "inactive", "SubState": "dead", "Result": "success", "ExecMainStatus": "0"},
+    )
+    persistent = systemd_fixture(
+        "surveil-sina-flash.service",
+        {"ActiveState": "inactive", "SubState": "dead", "Result": "success", "ExecMainStatus": "0"},
+    )
+    summary = build_health_summary(build_health_tasks([timer, timer_service, persistent]), [])
+    assert summary["task_failures"] == 2
+    assert {item["reason"] for item in summary["issues"]} == {
+        "生产定时器未启用",
+        "常驻生产服务未运行",
+    }
+
+
+def test_health_summary_excludes_shadow_legacy_and_default_disabled_jygs() -> None:
+    units = [
+        systemd_fixture(
+            "surveil-research-collector-shadow.timer",
+            {"ActiveState": "inactive", "SubState": "dead", "Result": "success"},
+        ),
+        systemd_fixture(
+            "surveil-research-collector-shadow.service",
+            {"ActiveState": "failed", "SubState": "failed", "Result": "failed", "ExecMainStatus": "1"},
+        ),
+        systemd_fixture(
+            "surveil-china-media.timer",
+            {"ActiveState": "inactive", "SubState": "dead", "Result": "success"},
+        ),
+        systemd_fixture(
+            "surveil-china-media.service",
+            {"ActiveState": "failed", "SubState": "failed", "Result": "failed", "ExecMainStatus": "1"},
+        ),
+        systemd_fixture(
+            "surveil-jygs-actions.timer",
+            {"ActiveState": "inactive", "SubState": "dead", "Result": "success"},
+        ),
+        systemd_fixture(
+            "surveil-jygs-actions.service",
+            {"ActiveState": "inactive", "SubState": "dead", "Result": "success", "ExecMainStatus": "0"},
+        ),
+    ]
+    assert build_health_summary(build_health_tasks(units), [])["total_failures"] == 0
+
+
+def test_health_summary_counts_only_enabled_failing_sources() -> None:
+    profiles = [
+        {
+            "id": "enabled_source",
+            "name": "启用来源",
+            "enabled": True,
+            "health_status": "failing",
+            "consecutive_failures": 3,
+        },
+        {
+            "id": "disabled_source",
+            "name": "停用来源",
+            "enabled": False,
+            "health_status": "failing",
+            "consecutive_failures": 8,
+        },
+        {
+            "id": "healthy_source",
+            "name": "健康来源",
+            "enabled": True,
+            "health_status": "ok",
+            "consecutive_failures": 0,
+        },
+    ]
+    summary = build_health_summary([], profiles)
+    assert summary["total_failures"] == 1
+    assert summary["source_failures"] == 1
+    assert summary["issues"][0]["id"] == "enabled_source"
+    assert summary["issues"][0]["reason"] == "来源连续失败 3 次"
+
+
+def test_health_summary_includes_x_detail_only_while_x_source_enabled() -> None:
+    source = {
+        "monitor": "x_stream_detail",
+        "source": "connection",
+        "status": "failing",
+        "consecutive_failures": 4,
+    }
+    enabled = [{"id": "x_serenity", "name": "X", "enabled": True, "health_status": "ok"}]
+    disabled = [{"id": "x_serenity", "name": "X", "enabled": False, "health_status": "ok"}]
+    assert build_health_summary([], enabled, [source])["source_failures"] == 1
+    assert build_health_summary([], disabled, [source])["source_failures"] == 0
 
 
 def test_unit_display_metadata_translates_oneshot_success() -> None:
