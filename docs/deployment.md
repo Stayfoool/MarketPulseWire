@@ -45,6 +45,12 @@ python scripts/rss_monitor.py --interval 300
 python scripts/overseas_media_monitor.py
 ```
 
+The Web process requires the repository `web/` directory alongside `scripts/`.
+`deploy_remote.sh` already synchronizes both directories; do not deploy
+`scripts/holdings_web.py` by itself. The browser loads `web/index.html`,
+`web/styles.css` and `web/app.js` from the same loopback service and origin as
+the existing `/api/*` routes.
+
 Open:
 
 ```text

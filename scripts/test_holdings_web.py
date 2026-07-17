@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import http.client
 import sqlite3
+import threading
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -11,6 +14,7 @@ import holdings_web
 from holdings_web import (
     RUN_ONCE_TARGETS,
     SERVICE_UNITS,
+    HoldingsHandler,
     active_source_health_keys,
     build_health_summary,
     build_health_tasks,
@@ -34,18 +38,77 @@ from source_profiles import (
 )
 
 
-def test_embedded_script_keeps_newline_escapes() -> None:
-    html = html_page(token_required=False)
-    assert "showView('overview');" in html
-    index = html.find("parsed.lessons.join")
+def frontend_source() -> str:
+    return "\n".join(
+        (
+            html_page(token_required=False),
+            (holdings_web.WEB_ROOT / "app.js").read_text(encoding="utf-8"),
+        )
+    )
+
+
+def test_extracted_script_keeps_newline_escapes() -> None:
+    script = (holdings_web.WEB_ROOT / "app.js").read_text(encoding="utf-8")
+    assert "showView('overview');" in script
+    index = script.find("parsed.lessons.join")
     assert index > 0
-    snippet = html[index : index + 40]
+    snippet = script[index : index + 40]
     assert repr("\\n") in repr(snippet)
-    assert "parsed.lessons.join('\n')" not in html
+    assert "parsed.lessons.join('\n')" not in script
+
+
+def test_page_uses_extracted_assets_and_bounded_placeholders() -> None:
+    html = html_page(token_required=False)
+    assert '<link rel="stylesheet" href="/static/styles.css">' in html
+    assert '<script src="/static/app.js" defer></script>' in html
+    assert "<style>" not in html
+    assert "<script>" not in html
+    assert "__WORKBENCH_" not in html
+    assert "未配置访问令牌，仅限 SSH 隧道使用" in html
+
+
+def test_static_asset_routes_are_allowlisted() -> None:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), HoldingsHandler)
+    server.token = "test-token"
+    server.restart_sina_flash = False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        connection = http.client.HTTPConnection(*server.server_address, timeout=5)
+        expected = {
+            "/": "text/html; charset=utf-8",
+            "/static/styles.css": "text/css; charset=utf-8",
+            "/static/app.js": "text/javascript; charset=utf-8",
+        }
+        for path, content_type in expected.items():
+            connection.request("GET", path)
+            response = connection.getresponse()
+            body = response.read()
+            assert response.status == 200
+            assert response.getheader("Content-Type") == content_type
+            assert response.getheader("Cache-Control") == "no-cache"
+            assert response.getheader("X-Content-Type-Options") == "nosniff"
+            assert body
+
+        for path in ("/static/missing.css", "/static/../AGENTS.md", "/api/missing"):
+            connection.request("GET", path)
+            response = connection.getresponse()
+            response.read()
+            assert response.status == 404
+
+        connection.request("GET", "/api/overview")
+        response = connection.getresponse()
+        response.read()
+        assert response.status == 401
+        connection.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 def test_health_page_exposes_service_action_controls() -> None:
-    html = html_page(token_required=False)
+    html = frontend_source()
     assert "/api/service-action" in html
     assert "runServiceAction" in html
     assert "renderHealthTasks" in html
@@ -94,7 +157,7 @@ SubState=failed
 
 
 def test_source_profile_view_is_exposed() -> None:
-    html = html_page(token_required=False)
+    html = frontend_source()
     assert "showView('sources')" in html
     assert "/api/source-profiles" in html
     assert "renderSourceProfiles" in html
@@ -104,14 +167,14 @@ def test_source_profile_view_is_exposed() -> None:
 
 
 def test_investment_bank_theme_rule_configuration_is_exposed() -> None:
-    html = html_page(token_required=False)
+    html = frontend_source()
     assert "/api/investment-bank-theme-rules" in html
     assert "国际投行重大主题策略" in html
     assert "saveInvestmentBankThemeRules" in html
 
 
 def test_rule_center_view_is_exposed() -> None:
-    html = html_page(token_required=False)
+    html = frontend_source()
     assert "规则中心" in html
     assert "showView('rules')" in html
     assert "/api/rule-center" in html
@@ -119,7 +182,7 @@ def test_rule_center_view_is_exposed() -> None:
 
 
 def test_feedback_quality_view_is_exposed() -> None:
-    html = html_page(token_required=False)
+    html = frontend_source()
     assert "反馈质量" in html
     assert "showView('feedback')" in html
     assert "/api/feedback-quality" in html
@@ -128,7 +191,7 @@ def test_feedback_quality_view_is_exposed() -> None:
 
 
 def test_holdings_page_marks_environment_and_related_keywords() -> None:
-    html = html_page(token_required=False)
+    html = frontend_source()
     assert "环境：本地开发配置" in html
     assert "关联新闻关键词" in html
 
@@ -377,7 +440,7 @@ def test_event_center_shows_company_disclosure_baseline_only_when_requested() ->
 
 
 def test_event_center_source_filter_uses_grouped_dropdown() -> None:
-    html = html_page(token_required=False)
+    html = frontend_source()
     assert '<select id="eventSource"' in html
     assert '全部来源' in html
     assert 'loadEventSourceOptions' in html
@@ -1016,7 +1079,9 @@ def test_unit_display_metadata_includes_news_production_collector() -> None:
 
 
 def main() -> int:
-    test_embedded_script_keeps_newline_escapes()
+    test_extracted_script_keeps_newline_escapes()
+    test_page_uses_extracted_assets_and_bounded_placeholders()
+    test_static_asset_routes_are_allowlisted()
     test_health_page_exposes_service_action_controls()
     test_source_profile_view_is_exposed()
     test_investment_bank_theme_rule_configuration_is_exposed()
