@@ -48,10 +48,12 @@ rsync -az --delete \
   --exclude 'config/market_skill/' \
   --exclude '.venv' \
   --exclude '.cache/' \
+  --exclude '.paddleocr/' \
   --exclude '__pycache__' \
   --exclude '*.pyc' \
   --exclude 'data/' \
   --exclude 'logs/' \
+  --exclude 'reports/' \
   --exclude 'docs/monitoring-plan.md' \
   --exclude '.DS_Store' \
   -e "$RSYNC_RSH" \

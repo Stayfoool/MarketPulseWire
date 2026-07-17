@@ -153,6 +153,8 @@ def test_deployment_preserves_private_proxy_state_and_disables_shadows() -> None
     assert 'PRIVATE_PROXY_PREFIX="shadowsocks_"' in deploy
     assert 'PRIVATE_PROXY_YAML_PATTERN="${PRIVATE_PROXY_PREFIX}*.yaml"' in deploy
     assert '--exclude "$PRIVATE_PROXY_YAML_PATTERN"' in deploy
+    assert "--exclude '.paddleocr/'" in deploy
+    assert "--exclude 'reports/'" in deploy
     shadow_timers = (
         "surveil-research-collector-shadow.timer",
         "surveil-official-collector-shadow.timer",
