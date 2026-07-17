@@ -11,6 +11,7 @@ import holdings_web
 from holdings_web import (
     RUN_ONCE_TARGETS,
     SERVICE_UNITS,
+    active_source_health_keys,
     build_health_summary,
     build_health_tasks,
     event_feedback_summary,
@@ -60,6 +61,11 @@ def test_health_page_exposes_service_action_controls() -> None:
     assert "healthAlertBadge" in html
     assert "healthAlertSummary" in html
     assert "任务健康，无当前故障" in html
+    assert "sourceAlertBadge" in html
+    assert "sourceAlertSummary" in html
+    assert "信息源，无当前故障" in html
+    assert "isFailingSourceProfile" in html
+    assert "连续失败" in html
     assert "60000" in html
     assert "visibilitychange" in html
 
@@ -928,7 +934,7 @@ def test_health_summary_counts_only_enabled_failing_sources() -> None:
     assert summary["issues"][0]["reason"] == "来源连续失败 3 次"
 
 
-def test_health_summary_includes_x_detail_only_while_x_source_enabled() -> None:
+def test_health_summary_excludes_raw_x_detail_without_failing_source_profile() -> None:
     source = {
         "monitor": "x_stream_detail",
         "source": "connection",
@@ -936,9 +942,8 @@ def test_health_summary_includes_x_detail_only_while_x_source_enabled() -> None:
         "consecutive_failures": 4,
     }
     enabled = [{"id": "x_serenity", "name": "X", "enabled": True, "health_status": "ok"}]
-    disabled = [{"id": "x_serenity", "name": "X", "enabled": False, "health_status": "ok"}]
-    assert build_health_summary([], enabled, [source])["source_failures"] == 1
-    assert build_health_summary([], disabled, [source])["source_failures"] == 0
+    assert ("x_stream_detail", "connection") in active_source_health_keys(enabled, [source])
+    assert build_health_summary([], enabled)["source_failures"] == 0
 
 
 def test_unit_display_metadata_translates_oneshot_success() -> None:

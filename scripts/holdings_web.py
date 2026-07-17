@@ -1573,24 +1573,9 @@ def source_profile_health_issue(profile: dict[str, Any]) -> dict[str, Any] | Non
 def build_health_summary(
     tasks: list[dict[str, Any]],
     profiles: list[dict[str, Any]],
-    sources: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     task_issues = [issue for task in tasks if (issue := task.get("health_issue"))]
     source_issues = [issue for profile in profiles if (issue := source_profile_health_issue(profile))]
-    enabled_profile_ids = {str(profile.get("id") or "") for profile in profiles if profile.get("enabled", True)}
-    if "x_serenity" in enabled_profile_ids:
-        for source in sources or []:
-            if source.get("monitor") != "x_stream_detail" or source.get("status") != "failing":
-                continue
-            failures = int(source.get("consecutive_failures") or 0)
-            source_issues.append(
-                {
-                    "kind": "source",
-                    "id": f"x_stream_detail:{source.get('source') or ''}",
-                    "label": str(source.get("source") or "X / Serenity"),
-                    "reason": f"X 连接问题连续失败 {failures} 次",
-                }
-            )
     issues = [*task_issues, *source_issues]
     return {
         "ok": True,
@@ -1624,9 +1609,8 @@ def active_source_health_keys(profiles: list[dict[str, Any]], sources: list[dict
 
 def health_summary_payload(db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
     tasks = build_health_tasks(health_units())
-    sources = health_sources(db_path)
     profiles = source_profiles_payload(db_path=db_path).get("profiles") or []
-    return build_health_summary(tasks, profiles, sources)
+    return build_health_summary(tasks, profiles)
 
 
 def health_payload(db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
@@ -1640,7 +1624,7 @@ def health_payload(db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
             str(source.get("monitor") or ""),
             str(source.get("source") or ""),
         ) in active_source_keys
-    summary = build_health_summary(tasks, profiles, sources)
+    summary = build_health_summary(tasks, profiles)
     logs_dir = ROOT / "logs"
     logs = []
     for name in LOG_FILES:
@@ -1687,9 +1671,9 @@ def html_page(token_required: bool) -> str:
     nav.tabs {{ display: flex; gap: 8px; padding: 10px 20px 0; background: var(--bg); overflow-x: auto; }}
     nav.tabs button {{ flex: 0 0 auto; white-space: nowrap; background: transparent; border-color: transparent; border-radius: 6px 6px 0 0; display: inline-flex; align-items: center; gap: 5px; }}
     nav.tabs button.active {{ background: white; border-color: var(--line); border-bottom-color: white; color: var(--accent); }}
-    .health-alert-badge {{ min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; background: #d92d20; color: white; font-size: 11px; font-weight: 700; line-height: 1; }}
-    .health-alert-badge.unavailable {{ background: #b54708; }}
-    .health-alert-badge[hidden] {{ display: none; }}
+    .nav-alert-badge {{ min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; background: #d92d20; color: white; font-size: 11px; font-weight: 700; line-height: 1; }}
+    .nav-alert-badge.unavailable {{ background: #b54708; }}
+    .nav-alert-badge[hidden] {{ display: none; }}
     main {{ padding: 18px 20px 32px; }}
     .view {{ display: none; }}
     .view.active {{ display: block; }}
@@ -1800,8 +1784,8 @@ def html_page(token_required: bool) -> str:
     <button id="tab-feedback" onclick="showView('feedback')">反馈质量</button>
     <button id="tab-signals" onclick="showView('signals')">信号复盘</button>
     <button id="tab-relations" onclick="showView('relations')">关系映射</button>
-    <button id="tab-sources" onclick="showView('sources')">信息源</button>
-    <button id="tab-health" onclick="showView('health')" aria-label="任务健康，无当前故障"><span>任务健康</span><span id="healthAlertBadge" class="health-alert-badge" hidden></span></button>
+    <button id="tab-sources" onclick="showView('sources')" aria-label="信息源，无当前故障"><span>信息源</span><span id="sourceAlertBadge" class="nav-alert-badge" hidden></span></button>
+    <button id="tab-health" onclick="showView('health')" aria-label="任务健康，无当前故障"><span>任务健康</span><span id="healthAlertBadge" class="nav-alert-badge" hidden></span></button>
     <button id="tab-keywords" onclick="showView('keywords')">媒体关键词</button>
     <button id="tab-rules" onclick="showView('rules')">规则中心</button>
     <button id="tab-settings" onclick="showView('settings')">配置中心</button>
@@ -2062,6 +2046,7 @@ def html_page(token_required: bool) -> str:
           <button id="sourceProfileSaveButton" class="primary" onclick="saveSourceProfiles()" disabled>保存配置</button>
         </div>
       </div>
+      <div id="sourceAlertSummary" class="health-issue-summary" role="status" aria-live="polite" hidden></div>
       <div id="sourceProfileConfigHint" class="status ok" style="display:block">
 正在读取信息源、Skeptic 和 Tavily/Web Evidence 的实际运行配置。
       </div>
@@ -2604,7 +2589,10 @@ function showView(name) {{
   if (name === 'feedback') loadFeedbackQuality();
   if (name === 'signals') loadSignals();
   if (name === 'relations') loadRelationManager();
-  if (name === 'sources') loadSourceProfiles();
+  if (name === 'sources') {{
+    loadSourceProfiles();
+    loadHealthSummary();
+  }}
   if (name === 'health') loadHealth();
   if (name === 'keywords') loadKeywords();
   if (name === 'rules') loadRuleCenter();
@@ -3229,6 +3217,10 @@ function sourceProfilesForSave() {{
   }}));
 }}
 
+function isFailingSourceProfile(item) {{
+  return item.enabled !== false && item.health_status === 'failing';
+}}
+
 function renderSourceProfiles() {{
   const category = document.getElementById('sourceProfileCategory').value;
   const q = document.getElementById('sourceProfileQuery').value.trim().toLowerCase();
@@ -3236,10 +3228,12 @@ function renderSourceProfiles() {{
     if (category && item.category !== category) return false;
     if (q && !sourceProfileSearchText(item).includes(q)) return false;
     return true;
-  }});
+  }}).sort((left, right) => Number(isFailingSourceProfile(right)) - Number(isFailingSourceProfile(left)));
   document.getElementById('sourceProfileRows').innerHTML = rows.map(item => {{
     const health = item.health_status === 'unknown' ? '未记录' : item.health_status;
+    const isFailing = isFailingSourceProfile(item);
     const healthDetail = item.last_error ? `<div class="hint">${{escapeHtml(shortText(item.last_error, 120))}}</div>` : '';
+    const healthTime = isFailing && item.last_failure_at ? `<div class="hint">最近失败：${{escapeHtml(formatTime(item.last_failure_at))}}</div>` : '';
     const gates = [
       item.skeptic_enabled ? 'Skeptic' : '无 Skeptic',
       item.web_evidence_enabled ? 'Tavily 可触发' : '无 Tavily'
@@ -3263,7 +3257,7 @@ function renderSourceProfiles() {{
       </div>
     ` : '';
     return `
-      <tr>
+      <tr${{isFailing ? ' class="health-issue-row"' : ''}}>
         <td>${{escapeHtml(item.category_label || item.category || '')}}</td>
         <td>
           <input type="checkbox" data-source-id="${{escapeHtml(item.id || '')}}" data-field="enabled" onchange="updateSourceProfileDraft(this)" ${{enabledChecked}}>
@@ -3274,7 +3268,7 @@ function renderSourceProfiles() {{
           <div class="hint">${{escapeHtml(item.id || '')}} / ${{escapeHtml(item.source_type || '')}}</div>
           <div class="hint">${{escapeHtml(item.runtime_note || '')}}</div>
         </td>
-        <td>${{badge(health)}}<div class="hint">失败 ${{escapeHtml(item.consecutive_failures || 0)}}</div>${{healthDetail}}</td>
+        <td>${{badge(health)}}<div class="hint">连续失败 ${{escapeHtml(item.consecutive_failures || 0)}}</div>${{healthTime}}${{healthDetail}}</td>
         <td>
           <input class="source-control" data-source-id="${{escapeHtml(item.id || '')}}" data-field="frequency" value="${{escapeHtml(item.frequency || '')}}" oninput="updateSourceProfileDraft(this)">
           <div class="hint">${{escapeHtml(item.runtime_shape || '')}}</div>
@@ -3367,32 +3361,39 @@ async function saveSourceProfiles() {{
   }}
 }}
 
-function healthSummaryText(summary) {{
-  const total = Number(summary.total_failures || 0);
-  const tasks = Number(summary.task_failures || 0);
-  const sources = Number(summary.source_failures || 0);
-  return `当前 ${{total}} 项故障：${{tasks}} 个任务异常，${{sources}} 个来源连续失败`;
+function applyNavAlertBadge(badgeId, tabId, count, label) {{
+  const badgeEl = document.getElementById(badgeId);
+  const tab = document.getElementById(tabId);
+  badgeEl.classList.remove('unavailable');
+  badgeEl.textContent = count > 99 ? '99+' : String(count);
+  badgeEl.hidden = count === 0;
+  tab.setAttribute('aria-label', count ? `${{label}}，${{count}} 项当前故障` : `${{label}}，无当前故障`);
 }}
 
 function applyHealthSummary(summary) {{
-  const total = Number(summary.total_failures || 0);
-  const badgeEl = document.getElementById('healthAlertBadge');
-  const tab = document.getElementById('tab-health');
-  const detail = document.getElementById('healthAlertSummary');
-  badgeEl.classList.remove('unavailable');
-  badgeEl.textContent = total > 99 ? '99+' : String(total);
-  badgeEl.hidden = total === 0;
-  tab.setAttribute('aria-label', total ? `任务健康，${{total}} 项当前故障` : '任务健康，无当前故障');
-  detail.hidden = total === 0;
-  detail.textContent = total ? healthSummaryText(summary) : '';
+  const taskFailures = Number(summary.task_failures || 0);
+  const sourceFailures = Number(summary.source_failures || 0);
+  applyNavAlertBadge('healthAlertBadge', 'tab-health', taskFailures, '任务健康');
+  applyNavAlertBadge('sourceAlertBadge', 'tab-sources', sourceFailures, '信息源');
+  const taskDetail = document.getElementById('healthAlertSummary');
+  taskDetail.hidden = taskFailures === 0;
+  taskDetail.textContent = taskFailures ? `当前 ${{taskFailures}} 个任务异常` : '';
+  const sourceDetail = document.getElementById('sourceAlertSummary');
+  sourceDetail.hidden = sourceFailures === 0;
+  sourceDetail.textContent = sourceFailures ? `当前 ${{sourceFailures}} 个异常信息源` : '';
 }}
 
 function markHealthSummaryUnavailable() {{
-  const badgeEl = document.getElementById('healthAlertBadge');
-  badgeEl.textContent = '!';
-  badgeEl.hidden = false;
-  badgeEl.classList.add('unavailable');
-  document.getElementById('tab-health').setAttribute('aria-label', '任务健康状态读取失败');
+  [
+    ['healthAlertBadge', 'tab-health', '任务健康'],
+    ['sourceAlertBadge', 'tab-sources', '信息源']
+  ].forEach(([badgeId, tabId, label]) => {{
+    const badgeEl = document.getElementById(badgeId);
+    badgeEl.textContent = '!';
+    badgeEl.hidden = false;
+    badgeEl.classList.add('unavailable');
+    document.getElementById(tabId).setAttribute('aria-label', `${{label}}状态读取失败`);
+  }});
 }}
 
 async function loadHealthSummary() {{
