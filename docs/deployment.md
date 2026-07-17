@@ -298,8 +298,17 @@ and `cv2` imports. A missing, mismatched or broken runtime invokes the same
 installer and then checks again; deployment fails if the post-install check does
 not pass. When preview or OCR is explicitly disabled, the optional dependency
 check is skipped. This deployment check does not initialize PaddleOCR or download
-model files; the service-account model cache is retained across normal deploys
-and populated on the first approved OCR run.
+model files. The service-account `.paddleocr/` model cache and runtime `reports/`
+are excluded from rsync deletion, retained across normal deploys and never copied
+back into Git. The model cache is populated on the first approved OCR run.
+
+ValueList browser launches retain bounded Playwright error and profile-lock
+diagnostics without page content, cookies or browser storage. After each
+persistent context closes, the collector waits briefly for a live same-profile
+owner to exit. A shutdown timeout fails that source explicitly rather than
+starting another browser against a profile that is still in use. Dead-owner lock
+artifacts remain recoverable by Chromium; the collector does not blindly delete
+locks or kill unrelated browser processes.
 
 ## Optional Proxy
 

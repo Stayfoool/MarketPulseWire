@@ -12,16 +12,24 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import value_directory_preview
+import value_directory_browser
 import value_directory_monitor
 from market_item import DecisionResult, InterpretationResult, MarketFlowResult
 from market_runtime import MarketProcessOutcome
 from source_profiles import runtime_source_profile
 from value_directory_browser import (
+    BrowserConfig,
+    BrowserLaunchFailed,
+    BrowserShutdownTimeout,
     classify_page_state,
+    close_browser_context,
     dedupe_entries,
     evaluate_list_payload_with_empty_wait,
+    launch_browser_context,
     normalize_entry,
+    profile_lock_state,
     source_config,
+    wait_for_profile_release,
 )
 from value_directory_preview import (
     apply_preview_llm_response_preferences,
@@ -124,6 +132,149 @@ def test_waf_and_login_states_do_not_wait_for_articles() -> None:
         result = evaluate_list_payload_with_empty_wait(page, 30, 45_000, timeout_error=_ListWaitTimeout)
         assert result == payload
         assert page.waits == []
+
+
+def test_profile_lock_state_distinguishes_live_and_dead_same_host_owner() -> None:
+    with TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        profile = root / "profile"
+        proc = root / "proc"
+        profile.mkdir()
+        (proc / "net").mkdir(parents=True)
+        (proc / "net" / "unix").write_text(
+            "Num RefCount Protocol Flags Type St Inode Path\n",
+            encoding="utf-8",
+        )
+        (profile / "SingletonLock").symlink_to("test-host-123")
+        dead = profile_lock_state(profile, proc_root=proc, hostname="test-host")
+        (proc / "123").mkdir()
+        live = profile_lock_state(profile, proc_root=proc, hostname="test-host")
+    assert dead["lock_pid"] == 123
+    assert dead["lock_pid_alive"] is False
+    assert live["lock_pid_alive"] is True
+
+
+def test_profile_lock_state_finds_registered_socket_holder() -> None:
+    with TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        profile = root / "profile"
+        proc = root / "proc"
+        socket_path = root / "SingletonSocket"
+        profile.mkdir()
+        socket_path.touch()
+        (profile / "SingletonSocket").symlink_to(socket_path)
+        (proc / "net").mkdir(parents=True)
+        (proc / "net" / "unix").write_text(
+            f"Num RefCount Protocol Flags Type St Inode Path\n"
+            f"000: 00000002 00000000 00010000 0001 01 4242 {socket_path}\n",
+            encoding="utf-8",
+        )
+        fd_dir = proc / "456" / "fd"
+        fd_dir.mkdir(parents=True)
+        (fd_dir / "7").symlink_to("socket:[4242]")
+        state = profile_lock_state(profile, proc_root=proc, hostname="test-host")
+    assert state["socket_exists"] is True
+    assert state["socket_registered"] is True
+    assert state["socket_holder_pids"] == [456]
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def monotonic(self) -> float:
+        return self.value
+
+    def sleep(self, seconds: float) -> None:
+        self.value += seconds
+
+
+def test_wait_for_profile_release_observes_owner_exit() -> None:
+    states = [
+        {"lock_pid_alive": True, "socket_registered": True, "socket_holder_pids": [123]},
+        {"lock_pid_alive": True, "socket_registered": True, "socket_holder_pids": [123]},
+        {"lock_pid_alive": False, "socket_registered": False, "socket_holder_pids": [], "lock_exists": True},
+    ]
+    clock = _FakeClock()
+
+    def state_reader(_profile: Path) -> dict[str, object]:
+        if len(states) > 1:
+            return states.pop(0)
+        return states[0]
+
+    released, state = wait_for_profile_release(
+        Path("/private/profile"),
+        timeout_seconds=1,
+        poll_seconds=0.1,
+        state_reader=state_reader,
+        monotonic=clock.monotonic,
+        sleeper=clock.sleep,
+    )
+    assert released is True
+    assert state["lock_pid_alive"] is False
+
+
+class _FakeContext:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+        if self.error:
+            raise self.error
+
+
+def test_close_browser_context_reports_live_owner_timeout() -> None:
+    config = BrowserConfig(Path("/private/profile"), None, False, 45_000)
+    context = _FakeContext()
+    saved_wait = value_directory_browser.wait_for_profile_release
+    try:
+        value_directory_browser.wait_for_profile_release = lambda _profile: (
+            False,
+            {
+                "lock_exists": True,
+                "lock_target": "host-123",
+                "lock_pid_alive": True,
+                "socket_registered": True,
+                "socket_holder_pids": [123],
+            },
+        )
+        try:
+            close_browser_context(context, config)
+        except BrowserShutdownTimeout as exc:
+            error = str(exc)
+        else:
+            raise AssertionError("live profile owner must fail close")
+    finally:
+        value_directory_browser.wait_for_profile_release = saved_wait
+    assert context.closed is True
+    assert "host-123" in error
+    assert "123" in error
+
+
+def test_launch_browser_context_retains_bounded_underlying_error_and_lock_state() -> None:
+    class FailingChromium:
+        def launch_persistent_context(self, **_kwargs):
+            raise RuntimeError("ProcessSingleton profile already in use")
+
+    class FailingPlaywright:
+        chromium = FailingChromium()
+
+    with TemporaryDirectory() as tmpdir:
+        profile = Path(tmpdir)
+        (profile / "SingletonLock").symlink_to("test-host-999999")
+        config = BrowserConfig(profile, "/missing/chromium", False, 45_000)
+        try:
+            launch_browser_context(FailingPlaywright(), config)
+        except BrowserLaunchFailed as exc:
+            error = str(exc)
+        else:
+            raise AssertionError("launch failure must retain diagnostics")
+    assert "ProcessSingleton profile already in use" in error
+    assert "test-host-999999" in error
+    assert '"executable_exists":false' in error
+    assert "SingletonCookie" not in error
 
 
 def test_dedupe_entries_keeps_first_valid_url() -> None:
@@ -619,6 +770,11 @@ def main() -> int:
     test_empty_list_waits_once_for_delayed_articles()
     test_persistent_empty_list_remains_empty_after_bounded_wait()
     test_waf_and_login_states_do_not_wait_for_articles()
+    test_profile_lock_state_distinguishes_live_and_dead_same_host_owner()
+    test_profile_lock_state_finds_registered_socket_holder()
+    test_wait_for_profile_release_observes_owner_exit()
+    test_close_browser_context_reports_live_owner_timeout()
+    test_launch_browser_context_retains_bounded_underlying_error_and_lock_state()
     test_dedupe_entries_keeps_first_valid_url()
     test_shadow_payload_marks_seen_and_reviewed_without_delivery()
     test_source_profile_registers_value_directory()

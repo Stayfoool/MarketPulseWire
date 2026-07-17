@@ -6,13 +6,16 @@ server keeps a dedicated browser profile and the user logs in there manually.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
+import socket
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from time_utils import parse_datetime_to_utc_iso
 
@@ -26,6 +29,8 @@ INDUSTRY_MACRO_LIST_URL = "https://www.valuelist.cn/ib-research/global-investmen
 INDUSTRY_MACRO_SOURCE_MODULE = "价值目录 / 国际投行-行业宏观"
 CN_TZ = timezone(timedelta(hours=8))
 LIST_EMPTY_WAIT_MS = 15_000
+BROWSER_CLOSE_WAIT_SECONDS = 5.0
+BROWSER_DIAGNOSTIC_LIMIT = 800
 
 WAF_PATTERNS = (
     "人机验证",
@@ -48,6 +53,14 @@ class ValueDirectoryError(RuntimeError):
 
 class BrowserNotConfigured(ValueDirectoryError):
     """Raised when Chromium/Playwright is unavailable."""
+
+
+class BrowserLaunchFailed(ValueDirectoryError):
+    """Raised when an installed browser cannot acquire the private profile."""
+
+
+class BrowserShutdownTimeout(ValueDirectoryError):
+    """Raised when a browser still owns the private profile after close."""
 
 
 class AccessBlocked(ValueDirectoryError):
@@ -194,6 +207,166 @@ def launch_kwargs(config: BrowserConfig, *, headless: bool | None = None) -> dic
     return kwargs
 
 
+def _symlink_target(path: Path) -> str:
+    try:
+        return os.readlink(path)
+    except OSError:
+        return ""
+
+
+def _unix_socket_inode(socket_path: str, proc_root: Path) -> str:
+    if not socket_path:
+        return ""
+    try:
+        lines = (proc_root / "net" / "unix").read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    for line in lines[1:]:
+        parts = line.split(maxsplit=7)
+        if len(parts) == 8 and parts[7] == socket_path:
+            return parts[6]
+    return ""
+
+
+def _socket_holder_pids(inode: str, proc_root: Path) -> list[int]:
+    if not inode:
+        return []
+    expected = f"socket:[{inode}]"
+    holders: list[int] = []
+    try:
+        pid_dirs = [path for path in proc_root.iterdir() if path.name.isdigit()]
+    except OSError:
+        return holders
+    for pid_dir in pid_dirs:
+        try:
+            links = list((pid_dir / "fd").iterdir())
+        except OSError:
+            continue
+        for link in links:
+            try:
+                if os.readlink(link) == expected:
+                    holders.append(int(pid_dir.name))
+                    break
+            except OSError:
+                continue
+        if len(holders) >= 8:
+            break
+    return sorted(holders)
+
+
+def profile_lock_state(
+    profile_dir: Path,
+    *,
+    proc_root: Path = Path("/proc"),
+    hostname: str | None = None,
+) -> dict[str, Any]:
+    hostname = hostname or socket.gethostname()
+    lock_path = profile_dir / "SingletonLock"
+    socket_link = profile_dir / "SingletonSocket"
+    lock_exists = lock_path.exists() or lock_path.is_symlink()
+    lock_target = _symlink_target(lock_path)
+    lock_host = ""
+    lock_pid: int | None = None
+    if lock_target and "-" in lock_target:
+        candidate_host, candidate_pid = lock_target.rsplit("-", 1)
+        if candidate_pid.isdigit():
+            lock_host = candidate_host
+            lock_pid = int(candidate_pid)
+    same_host = bool(lock_host) and lock_host == hostname
+    owner_pid_alive: bool | None = None
+    if same_host and lock_pid is not None:
+        owner_pid_alive = (proc_root / str(lock_pid)).exists()
+
+    socket_target = _symlink_target(socket_link)
+    if socket_target and not os.path.isabs(socket_target):
+        socket_target = str((socket_link.parent / socket_target).resolve(strict=False))
+    socket_exists = bool(socket_target) and Path(socket_target).exists()
+    socket_inode = _unix_socket_inode(socket_target, proc_root)
+    holders = _socket_holder_pids(socket_inode, proc_root)
+    return {
+        "lock_exists": lock_exists,
+        "lock_target": lock_target[:160],
+        "lock_same_host": same_host,
+        "lock_pid": lock_pid,
+        "lock_pid_alive": owner_pid_alive,
+        "socket_exists": socket_exists,
+        "socket_registered": bool(socket_inode),
+        "socket_holder_pids": holders,
+    }
+
+
+def profile_lock_active(state: dict[str, Any]) -> bool:
+    return bool(
+        state.get("lock_pid_alive") is True
+        or state.get("socket_registered")
+        or state.get("socket_holder_pids")
+    )
+
+
+def wait_for_profile_release(
+    profile_dir: Path,
+    *,
+    timeout_seconds: float = BROWSER_CLOSE_WAIT_SECONDS,
+    poll_seconds: float = 0.1,
+    state_reader: Callable[[Path], dict[str, Any]] = profile_lock_state,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> tuple[bool, dict[str, Any]]:
+    deadline = monotonic() + max(0.0, timeout_seconds)
+    state = state_reader(profile_dir)
+    while profile_lock_active(state) and monotonic() < deadline:
+        sleeper(poll_seconds)
+        state = state_reader(profile_dir)
+    return not profile_lock_active(state), state
+
+
+def compact_browser_error(exc: Exception) -> str:
+    return " ".join(str(exc).split())[:BROWSER_DIAGNOSTIC_LIMIT]
+
+
+def browser_diagnostic(config: BrowserConfig) -> dict[str, Any]:
+    executable = config.executable_path or "playwright-managed"
+    try:
+        lock_state = profile_lock_state(config.profile_dir)
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not hide the browser error.
+        lock_state = {"diagnostic_error": f"{type(exc).__name__}: {compact_browser_error(exc)}"}
+    return {
+        "exception_context": "persistent_context",
+        "executable": executable[:240],
+        "executable_exists": Path(executable).exists() if config.executable_path else None,
+        "profile_lock": lock_state,
+    }
+
+
+def launch_browser_context(playwright: Any, config: BrowserConfig) -> Any:
+    try:
+        return playwright.chromium.launch_persistent_context(**launch_kwargs(config))
+    except Exception as exc:  # noqa: BLE001 - preserve bounded native browser diagnostics.
+        detail = compact_browser_error(exc)
+        diagnostic = json.dumps(browser_diagnostic(config), ensure_ascii=False, separators=(",", ":"))
+        raise BrowserLaunchFailed(
+            f"浏览器启动失败：{type(exc).__name__}: {detail}; diagnostic={diagnostic}"
+        ) from exc
+
+
+def close_browser_context(context: Any, config: BrowserConfig) -> None:
+    try:
+        context.close()
+    except Exception as exc:  # noqa: BLE001 - retain bounded close diagnostics.
+        diagnostic = json.dumps(browser_diagnostic(config), ensure_ascii=False, separators=(",", ":"))
+        raise BrowserShutdownTimeout(
+            f"浏览器关闭失败：{type(exc).__name__}: {compact_browser_error(exc)}; diagnostic={diagnostic}"
+        ) from exc
+    released, state = wait_for_profile_release(config.profile_dir)
+    if released:
+        if state.get("lock_exists"):
+            diagnostic = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+            print(f"ValueList browser closed with stale recoverable lock: {diagnostic}", flush=True)
+        return
+    diagnostic = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+    raise BrowserShutdownTimeout(f"浏览器关闭后仍持有 profile 超过 {BROWSER_CLOSE_WAIT_SECONDS:.1f}s：{diagnostic}")
+
+
 def page_id_from_url(url: str) -> str:
     match = re.search(r"/(\d+)\.html(?:$|[?#])", str(url or ""))
     return match.group(1) if match else str(url or "")
@@ -300,12 +473,7 @@ def collect_entries(limit: int = 30, url: str | None = None, source_id: str = SO
     config = browser_config()
     safe_limit = max(1, min(int(limit), 100))
     with sync_playwright() as playwright:
-        try:
-            context = playwright.chromium.launch_persistent_context(**launch_kwargs(config))
-        except Exception as exc:  # noqa: BLE001 - setup failures need a clear operator message
-            raise BrowserNotConfigured(
-                "浏览器启动失败。请安装系统 Chrome/Chromium，或运行 `python -m playwright install chromium`。"
-            ) from exc
+        context = launch_browser_context(playwright, config)
         try:
             page = context.pages[0] if context.pages else context.new_page()
             page.goto(target_url, wait_until="domcontentloaded", timeout=config.timeout_ms)
@@ -317,7 +485,7 @@ def collect_entries(limit: int = 30, url: str | None = None, source_id: str = SO
                 timeout_error=PlaywrightTimeoutError,
             )
         finally:
-            context.close()
+            close_browser_context(context, config)
 
     state = classify_page_state(
         f"{payload.get('title', '')}\n{payload.get('bodySample', '')}",
@@ -361,19 +529,14 @@ def collect_preview(url: str) -> dict[str, Any]:
 
     config = browser_config()
     with sync_playwright() as playwright:
-        try:
-            context = playwright.chromium.launch_persistent_context(**launch_kwargs(config))
-        except Exception as exc:  # noqa: BLE001
-            raise BrowserNotConfigured(
-                "浏览器启动失败。请安装系统 Chrome/Chromium，或运行 `python -m playwright install chromium`。"
-            ) from exc
+        context = launch_browser_context(playwright, config)
         try:
             page = context.pages[0] if context.pages else context.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=config.timeout_ms)
             page.wait_for_timeout(int(os.getenv("VALUE_DIRECTORY_WAF_SETTLE_MS", "6000") or "6000"))
             payload = evaluate_detail_payload(page)
         finally:
-            context.close()
+            close_browser_context(context, config)
 
     state = classify_detail_page_state(
         f"{payload.get('title', '')}\n{payload.get('articleText', '')}",
