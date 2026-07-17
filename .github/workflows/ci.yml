@@ -46,6 +46,7 @@ jobs:
           python scripts/test_research_collector.py
           python scripts/test_value_directory_monitor.py
           python scripts/test_value_directory_flow.py
+          python scripts/test_ocr_runtime.py
           python scripts/test_http_utils.py
           python scripts/test_rss_monitor_fetch.py
           python scripts/test_push_rules.py
