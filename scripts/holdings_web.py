@@ -56,6 +56,18 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
 BJ = ZoneInfo("Asia/Shanghai")
+SYSTEMCTL_SHOW_FIELDS = {
+    "ActiveState",
+    "SubState",
+    "Result",
+    "ExecMainStatus",
+    "ExecMainPID",
+    "NRestarts",
+    "ExecMainStartTimestamp",
+    "NextElapseUSecRealtime",
+    "LastTriggerUSec",
+    "LoadState",
+}
 
 SERVICE_UNITS = [
     "surveil-x-stream.service",
@@ -167,7 +179,12 @@ UNIT_METADATA = {
     "surveil-china-media.service": {"group": "fetching_legacy", "type": "历史兼容", "schedule": "已切流；旧中国财经媒体批处理"},
     "surveil-sina-stock-news.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 30 分钟"},
     "surveil-company-disclosures.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 08:00 / 20:00"},
-    "surveil-jygs-actions.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 12:30 / 16:00"},
+    "surveil-jygs-actions.service": {
+        "group": "fetching_scheduled",
+        "type": "定时采集",
+        "schedule": "默认停用；legacy product path",
+        "health_alert": False,
+    },
     "surveil-research-collector.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 5 分钟；页面源内部 15 分钟"},
     "surveil-official-collector.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 10 分钟"},
     "surveil-news-collector.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 2 分钟"},
@@ -188,7 +205,12 @@ UNIT_METADATA = {
     "surveil-overseas-media.timer": {"group": "fetching_legacy", "type": "历史兼容定时器", "schedule": "已切流；旧每 5 分钟"},
     "surveil-china-media.timer": {"group": "fetching_legacy", "type": "历史兼容定时器", "schedule": "已切流；旧每 2 分钟"},
     "surveil-company-disclosures.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "08:00 / 20:00"},
-    "surveil-jygs-actions.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "12:30 / 16:00"},
+    "surveil-jygs-actions.timer": {
+        "group": "fetching_scheduled",
+        "type": "定时器",
+        "schedule": "默认停用；legacy product path",
+        "health_alert": False,
+    },
     "surveil-research-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 5 分钟"},
     "surveil-official-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 10 分钟"},
     "surveil-news-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 2 分钟"},
@@ -1128,38 +1150,54 @@ def overview_payload(day: str = "") -> dict[str, Any]:
     }
 
 
-def systemctl_show(unit: str) -> dict[str, Any]:
+def parse_systemctl_show_output(output: str) -> dict[str, dict[str, Any]]:
+    parsed: dict[str, dict[str, Any]] = {}
+    for block in output.split("\n\n"):
+        values: dict[str, Any] = {}
+        for line in block.splitlines():
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            if key == "Id" or key in SYSTEMCTL_SHOW_FIELDS:
+                values[key] = value
+        unit_id = str(values.get("Id") or "")
+        if unit_id:
+            parsed[unit_id] = values
+    return parsed
+
+
+def systemctl_show_many(units: list[str]) -> list[dict[str, Any]]:
+    if not units:
+        return []
     try:
         result = subprocess.run(
-            ["systemctl", "show", unit, "--no-pager"],
+            [
+                "systemctl",
+                "show",
+                *units,
+                "--no-pager",
+                f"--property=Id,{','.join(sorted(SYSTEMCTL_SHOW_FIELDS))}",
+            ],
             check=False,
             text=True,
             capture_output=True,
             timeout=8,
         )
     except Exception as exc:  # noqa: BLE001
-        return {"Id": unit, "error": str(exc)}
-    values: dict[str, Any] = {"Id": unit}
-    for line in result.stdout.splitlines():
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        if key in {
-            "ActiveState",
-            "SubState",
-            "Result",
-            "ExecMainStatus",
-            "ExecMainPID",
-            "NRestarts",
-            "ExecMainStartTimestamp",
-            "NextElapseUSecRealtime",
-            "LastTriggerUSec",
-            "LoadState",
-        }:
-            values[key] = value
-    if result.returncode != 0:
-        values["error"] = result.stderr.strip() or result.stdout.strip()
-    return values
+        return [{"Id": unit, "error": str(exc)} for unit in units]
+    parsed = parse_systemctl_show_output(result.stdout)
+    command_error = result.stderr.strip() if result.returncode != 0 else ""
+    rows: list[dict[str, Any]] = []
+    for unit in units:
+        values = parsed.get(unit, {"Id": unit})
+        if command_error or unit not in parsed:
+            values["error"] = command_error or "systemctl 未返回该单元状态"
+        rows.append(values)
+    return rows
+
+
+def systemctl_show(unit: str) -> dict[str, Any]:
+    return systemctl_show_many([unit])[0]
 
 
 def unit_actions(unit: str) -> list[str]:
@@ -1226,6 +1264,7 @@ def unit_display_metadata(unit: str, values: dict[str, Any]) -> dict[str, Any]:
         "lifecycle_label": lifecycle_label,
         "replacement": replacement,
         "default_visible": default_visible,
+        "health_alert": bool(meta.get("health_alert", lifecycle == "production")),
     }
 
 
@@ -1268,6 +1307,54 @@ def task_execution_status(service: dict[str, Any] | None) -> str:
     return str(service.get("status_text") or f"{active}/{sub}".strip("/") or "未知")
 
 
+def task_health_issue(task: dict[str, Any]) -> dict[str, Any] | None:
+    if task.get("lifecycle") != "production" or not task.get("health_alert", True):
+        return None
+    timer = task.get("timer") or None
+    service = task.get("service") or None
+    for unit in (timer, service):
+        if unit and unit.get("error"):
+            return {
+                "kind": "task",
+                "id": str(task.get("Id") or ""),
+                "label": str(task.get("label") or task.get("Id") or ""),
+                "reason": "状态读取异常",
+            }
+    if timer and str(timer.get("ActiveState") or "") != "active":
+        return {
+            "kind": "task",
+            "id": str(task.get("Id") or ""),
+            "label": str(task.get("label") or task.get("Id") or ""),
+            "reason": "生产定时器未启用",
+        }
+    if not service:
+        return {
+            "kind": "task",
+            "id": str(task.get("Id") or ""),
+            "label": str(task.get("label") or task.get("Id") or ""),
+            "reason": "执行服务状态缺失",
+        }
+    active = str(service.get("ActiveState") or "")
+    result = str(service.get("Result") or "")
+    exit_status = str(service.get("ExecMainStatus") or "").strip()
+    if result == "failed" or active == "failed" or (exit_status and exit_status != "0"):
+        reason = f"最近运行失败（exit {exit_status}）" if exit_status else "最近运行失败"
+        return {
+            "kind": "task",
+            "id": str(task.get("Id") or ""),
+            "label": str(task.get("label") or task.get("Id") or ""),
+            "reason": reason,
+        }
+    if not timer and active != "active":
+        return {
+            "kind": "task",
+            "id": str(task.get("Id") or ""),
+            "label": str(task.get("label") or task.get("Id") or ""),
+            "reason": "常驻生产服务未运行",
+        }
+    return None
+
+
 def build_health_tasks(units: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_id = {str(unit.get("Id") or ""): unit for unit in units}
     paired_services = set(RUN_ONCE_TARGETS.values())
@@ -1289,6 +1376,7 @@ def build_health_tasks(units: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "lifecycle": timer.get("lifecycle") or "production",
                 "lifecycle_label": timer.get("lifecycle_label") or "",
                 "replacement": timer.get("replacement") or "",
+                "health_alert": bool(timer.get("health_alert", True)),
                 "schedule": timer.get("schedule") or "",
                 "schedule_status": timer.get("status_text") or "未知",
                 "execution_status": task_execution_status(service),
@@ -1320,6 +1408,7 @@ def build_health_tasks(units: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "lifecycle": service.get("lifecycle") or "production",
                 "lifecycle_label": service.get("lifecycle_label") or "",
                 "replacement": service.get("replacement") or "",
+                "health_alert": bool(service.get("health_alert", True)),
                 "schedule": service.get("schedule") or "",
                 "schedule_status": "常驻" if service.get("ActiveState") == "active" else "未运行",
                 "execution_status": task_execution_status(service),
@@ -1333,6 +1422,8 @@ def build_health_tasks(units: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "raw_service_state": raw_systemd_state(service),
             }
         )
+    for task in tasks:
+        task["health_issue"] = task_health_issue(task)
     return tasks
 
 
@@ -1403,17 +1494,20 @@ def tail_file(path: Path, max_lines: int = 8) -> str:
     return "\n".join(lines[-max_lines:])
 
 
-def health_payload() -> dict[str, Any]:
-    units = [systemctl_show(unit) for unit in [*SERVICE_UNITS, *TIMER_UNITS]]
+def health_units() -> list[dict[str, Any]]:
+    units = systemctl_show_many([*SERVICE_UNITS, *TIMER_UNITS])
     for unit in units:
         unit_id = str(unit.get("Id", ""))
         unit.update(unit_display_metadata(unit_id, unit))
         unit["actions"] = unit_actions(unit_id)
         if unit_id in RUN_ONCE_TARGETS:
             unit["run_once_target"] = RUN_ONCE_TARGETS[unit_id]
-    tasks = build_health_tasks(units)
+    return units
+
+
+def health_sources(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
     sources: list[dict[str, Any]] = []
-    with connect_sqlite(DEFAULT_DB_PATH) as conn:
+    with connect_sqlite(db_path) as conn:
         conn.row_factory = sqlite3.Row
         if table_exists(conn, "source_health"):
             for row in conn.execute(
@@ -1461,6 +1555,92 @@ def health_payload() -> dict[str, Any]:
                         "updated_at": row["last_failed_at"] or row["last_recovered_at"] or "",
                     }
                 )
+    return sources
+
+
+def source_profile_health_issue(profile: dict[str, Any]) -> dict[str, Any] | None:
+    if not profile.get("enabled", True) or profile.get("health_status") != "failing":
+        return None
+    failures = int(profile.get("consecutive_failures") or 0)
+    return {
+        "kind": "source",
+        "id": str(profile.get("id") or ""),
+        "label": str(profile.get("name") or profile.get("id") or ""),
+        "reason": f"来源连续失败 {failures} 次",
+    }
+
+
+def build_health_summary(
+    tasks: list[dict[str, Any]],
+    profiles: list[dict[str, Any]],
+    sources: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    task_issues = [issue for task in tasks if (issue := task.get("health_issue"))]
+    source_issues = [issue for profile in profiles if (issue := source_profile_health_issue(profile))]
+    enabled_profile_ids = {str(profile.get("id") or "") for profile in profiles if profile.get("enabled", True)}
+    if "x_serenity" in enabled_profile_ids:
+        for source in sources or []:
+            if source.get("monitor") != "x_stream_detail" or source.get("status") != "failing":
+                continue
+            failures = int(source.get("consecutive_failures") or 0)
+            source_issues.append(
+                {
+                    "kind": "source",
+                    "id": f"x_stream_detail:{source.get('source') or ''}",
+                    "label": str(source.get("source") or "X / Serenity"),
+                    "reason": f"X 连接问题连续失败 {failures} 次",
+                }
+            )
+    issues = [*task_issues, *source_issues]
+    return {
+        "ok": True,
+        "total_failures": len(issues),
+        "task_failures": len(task_issues),
+        "source_failures": len(source_issues),
+        "issues": issues[:50],
+        "issues_truncated": len(issues) > 50,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def active_source_health_keys(profiles: list[dict[str, Any]], sources: list[dict[str, Any]]) -> set[tuple[str, str]]:
+    keys: set[tuple[str, str]] = set()
+    enabled_profile_ids: set[str] = set()
+    for profile in profiles:
+        if not profile.get("enabled", True):
+            continue
+        enabled_profile_ids.add(str(profile.get("id") or ""))
+        for record in profile.get("health_records") or []:
+            if record.get("status") == "failing":
+                keys.add((str(record.get("monitor") or ""), str(record.get("source") or "")))
+    if "x_serenity" in enabled_profile_ids:
+        keys.update(
+            ("x_stream_detail", str(source.get("source") or ""))
+            for source in sources
+            if source.get("monitor") == "x_stream_detail" and source.get("status") == "failing"
+        )
+    return keys
+
+
+def health_summary_payload(db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
+    tasks = build_health_tasks(health_units())
+    sources = health_sources(db_path)
+    profiles = source_profiles_payload(db_path=db_path).get("profiles") or []
+    return build_health_summary(tasks, profiles, sources)
+
+
+def health_payload(db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
+    units = health_units()
+    tasks = build_health_tasks(units)
+    sources = health_sources(db_path)
+    profiles = source_profiles_payload(db_path=db_path).get("profiles") or []
+    active_source_keys = active_source_health_keys(profiles, sources)
+    for source in sources:
+        source["health_issue"] = (
+            str(source.get("monitor") or ""),
+            str(source.get("source") or ""),
+        ) in active_source_keys
+    summary = build_health_summary(tasks, profiles, sources)
     logs_dir = ROOT / "logs"
     logs = []
     for name in LOG_FILES:
@@ -1473,6 +1653,7 @@ def health_payload() -> dict[str, Any]:
         "units": units,
         "tasks": tasks,
         "sources": sources,
+        "summary": summary,
         "logs": logs,
     }
 
@@ -1504,8 +1685,11 @@ def html_page(token_required: bool) -> str:
     header h1 {{ font-size: 18px; margin: 0; font-weight: 650; }}
     .environment-label {{ color: #d9f5ec; border-color: #6cc9b2; background: rgba(15, 118, 110, .35); }}
     nav.tabs {{ display: flex; gap: 8px; padding: 10px 20px 0; background: var(--bg); overflow-x: auto; }}
-    nav.tabs button {{ flex: 0 0 auto; white-space: nowrap; background: transparent; border-color: transparent; border-radius: 6px 6px 0 0; }}
+    nav.tabs button {{ flex: 0 0 auto; white-space: nowrap; background: transparent; border-color: transparent; border-radius: 6px 6px 0 0; display: inline-flex; align-items: center; gap: 5px; }}
     nav.tabs button.active {{ background: white; border-color: var(--line); border-bottom-color: white; color: var(--accent); }}
+    .health-alert-badge {{ min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; background: #d92d20; color: white; font-size: 11px; font-weight: 700; line-height: 1; }}
+    .health-alert-badge.unavailable {{ background: #b54708; }}
+    .health-alert-badge[hidden] {{ display: none; }}
     main {{ padding: 18px 20px 32px; }}
     .view {{ display: none; }}
     .view.active {{ display: block; }}
@@ -1568,6 +1752,10 @@ def html_page(token_required: bool) -> str:
     .table-wrap {{ max-height: calc(100vh - 190px); overflow: auto; }}
     .health-table {{ min-width: 1180px; }}
     .health-table td:last-child {{ white-space: nowrap; }}
+    .health-issue-summary {{ margin-bottom: 12px; padding: 10px 12px; border: 1px solid #f1b7b0; border-left: 4px solid var(--danger); background: #fff5f4; color: var(--danger); font-size: 13px; }}
+    .health-issue-summary[hidden] {{ display: none; }}
+    tr.health-issue-row td {{ background: #fff5f4; }}
+    tr.health-issue-row td:first-child {{ box-shadow: inset 3px 0 0 var(--danger); }}
     @media (max-width: 640px) {{
       header {{ height: auto; min-height: 56px; padding: 8px 12px; flex-wrap: wrap; gap: 8px 12px; }}
       nav.tabs {{ padding-left: 12px; padding-right: 12px; }}
@@ -1613,7 +1801,7 @@ def html_page(token_required: bool) -> str:
     <button id="tab-signals" onclick="showView('signals')">信号复盘</button>
     <button id="tab-relations" onclick="showView('relations')">关系映射</button>
     <button id="tab-sources" onclick="showView('sources')">信息源</button>
-    <button id="tab-health" onclick="showView('health')">任务健康</button>
+    <button id="tab-health" onclick="showView('health')" aria-label="任务健康，无当前故障"><span>任务健康</span><span id="healthAlertBadge" class="health-alert-badge" hidden></span></button>
     <button id="tab-keywords" onclick="showView('keywords')">媒体关键词</button>
     <button id="tab-rules" onclick="showView('rules')">规则中心</button>
     <button id="tab-settings" onclick="showView('settings')">配置中心</button>
@@ -1910,6 +2098,7 @@ def html_page(token_required: bool) -> str:
         <h2>任务健康</h2>
         <button onclick="loadHealth()">刷新</button>
       </div>
+      <div id="healthAlertSummary" class="health-issue-summary" role="status" aria-live="polite" hidden></div>
       <div class="status ok" style="display:block">
 只允许操作 MarketPulseWire 白名单内的 systemd 单元。默认展示生产单元；历史兼容单元已完成切流，通常保持停用。
       </div>
@@ -2336,7 +2525,14 @@ function renderHealthTasks(tasks, groupLabels) {{
     byGroup[group].push(task);
   }});
   const rows = [];
-  const orderedGroups = [...order, ...Object.keys(byGroup).filter(group => !order.includes(group))];
+  Object.values(byGroup).forEach(groupTasks => groupTasks.sort((left, right) =>
+    Number(Boolean(right.health_issue)) - Number(Boolean(left.health_issue))
+  ));
+  const baseGroupOrder = [...order, ...Object.keys(byGroup).filter(group => !order.includes(group))];
+  const orderedGroups = [
+    ...baseGroupOrder.filter(group => (byGroup[group] || []).some(task => task.health_issue)),
+    ...baseGroupOrder.filter(group => !(byGroup[group] || []).some(task => task.health_issue))
+  ];
   orderedGroups.forEach(group => {{
     const groupTasks = byGroup[group] || [];
     if (!groupTasks.length) return;
@@ -2359,8 +2555,9 @@ function renderHealthTasks(tasks, groupLabels) {{
           ${{rawLines.map(line => `<div>${{escapeHtml(line)}}</div>`).join('')}}
         </details>` : '';
       const nextTrigger = task.next_trigger ? `<div class="hint">下次：${{escapeHtml(task.next_trigger)}}</div>` : '';
+      const issueClass = task.health_issue ? ' class="health-issue-row"' : '';
       rows.push(`
-        <tr>
+        <tr${{issueClass}}>
           <td><strong>${{escapeHtml(task.label || task.Id || '')}}</strong><div class="hint">${{escapeHtml(task.Id || '')}}</div>${{rawDetails}}</td>
           <td>${{escapeHtml(task.unit_type || '')}}${{lifecycle}}${{replacement}}</td>
           <td>${{badge(task.schedule_status || '未知')}}</td>
@@ -3170,12 +3367,54 @@ async function saveSourceProfiles() {{
   }}
 }}
 
+function healthSummaryText(summary) {{
+  const total = Number(summary.total_failures || 0);
+  const tasks = Number(summary.task_failures || 0);
+  const sources = Number(summary.source_failures || 0);
+  return `当前 ${{total}} 项故障：${{tasks}} 个任务异常，${{sources}} 个来源连续失败`;
+}}
+
+function applyHealthSummary(summary) {{
+  const total = Number(summary.total_failures || 0);
+  const badgeEl = document.getElementById('healthAlertBadge');
+  const tab = document.getElementById('tab-health');
+  const detail = document.getElementById('healthAlertSummary');
+  badgeEl.classList.remove('unavailable');
+  badgeEl.textContent = total > 99 ? '99+' : String(total);
+  badgeEl.hidden = total === 0;
+  tab.setAttribute('aria-label', total ? `任务健康，${{total}} 项当前故障` : '任务健康，无当前故障');
+  detail.hidden = total === 0;
+  detail.textContent = total ? healthSummaryText(summary) : '';
+}}
+
+function markHealthSummaryUnavailable() {{
+  const badgeEl = document.getElementById('healthAlertBadge');
+  badgeEl.textContent = '!';
+  badgeEl.hidden = false;
+  badgeEl.classList.add('unavailable');
+  document.getElementById('tab-health').setAttribute('aria-label', '任务健康状态读取失败');
+}}
+
+async function loadHealthSummary() {{
+  try {{
+    applyHealthSummary(await api('/api/health/summary'));
+  }} catch (err) {{
+    markHealthSummaryUnavailable();
+  }}
+}}
+
 async function loadHealth() {{
   try {{
     const data = await api('/api/health');
+    applyHealthSummary(data.summary || {{}});
     document.getElementById('healthRows').innerHTML = renderHealthTasks(data.tasks || [], data.unit_groups || {{}});
-    document.getElementById('sourceHealthRows').innerHTML = (data.sources || []).map(source => `
-      <tr>
+    const sources = [...(data.sources || [])].sort((left, right) => {{
+      const issueOrder = Number(Boolean(right.health_issue)) - Number(Boolean(left.health_issue));
+      if (issueOrder) return issueOrder;
+      return Number(right.consecutive_failures || 0) - Number(left.consecutive_failures || 0);
+    }});
+    document.getElementById('sourceHealthRows').innerHTML = sources.map(source => `
+      <tr${{source.health_issue ? ' class="health-issue-row"' : ''}}>
         <td>${{escapeHtml(source.monitor || '')}}</td>
         <td>${{escapeHtml(source.source || '')}}</td>
         <td>${{badge(source.status || '')}}</td>
@@ -3733,6 +3972,13 @@ async function confirmSave() {{
 
 document.getElementById('eventDate').value = todayString();
 showView('overview');
+loadHealthSummary();
+setInterval(() => {{
+  if (!document.hidden) loadHealthSummary();
+}}, 60000);
+document.addEventListener('visibilitychange', () => {{
+  if (!document.hidden) loadHealthSummary();
+}});
 </script>
 </body>
 </html>"""
@@ -3963,6 +4209,14 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 return
             try:
                 self.send_json(health_payload())
+            except Exception as exc:  # noqa: BLE001
+                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path == "/api/health/summary":
+            if not self.require_auth():
+                return
+            try:
+                self.send_json(health_summary_payload())
             except Exception as exc:  # noqa: BLE001
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
