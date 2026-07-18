@@ -22,6 +22,7 @@ from holdings_web import (
     fetch_events_rows,
     html_page,
     parse_systemctl_show_output,
+    utc_window_for_range,
     unit_actions,
     unit_display_metadata,
 )
@@ -285,6 +286,55 @@ def test_event_center_search_filters_before_per_pipeline_limit() -> None:
     assert rows[0]["kind"] == "article"
 
 
+def test_event_center_date_range_is_inclusive_in_beijing_time() -> None:
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            """
+            CREATE TABLE article_reviews (
+                source TEXT, item_id TEXT, url TEXT, title TEXT, source_module TEXT,
+                published_at TEXT, importance TEXT, push_now INTEGER,
+                incremental_classification TEXT, affected_targets_json TEXT,
+                daily_summary TEXT, reason TEXT, pushed_at TEXT, created_at TEXT
+            )
+            """
+        )
+        rows = [
+            ("source", "start", "", "起始日", "source", "", "low", 0, "", "[]", "", "", "", "2026-07-01T00:00:00+00:00"),
+            ("source", "end", "", "结束日", "source", "", "low", 0, "", "[]", "", "", "", "2026-07-02T15:59:59+00:00"),
+            ("source", "after", "", "结束日之后", "source", "", "low", 0, "", "[]", "", "", "", "2026-07-02T16:00:00+00:00"),
+        ]
+        conn.executemany("INSERT INTO article_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        conn.commit()
+        conn.close()
+
+        selected = fetch_events_rows(start_day="2026-07-01", end_day="2026-07-02", db_path=db_path)
+        same_day = fetch_events_rows(day="2026-07-01", db_path=db_path)
+
+    assert [row["id"] for row in selected] == ["end", "start"]
+    assert [row["id"] for row in same_day] == ["start"]
+
+    start_utc, end_utc, display_start, display_end = utc_window_for_range("2026-07-01", "2026-07-02")
+    assert start_utc == "2026-06-30T16:00:00+00:00"
+    assert end_utc == "2026-07-02T16:00:00+00:00"
+    assert (display_start, display_end) == ("2026-07-01", "2026-07-02")
+
+
+def test_event_center_date_range_rejects_partial_or_inverted_dates() -> None:
+    for kwargs, expected in (
+        ({"start_day": "2026-07-01"}, "必须同时填写"),
+        ({"start_day": "2026-07-03", "end_day": "2026-07-01"}, "不能晚于"),
+        ({"start_day": "2026/07/01", "end_day": "2026-07-01"}, "YYYY-MM-DD"),
+    ):
+        try:
+            fetch_events_rows(**kwargs)
+        except ValueError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError(f"expected ValueError for {kwargs}")
+
+
 def test_event_center_can_show_baselines_and_filter_by_published_time() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
@@ -446,6 +496,10 @@ def test_event_center_source_filter_uses_grouped_dropdown() -> None:
     assert 'loadEventSourceOptions' in html
     assert 'eventSourceFilterValue' in html
     assert 'eventTimeBasis' in html
+    assert 'eventFromDate' in html
+    assert 'eventToDate' in html
+    assert "params.set('from', startDate)" in html
+    assert "params.set('to', endDate)" in html
     assert 'eventIncludeBaseline' in html
     assert '显示基线条目' in html
     assert "x:serenity" in html

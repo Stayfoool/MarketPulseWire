@@ -45,7 +45,8 @@
 
     <section id="view-events" class="view">
       <div class="toolbar">
-        <input id="eventDate" type="date" style="width:160px">
+        <label class="date-range-field">开始日期<input id="eventFromDate" type="date" style="width:145px"></label>
+        <label class="date-range-field">结束日期<input id="eventToDate" type="date" style="width:145px"></label>
         <select id="eventTimeBasis" aria-label="日期依据" style="width:170px" onchange="loadEvents()">
           <option value="seen">按采集/处理日期</option>
           <option value="published">按原文发布时间</option>
@@ -635,4 +636,3 @@
 <script src="/static/app.js" defer></script>
 </body>
 </html>
-
