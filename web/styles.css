@@ -24,6 +24,7 @@ main { padding: 18px 20px 32px; }
 .view { display: none; }
 .view.active { display: block; }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
+.date-range-field { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .section-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 0 12px; }
 .section-title h2 { margin: 0; font-size: 16px; }
@@ -116,4 +117,3 @@ tr.health-issue-row td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
   .split { grid-template-columns: 1fr; }
   .settings-grid { grid-template-columns: 1fr; }
 }
-

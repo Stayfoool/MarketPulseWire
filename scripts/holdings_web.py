@@ -323,17 +323,33 @@ def workbench_environment_label() -> str:
     return "服务器生产配置" if ROOT == Path("/opt/surveil") else "本地开发配置"
 
 
-def utc_window_for_day(day: str = "") -> tuple[str, str, str]:
-    if day:
-        start_local = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=BJ)
-    else:
-        start_local = datetime.now(BJ).replace(hour=0, minute=0, second=0, microsecond=0)
-    end_local = start_local + timedelta(days=1)
+def utc_window_for_range(start_day: str = "", end_day: str = "") -> tuple[str, str, str, str]:
+    start_value = str(start_day or "").strip()
+    end_value = str(end_day or "").strip()
+    if not start_value and not end_value:
+        today = datetime.now(BJ).strftime("%Y-%m-%d")
+        start_value = end_value = today
+    elif not start_value or not end_value:
+        raise ValueError("开始日期和结束日期必须同时填写")
+    try:
+        start_local = datetime.strptime(start_value, "%Y-%m-%d").replace(tzinfo=BJ)
+        end_local = datetime.strptime(end_value, "%Y-%m-%d").replace(tzinfo=BJ)
+    except ValueError as exc:
+        raise ValueError("日期必须是 YYYY-MM-DD 格式") from exc
+    if start_local > end_local:
+        raise ValueError("开始日期不能晚于结束日期")
+    end_local += timedelta(days=1)
     return (
         start_local.astimezone(timezone.utc).isoformat(),
         end_local.astimezone(timezone.utc).isoformat(),
-        start_local.strftime("%Y-%m-%d"),
+        start_value,
+        end_value,
     )
+
+
+def utc_window_for_day(day: str = "") -> tuple[str, str, str]:
+    start_utc, end_utc, display_start, _ = utc_window_for_range(day, day)
+    return start_utc, end_utc, display_start
 
 
 def table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -505,6 +521,8 @@ def event_feedback_summary(rows: list[dict[str, Any]]) -> dict[str, int]:
 
 def fetch_events_rows(
     day: str = "",
+    start_day: str = "",
+    end_day: str = "",
     source: str = "",
     kind: str = "",
     q: str = "",
@@ -514,7 +532,11 @@ def fetch_events_rows(
     limit: int = 100,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> list[dict[str, Any]]:
-    start_utc, end_utc, _ = utc_window_for_day(day)
+    if day and (start_day or end_day):
+        raise ValueError("date 不能与 from/to 同时使用")
+    if day:
+        start_day = end_day = day
+    start_utc, end_utc, _, _ = utc_window_for_range(start_day, end_day)
     q_lower = q.strip().lower()
     source_lower = source.strip().lower()
     kind_lower = kind.strip().lower()
@@ -1794,6 +1816,8 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                     limit = 100
                 events = fetch_events_rows(
                     day=(qs.get("date") or [""])[0],
+                    start_day=(qs.get("from") or [""])[0],
+                    end_day=(qs.get("to") or [""])[0],
                     source=(qs.get("source") or [""])[0],
                     kind=(qs.get("kind") or [""])[0],
                     q=(qs.get("q") or [""])[0],
@@ -1804,6 +1828,8 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                     limit=limit,
                 )
                 self.send_json({"ok": True, "events": events, "feedback_summary": event_feedback_summary(events)})
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except Exception as exc:  # noqa: BLE001
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return

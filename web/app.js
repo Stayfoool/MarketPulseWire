@@ -345,12 +345,24 @@ async function loadOverview() {
 async function loadEvents() {
   try {
     const params = new URLSearchParams();
-    const date = document.getElementById('eventDate').value;
+    const startDate = document.getElementById('eventFromDate').value;
+    const endDate = document.getElementById('eventToDate').value;
     const timeBasis = document.getElementById('eventTimeBasis').value;
     const source = document.getElementById('eventSource').value.trim();
     const feedback = document.getElementById('eventFeedback').value.trim();
     const q = document.getElementById('eventQuery').value.trim();
-    if (date) params.set('date', date);
+    if (Boolean(startDate) !== Boolean(endDate)) {
+      showStatus('开始日期和结束日期必须同时填写。', 'err');
+      return;
+    }
+    if (startDate && endDate && startDate > endDate) {
+      showStatus('开始日期不能晚于结束日期。', 'err');
+      return;
+    }
+    if (startDate && endDate) {
+      params.set('from', startDate);
+      params.set('to', endDate);
+    }
     if (timeBasis !== 'seen') params.set('time_basis', timeBasis);
     if (source) params.set('source', source);
     if (feedback) params.set('feedback', feedback);
@@ -1570,7 +1582,8 @@ async function confirmSave() {
   }
 }
 
-document.getElementById('eventDate').value = todayString();
+document.getElementById('eventFromDate').value = todayString();
+document.getElementById('eventToDate').value = todayString();
 showView('overview');
 loadHealthSummary();
 setInterval(() => {
@@ -1579,4 +1592,3 @@ setInterval(() => {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) loadHealthSummary();
 });
-
