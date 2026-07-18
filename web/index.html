@@ -488,8 +488,8 @@
       <div class="toolbar">
         <button class="primary" onclick="addRow()">新增</button>
         <button onclick="openBatch()">批量导入</button>
-        <button onclick="reloadData()">刷新</button>
-        <button class="primary" onclick="previewSave()">保存</button>
+        <button id="holdingsRefreshButton" class="holdings-command" onclick="reloadData()">刷新</button>
+        <button id="holdingsSaveButton" class="primary holdings-command" onclick="previewSave()">保存</button>
         <input id="filter" placeholder="搜索代码、名称、关键词" style="width:260px" oninput="renderTable()">
         <span id="summary" class="summary"></span>
       </div>
@@ -538,8 +538,8 @@
         <div id="diffText" class="diff"></div>
       </div>
       <div class="foot">
-        <button onclick="closeDiff()">取消</button>
-        <button class="primary" onclick="confirmSave()">确认保存</button>
+        <button id="holdingsPreviewCancelButton" onclick="closeDiff()">取消</button>
+        <button id="holdingsConfirmButton" class="primary" onclick="confirmSave()">确认保存</button>
       </div>
     </div>
   </div>

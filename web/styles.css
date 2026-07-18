@@ -48,6 +48,7 @@ button { border: 1px solid var(--line); background: white; color: var(--text); h
 button.primary { background: var(--accent); color: white; border-color: var(--accent); }
 button.danger { color: var(--danger); border-color: #f1b7b0; }
 button:disabled { opacity: .5; cursor: not-allowed; }
+.holdings-command { min-width: 68px; }
 input, textarea, select { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: inherit; background: white; }
 input[type="checkbox"] { width: auto; }
 .source-control { height: 30px; padding: 5px 7px; font-size: 12px; }
@@ -95,8 +96,9 @@ tr.health-issue-row td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
 }
 .status { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: white; margin-bottom: 12px; display: none; }
 .status.ok { display: block; border-color: #99d6cc; color: var(--ok); }
+.status.busy { display: block; border-color: #9fb8cf; color: #334e68; }
 .status.err { display: block; border-color: #f1b7b0; color: var(--danger); }
-.modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, .35); display: none; align-items: center; justify-content: center; padding: 20px; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 100; background: rgba(15, 23, 42, .35); display: none; align-items: center; justify-content: center; padding: 20px; }
 .modal { width: min(760px, 100%); background: white; border-radius: 8px; border: 1px solid var(--line); box-shadow: 0 20px 60px rgba(15, 23, 42, .25); }
 .modal h2 { font-size: 16px; margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--line); }
 .modal .body { padding: 16px; }

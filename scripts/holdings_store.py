@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import shutil
+import sqlite3
 import tempfile
 import unicodedata
 import urllib.parse
-import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from http_utils import http_get
 from market_db import DEFAULT_DB_PATH
 from portfolio_import import import_holdings
 
@@ -31,6 +33,9 @@ class SaveResult:
     backup_path: Path | None
     imported_count: int
     changed_count: int
+    no_change: bool = False
+    sync_repaired: bool = False
+    revision: str = ""
 
 
 class HoldingsError(ValueError):
@@ -39,6 +44,10 @@ class HoldingsError(ValueError):
 
 class HoldingsValidationError(HoldingsError):
     """Raised when holdings fail strict validation before saving."""
+
+
+class HoldingsConflictError(HoldingsError):
+    """Raised when a preview no longer matches the live portfolio revision."""
 
 
 @contextmanager
@@ -162,16 +171,16 @@ def fetch_a_share_suggestions(keyword: str, timeout: int = 5) -> list[dict[str, 
         return []
     encoded = urllib.parse.quote(keyword)
     url = f"https://suggest3.sinajs.cn/suggest/type=11&key={encoded}&name=suggestdata"
-    request = urllib.request.Request(
+    response = http_get(
         url,
         headers={
             "Referer": "https://finance.sina.com.cn",
             "User-Agent": "surveil-holdings-validate/0.1",
         },
+        timeout=timeout,
+        retries=0,
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        body = response.read()
-    text = body.decode("gb18030", errors="replace")
+    text = response.content.decode("gb18030", errors="replace")
     match = re.search(r'="([^"]*)"', text)
     if not match:
         return []
@@ -222,16 +231,16 @@ def fetch_a_share_name(symbol: str, timeout: int = 5) -> str:
     if not sina_symbol:
         return ""
     url = f"https://hq.sinajs.cn/list={sina_symbol}"
-    request = urllib.request.Request(
+    response = http_get(
         url,
         headers={
             "Referer": "https://finance.sina.com.cn",
             "User-Agent": "surveil-holdings-validate/0.1",
         },
+        timeout=timeout,
+        retries=0,
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        body = response.read()
-    text = body.decode("gb18030", errors="replace")
+    text = response.content.decode("gb18030", errors="replace")
     match = re.search(r'="([^"]*)"', text)
     if not match:
         return ""
@@ -246,16 +255,16 @@ def fetch_hk_name(symbol: str, timeout: int = 5) -> str:
         return ""
     sina_symbol = f"hk{match.group(1).zfill(5)}"
     url = f"https://hq.sinajs.cn/list={sina_symbol}"
-    request = urllib.request.Request(
+    response = http_get(
         url,
         headers={
             "Referer": "https://finance.sina.com.cn",
             "User-Agent": "surveil-holdings-validate/0.1",
         },
+        timeout=timeout,
+        retries=0,
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        body = response.read()
-    text = body.decode("gb18030", errors="replace")
+    text = response.content.decode("gb18030", errors="replace")
     match_data = re.search(r'="([^"]*)"', text)
     if not match_data:
         return ""
@@ -278,7 +287,51 @@ def similar_name(expected: str, actual: str, aliases: list[str] | None = None) -
     return actual_norm in alias_norms or expected_norm in alias_norms
 
 
-def validate_holdings(items: list[dict[str, Any]], *, verify_remote: bool = True) -> list[dict[str, str]]:
+def holdings_revision(items: list[dict[str, Any]]) -> str:
+    payload = json.dumps(items, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def remote_validation_symbols(
+    current: list[dict[str, Any]],
+    proposed: list[dict[str, Any]],
+) -> set[str]:
+    """Return enabled identities whose market name evidence must be refreshed."""
+    current_by_symbol = {
+        str(item.get("symbol") or "").strip().upper(): item
+        for item in current
+        if str(item.get("symbol") or "").strip()
+    }
+    symbols: set[str] = set()
+    for item in proposed:
+        if item.get("enabled", True) is False:
+            continue
+        symbol = str(item.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        previous = current_by_symbol.get(symbol)
+        if previous is None or previous.get("enabled", True) is False:
+            symbols.add(symbol)
+            continue
+        previous_identity = (
+            normalize_text(str(previous.get("name") or "")).upper(),
+            tuple(sorted(normalize_text(alias).upper() for alias in string_list(previous.get("aliases")))),
+        )
+        proposed_identity = (
+            normalize_text(str(item.get("name") or "")).upper(),
+            tuple(sorted(normalize_text(alias).upper() for alias in string_list(item.get("aliases")))),
+        )
+        if previous_identity != proposed_identity:
+            symbols.add(symbol)
+    return symbols
+
+
+def validate_holdings(
+    items: list[dict[str, Any]],
+    *,
+    verify_remote: bool = True,
+    remote_symbols: set[str] | None = None,
+) -> list[dict[str, str]]:
     """Return warnings and raise for blocking validation errors."""
     warnings: list[dict[str, str]] = []
     errors: list[str] = []
@@ -301,8 +354,9 @@ def validate_holdings(items: list[dict[str, Any]], *, verify_remote: bool = True
         if not re.fullmatch(r"(\d{6}\.(SH|SZ|BJ)|HK\d{4,5}|[A-Z.]{1,10})", symbol):
             errors.append(f"第 {index} 行股票代码格式可疑：{symbol}")
             continue
+        should_verify_remote = verify_remote and (remote_symbols is None or symbol in remote_symbols)
         if is_hk_symbol(symbol):
-            if verify_remote:
+            if should_verify_remote:
                 try:
                     actual_name = fetch_hk_name(symbol)
                 except Exception as exc:  # noqa: BLE001
@@ -335,7 +389,7 @@ def validate_holdings(items: list[dict[str, Any]], *, verify_remote: bool = True
                         }
                     )
             continue
-        if is_a_share_symbol(symbol) and verify_remote:
+        if is_a_share_symbol(symbol) and should_verify_remote:
             try:
                 actual_name = fetch_a_share_name(symbol)
             except Exception as exc:  # noqa: BLE001 - keep save possible with explicit warning
@@ -396,11 +450,16 @@ def normalized_holdings(path: Path = DEFAULT_CONFIG_PATH) -> list[dict[str, Any]
     return result
 
 
-def normalize_holdings_for_save(items: list[dict[str, Any]], current: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def normalize_holdings_for_save(
+    items: list[dict[str, Any]],
+    current: list[dict[str, Any]],
+    *,
+    enrich_symbols: bool = True,
+) -> list[dict[str, Any]]:
     existing_by_symbol = {str(item.get("symbol") or ""): item for item in current if item.get("symbol")}
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for raw in enrich_missing_symbols(items):
+    for raw in enrich_missing_symbols(items, verify_remote=enrich_symbols):
         symbol_hint = infer_symbol(str(raw.get("symbol") or ""))
         existing = existing_by_symbol.get(symbol_hint) if symbol_hint else None
         item = normalize_holding(raw, existing=existing)
@@ -440,20 +499,86 @@ def atomic_write_json(path: Path, data: dict[str, Any]) -> None:
             tmp_path.unlink()
 
 
+def holdings_db_matches(items: list[dict[str, Any]], db_path: Path) -> bool:
+    expected = {
+        str(item.get("symbol") or "").strip().upper(): item
+        for item in items
+        if str(item.get("symbol") or "").strip()
+    }
+    if len(expected) != len(items) or not db_path.exists():
+        return False
+    try:
+        uri = f"file:{db_path.resolve()}?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=5) as conn:
+            conn.execute("PRAGMA busy_timeout = 5000")
+            rows = conn.execute(
+                "SELECT symbol, enabled, raw_json FROM portfolio_holdings"
+            ).fetchall()
+    except (OSError, sqlite3.Error):
+        return False
+    active_symbols: set[str] = set()
+    matched: set[str] = set()
+    for raw_symbol, raw_enabled, raw_json in rows:
+        symbol = str(raw_symbol or "").strip().upper()
+        if raw_enabled:
+            active_symbols.add(symbol)
+        expected_item = expected.get(symbol)
+        if expected_item is None:
+            continue
+        try:
+            stored_item = json.loads(str(raw_json or "{}"))
+        except json.JSONDecodeError:
+            return False
+        if stored_item != expected_item or bool(raw_enabled) != bool(expected_item.get("enabled", True)):
+            return False
+        matched.add(symbol)
+    expected_active = {symbol for symbol, item in expected.items() if item.get("enabled", True)}
+    return matched == set(expected) and active_symbols == expected_active
+
+
 def save_holdings(
     items: list[dict[str, Any]],
     *,
     config_path: Path = DEFAULT_CONFIG_PATH,
     db_path: Path = DEFAULT_DB_PATH,
+    expected_current_revision: str = "",
+    expected_payload_revision: str = "",
 ) -> SaveResult:
     with config_lock():
         current = normalized_holdings(config_path)
-        normalized = normalize_holdings_for_save(items, current)
-        validate_holdings(normalized, verify_remote=True)
+        normalized = normalize_holdings_for_save(items, current, enrich_symbols=False)
+        validate_holdings(normalized, verify_remote=False)
+        revision = holdings_revision(normalized)
+        if normalized == current:
+            if not holdings_db_matches(normalized, db_path):
+                imported_count = import_holdings(config_path, db_path)
+                return SaveResult(
+                    backup_path=None,
+                    imported_count=imported_count,
+                    changed_count=0,
+                    sync_repaired=True,
+                    revision=revision,
+                )
+            return SaveResult(
+                backup_path=None,
+                imported_count=len(normalized),
+                changed_count=0,
+                no_change=True,
+                revision=revision,
+            )
+        if expected_current_revision and holdings_revision(current) != expected_current_revision:
+            raise HoldingsConflictError("持仓配置已在预览后发生变化，请刷新并重新预览。")
+        if expected_payload_revision and revision != expected_payload_revision:
+            raise HoldingsConflictError("待保存内容与预览不一致，请重新预览。")
         backup_path = backup_config(config_path)
         atomic_write_json(config_path, {"holdings": normalized})
         imported_count = import_holdings(config_path, db_path)
-    return SaveResult(backup_path=backup_path, imported_count=imported_count, changed_count=len(normalized))
+    return SaveResult(
+        backup_path=backup_path,
+        imported_count=imported_count,
+        changed_count=len(normalized),
+        revision=revision,
+    )
 
 
 def holdings_diff(old: list[dict[str, Any]], new: list[dict[str, Any]]) -> dict[str, Any]:

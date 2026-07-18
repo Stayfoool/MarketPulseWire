@@ -4,11 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import html
+import hmac
 import json
 import os
+import secrets
 import sqlite3
 import subprocess
+import time
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,10 +25,13 @@ from zoneinfo import ZoneInfo
 from db_utils import connect_sqlite
 from env_utils import load_env
 from holdings_store import (
+    HoldingsConflictError,
     HoldingsError,
     holdings_diff,
+    holdings_revision,
     normalized_holdings,
     normalize_holdings_for_save,
+    remote_validation_symbols,
     save_holdings,
     validate_holdings,
 )
@@ -62,6 +70,8 @@ WEB_STATIC_ASSETS = {
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8787
 BJ = ZoneInfo("Asia/Shanghai")
+HOLDINGS_PREVIEW_TTL_SECONDS = 15 * 60
+_HOLDINGS_PREVIEW_SIGNING_KEY = secrets.token_bytes(32)
 SYSTEMCTL_SHOW_FIELDS = {
     "ActiveState",
     "SubState",
@@ -1707,6 +1717,74 @@ def diff_text(diff: dict[str, Any]) -> str:
     return "\n".join(lines) or "没有变化。"
 
 
+def _urlsafe_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _urlsafe_decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode((value + padding).encode("ascii"))
+
+
+def issue_holdings_preview_token(
+    base_revision: str,
+    payload_revision: str,
+    *,
+    now: int | None = None,
+) -> str:
+    issued_at = int(time.time()) if now is None else int(now)
+    body = json.dumps(
+        {"base": base_revision, "payload": payload_revision, "issued_at": issued_at},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    encoded = _urlsafe_encode(body)
+    signature = hmac.new(_HOLDINGS_PREVIEW_SIGNING_KEY, encoded.encode("ascii"), hashlib.sha256).digest()
+    return f"{encoded}.{_urlsafe_encode(signature)}"
+
+
+def verify_holdings_preview_token(token: str, *, now: int | None = None) -> tuple[str, str]:
+    try:
+        encoded, encoded_signature = token.split(".", 1)
+        signature = _urlsafe_decode(encoded_signature)
+        expected_signature = hmac.new(
+            _HOLDINGS_PREVIEW_SIGNING_KEY,
+            encoded.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        if not hmac.compare_digest(signature, expected_signature):
+            raise ValueError("signature mismatch")
+        payload = json.loads(_urlsafe_decode(encoded).decode("utf-8"))
+        base_revision = str(payload["base"])
+        payload_revision = str(payload["payload"])
+        issued_at = int(payload["issued_at"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise HoldingsError("保存预览无效，请重新点击保存生成预览。") from exc
+    current_time = int(time.time()) if now is None else int(now)
+    if issued_at > current_time + 30 or current_time - issued_at > HOLDINGS_PREVIEW_TTL_SECONDS:
+        raise HoldingsError("保存预览已过期，请重新点击保存生成预览。")
+    return base_revision, payload_revision
+
+
+def prepare_holdings_preview(
+    items: list[dict[str, Any]],
+    current: list[dict[str, Any]],
+) -> dict[str, Any]:
+    normalized = normalize_holdings_for_save(items, current)
+    symbols = remote_validation_symbols(current, normalized)
+    warnings = validate_holdings(normalized, remote_symbols=symbols)
+    base_revision = holdings_revision(current)
+    payload_revision = holdings_revision(normalized)
+    return {
+        "normalized": normalized,
+        "warnings": warnings,
+        "remote_checked_count": len(symbols),
+        "base_revision": base_revision,
+        "payload_revision": payload_revision,
+        "preview_token": issue_holdings_preview_token(base_revision, payload_revision),
+    }
+
+
 class HoldingsHandler(BaseHTTPRequestHandler):
     server_version = "SurveilHoldingsWeb/0.1"
 
@@ -2023,6 +2101,8 @@ class HoldingsHandler(BaseHTTPRequestHandler):
         if not self.require_auth():
             return
         parsed = urlparse(self.path)
+        request_id = secrets.token_hex(4)
+        request_started = time.monotonic()
         try:
             payload = self.read_json()
             if parsed.path == "/api/media-keywords":
@@ -2171,36 +2251,78 @@ class HoldingsHandler(BaseHTTPRequestHandler):
             if not isinstance(items, list):
                 raise HoldingsError("请求缺少 holdings 数组")
             current = normalized_holdings()
-            normalized = normalize_holdings_for_save(items, current)
             if parsed.path == "/api/preview":
-                warnings = validate_holdings(normalized, verify_remote=True)
+                preview = prepare_holdings_preview(items, current)
+                normalized = preview["normalized"]
                 diff = holdings_diff(current, normalized)
+                duration_ms = round((time.monotonic() - request_started) * 1000)
+                print(
+                    "holdings_preview "
+                    f"request_id={request_id} duration_ms={duration_ms} "
+                    f"payload={preview['payload_revision'][:12]} "
+                    f"remote_checked={preview['remote_checked_count']} outcome=ok",
+                    flush=True,
+                )
                 self.send_json(
                     {
                         "ok": True,
                         "diff": diff,
                         "diff_text": diff_text(diff),
                         "holdings": normalized,
-                        "warnings": warnings,
+                        "warnings": preview["warnings"],
+                        "remote_checked_count": preview["remote_checked_count"],
+                        "preview_token": preview["preview_token"],
+                        "preview_expires_in_seconds": HOLDINGS_PREVIEW_TTL_SECONDS,
                     }
                 )
                 return
             if parsed.path == "/api/save":
-                result = save_holdings(normalized, db_path=DEFAULT_DB_PATH)
-                if self.restart_sina_flash:
+                normalized = normalize_holdings_for_save(items, current, enrich_symbols=False)
+                base_revision, payload_revision = verify_holdings_preview_token(
+                    str(payload.get("preview_token") or "")
+                )
+                if holdings_revision(normalized) != payload_revision:
+                    raise HoldingsConflictError("待保存内容与预览不一致，请重新预览。")
+                result = save_holdings(
+                    normalized,
+                    db_path=DEFAULT_DB_PATH,
+                    expected_current_revision=base_revision,
+                    expected_payload_revision=payload_revision,
+                )
+                if self.restart_sina_flash and result.backup_path is not None:
                     subprocess.run(["systemctl", "restart", "surveil-sina-flash.service"], check=False)
+                duration_ms = round((time.monotonic() - request_started) * 1000)
+                print(
+                    "holdings_save "
+                    f"request_id={request_id} duration_ms={duration_ms} "
+                    f"payload={result.revision[:12]} no_change={int(result.no_change)} "
+                    f"sync_repaired={int(result.sync_repaired)} outcome=ok",
+                    flush=True,
+                )
                 self.send_json(
                     {
                         "ok": True,
                         "backup_path": str(result.backup_path) if result.backup_path else "",
                         "imported_count": result.imported_count,
                         "changed_count": result.changed_count,
+                        "no_change": result.no_change,
+                        "sync_repaired": result.sync_repaired,
+                        "revision": result.revision,
                         "holdings": normalized_holdings(),
                     }
                 )
                 return
         except Exception as exc:  # noqa: BLE001
-            self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            if parsed.path in {"/api/preview", "/api/save"}:
+                duration_ms = round((time.monotonic() - request_started) * 1000)
+                print(
+                    "holdings_request "
+                    f"request_id={request_id} path={parsed.path} duration_ms={duration_ms} "
+                    f"error={type(exc).__name__} outcome=failed",
+                    flush=True,
+                )
+            status = HTTPStatus.CONFLICT if isinstance(exc, HoldingsConflictError) else HTTPStatus.BAD_REQUEST
+            self.send_json({"ok": False, "error": str(exc)}, status)
             return
         self.send_error(HTTPStatus.NOT_FOUND)
 
