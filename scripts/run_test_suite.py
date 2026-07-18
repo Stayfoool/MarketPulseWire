@@ -35,6 +35,7 @@ CI_SAFE_TESTS = (
     "test_event_pipeline_convergence.py",
     "test_event_runtime.py",
     "test_gate_prompts.py",
+    "test_holdings_save_flow.py",
     "test_holdings_web.py",
     "test_http_utils.py",
     "test_industry_fact_dedup.py",

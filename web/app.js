@@ -1,7 +1,10 @@
 let token = localStorage.getItem('surveil_holdings_token') || '';
 let holdings = [];
 let pendingPayload = null;
+let pendingPreviewToken = '';
 let loadedHoldings = false;
+let holdingsOperationId = 0;
+let holdingsBusyMode = '';
 // 拖拽排序时记录被拖动行的原始下标，null 表示当前未拖动。
 let dragIndex = null;
 let codeDefaultKeywords = [];
@@ -35,6 +38,37 @@ function showStatus(text, kind='ok') {
   const el = document.getElementById('status');
   el.className = 'status ' + kind;
   el.textContent = text;
+}
+
+function setHoldingsBusy(mode='') {
+  holdingsBusyMode = mode;
+  const busy = Boolean(mode);
+  document.querySelectorAll('#view-holdings button, #view-holdings input, #view-holdings textarea').forEach(control => {
+    control.disabled = busy;
+  });
+  const refreshButton = document.getElementById('holdingsRefreshButton');
+  const saveButton = document.getElementById('holdingsSaveButton');
+  const confirmButton = document.getElementById('holdingsConfirmButton');
+  const cancelButton = document.getElementById('holdingsPreviewCancelButton');
+  if (refreshButton) refreshButton.textContent = mode === 'refreshing' ? '刷新中' : '刷新';
+  if (saveButton) saveButton.textContent = mode === 'validating' ? '校验中' : '保存';
+  if (confirmButton) {
+    confirmButton.disabled = mode === 'saving';
+    confirmButton.textContent = mode === 'saving' ? '保存中' : '确认保存';
+  }
+  if (cancelButton) cancelButton.disabled = mode === 'saving';
+}
+
+function beginHoldingsOperation(mode) {
+  if (holdingsBusyMode) return 0;
+  holdingsOperationId += 1;
+  setHoldingsBusy(mode);
+  return holdingsOperationId;
+}
+
+function endHoldingsOperation(operationId) {
+  if (operationId !== holdingsOperationId) return;
+  setHoldingsBusy('');
 }
 
 function splitList(value) {
@@ -1499,14 +1533,23 @@ function moveRow(index, delta) {
 }
 
 async function reloadData() {
+  const operationId = beginHoldingsOperation('refreshing');
+  if (!operationId) return;
+  pendingPayload = null;
+  pendingPreviewToken = '';
+  showStatus('正在刷新持仓...', 'busy');
   try {
     const data = await api('/api/holdings');
+    if (operationId !== holdingsOperationId) return;
     holdings = data.holdings || [];
     loadedHoldings = true;
     renderTable(false);
     showStatus('已加载持仓。');
   } catch (err) {
+    if (operationId !== holdingsOperationId) return;
     showStatus(err.message, 'err');
+  } finally {
+    endHoldingsOperation(operationId);
   }
 }
 
@@ -1525,7 +1568,14 @@ function removeRow(index) {
 
 function openBatch() { document.getElementById('batchModal').style.display = 'flex'; }
 function closeBatch() { document.getElementById('batchModal').style.display = 'none'; }
-function closeDiff() { document.getElementById('diffModal').style.display = 'none'; }
+function closeDiff(force=false) {
+  if (holdingsBusyMode === 'saving' && !force) return;
+  document.getElementById('diffModal').style.display = 'none';
+  if (!force) {
+    pendingPayload = null;
+    pendingPreviewToken = '';
+  }
+}
 
 function parseBatchLine(line) {
   const parts = line.split(/[，,\t]+/).map(s => s.trim()).filter(Boolean);
@@ -1552,9 +1602,14 @@ function applyBatch() {
 }
 
 async function previewSave() {
+  const operationId = beginHoldingsOperation('validating');
+  if (!operationId) return;
   try {
     pendingPayload = currentRows();
+    pendingPreviewToken = '';
+    showStatus('正在校验待保存内容...', 'busy');
     const data = await api('/api/preview', {method: 'POST', body: JSON.stringify({holdings: pendingPayload})});
+    if (operationId !== holdingsOperationId) return;
     // 后端 normalize_holdings_for_save 会通过新浪接口补全缺失的股票代码，
     // 这里用补全后的 holdings 回写数据和表格，让用户在预览阶段就能看到补全结果。
     if (Array.isArray(data.holdings) && data.holdings.length) {
@@ -1562,23 +1617,54 @@ async function previewSave() {
       pendingPayload = data.holdings;
       renderTable(false);
     }
+    pendingPreviewToken = String(data.preview_token || '');
+    if (!pendingPreviewToken) throw new Error('保存预览缺少确认凭据，请重试。');
     const warnings = (data.warnings || []).map(item => `! ${item.message || item}`).join('\n');
-    document.getElementById('diffText').textContent = [warnings ? `校验提醒：\n${warnings}` : '', data.diff_text || '没有变化。'].filter(Boolean).join('\n\n');
+    const remoteCount = Number(data.remote_checked_count || 0);
+    const validationSummary = remoteCount
+      ? `联网名称校验：${remoteCount} 只身份有变化的持仓。`
+      : '联网名称校验：无需执行（代码、简称和别名均未变化）。';
+    document.getElementById('diffText').textContent = [validationSummary, warnings ? `校验提醒：\n${warnings}` : '', data.diff_text || '没有变化。'].filter(Boolean).join('\n\n');
     document.getElementById('diffModal').style.display = 'flex';
+    showStatus('校验完成，请确认保存。');
   } catch (err) {
+    if (operationId !== holdingsOperationId) return;
+    pendingPayload = null;
+    pendingPreviewToken = '';
     showStatus(err.message, 'err');
+  } finally {
+    endHoldingsOperation(operationId);
   }
 }
 
 async function confirmSave() {
+  if (!pendingPayload || !pendingPreviewToken) {
+    showStatus('保存预览已失效，请重新点击保存。', 'err');
+    closeDiff(true);
+    return;
+  }
+  const operationId = beginHoldingsOperation('saving');
+  if (!operationId) return;
+  showStatus('正在保存并同步持仓...', 'busy');
   try {
-    const data = await api('/api/save', {method: 'POST', body: JSON.stringify({holdings: pendingPayload || currentRows()})});
-    closeDiff();
-    showStatus(`保存成功。\n备份：${data.backup_path || '无'}\n已同步 SQLite：${data.imported_count} 只持仓。`);
+    const data = await api('/api/save', {method: 'POST', body: JSON.stringify({holdings: pendingPayload, preview_token: pendingPreviewToken})});
+    if (operationId !== holdingsOperationId) return;
+    closeDiff(true);
+    const headline = data.no_change
+      ? '配置与 SQLite 均为最新，无需重复写入。'
+      : (data.sync_repaired ? '配置已存在，SQLite 同步已补齐。' : '保存成功。');
+    const countLabel = data.no_change ? '当前持仓' : 'SQLite 持仓';
+    showStatus(`${headline}\n备份：${data.backup_path || '无'}\n${countLabel}：${data.imported_count} 只。`);
     holdings = data.holdings || holdings;
+    pendingPayload = null;
+    pendingPreviewToken = '';
     renderTable();
   } catch (err) {
+    if (operationId !== holdingsOperationId) return;
+    document.getElementById('diffText').textContent = `保存失败：${err.message}\n\n请取消后重新预览；如果只是临时错误，也可以再次确认。`;
     showStatus(err.message, 'err');
+  } finally {
+    endHoldingsOperation(operationId);
   }
 }
 

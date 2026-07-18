@@ -84,11 +84,6 @@ DIRECT_URLLIB_EXCEPTIONS = {
         "reason": "Feishu image upload and download paths carry bounded binary payloads and provider-specific errors.",
         "test": "test_market_delivery.py",
     },
-    "holdings_store.py": {
-        "kind": "legacy_bounded_request",
-        "reason": "Legacy holdings enrichment APIs remain tracked migration debt outside collector-provider transport work.",
-        "test": "test_analysis.py",
-    },
     "ifind_client.py": {
         "kind": "legacy_bounded_request",
         "reason": "The licensed iFinD client retains its current token and API error contract pending separate retirement or migration.",
