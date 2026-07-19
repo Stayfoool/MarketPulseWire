@@ -29,6 +29,7 @@ from rule_config_migration_v1 import (
     preview_rule_config_migration,
 )
 from rule_core_replay import CurrentRuleOutcome, ReplayCase, build_replay_report
+from rule_core_history_replay import _make_case
 from rule_core_v1 import SourceAdmissionPolicy, parse_portfolio_config, parse_rule_config
 
 
@@ -190,7 +191,9 @@ def test_private_config_migration_preview_is_redacted_and_not_an_automatic_union
     assert report["automatic_union_applied"] is False
     assert report["cross_origin_duplicate_count"] == 1
     assert report["dropped_count"] == 3
-    assert report["validated_target_section_counts"]["trusted_domains"] == 2
+    assert report["validated_target_section_counts"]["trusted_domains"] == 0
+    assert report["validated_target_section_counts"]["trade_corridors"] == 3
+    assert report["validated_target_section_counts"]["trade_corridor_terms"] == 14
     assert all(term_id.startswith("term:") for term_id in report["dropped_term_ids"])
     for private_term in (
         "HBM", "GPU", "CPO", "legacy-only-private-term", "operator-private-term", "code-only-private-term"
@@ -260,13 +263,11 @@ def test_replay_reports_changes_invariance_and_missing_config_without_content_ec
         cases,
         rule_config=config,
         portfolio=portfolio,
-        missing_configuration=("portfolio_snapshot", "trusted_attribution.domains"),
+        missing_configuration=("portfolio_snapshot",),
     )
     assert blocked["status"] == "blocked"
     assert blocked["changes"] == []
-    assert blocked["missing_configuration"] == [
-        "portfolio_snapshot", "trusted_attribution.domains"
-    ]
+    assert blocked["missing_configuration"] == ["portfolio_snapshot"]
 
     try:
         _replay_case("unsafe title", "wallstreetcn_news", text, group="same-claim")
@@ -274,6 +275,26 @@ def test_replay_reports_changes_invariance_and_missing_config_without_content_ec
         pass
     else:
         raise AssertionError("replay output identifiers must not accept prose")
+
+
+def test_history_replay_preserves_complete_stored_full_text() -> None:
+    full_text = "HBM supply evidence.\n" + ("x" * 25_000) + "\ncomplete-tail-marker"
+    case, has_decision = _make_case(
+        replay_id="event:complete-body",
+        source="industry_media",
+        title="Complete stored body",
+        summary="",
+        full_text=full_text,
+        published_at="2026-07-19T10:00:00+08:00",
+        first_seen_at="2026-07-19T10:01:00+08:00",
+        payload={},
+        default_category="research_industry_media",
+        default_role="research_publisher",
+        default_content_type="article",
+    )
+    assert has_decision is False
+    assert case.item.full_text == " ".join(full_text.split())
+    assert case.item.full_text.endswith("complete-tail-marker")
 
 
 def test_inactive_slice_has_no_database_network_llm_or_delivery_imports() -> None:
@@ -304,6 +325,7 @@ def main() -> int:
     test_every_normalized_source_contract_uses_all_five_families()
     test_private_config_migration_preview_is_redacted_and_not_an_automatic_union()
     test_replay_reports_changes_invariance_and_missing_config_without_content_echo()
+    test_history_replay_preserves_complete_stored_full_text()
     test_inactive_slice_has_no_database_network_llm_or_delivery_imports()
     print("rule core integration v1 checks passed")
     return 0

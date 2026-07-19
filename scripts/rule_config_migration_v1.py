@@ -72,6 +72,11 @@ def preview_rule_config_migration(
         for term in legacy_union
         if sum(term in values for values in origin_terms.values()) > 1
     }
+    trusted_domains = sum(len(item.domains) for item in target.trusted_institutions)
+    trade_corridor_terms = sum(
+        len(item.china_terms) + len(item.counterparty_terms) + len(item.joint_terms)
+        for item in target.trade_corridors
+    )
     return {
         "report_version": MIGRATION_REPORT_VERSION,
         "target_config_version": target.config_version,
@@ -79,6 +84,7 @@ def preview_rule_config_migration(
         "origin_counts": {name: len(values) for name, values in origin_terms.items()},
         "validated_target_section_counts": {
             "semiconductor_ai_keywords": len(target.semiconductor_ai_keywords),
+            "major_semiconductor_customers": len(target.major_semiconductor_customers),
             "exclude_keywords": len(target.exclude_keywords),
             "macro_indicators": len(target.macro_indicators),
             "macro_context_aliases": len(target.macro_context_aliases),
@@ -88,8 +94,9 @@ def preview_rule_config_migration(
             "fed_actor_aliases": len(target.fed_actor_aliases),
             "fed_path_aliases": len(target.fed_path_aliases),
             "trusted_institutions": len(target.trusted_institutions),
-            "trusted_domains": len(target.trusted_domains),
+            "trusted_domains": trusted_domains,
             "trade_corridors": len(target.trade_corridors),
+            "trade_corridor_terms": trade_corridor_terms,
             "trade_instruments": len(target.trade_instruments),
             "trade_stages": len(target.trade_stages),
             "trade_focus_industries": len(target.trade_focus_industries),

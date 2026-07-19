@@ -398,6 +398,7 @@ def test_future_rule_core_is_side_effect_free_and_not_production_wired() -> None
         "rule_core_v1.py",
         "rule_core_fixture.py",
         "rule_core_replay.py",
+        "rule_core_history_replay.py",
         "rule_config_migration_v1.py",
         "market_lifecycle_v1.py",
     }
