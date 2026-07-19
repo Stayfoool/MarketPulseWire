@@ -225,6 +225,10 @@ def compact_normalized_item(item: NormalizedMarketItem) -> dict[str, Any]:
         "content_type": item.content_type,
         "dedupe_key": item.dedupe_key,
         "title": item.title,
+        "summary": item.summary,
+        # Direct shadow is an explicit operator report. Retain the original
+        # body so a later v1 comparison can use the same evidence as production.
+        "full_text": item.full_text,
         "url": item.url,
         "published_at": item.published_at,
         "symbols": list(item.symbols),
