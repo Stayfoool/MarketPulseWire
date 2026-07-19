@@ -5,6 +5,7 @@
     "半导体",
     "芯片",
     "GPU",
+    "DRAM",
     "HBM",
     "NAND",
     "CPO",
@@ -14,6 +15,13 @@
     "存储",
     "机器人",
     "激光雷达"
+  ],
+  "major_semiconductor_customers": [
+    "NVIDIA", "英伟达",
+    "Micron", "美光",
+    "SK Hynix", "SK海力士", "海力士",
+    "Samsung", "Samsung Electronics", "三星", "三星电子",
+    "TSMC", "Taiwan Semiconductor Manufacturing", "台积电"
   ],
   "exclude_keywords": [
     "四川 GDP",
@@ -35,11 +43,35 @@
     "path_aliases": ["降息", "加息", "终端利率", "利率路径"]
   },
   "trusted_attribution": {
-    "institutions": ["受信研究机构", "国际大行"],
-    "domains": ["research.example", "bank.example"]
+    "institutions": {
+      "trusted_research": {
+        "aliases": ["受信研究机构"],
+        "domains": []
+      },
+      "international_bank": {
+        "aliases": ["国际大行"],
+        "domains": []
+      }
+    }
   },
   "trade_policy": {
-    "corridors": ["对中国", "中国商品", "中美", "中欧", "from China"],
+    "corridors": {
+      "china_us": {
+        "china_terms": ["中国", "China"],
+        "counterparty_terms": ["美国", "US", "U.S."],
+        "joint_terms": ["中美"]
+      },
+      "china_eu": {
+        "china_terms": ["中国", "China"],
+        "counterparty_terms": ["欧盟", "EU"],
+        "joint_terms": ["中欧"]
+      },
+      "china_targeted": {
+        "china_terms": [],
+        "counterparty_terms": [],
+        "joint_terms": ["对中国", "中国商品", "from China"]
+      }
+    },
     "instruments": ["反补贴", "反规避", "337调查", "关税", "出口管制", "紧急状态", "调查"],
     "stages": ["启动", "实施", "生效", "终止", "撤销", "initiates"],
     "focus_industries": ["光伏", "半导体", "芯片", "DRAM", "GPU", "HBM"]

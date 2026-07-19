@@ -67,9 +67,31 @@ def _mapping(value: object, field: str, expected: set[str]) -> Mapping[str, Any]
 
 
 @dataclass(frozen=True)
+class TrustedInstitution:
+    institution_id: str
+    aliases: tuple[str, ...]
+    domains: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TradeCorridor:
+    corridor_id: str
+    china_terms: tuple[str, ...] = ()
+    counterparty_terms: tuple[str, ...] = ()
+    joint_terms: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.joint_terms and not (self.china_terms and self.counterparty_terms):
+            raise RuleConfigError(
+                f"trade corridor {self.corridor_id} requires joint terms or both corridor sides"
+            )
+
+
+@dataclass(frozen=True)
 class RuleConfig:
     config_version: str
     semiconductor_ai_keywords: tuple[str, ...]
+    major_semiconductor_customers: tuple[str, ...]
     exclude_keywords: tuple[str, ...]
     macro_indicators: tuple[str, ...]
     macro_primary_indicators: tuple[str, ...]
@@ -78,12 +100,82 @@ class RuleConfig:
     fed_event_aliases: tuple[str, ...]
     fed_actor_aliases: tuple[str, ...]
     fed_path_aliases: tuple[str, ...]
-    trusted_institutions: tuple[str, ...]
-    trusted_domains: tuple[str, ...]
-    trade_corridors: tuple[str, ...]
+    trusted_institutions: tuple[TrustedInstitution, ...]
+    trade_corridors: tuple[TradeCorridor, ...]
     trade_instruments: tuple[str, ...]
     trade_stages: tuple[str, ...]
     trade_focus_industries: tuple[str, ...]
+
+
+def _stable_registry_id(value: object, field: str) -> str:
+    text = _clean(value)
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", text):
+        raise RuleConfigError(f"{field} must be a stable lower-snake-case id")
+    return text
+
+
+def _trusted_registry(value: object) -> tuple[TrustedInstitution, ...]:
+    if not isinstance(value, dict) or not value:
+        raise RuleConfigError("trusted_attribution.institutions must be a non-empty object")
+    result: list[TrustedInstitution] = []
+    for raw_id, raw in value.items():
+        institution_id = _stable_registry_id(raw_id, "trusted institution id")
+        definition = _mapping(
+            raw,
+            f"trusted_attribution.institutions.{institution_id}",
+            {"aliases", "domains"},
+        )
+        aliases = _tuple_strings(
+            definition.get("aliases"),
+            f"trusted_attribution.institutions.{institution_id}.aliases",
+        )
+        domains = tuple(
+            domain.casefold()
+            for domain in _tuple_strings(
+                definition.get("domains"),
+                f"trusted_attribution.institutions.{institution_id}.domains",
+            )
+        )
+        if not aliases:
+            raise RuleConfigError(f"trusted institution {institution_id} requires aliases")
+        if any(
+            not re.fullmatch(r"(?:[a-z0-9-]+\.)+[a-z]{2,}", domain)
+            for domain in domains
+        ):
+            raise RuleConfigError(f"trusted institution {institution_id} has an invalid domain")
+        result.append(TrustedInstitution(institution_id, aliases, domains))
+    return tuple(result)
+
+
+def _trade_corridor_registry(value: object) -> tuple[TradeCorridor, ...]:
+    if not isinstance(value, dict) or not value:
+        raise RuleConfigError("trade_policy.corridors must be a non-empty object")
+    result: list[TradeCorridor] = []
+    for raw_id, raw in value.items():
+        corridor_id = _stable_registry_id(raw_id, "trade corridor id")
+        definition = _mapping(
+            raw,
+            f"trade_policy.corridors.{corridor_id}",
+            {"china_terms", "counterparty_terms", "joint_terms"},
+        )
+        result.append(
+            TradeCorridor(
+                corridor_id=corridor_id,
+                china_terms=_tuple_strings(
+                    definition.get("china_terms"),
+                    f"trade_policy.corridors.{corridor_id}.china_terms",
+                ),
+                counterparty_terms=_tuple_strings(
+                    definition.get("counterparty_terms"),
+                    f"trade_policy.corridors.{corridor_id}.counterparty_terms",
+                ),
+                joint_terms=_tuple_strings(
+                    definition.get("joint_terms"),
+                    f"trade_policy.corridors.{corridor_id}.joint_terms",
+                ),
+            )
+        )
+    return tuple(result)
 
 
 def parse_rule_config(payload: Mapping[str, Any]) -> RuleConfig:
@@ -91,6 +183,7 @@ def parse_rule_config(payload: Mapping[str, Any]) -> RuleConfig:
         "schema_version",
         "config_version",
         "semiconductor_ai_keywords",
+        "major_semiconductor_customers",
         "exclude_keywords",
         "macro_data",
         "fed_policy",
@@ -120,7 +213,7 @@ def parse_rule_config(payload: Mapping[str, Any]) -> RuleConfig:
     trusted = _mapping(
         payload.get("trusted_attribution"),
         "trusted_attribution",
-        {"institutions", "domains"},
+        {"institutions"},
     )
     trade = _mapping(
         payload.get("trade_policy"),
@@ -137,6 +230,9 @@ def parse_rule_config(payload: Mapping[str, Any]) -> RuleConfig:
         semiconductor_ai_keywords=_tuple_strings(
             payload.get("semiconductor_ai_keywords"), "semiconductor_ai_keywords"
         ),
+        major_semiconductor_customers=_tuple_strings(
+            payload.get("major_semiconductor_customers"), "major_semiconductor_customers"
+        ),
         exclude_keywords=_tuple_strings(payload.get("exclude_keywords"), "exclude_keywords"),
         macro_indicators=indicators,
         macro_primary_indicators=primary,
@@ -145,18 +241,20 @@ def parse_rule_config(payload: Mapping[str, Any]) -> RuleConfig:
         fed_event_aliases=_tuple_strings(fed.get("event_aliases"), "fed_policy.event_aliases"),
         fed_actor_aliases=_tuple_strings(fed.get("actor_aliases"), "fed_policy.actor_aliases"),
         fed_path_aliases=_tuple_strings(fed.get("path_aliases"), "fed_policy.path_aliases"),
-        trusted_institutions=_tuple_strings(
-            trusted.get("institutions"), "trusted_attribution.institutions"
-        ),
-        trusted_domains=_tuple_strings(trusted.get("domains"), "trusted_attribution.domains"),
-        trade_corridors=_tuple_strings(trade.get("corridors"), "trade_policy.corridors"),
+        trusted_institutions=_trusted_registry(trusted.get("institutions")),
+        trade_corridors=_trade_corridor_registry(trade.get("corridors")),
         trade_instruments=_tuple_strings(trade.get("instruments"), "trade_policy.instruments"),
         trade_stages=_tuple_strings(trade.get("stages"), "trade_policy.stages"),
         trade_focus_industries=_tuple_strings(
             trade.get("focus_industries"), "trade_policy.focus_industries"
         ),
     )
-    if not config.semiconductor_ai_keywords or not config.macro_indicators or not config.trade_corridors:
+    if (
+        not config.semiconductor_ai_keywords
+        or not config.major_semiconductor_customers
+        or not config.macro_indicators
+        or not config.trade_corridors
+    ):
         raise RuleConfigError("required rule lists cannot be empty")
     return config
 
@@ -355,20 +453,37 @@ def admit_market_item(
     if fed_terms:
         evidence.append(_evidence("fed_policy", "fed_policy_scope", text, fed_terms))
 
-    corridor = _matches(text, rule_config.trade_corridors)
+    corridor_terms: list[str] = []
+    for corridor in rule_config.trade_corridors:
+        joint = _matches(text, corridor.joint_terms)
+        china = _matches(text, corridor.china_terms)
+        counterparty = _matches(text, corridor.counterparty_terms)
+        if joint or (china and counterparty):
+            corridor_terms.extend(joint or (*china, *counterparty))
     trade_action = _matches(text, (*rule_config.trade_instruments, *rule_config.trade_stages))
+    local_trade_terms: list[str] = []
+    for sentence in _sentences(text):
+        sentence_action = _matches(sentence, (*rule_config.trade_instruments, *rule_config.trade_stages))
+        if not sentence_action:
+            continue
+        for corridor in rule_config.trade_corridors:
+            joint = _matches(sentence, corridor.joint_terms)
+            china = _matches(sentence, corridor.china_terms)
+            counterparty = _matches(sentence, corridor.counterparty_terms)
+            if joint or (china and counterparty):
+                local_trade_terms.extend((*joint, *china, *counterparty, *sentence_action))
     if "trade_policy" in source_policy.direct_admission_families:
         evidence.append(
             _evidence(
                 "trade_policy",
                 "trade_policy_direct_scope",
                 text,
-                trade_action or corridor or ("direct_trade_surface",),
+                trade_action or tuple(corridor_terms) or ("direct_trade_surface",),
             )
         )
-    elif corridor and trade_action:
+    elif local_trade_terms:
         evidence.append(
-            _evidence("trade_policy", "trade_policy_scope", text, (*corridor, *trade_action))
+            _evidence("trade_policy", "trade_policy_scope", text, local_trade_terms)
         )
 
     if excluded_terms and not direct_holding:
@@ -416,6 +531,15 @@ def _all_groups(text: str, *groups: tuple[str, ...]) -> bool:
     return all(_has(text, *group) for group in groups)
 
 
+def _is_market_template_title(title: str) -> bool:
+    return _has(
+        title,
+        "ETF", "股价", "涨停", "跌停", "市值", "PE", "成交额", "后市", "估值",
+        "牛股", "吸金", "机构看好", "板块", "概念", "反弹", "涨超", "跌超",
+        "集体", "暴涨", "爆发",
+    )
+
+
 def _candidate(family: RuleFamily, rule_id: str, action: str, quote: str, reason: str) -> dict[str, Any]:
     return {
         "rule_id": rule_id,
@@ -426,8 +550,172 @@ def _candidate(family: RuleFamily, rule_id: str, action: str, quote: str, reason
     }
 
 
+def _first_local_match(
+    text: str,
+    *groups: tuple[str, ...],
+    sentence_limit: int | None = None,
+    asserted_only: bool = False,
+) -> str:
+    sentences = _sentences(text)
+    for sentence in sentences[:sentence_limit] if sentence_limit is not None else sentences:
+        if asserted_only:
+            question_attribution = _all_groups(
+                sentence,
+                ("投资者", "股民", "网友"),
+                ("提问", "问道", "询问", "请问"),
+            )
+            answer_attribution = _has(
+                sentence,
+                "公司回答",
+                "公司回复",
+                "公司表示",
+                "公司称",
+                "回应称",
+                "答复称",
+            )
+            if _has(sentence, "?", "？") or (question_attribution and not answer_attribution):
+                continue
+        if _all_groups(sentence, *groups):
+            return sentence
+    return ""
+
+
+def _term_spans(text: str, terms: tuple[str, ...]) -> tuple[tuple[int, int], ...]:
+    lowered = text.casefold()
+    spans: list[tuple[int, int]] = []
+    for term in terms:
+        normalized = term.casefold().strip()
+        if not normalized:
+            continue
+        pattern = re.escape(normalized)
+        if re.fullmatch(r"[a-z0-9_.+-]+", normalized):
+            pattern = rf"(?<![a-z0-9]){pattern}(?![a-z0-9])"
+        spans.extend((match.start(), match.end()) for match in re.finditer(pattern, lowered))
+    return tuple(spans)
+
+
+def _first_local_near_match(
+    text: str,
+    left_terms: tuple[str, ...],
+    right_terms: tuple[str, ...],
+    *,
+    max_gap: int = 24,
+    sentence_limit: int | None = None,
+) -> str:
+    sentences = _sentences(text)
+    for sentence in sentences[:sentence_limit] if sentence_limit is not None else sentences:
+        left_spans = _term_spans(sentence, left_terms)
+        right_spans = _term_spans(sentence, right_terms)
+        for left_start, left_end in left_spans:
+            for right_start, right_end in right_spans:
+                gap = max(left_start, right_start) - min(left_end, right_end)
+                if gap <= max_gap:
+                    return sentence
+    return ""
+
+
+def _first_local_ordered_match(
+    text: str,
+    left_terms: tuple[str, ...],
+    right_terms: tuple[str, ...],
+    *,
+    max_gap: int,
+    sentence_limit: int | None = None,
+) -> str:
+    sentences = _sentences(text)
+    for sentence in sentences[:sentence_limit] if sentence_limit is not None else sentences:
+        for _, left_end in _term_spans(sentence, left_terms):
+            for right_start, _ in _term_spans(sentence, right_terms):
+                if 0 <= right_start - left_end <= max_gap:
+                    return sentence
+    return ""
+
+
+def _references_earlier_year(item: NormalizedMarketItem, evidence: str) -> bool:
+    published_year = re.match(r"(20\d{2})", item.published_at or item.first_seen_at)
+    if not published_year:
+        return False
+    year = int(published_year.group(1))
+    return any(int(value) < year for value in re.findall(r"(20\d{2})\s*年", evidence))
+
+
+def _routine_corporate_attachment(title: str) -> bool:
+    return _has(title, "审计报告", "审计附件", "资产评估报告", "估值报告", "valuation report")
+
+
+def _corporate_material_change(item: NormalizedMarketItem, text: str) -> tuple[str, str] | None:
+    title = item.title
+    if _routine_corporate_attachment(title):
+        return None
+    if _has(title, "增资", "减资", "capital increase", "capital reduction"):
+        return title, "公司发生实质增资或减资。"
+
+    approved_capital_change = _first_local_match(
+        text,
+        ("增资", "减资", "capital increase", "capital reduction"),
+        (
+            "审议通过",
+            "表决通过",
+            "董事会批准",
+            "董事会同意",
+            "approved by the board",
+            "board approved",
+        ),
+        sentence_limit=16,
+    )
+    if approved_capital_change:
+        return approved_capital_change, "公司董事会或同等决策机构已审议通过实质增资或减资。"
+
+    formal_earnings_forecast = _has(
+        title,
+        "业绩预告",
+        "盈利预告",
+        "earnings guidance",
+        "profit forecast",
+    ) or _all_groups(
+        title,
+        ("预计", "预增", "预减", "expects", "forecasts", "guides"),
+        ("净利", "归母", "营收", "earnings", "net profit", "revenue"),
+    ) or _all_groups(
+        title,
+        ("预计", "预增", "预减"),
+        ("盈利",),
+        ("上半年", "下半年", "一季度", "二季度", "三季度", "四季度", "年度", "全年", "h1", "h2"),
+    )
+    if formal_earnings_forecast:
+        return title, "公司正式披露业绩预告或业绩指引。"
+
+    completed_acquisition = _first_local_match(
+        text,
+        ("收购", "并购", "acquisition", "acquire"),
+        ("完成审批", "完成交割", "对价支付", "收购完成", "已经完成", "已完成", "closed", "completed"),
+        sentence_limit=16,
+    )
+    if completed_acquisition:
+        return completed_acquisition, "并购已经完成审批、交割或对价支付，属于已执行的企业实质变化。"
+
+    project_schedule_change = _first_local_match(
+        text,
+        ("募投项目", "扩产项目", "建设项目", "项目建设", "capex project", "production project"),
+        ("延期", "延长", "推迟", "终止", "叫停", "delay", "postpone", "cancel"),
+        sentence_limit=16,
+    ) or _first_local_match(
+        text,
+        ("产线", "工厂", "production line", "factory"),
+        ("建设", "投产", "开工", "竣工", "construction", "production start"),
+        ("延期", "延长", "推迟", "终止", "叫停", "delay", "postpone", "cancel"),
+        sentence_limit=16,
+    )
+    if project_schedule_change:
+        return project_schedule_change, "募投、扩产或生产项目的执行时间表发生明确变化。"
+    return None
+
+
 def _holding_candidate(
-    text: str, admission: AdmissionResult, portfolio: PortfolioRuleConfig
+    item: NormalizedMarketItem,
+    text: str,
+    admission: AdmissionResult,
+    portfolio: PortfolioRuleConfig,
 ) -> dict[str, Any]:
     direct = any(
         item.rule_family == "holding" and item.reason_code == "holding_direct_identity"
@@ -436,26 +724,75 @@ def _holding_candidate(
     immediate = tuple(term for holding in portfolio.holdings for term in holding.immediate_alert_keywords)
     if _matches(text, immediate):
         return _candidate("holding", "holding_immediate_alert", "push", text, "命中显式即时提醒关键词。")
-    if _has(text, "股东会通知", "会议通知", "审计报告", "审计附件"):
+    routine_meeting_notice = _has(item.title, "会议通知") or _all_groups(
+        item.title,
+        ("股东会", "股东大会", "shareholder meeting"),
+        ("通知", "notice"),
+    )
+    if routine_meeting_notice or _routine_corporate_attachment(item.title):
         return _candidate("holding", "holding_ordinary", "archive", text, "例行会议或审计附件不构成实质变化。")
-    if _has(text, "增资", "减资", "capital increase", "capital reduction"):
-        return _candidate("holding", "holding_material_event", "push", text, "持仓公司发生实质增资或减资。")
-    if _all_groups(
+    material_change = _corporate_material_change(item, text)
+    if material_change:
+        quote, reason = material_change
+        return _candidate("holding", "holding_material_event", "push", quote, reason)
+    rating_revision = _first_local_ordered_match(
         text,
         ("上调", "下调", "upgrade", "downgrade", "raises", "cuts"),
         ("评级", "目标价", "rating", "target price"),
-    ):
-        return _candidate("holding", "holding_rating_revision", "push", text, "评级或估值锚明确修订。")
-    if _has(text, "维持评级", "维持目标价", "reiterates", "maintains rating") or _all_groups(
-        text, ("维持", "maintains"), ("评级", "目标价", "rating", "target price")
-    ):
-        return _candidate("holding", "holding_ordinary", "daily", text, "相关评级维持不变。")
+        max_gap=6,
+        sentence_limit=8,
+    ) or _first_local_ordered_match(
+        text,
+        ("评级", "目标价", "rating", "target price"),
+        ("上调", "下调", "upgrade", "downgrade", "raises", "cuts"),
+        max_gap=20,
+        sentence_limit=8,
+    )
+    if rating_revision:
+        return _candidate("holding", "holding_rating_revision", "push", rating_revision, "评级或估值锚明确修订。")
+    rating_maintained = _first_local_match(
+        text,
+        ("维持", "reiterates", "maintains"),
+        ("评级", "目标价", "rating", "target price"),
+        sentence_limit=8,
+    )
+    if rating_maintained:
+        return _candidate("holding", "holding_ordinary", "daily", rating_maintained, "相关评级维持不变。")
+    if _is_market_template_title(item.title):
+        return _candidate("holding", "holding_ordinary", "archive", item.title, "市场行情模板不构成新的持仓实质变化。")
     if direct:
         return _candidate("holding", "holding_ordinary", "daily", text, "直接持仓普通内容默认进入日报。")
     return _candidate("holding", "holding_ordinary", "archive", text, "关联内容未形成实质变化。")
 
 
-def _semiconductor_candidate(text: str) -> dict[str, Any]:
+def _semiconductor_candidate(
+    item: NormalizedMarketItem,
+    text: str,
+    config: RuleConfig,
+) -> dict[str, Any]:
+    stock_price_template = _has(item.title, "成交额") and _has(
+        item.title,
+        "主力净流入",
+        "主力净流出",
+        "后市是否有机会",
+        "人气排名",
+    )
+    if stock_price_template:
+        return _candidate(
+            "semiconductor_ai",
+            "semiconductor_ordinary",
+            "archive",
+            item.title,
+            "股价行情模板附带的静态业务资料不是新的产业实质变化。",
+        )
+    if _routine_corporate_attachment(item.title):
+        return _candidate(
+            "semiconductor_ai",
+            "semiconductor_ordinary",
+            "archive",
+            item.title,
+            "审计、估值或资产评估附件不构成新的产业实质变化。",
+        )
     if _has(text, "教程", "经验分享", "leaderboard", "workflow integration", "工具用法"):
         return _candidate(
             "semiconductor_ai", "semiconductor_ordinary", "archive", text, "教程或工具内容不是产业实质变化。"
@@ -479,70 +816,320 @@ def _semiconductor_candidate(text: str) -> dict[str, Any]:
         return _candidate(
             "semiconductor_ai", "semiconductor_ordinary", "archive", text, "非约束性合作未进入执行阶段。"
         )
-    if _all_groups(
+    material_change = _corporate_material_change(item, text)
+    if material_change:
+        quote, reason = material_change
+        return _candidate("semiconductor_ai", "semiconductor_material_change", "push", quote, reason)
+    if _is_market_template_title(item.title):
+        return _candidate("semiconductor_ai", "semiconductor_ordinary", "archive", item.title, "市场行情模板不构成新的产业实质变化。")
+    platform_change = _first_local_match(
         text,
+        tuple(config.semiconductor_ai_keywords),
         ("正式发布", "正式推出", "announces", "launches"),
         ("新平台", "新一代", "generation", "platform"),
         ("可用", "量产", "路线", "availability", "production", "roadmap"),
-    ):
+    )
+    if platform_change:
         return _candidate(
-            "semiconductor_ai", "semiconductor_material_change", "push", text, "正式平台代际及可用性或路线发生变化。"
+            "semiconductor_ai", "semiconductor_material_change", "push", platform_change, "正式平台代际及可用性或路线发生变化。"
         )
-    if _all_groups(
+    supply_constraint = _first_local_match(
         text,
-        ("短缺", "供不应求", "shortage", "supply tight"),
-        ("长期合同", "全部签约", "排队", "延期", "限流", "long-term contract", "fully booked"),
-    ):
+        tuple(config.semiconductor_ai_keywords),
+        ("短缺", "缺货", "供不应求", "shortage", "supply tight"),
+        (
+            "长期合同",
+            "全部签约",
+            "排队",
+            "延期",
+            "限流",
+            "供货周期",
+            "交期",
+            "long-term contract",
+            "fully booked",
+            "lead time",
+        ),
+    )
+    if supply_constraint:
         return _candidate(
-            "semiconductor_ai", "ai_compute_constraint", "push", text, "供需短缺产生约束性合同或运营后果。"
+            "semiconductor_ai", "ai_compute_constraint", "push", supply_constraint, "供需短缺产生约束性合同或运营后果。"
         )
-    if _has(text, "上调预测", "下调预测", "上修指引", "下修指引", "raises forecast", "cuts forecast") or _all_groups(
+    price_template_title = _is_market_template_title(item.title)
+    title_price_supply = _has(
+        item.title,
+        "涨价",
+        "提价",
+        "涨幅",
+        "量价",
+        "供给缺口",
+        "短缺",
+        "紧缺",
+        "price",
+        "shortage",
+    )
+    price_supply_change = ""
+    if title_price_supply and not price_template_title:
+        price_supply_change = _first_local_match(
+            text,
+            tuple(config.semiconductor_ai_keywords),
+            ("涨价", "价格上涨", "价格持续上涨", "价格上行", "合约价涨幅", "price increase", "price rise"),
+            ("持续", "大幅", "显著", "极度紧缺", "供不应求", "环比", "同比", "%", "％", "sustained", "sharp"),
+            ("短缺", "紧缺", "供不应求", "供给", "需求", "涨幅", "价格调查", "shortage", "supply", "demand"),
+            asserted_only=True,
+        )
+    if price_supply_change:
+        return _candidate(
+            "semiconductor_ai",
+            "semiconductor_price_supply_change",
+            "push",
+            price_supply_change,
+            "半导体价格或供需出现持续、显著或有明确幅度的实质变化。",
+        )
+    forecast_revision = _first_local_near_match(
         text,
         ("上调", "下调", "上修", "下修", "raises", "cuts"),
         ("预测", "指引", "forecast", "guidance"),
+    )
+    if forecast_revision and _matches(forecast_revision, config.semiconductor_ai_keywords):
+        return _candidate(
+            "semiconductor_ai", "industry_forecast_revision", "push", forecast_revision, "产业预测或指引发生明确修订。"
+        )
+    company_supply_confirmation = _first_local_match(
+        text,
+        ("供货", "供应商", "供应关系", "supplies", "supplier"),
+        (
+            "公司回答",
+            "公司回复",
+            "公司表示",
+            "公司确认",
+            "公司称",
+            "回应称",
+            "答复称",
+            "公告称",
+            "公司披露",
+            "confirmed",
+        ),
+        asserted_only=True,
+    )
+    new_execution = _has(
+        company_supply_confirmation,
+        "新签",
+        "签署",
+        "签订",
+        "中标",
+        "开始供货",
+        "首次供货",
+        "新增供货",
+        "续签",
+        "new order",
+        "signed",
+        "awarded",
+    )
+    denied_confirmation = _has(
+        company_supply_confirmation,
+        "未供货",
+        "尚未供货",
+        "不是供应商",
+        "否认",
+        "没有供货",
+        "not supplying",
+    )
+    if company_supply_confirmation and not new_execution and not denied_confirmation:
+        if _matches(company_supply_confirmation, config.major_semiconductor_customers):
+            return _candidate(
+                "semiconductor_ai",
+                "major_customer_supply_confirmation",
+                "push",
+                company_supply_confirmation,
+                "公司明确确认向全球主要半导体公司供货。",
+            )
+        return _candidate(
+            "semiconductor_ai",
+            "semiconductor_ordinary",
+            "daily",
+            company_supply_confirmation,
+            "公司确认已有供货关系，但客户不在全球大厂供货关系名单内。",
+        )
+
+    existing_supply_statement = _first_local_match(
+        text,
+        ("供货", "供应商", "供应关系", "supplies", "supplier"),
+        ("稳定供货", "长期供货", "供货名单", "供应商", "批量供货", "stable supply", "supplier list"),
+        asserted_only=True,
+    )
+    if existing_supply_statement and not _has(
+        existing_supply_statement,
+        "新签",
+        "签署",
+        "签订",
+        "中标",
+        "开始供货",
+        "首次供货",
+        "新增供货",
+        "续签",
+        "new order",
+        "signed",
+        "awarded",
     ):
         return _candidate(
-            "semiconductor_ai", "industry_forecast_revision", "push", text, "产业预测或指引发生明确修订。"
+            "semiconductor_ai",
+            "semiconductor_ordinary",
+            "daily",
+            existing_supply_statement,
+            "文章只描述已有供货关系，未提供公司确认或新的执行动作。",
         )
-    if _all_groups(
+
+    order_execution = _first_local_match(
         text,
         ("新签订单", "订单", "供货", "new order", "supply agreement"),
-        ("ai", "算力", "gpu", "hbm", "芯片"),
-    ) and not _has(text, "意向", "框架") and not non_execution:
+        tuple(config.semiconductor_ai_keywords),
+        (
+            "新签",
+            "签署",
+            "签订",
+            "中标",
+            "开始供货",
+            "已供货",
+            "稳定供货",
+            "批量供货",
+            "小批量供货",
+            "订单积压",
+            "订单排期",
+            "订单排到",
+            "排单",
+            "长期合同",
+            "长约",
+            "续签",
+            "锁定",
+            "订单放量",
+            "binding",
+            "signed",
+            "awarded",
+            "backlog",
+            "booked",
+            "supplying",
+        ),
+        asserted_only=True,
+    )
+    obtained_order = _first_local_ordered_match(
+        text,
+        ("获得",),
+        ("订单",),
+        max_gap=28,
+    )
+    if obtained_order and _matches(obtained_order, config.semiconductor_ai_keywords):
+        order_execution = order_execution or obtained_order
+    speculative_order = _has(
+        order_execution,
+        "预计",
+        "有望",
+        "可能",
+        "预期",
+        "能否",
+        "将持续",
+        "中长期",
+        "逐步迈向",
+        "后续",
+        "will",
+    ) and not _has(
+        order_execution,
+        "新签",
+        "签署",
+        "签订",
+        "中标",
+        "开始供货",
+        "已供货",
+        "稳定供货",
+        "批量供货",
+        "小批量供货",
+        "订单积压",
+        "订单排期",
+        "订单排到",
+        "排单",
+        "长期合同",
+        "长约",
+        "续签",
+        "锁定",
+        "binding",
+        "signed",
+        "awarded",
+        "backlog",
+        "booked",
+        "supplying",
+    )
+    capability_only = _has(order_execution, "供货能力", "供应能力") and not _has(
+        order_execution,
+        "已向",
+        "开始供货",
+        "进入",
+        "签署",
+        "签订",
+        "向客户",
+    )
+    planned_document = _has(item.title, "预案", "可行性分析报告") and not _has(
+        order_execution,
+        "已经",
+        "已向",
+        "现已",
+        "当前",
+        "签署",
+        "签订",
+    )
+    if order_execution and not _has(order_execution, "意向", "框架") and not _has(
+        order_execution,
+        "尚未",
+        "尚无",
+        "没有订单",
+        "没有新签",
+        "未新签",
+        "未签署",
+        "没有执行证据",
+        "订单较少",
+        "订单不足",
+        "尚未真正形成",
+        "未规模化",
+        "not yet",
+        "no binding order",
+    ) and not _has(order_execution, "若", "风险提示") and not capability_only and not planned_document and not speculative_order and not _references_earlier_year(item, order_execution):
         return _candidate(
-            "semiconductor_ai", "semiconductor_material_change", "push", text, "订单或供货关系进入执行阶段。"
+            "semiconductor_ai", "semiconductor_material_change", "push", order_execution, "订单或供货关系进入执行阶段。"
         )
-    if _all_groups(
+    cost_route_change = _first_local_match(
         text,
         ("低成本", "成本路线", "cost route", "price war"),
         ("算力需求", "资本开支", "采购", "compute demand", "capex", "procurement"),
-    ):
+    )
+    if cost_route_change:
         return _candidate(
-            "semiconductor_ai", "semiconductor_material_change", "push", text, "成本路线明确改变需求或资本开支方向。"
+            "semiconductor_ai", "semiconductor_material_change", "push", cost_route_change, "成本路线明确改变需求或资本开支方向。"
         )
-    if _all_groups(
+    credit_constraint = _first_local_match(
         text,
         ("巨额亏损", "信用压力", "cds", "credit stress", "losses"),
         ("采购承诺", "采购约束", "融资约束", "purchase commitment", "procurement constraint"),
-    ):
+    )
+    if credit_constraint:
         return _candidate(
-            "semiconductor_ai", "ai_credit_constraint", "push", text, "信用压力与采购约束在同一主体局部绑定。"
+            "semiconductor_ai", "ai_credit_constraint", "push", credit_constraint, "信用压力与采购约束在同一主体局部绑定。"
         )
-    if _all_groups(
+    roadmap_change = _first_local_match(
         text,
         ("推迟", "延后", "路线变化", "delay", "roadmap shift"),
         ("cpo", "gpu", "hbm", "芯片", "量产"),
-    ):
+    )
+    if roadmap_change:
         return _candidate(
-            "semiconductor_ai", "semiconductor_material_change", "push", text, "产业时间表或技术路线明确变化。"
+            "semiconductor_ai", "semiconductor_material_change", "push", roadmap_change, "产业时间表或技术路线明确变化。"
         )
-    if _all_groups(
+    allocation_change = _first_local_match(
         text,
         ("轮动", "增配", "减配", "rotate", "rotation"),
-        ("芯片", "半导体", "ai", "云服务"),
-    ):
+        ("芯片", "半导体", "chip", "semiconductor"),
+        ("云服务", "ai 云", "ai cloud", "cloud service"),
+    )
+    if allocation_change:
         return _candidate(
-            "semiconductor_ai", "semiconductor_material_change", "push", text, "产业配置发生明确跨主题轮动。"
+            "semiconductor_ai", "semiconductor_material_change", "push", allocation_change, "产业配置发生明确跨主题轮动。"
         )
     if _has(text, "泛谈", "长期看好", "基金经理观点", "generic outlook"):
         return _candidate(
@@ -557,13 +1144,21 @@ def _semiconductor_candidate(text: str) -> dict[str, Any]:
     )
 
 
-def _macro_candidate(text: str, config: RuleConfig) -> dict[str, Any]:
+def _macro_candidate(item: NormalizedMarketItem, text: str, config: RuleConfig) -> dict[str, Any]:
     if _has(text, "综述", "回顾", "仅转述", "roundup"):
         return _candidate("macro_data", "macro_indirect_summary", "archive", text, "二次综述不是数据发布。")
-    indicator_matches = _matches(text, config.macro_indicators)
-    primary = any(term in config.macro_primary_indicators for term in indicator_matches)
-    surprise = _has(
+    expected_evidence = _first_local_match(
         text,
+        tuple(config.macro_indicators),
+        ("符合预期", "与预期一致", "in line with expectations"),
+        sentence_limit=16,
+    )
+    if expected_evidence:
+        return _candidate("macro_data", "macro_release_expected", "daily", expected_evidence, "数据符合预期。")
+    surprise_evidence = _first_local_match(
+        text,
+        tuple(config.macro_indicators),
+        (
         "高于预期",
         "低于预期",
         "超预期",
@@ -573,10 +1168,23 @@ def _macro_candidate(text: str, config: RuleConfig) -> dict[str, Any]:
         "above expectations",
         "below expectations",
         "unexpected",
+        ),
+        sentence_limit=16,
     )
-    expected = _has(text, "符合预期", "与预期一致", "in line with expectations")
+    indicator_matches = _matches(surprise_evidence, config.macro_indicators)
+    primary = any(term in config.macro_primary_indicators for term in indicator_matches)
+    lead_text = "\n".join(part for part in (item.title, item.summary) if part)
+    direct_release = bool(_matches(lead_text, config.macro_indicators)) or _has(
+        surprise_evidence,
+        "发布",
+        "公布",
+        "录得",
+        "数据显示",
+        "released",
+        "reported",
+    )
     reaction = _has(
-        text,
+        surprise_evidence,
         "汇市反应",
         "美元大涨",
         "美元大跌",
@@ -584,23 +1192,22 @@ def _macro_candidate(text: str, config: RuleConfig) -> dict[str, Any]:
         "美债收益率大跌",
         "market repricing",
     )
-    if expected:
-        return _candidate("macro_data", "macro_release_expected", "daily", text, "数据符合预期。")
-    if surprise and (primary or reaction):
+    if direct_release and surprise_evidence and (primary or reaction):
         rule_id = "macro_surprise" if primary else "macro_secondary_reaction"
-        return _candidate("macro_data", rule_id, "push", text, "偏离方向明确并达到 v1 反应条件。")
+        return _candidate("macro_data", rule_id, "push", surprise_evidence, "偏离方向明确并达到 v1 反应条件。")
     return _candidate("macro_data", "macro_release_expected", "daily", text, "数据相关但未形成可推送偏离。")
 
 
 def _fed_candidate(text: str) -> dict[str, Any]:
     if _has(text, "未说明相对此前", "未证明修订", "没有路径修订", "without a revision"):
         return _candidate("fed_policy", "fed_path_unchanged", "daily", text, "只有当前预测，无法证明路径修订。")
-    if _all_groups(
+    path_change = _first_local_near_match(
         text,
         ("上调", "下调", "改为", "修订", "raises", "cuts", "revises"),
         ("降息", "加息", "终端利率", "利率路径", "rate path", "terminal rate"),
-    ):
-        return _candidate("fed_policy", "fed_path_change", "push", text, "利率路径发生明确修订。")
+    )
+    if path_change:
+        return _candidate("fed_policy", "fed_path_change", "push", path_change, "利率路径发生明确修订。")
     if _has(text, "维持预测", "重申", "符合预期", "unchanged", "reiterates"):
         return _candidate("fed_policy", "fed_path_unchanged", "daily", text, "既有立场或路径没有变化。")
     if _has(text, "偏鹰", "偏鸽", "强调通胀", "hawkish", "dovish"):
@@ -615,10 +1222,13 @@ def _fed_candidate(text: str) -> dict[str, Any]:
 def _trade_candidate(text: str, config: RuleConfig) -> dict[str, Any]:
     if _has(text, "终止", "撤销", "豁免", "缓和", "terminate", "withdraw", "exemption"):
         return _candidate("trade_policy", "trade_deescalation", "daily", text, "政策发生有效缓和或撤销。")
-    focus = _matches(text, config.trade_focus_industries)
-    escalation = _matches(text, config.trade_stages)
-    if focus and escalation:
-        return _candidate("trade_policy", "trade_escalation", "push", text, "关注产业贸易措施进入正式升级阶段。")
+    escalation = _first_local_match(
+        text,
+        tuple(config.trade_focus_industries),
+        tuple(config.trade_stages),
+    )
+    if escalation:
+        return _candidate("trade_policy", "trade_escalation", "push", escalation, "关注产业贸易措施进入正式升级阶段。")
     return _candidate("trade_policy", "trade_distant_or_unproven", "archive", text, "贸易行动距离关注产业较远。")
 
 
@@ -637,11 +1247,11 @@ def decide_admitted_item(
     candidates: list[dict[str, Any]] = []
     for family in admission.matched_families:
         if family == "holding":
-            candidates.append(_holding_candidate(text, admission, portfolio))
+            candidates.append(_holding_candidate(item, text, admission, portfolio))
         elif family == "semiconductor_ai":
-            candidates.append(_semiconductor_candidate(text))
+            candidates.append(_semiconductor_candidate(item, text, rule_config))
         elif family == "macro_data":
-            candidates.append(_macro_candidate(text, rule_config))
+            candidates.append(_macro_candidate(item, text, rule_config))
         elif family == "fed_policy":
             candidates.append(_fed_candidate(text))
         elif family == "trade_policy":

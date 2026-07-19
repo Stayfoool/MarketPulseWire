@@ -107,6 +107,18 @@
       "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "holding_material_event"},
       "variants": [{"variant_id": "HOLD-010", "source": "company_disclosure", "source_category": "company_disclosure", "publisher_role": "company_official", "content_type": "company_disclosure"}]
     },
+    {
+      "case_id": "HOLD-011",
+      "family": "holding",
+      "text": "监管机构要求甲公司补充香港上市备案材料，尚未作出批准、否决、暂停或终止决定。",
+      "symbols": ["TEST1.SZ"],
+      "portfolio_fixture": "holding_test",
+      "expected": {"admission": "admitted", "action": "daily", "push_eligible": false, "rule_id": "holding_ordinary"},
+      "variants": [
+        {"variant_id": "HOLD-011A", "source": "company_disclosure", "source_category": "company_disclosure", "publisher_role": "company_official", "content_type": "company_disclosure"},
+        {"variant_id": "HOLD-011B", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}
+      ]
+    },
 
     {
       "case_id": "SEMI-001",
@@ -254,6 +266,54 @@
       "portfolio_fixture": "empty",
       "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "ai_compute_constraint"},
       "variants": [{"variant_id": "SEMI-016", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "SEMI-017",
+      "family": "semiconductor_ai",
+      "text": "公司回复称，公司一直是英伟达AI服务器芯片材料供应商，但本次未披露新订单。",
+      "symbols": ["TEST1.SZ"],
+      "portfolio_fixture": "holding_test",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "major_customer_supply_confirmation"},
+      "variants": [
+        {"variant_id": "SEMI-017A", "source": "stock_news", "source_category": "portfolio_stock_news", "publisher_role": "news_media", "content_type": "portfolio_news"},
+        {"variant_id": "SEMI-017B", "source": "industry_media", "source_category": "research_industry_media", "publisher_role": "research_publisher", "content_type": "article"}
+      ]
+    },
+    {
+      "case_id": "SEMI-018",
+      "family": "semiconductor_ai",
+      "text": "公司回复称，公司一直是普通设备厂的AI芯片材料供应商，但本次未披露新订单。",
+      "symbols": ["TEST1.SZ"],
+      "portfolio_fixture": "holding_test",
+      "expected": {"admission": "admitted", "action": "daily", "push_eligible": false, "rule_id": "semiconductor_ordinary"},
+      "variants": [
+        {"variant_id": "SEMI-018A", "source": "stock_news", "source_category": "portfolio_stock_news", "publisher_role": "news_media", "content_type": "portfolio_news"},
+        {"variant_id": "SEMI-018B", "source": "industry_media", "source_category": "research_industry_media", "publisher_role": "research_publisher", "content_type": "article"}
+      ]
+    },
+    {
+      "case_id": "SEMI-019",
+      "family": "semiconductor_ai",
+      "text": "DRAM价格持续上涨，供应极度紧缺，预计第三季度环比涨幅13%至18%。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "semiconductor_price_supply_change"},
+      "variants": [
+        {"variant_id": "SEMI-019A", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"},
+        {"variant_id": "SEMI-019B", "source": "industry_media", "source_category": "research_industry_media", "publisher_role": "research_publisher", "content_type": "article"}
+      ]
+    },
+    {
+      "case_id": "SEMI-020",
+      "family": "semiconductor_ai",
+      "text": "机器人生产基地正式动工，但未披露投资额、产能、订单或明确采购安排。",
+      "symbols": ["TEST1.SZ"],
+      "portfolio_fixture": "holding_test",
+      "expected": {"admission": "admitted", "action": "daily", "push_eligible": false, "rule_id": "semiconductor_ordinary"},
+      "variants": [
+        {"variant_id": "SEMI-020A", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"},
+        {"variant_id": "SEMI-020B", "source": "official_company", "source_category": "official_company", "publisher_role": "company_official", "content_type": "official_news"}
+      ]
     },
 
     {
@@ -453,7 +513,7 @@
       "text": "美国对 DRAM 设备及下游启动 337调查，列名企业均为韩国和美国公司。",
       "symbols": [],
       "portfolio_fixture": "empty",
-      "expected": {"admission": "excluded", "action": null, "push_eligible": false, "rule_id": null},
+      "expected": {"admission": "admitted", "action": "archive", "push_eligible": false, "rule_id": "semiconductor_ordinary"},
       "variants": [{"variant_id": "TRADE-007", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
     }
   ]
