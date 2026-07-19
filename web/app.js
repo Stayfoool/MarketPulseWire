@@ -91,6 +91,15 @@ function badge(value) {
   return `<span class="badge ${cls}">${escapeHtml(raw)}</span>`;
 }
 
+function safeExternalUrl(value) {
+  try {
+    const parsed = new URL(String(value || ''));
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : '';
+  } catch (_) {
+    return '';
+  }
+}
+
 function feedbackBadge(item) {
   const state = String(item.feedback_state || 'not_applicable');
   const display = String(item.feedback_display || '不适用');
@@ -229,6 +238,7 @@ function showView(name) {
   if (name === 'health') loadHealth();
   if (name === 'keywords') loadKeywords();
   if (name === 'rules') loadRuleCenter();
+  if (name === 'rule-shadow') loadRuleShadowReports();
   if (name === 'settings') {
     loadSettings();
   }
@@ -1307,6 +1317,62 @@ async function saveInvestmentBankThemeRules() {
     const data = await api('/api/investment-bank-theme-rules', {method: 'POST', body: JSON.stringify(payload)});
     await loadInvestmentBankThemeRules();
     showStatus(`国际投行重大主题策略已保存：最低证据分 ${data.min_evidence_score}，去重 ${data.dedup_lookback_days} 天。下一条新资讯会自动读取。`);
+  } catch (err) {
+    showStatus(err.message, 'err');
+  }
+}
+
+function ruleShadowDecisionCell(item, prefix) {
+  const action = item[`${prefix}_action`] || 'none';
+  const importance = item[`${prefix}_importance`] || '';
+  const reason = item[`${prefix}_reason`] || '';
+  const rules = item[`${prefix}_rule_ids`] || [];
+  return `
+    <div>${badge(action)} ${importance ? badge(importance) : ''}</div>
+    <div class="summary-cell" style="margin-top:6px">${escapeHtml(reason || '未记录原因')}</div>
+    <div class="hint">${rules.length ? escapeHtml(rules.join('，')) : '未命中规则'}</div>
+  `;
+}
+
+async function loadRuleShadowReports(reportDate='') {
+  try {
+    const query = reportDate ? `?date=${encodeURIComponent(reportDate)}` : '';
+    const data = await api(`/api/rule-shadow-reports${query}`);
+    const selector = document.getElementById('ruleShadowDate');
+    const selected = data.selected_date || '';
+    selector.innerHTML = (data.reports || []).map(item => `
+      <option value="${escapeHtml(item.date || '')}" ${item.date === selected ? 'selected' : ''}>${escapeHtml(item.date || '')}</option>
+    `).join('') || '<option value="">暂无报告</option>';
+
+    const report = data.report || {};
+    const counts = report.counts || {};
+    const skipped = Object.values(counts.skipped || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+    const currentSummary = (data.reports || []).find(item => item.date === selected) || {};
+    document.getElementById('ruleShadowMetrics').innerHTML = [
+      ['可比较文章', counts.compared || 0],
+      ['action 不一致', counts.action_changes || 0],
+      ['涉及 push', currentSummary.push_changes || 0],
+      ['无法比较', skipped],
+      ['飞书提醒', currentSummary.notification_status || '-']
+    ].map(item => `<section class="metric"><div class="label">${escapeHtml(item[0])}</div><div class="value">${escapeHtml(item[1])}</div></section>`).join('');
+    document.getElementById('ruleShadowWindow').innerHTML = report.window_start
+      ? `<span>统计区间：${escapeHtml(formatTime(report.window_start))} 至 ${escapeHtml(formatTime(report.window_end))}</span><span>报告生成：${escapeHtml(formatTime(report.generated_at))}</span>`
+      : '<span>暂无日期报告。</span>';
+
+    document.getElementById('ruleShadowRows').innerHTML = (report.items || []).map(item => {
+      const safeUrl = safeExternalUrl(item.url);
+      const title = safeUrl
+        ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title || '')}</a>`
+        : escapeHtml(item.title || '');
+      return `
+        <tr>
+          <td>${escapeHtml(item.source || '')}<div class="hint">${escapeHtml(item.source_group || '')}</div></td>
+          <td><strong>${title}</strong><div class="hint">${escapeHtml(item.item_id || '')}</div></td>
+          <td>${ruleShadowDecisionCell(item, 'current')}</td>
+          <td>${ruleShadowDecisionCell(item, 'candidate')}</td>
+        </tr>
+      `;
+    }).join('') || '<tr><td colspan="4">该报告没有可比较文章。</td></tr>';
   } catch (err) {
     showStatus(err.message, 'err');
   }

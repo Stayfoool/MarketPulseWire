@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Surveil daily rule comparison review at 15:30 Beijing time
+
+[Timer]
+OnCalendar=*-*-* 15:30:00 Asia/Shanghai
+Persistent=true
+Unit=surveil-rule-shadow-daily.service
+
+[Install]
+WantedBy=timers.target

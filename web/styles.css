@@ -80,6 +80,9 @@ td textarea { min-height: 38px; resize: vertical; }
 .feedback-chip.invalid { color: #b42318; border-color: #fda29b; background: #fff5f4; }
 .feedback-chip.mixed { color: #5b3a8a; border-color: #c4b5fd; background: #faf5ff; }
 #view-feedback table { min-width: 840px; }
+.rule-shadow-table { min-width: 1080px; }
+.rule-shadow-table td { vertical-align: top; }
+.rule-shadow-table tr:first-child td { border-top-color: #99d6cc; }
 .events-table a { color: var(--accent); text-decoration: none; }
 .table-wrap { max-height: calc(100vh - 190px); overflow: auto; }
 .health-table { min-width: 1180px; }

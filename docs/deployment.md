@@ -141,6 +141,18 @@ family keeps its raw comparison JSON for audit, and the wrapper refreshes
 `reports/rule-core-shadow-combined-latest.md` plus `.json` as the daily
 operator view across research, official-company and news batches.
 
+When `RULE_CORE_SHADOW_AUTORUN=1`, installation also enables
+`surveil-rule-shadow-daily.timer`. It runs every day at 15:30
+`Asia/Shanghai`, covers the continuous interval from the previous 15:30
+inclusive to the current 15:30 exclusive, and writes immutable dated
+`reports/rule-core-shadow-daily-YYYY-MM-DD.md` and `.json` files. A successful
+report with comparable or skipped new items sends one Feishu reminder through
+the existing private webhook settings; an empty interval sends nothing. A
+successfully notified date is not recalculated or notified again. The Web
+workbench exposes the dated JSON reports read-only under `规则对比报告`; it does
+not expose candidate enablement or delivery controls. If the private comparison
+switch is disabled, installation disables this daily timer as well.
+
 The installer also copies the production collector units:
 
 - `surveil-research-collector.service`

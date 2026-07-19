@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -52,7 +53,12 @@ def load_report(path: Path) -> dict[str, Any] | None:
     return payload
 
 
-def iter_reports(report_dir: Path, *, since: datetime) -> list[dict[str, Any]]:
+def iter_reports(
+    report_dir: Path,
+    *,
+    since: datetime,
+    until: datetime | None = None,
+) -> list[dict[str, Any]]:
     reports: list[dict[str, Any]] = []
     if not report_dir.exists():
         return reports
@@ -63,7 +69,11 @@ def iter_reports(report_dir: Path, *, since: datetime) -> list[dict[str, Any]]:
         if payload is None:
             continue
         generated_at = parse_iso(payload.get("generated_at"))
-        if generated_at and generated_at < since:
+        if generated_at is None:
+            continue
+        if generated_at < since:
+            continue
+        if until is not None and generated_at >= until:
             continue
         reports.append(payload)
     return reports
@@ -102,10 +112,13 @@ def build_combined_report(
     report_dir: Path = REPORT_DIR,
     hours: int = 24,
     now: datetime | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
-    since = now - timedelta(hours=max(1, hours))
-    reports = iter_reports(report_dir, since=since)
+    window_end = until or now
+    window_start = since or (window_end - timedelta(hours=max(1, hours)))
+    reports = iter_reports(report_dir, since=window_start, until=window_end)
     skipped = Counter()
     action_changes = Counter()
     source_groups = Counter()
@@ -150,7 +163,9 @@ def build_combined_report(
         "comparison_only": True,
         "affects_current_decision": False,
         "generated_at": now.isoformat(),
-        "window_hours": max(1, hours),
+        "window_hours": round((window_end - window_start).total_seconds() / 3600, 3),
+        "window_start": window_start.isoformat(),
+        "window_end": window_end.isoformat(),
         "report_dir": str(report_dir),
         "counts": {
             "reports": len(reports),
@@ -167,16 +182,18 @@ def build_combined_report(
 def markdown_report(payload: dict[str, Any]) -> str:
     counts = payload.get("counts") if isinstance(payload.get("counts"), dict) else {}
     lines = [
-        "# Rule Core Shadow Combined Report",
+        f"# {payload.get('report_title') or 'Rule Core Shadow Combined Report'}",
         "",
         f"- Generated at: {payload.get('generated_at')}",
-        f"- Window: last {payload.get('window_hours')} hours",
+        f"- Window: {payload.get('window_start')} to {payload.get('window_end')}",
         f"- Reports scanned: {counts.get('reports', 0)}",
         f"- Compared items: {counts.get('compared', 0)}",
         f"- Action changes: {counts.get('action_changes', 0)}",
         f"- Skipped: {json.dumps(counts.get('skipped', {}), ensure_ascii=False, sort_keys=True)}",
         "",
     ]
+    if payload.get("review_date"):
+        lines.insert(2, f"- Review date: {payload.get('review_date')} (Asia/Shanghai)")
     pairs = counts.get("action_changes_by_pair") if isinstance(counts.get("action_changes_by_pair"), dict) else {}
     if pairs:
         lines.append("| Action Change | Count |")
@@ -207,8 +224,13 @@ def write_combined(payload: dict[str, Any], report_dir: Path = REPORT_DIR) -> di
     report_dir.mkdir(parents=True, exist_ok=True)
     json_path = report_dir / "rule-core-shadow-combined-latest.json"
     md_path = report_dir / "rule-core-shadow-combined-latest.md"
-    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    md_path.write_text(markdown_report(payload), encoding="utf-8")
+    for path, content in (
+        (json_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n"),
+        (md_path, markdown_report(payload)),
+    ):
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary.write_text(content, encoding="utf-8")
+        temporary.replace(path)
     return {"json_path": str(json_path), "markdown_path": str(md_path)}
 
 

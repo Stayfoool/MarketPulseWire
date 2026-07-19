@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import http.client
+import json
 import sqlite3
 import threading
 from http.server import ThreadingHTTPServer
@@ -22,6 +23,7 @@ from holdings_web import (
     fetch_events_rows,
     html_page,
     parse_systemctl_show_output,
+    rule_shadow_reports_payload,
     utc_window_for_range,
     unit_actions,
     unit_display_metadata,
@@ -66,6 +68,48 @@ def test_page_uses_extracted_assets_and_bounded_placeholders() -> None:
     assert "<script>" not in html
     assert "__WORKBENCH_" not in html
     assert "未配置访问令牌，仅限 SSH 隧道使用" in html
+
+
+def test_rule_shadow_report_view_is_read_only_and_path_bounded() -> None:
+    source = frontend_source()
+    assert "规则对比报告" in source
+    assert "/api/rule-shadow-reports" in source
+    assert "Current Reason" not in source
+    assert "现有规则" in source
+    assert "新内核" in source
+    assert "safeExternalUrl" in source
+
+    with TemporaryDirectory() as tmpdir:
+        report_dir = Path(tmpdir)
+        payload = {
+            "review_date": "2026-07-19",
+            "generated_at": "2026-07-19T07:30:00+00:00",
+            "report_dir": "/opt/surveil/reports",
+            "counts": {"compared": 1, "action_changes": 1, "skipped": {}},
+            "items": [
+                {
+                    "source": "news",
+                    "item_id": "1",
+                    "title": "测试",
+                    "report_path": "/opt/surveil/reports/private.json",
+                    "current_action": "daily",
+                    "candidate_action": "archive",
+                }
+            ],
+            "notification": {"status": "sent"},
+        }
+        path = report_dir / "rule-core-shadow-daily-2026-07-19.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        response = rule_shadow_reports_payload("2026-07-19", report_dir=report_dir)
+        assert response["selected_date"] == "2026-07-19"
+        assert "report_dir" not in response["report"]
+        assert "report_path" not in response["report"]["items"][0]
+        try:
+            rule_shadow_reports_payload("../../.env", report_dir=report_dir)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid report date must be rejected")
 
 
 def test_static_asset_routes_are_allowlisted() -> None:
@@ -1135,6 +1179,7 @@ def test_unit_display_metadata_includes_news_production_collector() -> None:
 def main() -> int:
     test_extracted_script_keeps_newline_escapes()
     test_page_uses_extracted_assets_and_bounded_placeholders()
+    test_rule_shadow_report_view_is_read_only_and_path_bounded()
     test_static_asset_routes_are_allowlisted()
     test_health_page_exposes_service_action_controls()
     test_source_profile_view_is_exposed()
