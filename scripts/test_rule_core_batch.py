@@ -61,10 +61,57 @@ def test_enabled_followup_runs_shadow_then_comparison_without_changing_status() 
             "RULE_CORE_SHADOW_PORTFOLIO": str(portfolio),
         }
         assert batch.run_batch("news", env=env, runner=runner, report_dir=report_dir, db_path=db_path) == 0
-        assert len(calls) == 3
+        assert len(calls) == 4
         assert "--production" in calls[0]
         assert "--direct-shadow" in calls[1]
         assert "--include-seen" in calls[2]
+        assert "scripts/rule_core_shadow_combined.py" in calls[3]
+
+
+def test_enabled_followup_refreshes_combined_report() -> None:
+    with TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        config = root / "rule.json"
+        portfolio = root / "portfolio.json"
+        config.write_text("{}", encoding="utf-8")
+        portfolio.write_text("[]", encoding="utf-8")
+        report_dir = root / "reports"
+        db_path = root / "surveil.sqlite3"
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("CREATE TABLE seen_items (source TEXT, item_id TEXT)")
+            conn.commit()
+        calls: list[list[str]] = []
+
+        def runner(command, **kwargs):
+            calls.append(list(command))
+            if "--production" in command:
+                with sqlite3.connect(db_path) as conn:
+                    conn.execute("INSERT INTO seen_items(source, item_id) VALUES ('news', 'new-1')")
+                    conn.commit()
+            if "--direct-shadow" in command:
+                report_dir.mkdir(parents=True, exist_ok=True)
+                (report_dir / "news-collector-shadow-test.json").write_text(
+                    '{"sources": [{"source": "news", "candidates": [{"source": "news", "id": "new-1"}]}]}',
+                    encoding="utf-8",
+                )
+                (report_dir / "news-collector-shadow-test.json").touch()
+            if "scripts/rule_core_shadow_report.py" in command:
+                output = Path(command[command.index("--output") + 1])
+                output.write_text(
+                    '{"generated_at":"2026-07-19T11:18:16+00:00","counts":{"compared":0},"items":[]}',
+                    encoding="utf-8",
+                )
+            if "scripts/rule_core_shadow_combined.py" in command:
+                (report_dir / "rule-core-shadow-combined-latest.md").write_text("# combined\n", encoding="utf-8")
+            return SimpleNamespace(returncode=0)
+
+        env = {
+            "RULE_CORE_SHADOW_AUTORUN": "1",
+            "RULE_CORE_SHADOW_CONFIG": str(config),
+            "RULE_CORE_SHADOW_PORTFOLIO": str(portfolio),
+        }
+        assert batch.run_batch("news", env=env, runner=runner, report_dir=report_dir, db_path=db_path) == 0
+        assert any("scripts/rule_core_shadow_combined.py" in call for call in calls)
 
 
 def test_shadow_failure_does_not_change_production_status() -> None:
@@ -95,6 +142,7 @@ def test_production_units_use_the_wrapper_entrypoint() -> None:
 def main() -> int:
     test_default_keeps_the_existing_production_command_only()
     test_enabled_followup_runs_shadow_then_comparison_without_changing_status()
+    test_enabled_followup_refreshes_combined_report()
     test_shadow_failure_does_not_change_production_status()
     test_production_units_use_the_wrapper_entrypoint()
     print("rule core batch checks passed")

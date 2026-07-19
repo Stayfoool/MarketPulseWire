@@ -62,6 +62,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `rule_core_replay.py` | Inactive no-write comparison of explicit current outcome snapshots against the pure v1 core, including changed fields and source-invariance violations |
 | `rule_core_history_replay.py` | Inactive operator-only reader for an explicit local SQLite snapshot; strict mode requires stored full text and uses `mode=ro`/`query_only`, while optional title/summary proxy screening is explicitly non-comparative; delegates comparison to `rule_core_replay.py` |
 | `rule_core_shadow.py` | Inactive, side-effect-free comparison of the active `DecisionResult` with `rule_core_v1` for the same normalized item; records only bounded differences and cannot change review or delivery |
+| `rule_core_shadow_combined.py` | Report-only combiner for existing rule-core shadow comparison reports; refreshes one latest Markdown/JSON view across research, official and news production batches |
 | `rule_core_shadow_report.py` | Inactive operator-only reader for a shadow collector JSON report; supplies complete retained item text to `rule_core_shadow.py` and writes only a bounded comparison report |
 | `run_production_with_rule_shadow.py` | Production service entry wrapper; runs the existing collector first and, only with explicit private settings, starts a report-only shadow follow-up without importing or granting authority to the v1 core |
 | `ai_credit_risk.py` | Source-neutral deterministic AI borrower, funding-event and qualitative credit-stress evidence classification |
