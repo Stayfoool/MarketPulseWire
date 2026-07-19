@@ -768,6 +768,7 @@ def test_new_core_is_not_wired_into_production_or_side_effect_modules() -> None:
         "rule_core_replay.py",
         "rule_core_history_replay.py",
         "rule_core_shadow.py",
+        "rule_core_shadow_report.py",
         "rule_config_migration_v1.py",
         "market_lifecycle_v1.py",
     }
