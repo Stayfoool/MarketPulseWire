@@ -394,15 +394,22 @@ def test_future_rule_core_is_side_effect_free_and_not_production_wired() -> None
         elif isinstance(node, ast.ImportFrom) and node.module:
             imports.add(node.module.split(".")[0])
     assert imports == {"__future__", "hashlib", "re", "dataclasses", "typing", "market_item"}
+    inactive_modules = {
+        "rule_core_v1.py",
+        "rule_core_fixture.py",
+        "rule_core_replay.py",
+        "rule_config_migration_v1.py",
+        "market_lifecycle_v1.py",
+    }
     for path in SCRIPTS.glob("*.py"):
-        if path.name.startswith("test_") or path.name in {"rule_core_v1.py", "rule_core_fixture.py"}:
+        if path.name.startswith("test_") or path.name in inactive_modules:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=path.name)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                assert all(alias.name != "rule_core_v1" for alias in node.names), path.name
+                assert all(alias.name not in {Path(name).stem for name in inactive_modules} for alias in node.names), path.name
             elif isinstance(node, ast.ImportFrom):
-                assert node.module != "rule_core_v1", path.name
+                assert node.module not in {Path(name).stem for name in inactive_modules}, path.name
 
 
 def main() -> int:
