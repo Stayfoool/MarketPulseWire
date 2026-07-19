@@ -203,10 +203,27 @@ def run_shadow_followup(
             "returncode": int(getattr(compare_result, "returncode", 1)),
             "input_report": str(input_report),
         }
+    combined_command = (
+        "scripts/rule_core_shadow_combined.py",
+        "--report-dir",
+        str(report_dir),
+        "--hours",
+        str(env.get("RULE_CORE_SHADOW_COMBINED_HOURS") or "24"),
+        "--write-report",
+    )
+    combined_result = _run(combined_command, env=env, runner=runner, capture_output=True)
+    if int(getattr(combined_result, "returncode", 1)) != 0:
+        return {
+            "status": "failed",
+            "stage": "combined_report",
+            "returncode": int(getattr(combined_result, "returncode", 1)),
+            "comparison_report": str(output_report),
+        }
     return {
         "status": "completed",
         "input_report": str(input_report),
         "comparison_report": str(output_report),
+        "combined_report": str(report_dir / "rule-core-shadow-combined-latest.md"),
     }
 
 
@@ -238,6 +255,7 @@ def run_batch(
         print(f"rule core shadow follow-up failed: {followup}", file=sys.stderr, flush=True)
     elif followup.get("status") == "completed":
         print(f"rule core shadow comparison: {followup.get('comparison_report')}", flush=True)
+        print(f"rule core shadow combined: {followup.get('combined_report')}", flush=True)
     return production_status
 
 

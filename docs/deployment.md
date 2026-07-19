@@ -136,7 +136,10 @@ paths or their contents in Git. The wrapper snapshots `seen_items` before and
 after the production collector, filters the shadow report to newly added
 `(source, item_id)` pairs, and uses `--include-seen` because those pairs have
 already been recorded by production. The report remains a comparison record
-and does not promote the candidate action to delivery authority.
+and does not promote the candidate action to delivery authority. Each source
+family keeps its raw comparison JSON for audit, and the wrapper refreshes
+`reports/rule-core-shadow-combined-latest.md` plus `.json` as the daily
+operator view across research, official-company and news batches.
 
 The installer also copies the production collector units:
 
