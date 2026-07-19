@@ -401,6 +401,7 @@ def test_future_rule_core_is_side_effect_free_and_not_production_wired() -> None
         "rule_core_history_replay.py",
         "rule_core_shadow.py",
         "rule_core_shadow_combined.py",
+        "rule_core_shadow_daily.py",
         "rule_core_shadow_report.py",
         "rule_config_migration_v1.py",
         "market_lifecycle_v1.py",

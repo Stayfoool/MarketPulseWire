@@ -53,6 +53,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-china-media.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-sina-stock-news.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-article-daily.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-rule-shadow-daily.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signals-extract.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-outcome.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-review.service, \\
@@ -70,6 +71,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-overseas-media.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-china-media.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-article-daily.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-rule-shadow-daily.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signals-extract.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-outcome.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-review.timer, \\
@@ -88,6 +90,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block start surveil-overseas-media.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-china-media.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-article-daily.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-rule-shadow-daily.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-signals-extract.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-signal-outcome.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-signal-review.service, \\
@@ -133,6 +136,12 @@ else
   systemctl enable --now surveil-china-media.timer
 fi
 systemctl enable --now surveil-article-daily.timer
+if grep -Eq '^RULE_CORE_SHADOW_AUTORUN=(1|true|yes|on)$' '$REMOTE_DIR/.env' 2>/dev/null; then
+  systemctl enable --now surveil-rule-shadow-daily.timer
+else
+  systemctl disable --now surveil-rule-shadow-daily.timer >/dev/null 2>&1 || true
+  echo 'RULE_CORE_SHADOW_AUTORUN 未启用，保持规则对比日报定时器停用。'
+fi
 systemctl enable --now surveil-signals-extract.timer
 systemctl enable --now surveil-signal-outcome.timer
 systemctl enable --now surveil-signal-review.timer
@@ -195,6 +204,7 @@ systemctl --no-pager --full status surveil-research-collector.timer || true
 systemctl --no-pager --full status surveil-official-collector.timer || true
 systemctl --no-pager --full status surveil-news-collector.timer || true
 systemctl --no-pager --full status surveil-value-directory.timer || true
+systemctl --no-pager --full status surveil-rule-shadow-daily.timer || true
 systemctl --no-pager --full status surveil-research-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-official-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-news-collector-shadow.timer || true

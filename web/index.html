@@ -22,6 +22,7 @@
     <button id="tab-health" onclick="showView('health')" aria-label="任务健康，无当前故障"><span>任务健康</span><span id="healthAlertBadge" class="nav-alert-badge" hidden></span></button>
     <button id="tab-keywords" onclick="showView('keywords')">媒体关键词</button>
     <button id="tab-rules" onclick="showView('rules')">规则中心</button>
+    <button id="tab-rule-shadow" onclick="showView('rule-shadow')">规则对比报告</button>
     <button id="tab-settings" onclick="showView('settings')">配置中心</button>
     <button id="tab-holdings" onclick="showView('holdings')">持仓管理</button>
   </nav>
@@ -479,6 +480,33 @@
               </tr>
             </thead>
             <tbody id="ruleAuditRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="view-rule-shadow" class="view">
+      <div class="section-title">
+        <h2>规则对比报告</h2>
+        <div>
+          <select id="ruleShadowDate" aria-label="报告日期" style="width:160px" onchange="loadRuleShadowReports(this.value)"></select>
+          <button onclick="loadRuleShadowReports(document.getElementById('ruleShadowDate').value)">刷新</button>
+        </div>
+      </div>
+      <div id="ruleShadowMetrics" class="metric-grid"></div>
+      <div id="ruleShadowWindow" class="event-feedback-summary"></div>
+      <section class="panel">
+        <div class="table-wrap">
+          <table class="rule-shadow-table">
+            <thead>
+              <tr>
+                <th style="width:150px">来源</th>
+                <th>文章</th>
+                <th style="width:280px">现有规则</th>
+                <th style="width:280px">新内核</th>
+              </tr>
+            </thead>
+            <tbody id="ruleShadowRows"></tbody>
           </table>
         </div>
       </section>

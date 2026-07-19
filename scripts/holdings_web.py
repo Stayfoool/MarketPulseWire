@@ -42,6 +42,7 @@ from investment_bank_theme_config import config_payload as investment_bank_theme
 from investment_bank_theme_config import save_config as save_investment_bank_theme_config
 from market_view import article_view_from_row, event_view_from_row, official_view_from_row
 from rule_center import list_rule_audit, rule_center_payload, save_rule_center_config, simulate_rules
+from rule_shadow_report_store import list_daily_reports, load_daily_report
 from settings_store import save_settings, settings_payload
 from signals_extract import extract_signals
 from source_profiles import save_source_profile_config, source_profiles_payload
@@ -62,6 +63,7 @@ from stock_relations import (
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = ROOT / "web"
+RULE_SHADOW_REPORT_DIR = ROOT / "reports"
 WEB_INDEX_PATH = WEB_ROOT / "index.html"
 WEB_STATIC_ASSETS = {
     "/static/styles.css": (WEB_ROOT / "styles.css", "text/css; charset=utf-8"),
@@ -72,6 +74,33 @@ DEFAULT_PORT = 8787
 BJ = ZoneInfo("Asia/Shanghai")
 HOLDINGS_PREVIEW_TTL_SECONDS = 15 * 60
 _HOLDINGS_PREVIEW_SIGNING_KEY = secrets.token_bytes(32)
+
+
+def rule_shadow_reports_payload(
+    report_date: str = "",
+    *,
+    report_dir: Path = RULE_SHADOW_REPORT_DIR,
+) -> dict[str, Any]:
+    reports = list_daily_reports(report_dir)
+    selected_date = report_date or (str(reports[0].get("date") or "") if reports else "")
+    report = load_daily_report(report_dir, selected_date) if selected_date else None
+    if report is not None:
+        report = dict(report)
+        report.pop("report_dir", None)
+        cleaned_items: list[dict[str, Any]] = []
+        for item in report.get("items") if isinstance(report.get("items"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            cleaned = dict(item)
+            cleaned.pop("report_path", None)
+            cleaned_items.append(cleaned)
+        report["items"] = cleaned_items
+    return {
+        "ok": True,
+        "reports": reports,
+        "selected_date": selected_date,
+        "report": report,
+    }
 SYSTEMCTL_SHOW_FIELDS = {
     "ActiveState",
     "SubState",
@@ -97,6 +126,7 @@ SERVICE_UNITS = [
     "surveil-company-disclosures.service",
     "surveil-jygs-actions.service",
     "surveil-article-daily.service",
+    "surveil-rule-shadow-daily.service",
     "surveil-signals-extract.service",
     "surveil-signal-outcome.service",
     "surveil-signal-review.service",
@@ -118,6 +148,7 @@ TIMER_UNITS = [
     "surveil-overseas-media.timer",
     "surveil-china-media.timer",
     "surveil-article-daily.timer",
+    "surveil-rule-shadow-daily.timer",
     "surveil-signals-extract.timer",
     "surveil-signal-outcome.timer",
     "surveil-signal-review.timer",
@@ -139,6 +170,7 @@ RUN_ONCE_TARGETS = {
     "surveil-overseas-media.timer": "surveil-overseas-media.service",
     "surveil-china-media.timer": "surveil-china-media.service",
     "surveil-article-daily.timer": "surveil-article-daily.service",
+    "surveil-rule-shadow-daily.timer": "surveil-rule-shadow-daily.service",
     "surveil-signals-extract.timer": "surveil-signals-extract.service",
     "surveil-signal-outcome.timer": "surveil-signal-outcome.service",
     "surveil-signal-review.timer": "surveil-signal-review.service",
@@ -210,6 +242,7 @@ UNIT_METADATA = {
     "surveil-news-collector-shadow.service": {"group": "fetching_shadow", "type": "影子采集", "schedule": "timer 每 10 分钟"},
     "surveil-collector-shadow-digest.service": {"group": "processing_scheduled", "type": "影子报告", "schedule": "timer 21:05"},
     "surveil-article-daily.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 20:50"},
+    "surveil-rule-shadow-daily.service": {"group": "processing_scheduled", "type": "规则对比报告", "schedule": "每天 15:30 北京时间"},
     "surveil-signals-extract.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 每 10 分钟"},
     "surveil-signal-outcome.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 交易日 16:20"},
     "surveil-signal-review.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 交易日 16:35"},
@@ -236,6 +269,7 @@ UNIT_METADATA = {
     "surveil-news-collector-shadow.timer": {"group": "fetching_shadow", "type": "影子定时器", "schedule": "每 10 分钟"},
     "surveil-collector-shadow-digest.timer": {"group": "processing_scheduled", "type": "影子报告定时器", "schedule": "21:05"},
     "surveil-article-daily.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "20:50"},
+    "surveil-rule-shadow-daily.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "每天 15:30 北京时间"},
     "surveil-signals-extract.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "每 10 分钟"},
     "surveil-signal-outcome.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "交易日 16:20"},
     "surveil-signal-review.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "交易日 16:35"},
@@ -264,6 +298,7 @@ UNIT_TASK_LABELS = {
     "surveil-news-collector": "新闻媒体采集",
     "surveil-value-directory": "价值目录",
     "surveil-article-daily": "文章日报",
+    "surveil-rule-shadow-daily": "新旧规则对比日报",
     "surveil-signals-extract": "信号提取",
     "surveil-signal-outcome": "信号结果更新",
     "surveil-signal-review": "信号复盘",
@@ -286,6 +321,7 @@ LOG_FILES = [
     "official-collector-shadow.err.log",
     "news-collector-shadow.err.log",
     "collector-shadow-digest.err.log",
+    "rule-shadow-daily.err.log",
     "sina-flash.err.log",
     "sina-stock-news.err.log",
     "company-disclosures.err.log",
@@ -2072,6 +2108,18 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 return
             try:
                 self.send_json({"ok": True, "items": list_rule_audit(db_path=DEFAULT_DB_PATH)})
+            except Exception as exc:  # noqa: BLE001
+                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path == "/api/rule-shadow-reports":
+            if not self.require_auth():
+                return
+            try:
+                qs = parse_qs(parsed.query)
+                report_date = (qs.get("date") or [""])[0]
+                self.send_json(rule_shadow_reports_payload(report_date))
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except Exception as exc:  # noqa: BLE001
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return

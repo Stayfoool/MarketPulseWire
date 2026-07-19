@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Regression checks for the daily rule-core comparison review."""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from rule_core_shadow_daily import (
+    build_reminder_card,
+    list_daily_reports,
+    load_daily_report,
+    review_window,
+    run_daily_report,
+)
+
+
+def comparison_report(generated_at: str, item_id: str) -> dict:
+    return {
+        "generated_at": generated_at,
+        "counts": {"skipped": {}},
+        "items": [
+            {
+                "source": "sina_finance_articles",
+                "item_id": item_id,
+                "title": f"测试文章 {item_id}",
+                "url": f"https://example.test/{item_id}",
+                "comparison": {
+                    "current": {
+                        "action": "daily",
+                        "importance": "medium",
+                        "reason": "旧规则理由",
+                        "rule_ids": [],
+                    },
+                    "candidate": {
+                        "action": "push",
+                        "importance": "high",
+                        "reason": "新内核理由",
+                        "admission_reason": "content_scope_match",
+                        "admission_status": "admitted",
+                        "rule_ids": ["semiconductor_material_change"],
+                    },
+                    "changed_fields": ["action", "importance"],
+                },
+            }
+        ],
+    }
+
+
+def write_comparison(report_dir: Path, generated_at: str, suffix: str) -> None:
+    path = report_dir / f"rule-core-shadow-news-{suffix}.json"
+    path.write_text(json.dumps(comparison_report(generated_at, suffix)), encoding="utf-8")
+
+
+def test_review_window_uses_consecutive_beijing_1530_boundaries() -> None:
+    review_date, start, end = review_window(now=datetime(2026, 7, 19, 8, 0, tzinfo=timezone.utc))
+    assert review_date == "2026-07-19"
+    assert start == datetime(2026, 7, 18, 7, 30, tzinfo=timezone.utc)
+    assert end == datetime(2026, 7, 19, 7, 30, tzinfo=timezone.utc)
+
+    earlier_date, _, earlier_end = review_window(now=datetime(2026, 7, 19, 7, 0, tzinfo=timezone.utc))
+    assert earlier_date == "2026-07-18"
+    assert earlier_end == datetime(2026, 7, 18, 7, 30, tzinfo=timezone.utc)
+
+
+def test_daily_report_is_bounded_dated_and_notified_once() -> None:
+    with TemporaryDirectory() as tmpdir:
+        report_dir = Path(tmpdir)
+        write_comparison(report_dir, "2026-07-18T07:30:00+00:00", "at-start")
+        write_comparison(report_dir, "2026-07-19T07:29:59+00:00", "before-end")
+        write_comparison(report_dir, "2026-07-19T07:30:00+00:00", "at-end")
+        cards: list[dict] = []
+
+        result = run_daily_report(
+            report_dir=report_dir,
+            now=datetime(2026, 7, 19, 8, 0, tzinfo=timezone.utc),
+            sender=lambda card: cards.append(card) or True,
+        )
+        assert result["ok"] is True
+        assert result["notification_status"] == "sent"
+        assert result["counts"]["compared"] == 2
+        assert result["counts"]["action_changes"] == 2
+        assert len(cards) == 1
+
+        payload = load_daily_report(report_dir, "2026-07-19")
+        assert payload is not None
+        assert payload["window_start"] == "2026-07-18T07:30:00+00:00"
+        assert payload["window_end"] == "2026-07-19T07:30:00+00:00"
+        assert payload["notification"]["status"] == "sent"
+        original_generated_at = payload["generated_at"]
+        assert (report_dir / "rule-core-shadow-daily-2026-07-19.md").is_file()
+        assert (report_dir / "rule-core-shadow-combined-latest.md").is_file()
+        assert "Current Reason" in (report_dir / "rule-core-shadow-daily-2026-07-19.md").read_text()
+
+        again = run_daily_report(
+            report_dir=report_dir,
+            now=datetime(2026, 7, 19, 9, 0, tzinfo=timezone.utc),
+            sender=lambda card: cards.append(card) or True,
+        )
+        assert again["notification_status"] == "already_sent"
+        assert len(cards) == 1
+        assert load_daily_report(report_dir, "2026-07-19")["generated_at"] == original_generated_at
+        assert list_daily_reports(report_dir)[0]["push_changes"] == 2
+
+        card_text = json.dumps(build_reminder_card(payload), ensure_ascii=False)
+        assert "规则对比报告" in card_text
+        assert "涉及 push 的差异" in card_text
+
+
+def test_empty_daily_report_writes_files_without_notification() -> None:
+    with TemporaryDirectory() as tmpdir:
+        calls: list[dict] = []
+        result = run_daily_report(
+            report_dir=Path(tmpdir),
+            now=datetime(2026, 7, 19, 8, 0, tzinfo=timezone.utc),
+            sender=lambda card: calls.append(card) or True,
+        )
+        assert result["ok"] is True
+        assert result["notification_status"] == "not_sent_no_content"
+        assert calls == []
+        payload = load_daily_report(Path(tmpdir), "2026-07-19")
+        assert payload is not None
+        assert payload["notification"]["status"] == "not_sent_no_content"
+
+
+def test_systemd_timer_and_installer_use_beijing_1530() -> None:
+    root = Path(__file__).resolve().parents[1]
+    timer = (root / "systemd" / "surveil-rule-shadow-daily.timer").read_text(encoding="utf-8")
+    service = (root / "systemd" / "surveil-rule-shadow-daily.service").read_text(encoding="utf-8")
+    installer = (root / "scripts" / "install_remote_systemd.sh").read_text(encoding="utf-8")
+    assert "OnCalendar=*-*-* 15:30:00 Asia/Shanghai" in timer
+    assert "Persistent=true" in timer
+    assert "rule_core_shadow_daily.py" in service
+    assert "systemctl enable --now surveil-rule-shadow-daily.timer" in installer
+    assert "RULE_CORE_SHADOW_AUTORUN=(1|true|yes|on)" in installer
+
+    try:
+        load_daily_report(root / "reports", "2026-99-99")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid calendar dates must be rejected")
+
+
+def main() -> None:
+    test_review_window_uses_consecutive_beijing_1530_boundaries()
+    test_daily_report_is_bounded_dated_and_notified_once()
+    test_empty_daily_report_writes_files_without_notification()
+    test_systemd_timer_and_installer_use_beijing_1530()
+    print("rule core shadow daily checks passed")
+
+
+if __name__ == "__main__":
+    main()
