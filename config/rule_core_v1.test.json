@@ -1,0 +1,47 @@
+{
+  "schema_version": "rule-config-v1",
+  "config_version": "public-test-v1",
+  "semiconductor_ai_keywords": [
+    "半导体",
+    "芯片",
+    "GPU",
+    "HBM",
+    "NAND",
+    "CPO",
+    "AI",
+    "算力",
+    "数据中心",
+    "存储",
+    "机器人",
+    "激光雷达"
+  ],
+  "exclude_keywords": [
+    "四川 GDP",
+    "培训广告",
+    "历史教学",
+    "加拿大央行"
+  ],
+  "macro_data": {
+    "indicators": ["CPI", "PCE", "非农", "ADP", "JOLTS", "PPI", "ISM", "进口物价"],
+    "context_aliases": ["美国", "US", "U.S."],
+    "tiers": {
+      "primary": ["CPI", "PCE", "非农"],
+      "secondary": ["ADP", "JOLTS", "PPI", "ISM", "进口物价"]
+    }
+  },
+  "fed_policy": {
+    "event_aliases": ["美联储", "FOMC", "Fed"],
+    "actor_aliases": ["美联储主席", "美联储官员"],
+    "path_aliases": ["降息", "加息", "终端利率", "利率路径"]
+  },
+  "trusted_attribution": {
+    "institutions": ["受信研究机构", "国际大行"],
+    "domains": ["research.example", "bank.example"]
+  },
+  "trade_policy": {
+    "corridors": ["对中国", "中国商品", "中美", "中欧", "from China"],
+    "instruments": ["反补贴", "反规避", "337调查", "关税", "出口管制", "紧急状态", "调查"],
+    "stages": ["启动", "实施", "生效", "终止", "撤销", "initiates"],
+    "focus_industries": ["光伏", "半导体", "芯片", "DRAM", "GPU", "HBM"]
+  }
+}

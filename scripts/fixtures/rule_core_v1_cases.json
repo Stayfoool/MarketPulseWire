@@ -1,0 +1,460 @@
+{
+  "contract_version": "rule-core-v1",
+  "config_fixture": "config/rule_core_v1.test.json",
+  "portfolio_fixtures": {
+    "empty": [],
+    "holding_test": [
+      {
+        "symbol": "TEST1.SZ",
+        "names": ["甲公司"],
+        "related_news_keywords": ["乙公司", "固态激光雷达", "机器人"],
+        "exclude_keywords": [],
+        "immediate_alert_keywords": []
+      }
+    ]
+  },
+  "cases": [
+    {
+      "case_id": "HOLD-001",
+      "family": "holding",
+      "text": "甲公司公告召开临时股东会通知。",
+      "symbols": ["TEST1.SZ"],
+      "portfolio_fixture": "holding_test",
+      "expected": {"admission": "admitted", "action": "archive", "push_eligible": false, "rule_id": "holding_ordinary"},
+      "variants": [{"variant_id": "HOLD-001", "source": "company_disclosure", "source_category": "company_disclosure", "publisher_role": "company_official", "content_type": "company_disclosure"}]
+    },
+    {
+      "case_id": "HOLD-002",
+      "family": "holding",
+      "text": "甲公司披露子公司季度审计报告附件。",
+      "symbols": ["TEST1.SZ"],
+      "portfolio_fixture": "holding_test",
+      "expected": {"admission": "admitted", "action": "archive", "push_eligible": false, "rule_id": "holding_ordinary"},
+      "variants": [{"variant_id": "HOLD-002", "source": "company_disclosure", "source_category": "company_disclosure", "publisher_role": "company_official", "content_type": "company_disclosure"}]
+    },
+    {
+      "case_id": "HOLD-003",
+      "family": "holding",
+      "text": "甲公司公告实施实质增资。",
+      "symbols": ["TEST1.SZ"],
+      "portfolio_fixture": "holding_test",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "holding_material_event"},
+      "variants": [{"variant_id": "HOLD-003", "source": "company_disclosure", "source_category": "company_disclosure", "publisher_role": "company_official", "content_type": "company_disclosure"}]
+    },
+    {
+      "case_id": "HOLD-004",
+      "family": "holding",
+      "text": "甲公司发布普通经营动态，未披露实质变化。",
+      "symbols": [],
+      "portfolio_fixture": "holding_test",
+      "expected": {"admission": "admitted", "action": "daily", "push_eligible": false, "rule_id": "holding_ordinary"},
+      "variants": [
+        {"variant_id": "HOLD-004A", "source": "finance_media_a", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"},
+        {"variant_id": "HOLD-004B", "source": "industry_media_b", "source_category": "research_industry_media", "publisher_role": "research_publisher", "content_type": "article"}
+      ]
+    },
+    {
+      "case_id": "HOLD-005",
+      "family": "holding",
+      "text": "国际大行维持乙公司评级和目标价不变。",
+      "symbols": [],
+      "portfolio_fixture": "holding_test",
+      "expected": {"admission": "admitted", "action": "daily", "push_eligible": false, "rule_id": "holding_ordinary"},
+      "variants": [{"variant_id": "HOLD-005", "source": "stock_news", "source_category": "portfolio_stock_news", "publisher_role": "news_media", "content_type": "portfolio_news"}]
+    },
+    {
+      "case_id": "HOLD-006",
+      "family": "holding",
+      "text": "四川 GDP 数据发布，混合综述末尾泛称机器人产业。",
+      "symbols": [],
+      "portfolio_fixture": "holding_test",
+      "expected": {"admission": "excluded", "action": null, "push_eligible": false, "rule_id": null},
+      "variants": [{"variant_id": "HOLD-006", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "HOLD-007",
+      "family": "holding",
+      "text": "乙公司公布未来财报发布日期。",
+      "symbols": [],
+      "portfolio_fixture": "holding_test",
+      "expected": {"admission": "admitted", "action": "archive", "push_eligible": false, "rule_id": "holding_ordinary"},
+      "variants": [{"variant_id": "HOLD-007", "source": "stock_news", "source_category": "portfolio_stock_news", "publisher_role": "news_media", "content_type": "portfolio_news"}]
+    },
+    {
+      "case_id": "HOLD-008",
+      "family": "holding",
+      "text": "乙公司发布具身机器人固态激光雷达技术方案，尚无量产、订单或客户采用。",
+      "symbols": [],
+      "portfolio_fixture": "holding_test",
+      "expected": {"admission": "admitted", "action": "daily", "push_eligible": false, "rule_id": "semiconductor_ordinary"},
+      "variants": [{"variant_id": "HOLD-008", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "flash"}]
+    },
+    {
+      "case_id": "HOLD-009",
+      "family": "holding",
+      "text": "国际大行下调甲公司评级并给出新目标价。",
+      "symbols": [],
+      "portfolio_fixture": "holding_test",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "holding_rating_revision"},
+      "variants": [{"variant_id": "HOLD-009", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "HOLD-010",
+      "family": "holding",
+      "text": "甲公司公告实施实质减资。",
+      "symbols": ["TEST1.SZ"],
+      "portfolio_fixture": "holding_test",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "holding_material_event"},
+      "variants": [{"variant_id": "HOLD-010", "source": "company_disclosure", "source_category": "company_disclosure", "publisher_role": "company_official", "content_type": "company_disclosure"}]
+    },
+
+    {
+      "case_id": "SEMI-001",
+      "family": "semiconductor_ai",
+      "text": "GPU 开发者教程与竞赛经验分享，不涉及硬件供需变化。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "archive", "push_eligible": false, "rule_id": "semiconductor_ordinary"},
+      "variants": [{"variant_id": "SEMI-001", "source": "official_developer", "source_category": "official_company", "publisher_role": "company_official", "content_type": "official_news"}]
+    },
+    {
+      "case_id": "SEMI-002",
+      "family": "semiconductor_ai",
+      "text": "AI workflow integration 工具用法文章，没有硬件、供需或路线变化。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "archive", "push_eligible": false, "rule_id": "semiconductor_ordinary"},
+      "variants": [{"variant_id": "SEMI-002", "source": "official_developer", "source_category": "official_company", "publisher_role": "company_official", "content_type": "official_news"}]
+    },
+    {
+      "case_id": "SEMI-003",
+      "family": "semiconductor_ai",
+      "text": "某芯片公司正式发布新一代 GPU 平台，并公布量产可用路线。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "semiconductor_material_change"},
+      "variants": [{"variant_id": "SEMI-003", "source": "official_company", "source_category": "official_company", "publisher_role": "company_official", "content_type": "official_news"}]
+    },
+    {
+      "case_id": "SEMI-004",
+      "family": "semiconductor_ai",
+      "text": "某 HBM 公司宣布无金额战略合作框架协议，尚未进入供货或执行阶段。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "archive", "push_eligible": false, "rule_id": "semiconductor_ordinary"},
+      "variants": [{"variant_id": "SEMI-004", "source": "official_company", "source_category": "official_company", "publisher_role": "company_official", "content_type": "official_news"}]
+    },
+    {
+      "case_id": "SEMI-005",
+      "family": "semiconductor_ai",
+      "text": "低成本 AI 模型改变算力需求，并明确下调行业资本开支方向。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "semiconductor_material_change"},
+      "variants": [{"variant_id": "SEMI-005", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "SEMI-006",
+      "family": "semiconductor_ai",
+      "text": "AI 公司价格战导致巨额亏损，并同时承受采购承诺和融资约束。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "ai_credit_constraint"},
+      "variants": [{"variant_id": "SEMI-006", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "SEMI-007",
+      "family": "semiconductor_ai",
+      "text": "机构上调 NAND 价格和盈利预测，并判断供需改善。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "industry_forecast_revision"},
+      "variants": [{"variant_id": "SEMI-007", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "SEMI-008",
+      "family": "semiconductor_ai",
+      "text": "HBM 结构性短缺加深，供应商转向长期合同。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "ai_compute_constraint"},
+      "variants": [{"variant_id": "SEMI-008", "source": "industry_media", "source_category": "research_industry_media", "publisher_role": "research_publisher", "content_type": "article"}]
+    },
+    {
+      "case_id": "SEMI-009",
+      "family": "semiconductor_ai",
+      "text": "AI 数据中心运营商 CDS 创历史新高，信用压力造成融资约束和采购约束。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "ai_credit_constraint"},
+      "variants": [{"variant_id": "SEMI-009", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "SEMI-010",
+      "family": "semiconductor_ai",
+      "text": "国际大行明确从芯片轮动至 AI 云服务商并调整配置。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "semiconductor_material_change"},
+      "variants": [{"variant_id": "SEMI-010", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "SEMI-011",
+      "family": "semiconductor_ai",
+      "text": "受信研究机构称存储多年短缺，CPO 量产推迟至下一代周期。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "semiconductor_material_change"},
+      "variants": [{"variant_id": "SEMI-011", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "SEMI-012",
+      "family": "semiconductor_ai",
+      "text": "量化报告称 AI 动能复苏面临阻碍，但未给出具体约束及后果。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "daily", "push_eligible": false, "rule_id": "semiconductor_ordinary"},
+      "variants": [{"variant_id": "SEMI-012", "source": "value_directory", "source_category": "research_industry_media", "publisher_role": "research_origin", "content_type": "research_index"}]
+    },
+    {
+      "case_id": "SEMI-013",
+      "family": "semiconductor_ai",
+      "text": "芯片公司新签订单，AI 算力订单占比明显提升。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "semiconductor_material_change"},
+      "variants": [
+        {"variant_id": "SEMI-013A", "source": "finance_media_a", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"},
+        {"variant_id": "SEMI-013B", "source": "finance_media_b", "source_category": "news_media", "publisher_role": "news_media", "content_type": "flash"}
+      ]
+    },
+    {
+      "case_id": "SEMI-014",
+      "family": "semiconductor_ai",
+      "text": "基金经理泛谈 AI 产业链并表示长期看好，没有实质变化。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "archive", "push_eligible": false, "rule_id": "semiconductor_ordinary"},
+      "variants": [{"variant_id": "SEMI-014", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "SEMI-015",
+      "family": "semiconductor_ai",
+      "text": "地方电网采购变压器，正文只有一般电力设备需求。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "excluded", "action": null, "push_eligible": false, "rule_id": null},
+      "variants": [{"variant_id": "SEMI-015", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "SEMI-016",
+      "family": "semiconductor_ai",
+      "text": "区域 AI 算力供不应求，新增项目已经全部签约。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "ai_compute_constraint"},
+      "variants": [{"variant_id": "SEMI-016", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+
+    {
+      "case_id": "MACRO-001",
+      "family": "macro_data",
+      "text": "美国 CPI 明显低于预期，随后美债收益率大跌。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "macro_surprise"},
+      "variants": [
+        {"variant_id": "MACRO-001A", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"},
+        {"variant_id": "MACRO-001B", "source": "industry_media", "source_category": "research_industry_media", "publisher_role": "research_publisher", "content_type": "article"}
+      ]
+    },
+    {
+      "case_id": "MACRO-002",
+      "family": "macro_data",
+      "text": "美国非农数据与预期一致，市场没有异常反应。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "daily", "push_eligible": false, "rule_id": "macro_release_expected"},
+      "variants": [{"variant_id": "MACRO-002", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "flash"}]
+    },
+    {
+      "case_id": "MACRO-003",
+      "family": "macro_data",
+      "text": "美国 PPI 低于预期并引发明确汇市反应。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "macro_secondary_reaction"},
+      "variants": [{"variant_id": "MACRO-003", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "MACRO-004",
+      "family": "macro_data",
+      "text": "中国 GDP 增速符合市场预期。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "excluded", "action": null, "push_eligible": false, "rule_id": null},
+      "variants": [{"variant_id": "MACRO-004", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "MACRO-005",
+      "family": "macro_data",
+      "text": "欧元区 PPI 出现波动，欧洲央行维持政策。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "excluded", "action": null, "push_eligible": false, "rule_id": null},
+      "variants": [{"variant_id": "MACRO-005", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "MACRO-006",
+      "family": "macro_data",
+      "text": "美国大宗商品综述仅转述 PPI 和利率担忧，不是数据发布。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "archive", "push_eligible": false, "rule_id": "macro_indirect_summary"},
+      "variants": [{"variant_id": "MACRO-006", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "MACRO-007",
+      "family": "macro_data",
+      "text": "美国进口物价意外上行，但没有政策含义或市场后果。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "daily", "push_eligible": false, "rule_id": "macro_release_expected"},
+      "variants": [{"variant_id": "MACRO-007", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+
+    {
+      "case_id": "FED-001",
+      "family": "fed_policy",
+      "text": "美联储有投票权官员强调通胀并发表偏鹰观点，但没有可核验的路径变化。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "daily", "push_eligible": false, "rule_id": "fed_official_stance_change"},
+      "variants": [{"variant_id": "FED-001", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "FED-002",
+      "family": "fed_policy",
+      "text": "美联储主席在听证会上重申抗通胀和独立性。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "daily", "push_eligible": false, "rule_id": "fed_path_unchanged"},
+      "variants": [{"variant_id": "FED-002", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "FED-003",
+      "family": "fed_policy",
+      "text": "白宫官员与美联储主席会面并称赞工作组成员，没有政策路径证据。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "archive", "push_eligible": false, "rule_id": "fed_policy_non_material"},
+      "variants": [{"variant_id": "FED-003", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "flash"}]
+    },
+    {
+      "case_id": "FED-004",
+      "family": "fed_policy",
+      "text": "国际大行将此前预计美联储不调整利率改为年内加息三次。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "fed_path_change"},
+      "variants": [
+        {"variant_id": "FED-004A", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"},
+        {"variant_id": "FED-004B", "source": "industry_media", "source_category": "research_industry_media", "publisher_role": "research_publisher", "content_type": "article"}
+      ]
+    },
+    {
+      "case_id": "FED-005",
+      "family": "fed_policy",
+      "text": "国际大行预计美联储年内降息两次，但未说明相对此前发生修订。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "daily", "push_eligible": false, "rule_id": "fed_path_unchanged"},
+      "variants": [{"variant_id": "FED-005", "source": "research_media", "source_category": "research_industry_media", "publisher_role": "research_publisher", "content_type": "article"}]
+    },
+    {
+      "case_id": "FED-006",
+      "family": "fed_policy",
+      "text": "加拿大央行前瞻中混入国际大行对 Fed 路径的转述。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "excluded", "action": null, "push_eligible": false, "rule_id": null},
+      "variants": [{"variant_id": "FED-006", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "roundup"}]
+    },
+    {
+      "case_id": "FED-007",
+      "family": "fed_policy",
+      "text": "FOMC 决议与市场预期一致，政策路径没有变化。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "daily", "push_eligible": false, "rule_id": "fed_path_unchanged"},
+      "variants": [{"variant_id": "FED-007", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "flash"}]
+    },
+
+    {
+      "case_id": "TRADE-001",
+      "family": "trade_policy",
+      "text": "主管机构对中国光伏电池启动反规避调查。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "trade_escalation"},
+      "variants": [
+        {"variant_id": "TRADE-001A", "source": "official_trade", "source_category": "official_policy", "publisher_role": "government_official", "content_type": "official_policy", "direct_admission_families": ["trade_policy"]},
+        {"variant_id": "TRADE-001B", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}
+      ]
+    },
+    {
+      "case_id": "TRADE-002",
+      "family": "trade_policy",
+      "text": "主管机构对中国胆碱盐启动反补贴调查。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "archive", "push_eligible": false, "rule_id": "trade_distant_or_unproven"},
+      "variants": [{"variant_id": "TRADE-002", "source": "official_trade", "source_category": "official_policy", "publisher_role": "government_official", "content_type": "official_policy", "direct_admission_families": ["trade_policy"]}]
+    },
+    {
+      "case_id": "TRADE-003",
+      "family": "trade_policy",
+      "text": "美国与墨西哥开展区域贸易协定第三轮谈判。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "excluded", "action": null, "push_eligible": false, "rule_id": null},
+      "variants": [{"variant_id": "TRADE-003", "source": "wide_official_feed", "source_category": "official_policy", "publisher_role": "government_official", "content_type": "official_policy"}]
+    },
+    {
+      "case_id": "TRADE-004",
+      "family": "trade_policy",
+      "text": "欧盟发布银行业竞争力报告。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "excluded", "action": null, "push_eligible": false, "rule_id": null},
+      "variants": [{"variant_id": "TRADE-004", "source": "wide_official_feed", "source_category": "official_policy", "publisher_role": "government_official", "content_type": "official_policy"}]
+    },
+    {
+      "case_id": "TRADE-005",
+      "family": "trade_policy",
+      "text": "美国终止涉港紧急状态并履行中美经贸磋商承诺。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "admitted", "action": "daily", "push_eligible": false, "rule_id": "trade_deescalation"},
+      "variants": [{"variant_id": "TRADE-005", "source": "official_trade", "source_category": "official_policy", "publisher_role": "government_official", "content_type": "official_policy", "direct_admission_families": ["trade_policy"]}]
+    },
+    {
+      "case_id": "TRADE-006",
+      "family": "trade_policy",
+      "text": "培训广告以历史教学方式回顾中美关税摩擦。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "excluded", "action": null, "push_eligible": false, "rule_id": null},
+      "variants": [{"variant_id": "TRADE-006", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    },
+    {
+      "case_id": "TRADE-007",
+      "family": "trade_policy",
+      "text": "美国对 DRAM 设备及下游启动 337调查，列名企业均为韩国和美国公司。",
+      "symbols": [],
+      "portfolio_fixture": "empty",
+      "expected": {"admission": "excluded", "action": null, "push_eligible": false, "rule_id": null},
+      "variants": [{"variant_id": "TRADE-007", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
+    }
+  ]
+}
