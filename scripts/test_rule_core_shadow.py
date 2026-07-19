@@ -51,7 +51,12 @@ def test_candidate_action_is_recorded_without_replacing_current_decision() -> No
     assert all(result["comparison_only"] is True for result in results)
     assert all(result["affects_current_decision"] is False for result in results)
     assert all(result["current"]["action"] == "daily" for result in results)
+    assert all(result["current"]["importance"] == "medium" for result in results)
+    assert all(result["current"]["reason"] == "当前规则结果" for result in results)
     assert all(result["candidate"]["action"] == "push" for result in results)
+    assert all(result["candidate"]["importance"] == "high" for result in results)
+    assert all(result["candidate"]["reason"] for result in results)
+    assert all(result["candidate"]["admission_evidence"] for result in results)
     assert all("action" in result["changed_fields"] for result in results)
     assert results[0]["candidate"] == results[1]["candidate"]
 

@@ -76,6 +76,27 @@ def _pair_for(item: dict[str, Any]) -> str:
     return f"{current.get('action') or 'none'}->{candidate.get('action') or 'none'}"
 
 
+def _reason_for(payload: dict[str, Any]) -> str:
+    brief = str(payload.get("brief_reason") or "").strip()
+    reason = str(payload.get("reason") or "").strip()
+    return brief or reason
+
+
+def _candidate_reason(payload: dict[str, Any]) -> str:
+    reason = _reason_for(payload)
+    admission = str(payload.get("admission_reason") or "").strip()
+    if reason and admission:
+        return f"{admission}; {reason}"
+    return reason or admission
+
+
+def _md_cell(value: object, limit: int = 180) -> str:
+    text = " ".join(str(value or "").split()).replace("|", "\\|")
+    if len(text) > limit:
+        return text[: limit - 3].rstrip() + "..."
+    return text
+
+
 def build_combined_report(
     *,
     report_dir: Path = REPORT_DIR,
@@ -99,17 +120,24 @@ def build_combined_report(
             if not isinstance(item, dict):
                 continue
             comparison = item.get("comparison") if isinstance(item.get("comparison"), dict) else {}
+            current = comparison.get("current") if isinstance(comparison.get("current"), dict) else {}
+            candidate = comparison.get("candidate") if isinstance(comparison.get("candidate"), dict) else {}
             row = {
                 "source_group": source_group_name,
                 "source": item.get("source") or "",
                 "item_id": item.get("item_id") or "",
                 "title": item.get("title") or "",
                 "url": item.get("url") or "",
-                "current_action": (comparison.get("current") or {}).get("action") if isinstance(comparison.get("current"), dict) else None,
-                "candidate_action": (comparison.get("candidate") or {}).get("action") if isinstance(comparison.get("candidate"), dict) else None,
+                "current_action": current.get("action"),
+                "current_importance": current.get("importance"),
+                "current_reason": _reason_for(current),
+                "current_rule_ids": current.get("rule_ids") if isinstance(current.get("rule_ids"), list) else [],
+                "candidate_action": candidate.get("action"),
+                "candidate_importance": candidate.get("importance"),
+                "candidate_reason": _candidate_reason(candidate),
                 "changed_fields": comparison.get("changed_fields") if isinstance(comparison.get("changed_fields"), list) else [],
-                "candidate_admission": (comparison.get("candidate") or {}).get("admission_status") if isinstance(comparison.get("candidate"), dict) else "",
-                "candidate_rule_ids": (comparison.get("candidate") or {}).get("rule_ids") if isinstance(comparison.get("candidate"), dict) else [],
+                "candidate_admission": candidate.get("admission_status") or "",
+                "candidate_rule_ids": candidate.get("rule_ids") if isinstance(candidate.get("rule_ids"), list) else [],
                 "report_path": report.get("_path") or "",
             }
             items.append(row)
@@ -162,15 +190,15 @@ def markdown_report(payload: dict[str, Any]) -> str:
         lines.append("No comparable items in this window.")
         return "\n".join(lines).rstrip() + "\n"
 
-    lines.append("| Source Group | Source | Current | Candidate | Candidate Rules | Title |")
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("| Source Group | Source | Current | Current Reason | Candidate | Candidate Reason | Candidate Rules | Title |")
+    lines.append("|---|---|---|---|---|---|---|---|")
     for item in items:
-        title = str(item.get("title") or "").replace("|", "\\|")[:160]
         rules = ",".join(str(rule) for rule in (item.get("candidate_rule_ids") or [])) or "-"
         lines.append(
             f"| {item.get('source_group') or ''} | {item.get('source') or ''} | "
-            f"`{item.get('current_action') or 'none'}` | `{item.get('candidate_action') or 'none'}` | "
-            f"{rules} | {title} |"
+            f"`{item.get('current_action') or 'none'}` | {_md_cell(item.get('current_reason'))} | "
+            f"`{item.get('candidate_action') or 'none'}` | {_md_cell(item.get('candidate_reason'))} | "
+            f"{rules} | {_md_cell(item.get('title'), 160)} |"
         )
     return "\n".join(lines).rstrip() + "\n"
 

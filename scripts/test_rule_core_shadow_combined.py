@@ -30,9 +30,17 @@ def report_payload(source: str, current: str, candidate: str) -> dict:
                 "title": "DRAM价格持续上涨，供应极度紧缺",
                 "url": "https://example.test/item-1",
                 "comparison": {
-                    "current": {"action": current},
+                    "current": {
+                        "action": current,
+                        "importance": "medium",
+                        "reason": "旧规则理由",
+                        "rule_ids": [],
+                    },
                     "candidate": {
                         "action": candidate,
+                        "importance": "low",
+                        "reason": "新内核理由",
+                        "admission_reason": "content_scope_match",
                         "admission_status": "admitted",
                         "rule_ids": ["semiconductor_ordinary"],
                     },
@@ -64,6 +72,8 @@ def test_combined_report_merges_source_groups_and_writes_markdown() -> None:
         text = markdown_report(payload)
         assert "sina_finance_articles" in text
         assert "digitimes_tw_semiconductors" in text
+        assert "旧规则理由" in text
+        assert "content_scope_match; 新内核理由" in text
         assert "DRAM价格持续上涨" in text
         output = write_combined(payload, report_dir)
         assert Path(output["json_path"]).is_file()

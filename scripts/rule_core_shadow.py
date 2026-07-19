@@ -45,6 +45,40 @@ def _families(values: Iterable[str]) -> list[str]:
     return list(dict.fromkeys(str(value) for value in values if str(value)))
 
 
+def _decision_summary(decision: DecisionResult | None) -> dict[str, Any]:
+    if decision is None:
+        return {
+            "action": None,
+            "importance": None,
+            "brief_reason": "",
+            "reason": "",
+            "rule_ids": [],
+        }
+    return {
+        "action": decision.action,
+        "importance": decision.importance,
+        "brief_reason": _clean(decision.brief_reason, 500),
+        "reason": _clean(decision.reason, 800),
+        "rule_ids": _rule_ids(decision),
+    }
+
+
+def _admission_evidence(evidence: object) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for item in evidence if isinstance(evidence, tuple) else ():
+        items.append(
+            {
+                "rule_family": item.rule_family,
+                "reason_code": item.reason_code,
+                "evidence_quote": _clean(item.evidence_quote, 300),
+                "matched_subjects": list(item.matched_subjects),
+                "matched_term_ids": list(item.matched_term_ids),
+                "relation": item.relation,
+            }
+        )
+    return items[:5]
+
+
 def compare_rule_core(
     item: NormalizedMarketItem,
     *,
@@ -77,15 +111,14 @@ def compare_rule_core(
         "admission_status": current_admission_status,
         "admission_reason": _clean(current_admission_reason, 500),
         "matched_families": _families(current_matched_families),
-        "action": current_decision.action if current_decision else None,
-        "rule_ids": _rule_ids(current_decision),
+        **_decision_summary(current_decision),
     }
     candidate = {
         "admission_status": evaluation.admission.status,
         "admission_reason": evaluation.admission.reason_code,
         "matched_families": list(evaluation.admission.matched_families),
-        "action": candidate_decision.action if candidate_decision else None,
-        "rule_ids": _rule_ids(candidate_decision),
+        "admission_evidence": _admission_evidence(evaluation.admission.evidence),
+        **_decision_summary(candidate_decision),
     }
     changed_fields = [
         field
