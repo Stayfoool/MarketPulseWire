@@ -220,7 +220,13 @@ def test_new_core_is_not_wired_into_production_or_side_effect_modules() -> None:
             imported.add(node.module.split(".")[0])
     assert imported == {"__future__", "hashlib", "re", "dataclasses", "typing", "market_item"}
 
-    allowed = {"rule_core_v1.py", "rule_core_fixture.py"}
+    allowed = {
+        "rule_core_v1.py",
+        "rule_core_fixture.py",
+        "rule_core_replay.py",
+        "rule_config_migration_v1.py",
+        "market_lifecycle_v1.py",
+    }
     production_importers: list[str] = []
     for path in (ROOT / "scripts").glob("*.py"):
         if path.name.startswith("test_") or path.name in allowed:

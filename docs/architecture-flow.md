@@ -57,6 +57,9 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `decision_engine.py` | Deterministic `DecisionResult`, including final push action |
 | `rule_core_v1.py` | Inactive, side-effect-free candidate admission/decision core used only by the public v1 behavior corpus; bounded admission evidence includes all matched content-family evidence and global exclusion evidence, and no production collector/runtime/store/delivery imports it |
 | `rule_core_fixture.py` | Strict loader for the sanitized public v1 behavior corpus; test/spec support only |
+| `market_lifecycle_v1.py` | Inactive lifecycle/source-integration contract, bounded discovery shape, legal transitions and honest read-only projections over the current article/event physical stores |
+| `rule_config_migration_v1.py` | Inactive redacted preview of explicitly supplied legacy keyword origins versus a reviewed v1 target configuration; never writes configuration or prints keyword values |
+| `rule_core_replay.py` | Inactive no-write comparison of explicit current outcome snapshots against the pure v1 core, including changed fields and source-invariance violations |
 | `ai_credit_risk.py` | Source-neutral deterministic AI borrower, funding-event and qualitative credit-stress evidence classification |
 | `ai_compute_supply_demand.py` | Source-neutral deterministic AI compute supply, demand, capacity and constraint classification |
 | `trade_friction.py` | Source-neutral China-US / China-EU trade-friction classification and evidence extraction |
