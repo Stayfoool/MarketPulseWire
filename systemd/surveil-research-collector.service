@@ -9,6 +9,6 @@ User=surveil
 WorkingDirectory=/opt/surveil
 EnvironmentFile=-/opt/surveil/.env
 EnvironmentFile=-/opt/surveil/proxy.env
-ExecStart=/opt/surveil/.venv/bin/python /opt/surveil/scripts/research_collector.py --production --page-min-interval 900
+ExecStart=/opt/surveil/.venv/bin/python /opt/surveil/scripts/run_production_with_rule_shadow.py --collector research
 StandardOutput=append:/opt/surveil/logs/research-collector.log
 StandardError=append:/opt/surveil/logs/research-collector.err.log
