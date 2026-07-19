@@ -111,18 +111,32 @@ Install services and timers:
 ./scripts/install_remote_systemd.sh
 ```
 
-The installer copies but keeps these report-only shadow collector timers disabled:
+The installer copies but keeps these standalone report-only shadow collector timers disabled:
 
 - `surveil-research-collector-shadow.timer`
 - `surveil-official-collector-shadow.timer`
 - `surveil-news-collector-shadow.timer`
 - `surveil-collector-shadow-digest.timer`
 
-These shadow jobs are migration aids that may be started explicitly for a
-bounded observation. They write JSON/Markdown reports under
-`reports/` and logs under `logs/`; they can run report-only `decision_engine`
-direct-shadow checks, but they do not send Feishu messages, do not run LLM
-gates, and do not write production `seen_items` or review tables.
+These standalone shadow jobs are migration aids and are not used by the normal
+production schedule. The three production collector services now enter through
+`run_production_with_rule_shadow.py`. Its default behavior is exactly the old
+production command. Only when the private `.env` sets
+`RULE_CORE_SHADOW_AUTORUN=1` and supplies both
+`RULE_CORE_SHADOW_CONFIG` and `RULE_CORE_SHADOW_PORTFOLIO` does it run the
+matching shadow collector after the production collector finishes, then write
+a bounded rule comparison report. The follow-up is report-only: it does not
+send Feishu messages, run LLM gates, write production `seen_items` or review
+tables, and a shadow/comparison failure cannot change the production collector
+exit status.
+
+The private paths should point to the reviewed v1 rule and portfolio snapshots,
+for example under a service-user-readable private directory. Do not put these
+paths or their contents in Git. The wrapper snapshots `seen_items` before and
+after the production collector, filters the shadow report to newly added
+`(source, item_id)` pairs, and uses `--include-seen` because those pairs have
+already been recorded by production. The report remains a comparison record
+and does not promote the candidate action to delivery authority.
 
 The installer also copies the production collector units:
 
