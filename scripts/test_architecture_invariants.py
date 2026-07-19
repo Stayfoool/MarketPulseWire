@@ -385,6 +385,26 @@ def test_ai_compute_rule_is_stable_across_transport_metadata() -> None:
     assert {decision.dedup["dedup_key"] for decision in decisions} == {decisions[0].dedup["dedup_key"]}
 
 
+def test_future_rule_core_is_side_effect_free_and_not_production_wired() -> None:
+    core = parsed_module("rule_core_v1.py")
+    imports: set[str] = set()
+    for node in ast.walk(core):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imports.add(node.module.split(".")[0])
+    assert imports == {"__future__", "hashlib", "re", "dataclasses", "typing", "market_item"}
+    for path in SCRIPTS.glob("*.py"):
+        if path.name.startswith("test_") or path.name in {"rule_core_v1.py", "rule_core_fixture.py"}:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=path.name)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                assert all(alias.name != "rule_core_v1" for alias in node.names), path.name
+            elif isinstance(node, ast.ImportFrom):
+                assert node.module != "rule_core_v1", path.name
+
+
 def main() -> int:
     test_unified_collectors_use_runtime_without_owning_delivery()
     test_removed_compatibility_modules_do_not_return()
@@ -396,6 +416,7 @@ def main() -> int:
     test_common_rule_is_stable_across_transport_metadata()
     test_trade_friction_rule_is_stable_across_transport_metadata()
     test_ai_compute_rule_is_stable_across_transport_metadata()
+    test_future_rule_core_is_side_effect_free_and_not_production_wired()
     print("architecture invariant checks passed")
     return 0
 

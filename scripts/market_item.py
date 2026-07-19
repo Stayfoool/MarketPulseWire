@@ -16,6 +16,9 @@ from typing import Any, Literal
 
 DecisionAction = Literal["push", "daily", "archive", "ignore", "baseline"]
 Importance = Literal["high", "medium", "low", "unknown"]
+AdmissionStatus = Literal["admitted", "excluded", "not_applicable"]
+RuleFamily = Literal["holding", "semiconductor_ai", "macro_data", "fed_policy", "trade_policy"]
+EvidenceScope = Literal["holding", "semiconductor_ai", "macro_data", "fed_policy", "trade_policy", "global"]
 LLMJudgement = Literal[
     "not_needed",
     "confirm",
@@ -37,6 +40,15 @@ VALID_LLM_JUDGEMENTS: set[str] = {
     "possibly_stale_or_priced_in",
     "failed",
 }
+VALID_ADMISSION_STATUSES: set[str] = {"admitted", "excluded", "not_applicable"}
+VALID_RULE_FAMILIES: set[str] = {
+    "holding",
+    "semiconductor_ai",
+    "macro_data",
+    "fed_policy",
+    "trade_policy",
+}
+VALID_EVIDENCE_SCOPES: set[str] = {*VALID_RULE_FAMILIES, "global"}
 
 
 def _clean_text(value: Any) -> str:
@@ -180,6 +192,79 @@ class NormalizedMarketItem:
         }
 
 
+@dataclass(frozen=True)
+class AdmissionEvidence:
+    rule_family: EvidenceScope
+    reason_code: str
+    evidence_quote: str
+    matched_subjects: tuple[str, ...] = ()
+    matched_term_ids: tuple[str, ...] = ()
+    relation: str = ""
+
+    def __post_init__(self) -> None:
+        if self.rule_family not in VALID_EVIDENCE_SCOPES:
+            raise ValueError(f"invalid evidence scope: {self.rule_family}")
+        if not str(self.reason_code or "").strip():
+            raise ValueError("admission evidence reason_code is required")
+        if not str(self.evidence_quote or "").strip():
+            raise ValueError("admission evidence quote is required")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "rule_family": self.rule_family,
+            "reason_code": self.reason_code,
+            "evidence_quote": self.evidence_quote,
+            "matched_subjects": list(self.matched_subjects),
+            "matched_term_ids": list(self.matched_term_ids),
+            "relation": self.relation,
+        }
+
+
+@dataclass(frozen=True)
+class AdmissionResult:
+    status: AdmissionStatus
+    reason_code: str
+    matched_families: tuple[RuleFamily, ...]
+    evidence: tuple[AdmissionEvidence, ...]
+    config_version: str
+    rule_contract_version: str = "rule-core-v1"
+
+    def __post_init__(self) -> None:
+        if self.status not in VALID_ADMISSION_STATUSES:
+            raise ValueError(f"invalid admission status: {self.status}")
+        if not str(self.reason_code or "").strip():
+            raise ValueError("admission reason_code is required")
+        if not str(self.config_version or "").strip():
+            raise ValueError("admission config_version is required")
+        if self.rule_contract_version != "rule-core-v1":
+            raise ValueError(f"unsupported rule contract: {self.rule_contract_version}")
+        if any(family not in VALID_RULE_FAMILIES for family in self.matched_families):
+            raise ValueError("admission contains an invalid rule family")
+        if len(set(self.matched_families)) != len(self.matched_families):
+            raise ValueError("admission contains duplicate rule families")
+        if self.status == "admitted" and not self.matched_families:
+            raise ValueError("admitted result requires at least one matched family")
+        if self.status != "admitted" and self.matched_families:
+            raise ValueError("non-admitted result cannot expose matched families")
+        if self.status == "not_applicable" and self.evidence:
+            raise ValueError("not_applicable result cannot expose admission evidence")
+        if self.status == "admitted" and any(
+            item.rule_family != "global" and item.rule_family not in self.matched_families
+            for item in self.evidence
+        ):
+            raise ValueError("admission evidence does not belong to a matched family")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "reason_code": self.reason_code,
+            "matched_families": list(self.matched_families),
+            "evidence": [item.to_dict() for item in self.evidence],
+            "config_version": self.config_version,
+            "rule_contract_version": self.rule_contract_version,
+        }
+
+
 @dataclass
 class DecisionResult:
     action: DecisionAction = "archive"
@@ -234,6 +319,24 @@ class DecisionResult:
                 "decision_result": self.to_dict(),
                 "rule_hits": list(self.rule_hits),
             },
+        }
+
+
+@dataclass(frozen=True)
+class RuleEvaluation:
+    admission: AdmissionResult
+    decision: DecisionResult | None
+
+    def __post_init__(self) -> None:
+        if self.admission.status == "admitted" and self.decision is None:
+            raise ValueError("admitted evaluation requires a DecisionResult")
+        if self.admission.status != "admitted" and self.decision is not None:
+            raise ValueError("excluded/not_applicable evaluation cannot contain a DecisionResult")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "admission": self.admission.to_dict(),
+            "decision": self.decision.to_dict() if self.decision is not None else None,
         }
 
 
