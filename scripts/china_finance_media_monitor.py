@@ -963,21 +963,7 @@ def set_seen_item_lifecycle(source: str, item_id: str, **values: str | None) -> 
     retry_on_locked(operation)
 
 
-def wallstreetcn_empty_detail_is_terminal(
-    source: str,
-    item: dict[str, Any],
-    exc: Exception,
-) -> bool:
-    return bool(
-        source == WALLSTREETCN_SOURCE
-        and isinstance(exc, ValueError)
-        and str(exc) == WALLSTREETCN_EMPTY_DETAIL_ERROR
-        and not str(item.get("title") or "").strip()
-        and not str(item.get("summary") or "").strip()
-    )
-
-
-def finalize_existing_wallstreetcn_empty_details(source: str) -> int:
+def restore_existing_wallstreetcn_empty_details(source: str) -> int:
     if source != WALLSTREETCN_SOURCE:
         return 0
     now = datetime.now(timezone.utc).isoformat()
@@ -988,35 +974,24 @@ def finalize_existing_wallstreetcn_empty_details(source: str) -> int:
             cursor = conn.execute(
                 """
                 UPDATE seen_items
-                SET processability_status = 'failed_terminal',
-                    processability_reason = 'wallstreetcn_detail_empty',
-                    admission_status = 'not_applicable',
+                SET processability_status = 'failed_retryable',
+                    processability_reason = ?,
+                    admission_status = 'pending',
                     admission_reason = '',
                     processing_status = 'not_applicable',
                     processing_error = '',
-                    processed_at = COALESCE(processed_at, ?),
+                    processed_at = NULL,
                     lifecycle_updated_at = ?
                 WHERE source = ? AND collection_class = 'live'
-                  AND admission_status = 'pending'
+                  AND processability_status = 'failed_terminal'
+                  AND processability_reason = 'wallstreetcn_detail_empty'
+                  AND admission_status = 'not_applicable'
                   AND processing_status = 'not_applicable'
-                  AND TRIM(COALESCE(title, '')) = ''
-                  AND TRIM(COALESCE(summary, '')) = ''
-                  AND (
-                    (
-                      processability_status = 'failed_retryable'
-                      AND processability_reason = ?
-                    )
-                    OR (
-                      processability_status = 'pending'
-                      AND COALESCE(lifecycle_updated_at, '') > first_seen_at
-                    )
-                  )
                 """,
                 (
-                    now,
+                    f"ValueError: {WALLSTREETCN_EMPTY_DETAIL_ERROR}",
                     now,
                     source,
-                    f"ValueError: {WALLSTREETCN_EMPTY_DETAIL_ERROR}",
                 ),
             )
             conn.commit()
@@ -1026,9 +1001,9 @@ def finalize_existing_wallstreetcn_empty_details(source: str) -> int:
 
 
 def retryable_seen_items(source: str) -> list[dict[str, Any]]:
-    finalized = finalize_existing_wallstreetcn_empty_details(source)
-    if finalized:
-        print(f"华尔街见闻：{finalized} 条空快讯详情已记为技术处理终止，不再重试。", flush=True)
+    restored = restore_existing_wallstreetcn_empty_details(source)
+    if restored:
+        print(f"华尔街见闻：{restored} 条空快讯详情恢复为可重试，等待来源再次发现。", flush=True)
     with connect_db() as conn:
         ensure_seen_table(conn)
         rows = conn.execute(
@@ -1037,13 +1012,19 @@ def retryable_seen_items(source: str) -> list[dict[str, Any]]:
             FROM seen_items
             WHERE source = ? AND collection_class = 'live'
               AND (
-                processability_status IN ('pending', 'failed_retryable')
-                OR admission_status = 'pending'
+                (
+                  ? != ?
+                  AND processability_status IN ('pending', 'failed_retryable')
+                )
+                OR (
+                  processability_status IN ('not_required', 'succeeded', 'fallback')
+                  AND admission_status = 'pending'
+                )
                 OR processing_status IN ('pending', 'failed_retryable')
               )
             ORDER BY first_seen_at ASC
             """,
-            (source,),
+            (source, source, WALLSTREETCN_SOURCE),
         ).fetchall()
     return [
         {
@@ -1278,18 +1259,15 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
     try:
         enriched = enrich_item(source, item)
     except Exception as exc:
-        terminal = wallstreetcn_empty_detail_is_terminal(source, item, exc)
         set_seen_item_lifecycle(
             source,
             item_id,
-            processability_status="failed_terminal" if terminal else "failed_retryable",
-            processability_reason="wallstreetcn_detail_empty" if terminal else f"{type(exc).__name__}: {str(exc)[:400]}",
-            admission_status="not_applicable" if terminal else "pending",
+            processability_status="failed_retryable",
+            processability_reason=f"{type(exc).__name__}: {str(exc)[:400]}",
+            admission_status="pending",
             processing_status="not_applicable",
-            processed_at=datetime.now(timezone.utc).isoformat() if terminal else None,
+            processed_at=None,
         )
-        if terminal:
-            return
         raise
     if enriched.get("_skip_decision"):
         set_seen_item_lifecycle(
