@@ -57,21 +57,41 @@ class MarketItemProcessingError(RuntimeError):
         self.outcome = outcome
 
 
-def _record_rule_comparison(
+def record_rule_comparison(
     item: NormalizedMarketItem,
-    flow_result: MarketFlowResult,
+    current_decision: DecisionResult | None,
     storage_ref: dict[str, Any],
+    *,
+    current_admission_status: str = "unknown",
+    current_admission_reason: str = "current_runtime_does_not_expose_admission",
+    current_matched_families: tuple[str, ...] = (),
 ) -> None:
     """Run the optional comparison without making it part of runtime correctness."""
     if str(os.environ.get("RULE_CORE_SHADOW_AUTORUN") or "").strip().lower() not in {"1", "true", "yes", "on"}:
         return
     try:
         module = importlib.import_module("rule_core_runtime_shadow")
-        result = module.record_runtime_comparison(item, flow_result.decision, storage_ref)
+        result = module.record_runtime_comparison(
+            item,
+            current_decision,
+            storage_ref,
+            current_admission_status=current_admission_status,
+            current_admission_reason=current_admission_reason,
+            current_matched_families=current_matched_families,
+        )
         if result.get("status") == "failed":
             print(f"rule core comparison failed: {result.get('reason')}", file=sys.stderr, flush=True)
     except Exception as exc:  # noqa: BLE001 - optional reporting cannot change storage or delivery.
         print(f"rule core comparison failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+
+
+def _record_rule_comparison(
+    item: NormalizedMarketItem,
+    flow_result: MarketFlowResult,
+    storage_ref: dict[str, Any],
+) -> None:
+    """Compatibility hook retained for focused runtime tests."""
+    record_rule_comparison(item, flow_result.decision, storage_ref)
 
 
 def is_official_news_source(source: str) -> bool:
@@ -199,6 +219,9 @@ def _process_content_item(
     deliver: bool,
     use_rule_dedup: bool,
     reprocess_existing: bool,
+    current_admission_status: str,
+    current_admission_reason: str,
+    current_matched_families: tuple[str, ...],
 ) -> MarketProcessOutcome:
     module = _selected_module(store_kind)
     source = item.source
@@ -240,7 +263,21 @@ def _process_content_item(
     }
     flow_result = _flow_result(item, payload, storage_ref)
     if inserted and not flow_result.decision.audit_json.get("contract_error"):
-        _record_rule_comparison(item, flow_result, storage_ref)
+        if (
+            current_admission_status == "unknown"
+            and current_admission_reason == "current_runtime_does_not_expose_admission"
+            and not current_matched_families
+        ):
+            _record_rule_comparison(item, flow_result, storage_ref)
+        else:
+            record_rule_comparison(
+                item,
+                flow_result.decision,
+                storage_ref,
+                current_admission_status=current_admission_status,
+                current_admission_reason=current_admission_reason,
+                current_matched_families=current_matched_families,
+            )
     status = "not_requested"
     if deliver:
         if flow_result.decision.audit_json.get("contract_error") == "missing_decision_result":
@@ -342,6 +379,9 @@ def process_market_item(
     deliver: bool = True,
     use_rule_dedup: bool = True,
     reprocess_existing: bool = False,
+    current_admission_status: str = "unknown",
+    current_admission_reason: str = "current_runtime_does_not_expose_admission",
+    current_matched_families: tuple[str, ...] = (),
 ) -> MarketProcessOutcome:
     """Persist, decide, interpret, and optionally deliver one normalized item."""
     if store_kind == "event":
@@ -363,4 +403,7 @@ def process_market_item(
         deliver=deliver,
         use_rule_dedup=use_rule_dedup,
         reprocess_existing=reprocess_existing,
+        current_admission_status=current_admission_status,
+        current_admission_reason=current_admission_reason,
+        current_matched_families=current_matched_families,
     )

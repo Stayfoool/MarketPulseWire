@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from db_utils import connect_sqlite
+from db_utils import SEEN_ITEM_LIFECYCLE_COLUMNS, connect_sqlite
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +39,15 @@ CREATE TABLE IF NOT EXISTS seen_items (
     summary TEXT,
     published_at TEXT,
     first_seen_at TEXT NOT NULL,
+    collection_class TEXT NOT NULL DEFAULT 'legacy_unclassified',
+    processability_status TEXT NOT NULL DEFAULT 'legacy_unclassified',
+    processability_reason TEXT,
+    admission_status TEXT NOT NULL DEFAULT 'legacy_unclassified',
+    admission_reason TEXT,
+    processing_status TEXT NOT NULL DEFAULT 'legacy_unclassified',
+    processing_error TEXT,
+    processed_at TEXT,
+    lifecycle_updated_at TEXT,
     PRIMARY KEY (source, item_id)
 );
 
@@ -507,7 +516,11 @@ def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 def add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
     if column not in table_columns(conn, table):
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" not in str(exc).lower():
+                raise
 
 
 def db_table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -517,6 +530,8 @@ def db_table_exists(conn: sqlite3.Connection, table: str) -> bool:
 
 def migrate_schema(conn: sqlite3.Connection) -> None:
     """Apply additive migrations for existing personal SQLite databases."""
+    for column, definition in SEEN_ITEM_LIFECYCLE_COLUMNS.items():
+        add_column_if_missing(conn, "seen_items", column, definition)
     stock_relation_columns = {
         "symbol_name": "TEXT",
         "related_name": "TEXT",

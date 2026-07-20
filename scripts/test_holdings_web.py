@@ -417,7 +417,11 @@ def test_event_center_can_show_baselines_and_filter_by_published_time() -> None:
             """
         )
         conn.execute(
-            "INSERT INTO seen_items VALUES (?, ?, ?, ?, ?, ?, ?)",
+            """
+            INSERT INTO seen_items (
+                source, item_id, url, title, summary, published_at, first_seen_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
             (
                 "value_directory_ib_stocks",
                 "baseline-1",
@@ -620,7 +624,14 @@ def test_event_center_projects_current_feedback_across_active_stores() -> None:
                 (event_id,),
             )
             conn.execute(
-                "INSERT INTO seen_items VALUES ('baseline_source', 'baseline-1', '', '基线', '', '2026-07-15T09:04:00+00:00', '2026-07-15T09:04:01+00:00')"
+                """
+                INSERT INTO seen_items (
+                    source, item_id, url, title, summary, published_at, first_seen_at
+                ) VALUES (
+                    'baseline_source', 'baseline-1', '', '基线', '',
+                    '2026-07-15T09:04:00+00:00', '2026-07-15T09:04:01+00:00'
+                )
+                """
             )
             insert_feedback(conn, event_id="f1", item_kind="article", source="cls_telegraph_api", item_id="article-1", label="high_value", operator="operator-a", clicked_at_us=100)
             insert_feedback(conn, event_id="f2", item_kind="article", source="cls_telegraph_api", item_id="article-1", label="duplicate", operator="operator-a", clicked_at_us=300, reasons='["stale"]')

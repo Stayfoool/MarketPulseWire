@@ -103,6 +103,28 @@ def test_disabled_and_invalid_config_are_fail_safe() -> None:
         assert not (root / "reports").exists() or not list((root / "reports").glob("*.json"))
 
 
+def test_current_admission_exclusion_compares_without_a_current_decision() -> None:
+    with TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        config, portfolio = _files(root)
+        result = runtime_shadow.record_runtime_comparison(
+            _item(),
+            None,
+            {"store_kind": "seen_items", "item_id": "article:1"},
+            report_dir=root / "reports",
+            env=_env(config, portfolio),
+            current_admission_status="excluded",
+            current_admission_reason="investment_universe_no_match",
+        )
+        assert result["status"] == "completed"
+        payload = json.loads(Path(result["report"]).read_text(encoding="utf-8"))
+        comparison = payload["items"][0]["comparison"]
+        assert comparison["current"]["admission_status"] == "excluded"
+        assert comparison["current"]["action"] is None
+        assert comparison["candidate"]["action"] == "archive"
+        assert payload["counts"]["action_changes_by_pair"] == {"none->archive": 1}
+
+
 def test_config_cache_reloads_only_after_input_changes() -> None:
     with TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
@@ -126,6 +148,7 @@ def test_config_cache_reloads_only_after_input_changes() -> None:
 def main() -> int:
     test_runtime_item_writes_bounded_comparison_without_body()
     test_disabled_and_invalid_config_are_fail_safe()
+    test_current_admission_exclusion_compares_without_a_current_decision()
     test_config_cache_reloads_only_after_input_changes()
     print("rule core runtime shadow checks passed")
     return 0

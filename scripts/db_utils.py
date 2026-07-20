@@ -12,6 +12,31 @@ from typing import TypeVar
 T = TypeVar("T")
 
 
+SEEN_ITEM_LIFECYCLE_COLUMNS = {
+    "collection_class": "TEXT NOT NULL DEFAULT 'legacy_unclassified'",
+    "processability_status": "TEXT NOT NULL DEFAULT 'legacy_unclassified'",
+    "processability_reason": "TEXT",
+    "admission_status": "TEXT NOT NULL DEFAULT 'legacy_unclassified'",
+    "admission_reason": "TEXT",
+    "processing_status": "TEXT NOT NULL DEFAULT 'legacy_unclassified'",
+    "processing_error": "TEXT",
+    "processed_at": "TEXT",
+    "lifecycle_updated_at": "TEXT",
+}
+SEEN_ITEM_LIFECYCLE_VALUES = {
+    "collection_class": {"baseline", "live", "legacy_unclassified"},
+    "processability_status": {
+        "not_required", "pending", "succeeded", "fallback",
+        "failed_retryable", "failed_terminal", "legacy_unclassified",
+    },
+    "admission_status": {"pending", "admitted", "excluded", "not_applicable", "legacy_unclassified"},
+    "processing_status": {
+        "not_applicable", "pending", "succeeded",
+        "failed_retryable", "failed_terminal", "legacy_unclassified",
+    },
+}
+
+
 def is_locked_error(exc: BaseException) -> bool:
     return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
 
@@ -65,10 +90,27 @@ def ensure_seen_tables(conn: sqlite3.Connection) -> None:
             summary TEXT,
             published_at TEXT,
             first_seen_at TEXT NOT NULL,
+            collection_class TEXT NOT NULL DEFAULT 'legacy_unclassified',
+            processability_status TEXT NOT NULL DEFAULT 'legacy_unclassified',
+            processability_reason TEXT,
+            admission_status TEXT NOT NULL DEFAULT 'legacy_unclassified',
+            admission_reason TEXT,
+            processing_status TEXT NOT NULL DEFAULT 'legacy_unclassified',
+            processing_error TEXT,
+            processed_at TEXT,
+            lifecycle_updated_at TEXT,
             PRIMARY KEY (source, item_id)
         )
         """
     )
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(seen_items)")}
+    for column, definition in SEEN_ITEM_LIFECYCLE_COLUMNS.items():
+        if column not in columns:
+            try:
+                conn.execute(f"ALTER TABLE seen_items ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS seen_sources (
@@ -78,6 +120,30 @@ def ensure_seen_tables(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_seen_items_first_seen ON seen_items(first_seen_at)")
+
+
+def update_seen_item_lifecycle(
+    conn: sqlite3.Connection,
+    source: str,
+    item_id: str,
+    **values: str | None,
+) -> None:
+    unknown = set(values) - set(SEEN_ITEM_LIFECYCLE_COLUMNS)
+    if unknown:
+        raise ValueError(f"unsupported seen_items lifecycle fields: {sorted(unknown)}")
+    if not values:
+        return
+    for field, allowed in SEEN_ITEM_LIFECYCLE_VALUES.items():
+        if field in values and values[field] not in allowed:
+            raise ValueError(f"invalid {field}: {values[field]}")
+    assignments = ", ".join(f"{column} = ?" for column in values)
+    params = [values[column] for column in values]
+    cursor = conn.execute(
+        f"UPDATE seen_items SET {assignments} WHERE source = ? AND item_id = ?",
+        (*params, source, item_id),
+    )
+    if cursor.rowcount != 1:
+        raise LookupError(f"seen item not found: {source}/{item_id}")
 
 
 def ensure_source_state_table(conn: sqlite3.Connection) -> None:

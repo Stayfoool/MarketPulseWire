@@ -80,8 +80,31 @@ def test_combined_report_merges_source_groups_and_writes_markdown() -> None:
         assert Path(output["markdown_path"]).read_text(encoding="utf-8").startswith("# Rule Core Shadow")
 
 
+def test_combined_report_explains_current_admission_exclusion() -> None:
+    with TemporaryDirectory() as tmpdir:
+        report_dir = Path(tmpdir)
+        payload = report_payload("wallstreetcn_news", "archive", "daily")
+        current = payload["items"][0]["comparison"]["current"]
+        current["action"] = None
+        current["importance"] = None
+        current["reason"] = ""
+        current["admission_status"] = "excluded"
+        current["admission_reason"] = "investment_universe_no_match"
+        payload["counts"]["action_changes_by_pair"] = {"none->daily": 1}
+        (report_dir / "rule-core-shadow-news-20260719-111816.json").write_text(
+            json.dumps(payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        combined = build_combined_report(report_dir=report_dir, hours=24)
+        assert combined["counts"]["action_changes_by_pair"] == {"none->daily": 1}
+        text = markdown_report(combined)
+        assert "`none`" in text
+        assert "investment_universe_no_match" in text
+
+
 def main() -> int:
     test_combined_report_merges_source_groups_and_writes_markdown()
+    test_combined_report_explains_current_admission_exclusion()
     print("rule core shadow combined checks passed")
     return 0
 
