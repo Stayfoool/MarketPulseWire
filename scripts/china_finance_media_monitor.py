@@ -34,14 +34,15 @@ from collector_runtime import (
     save_source_state as runtime_save_source_state,
     split_sources_by_backoff,
 )
-from db_utils import connect_sqlite, ensure_seen_tables, retry_on_locked
+from db_utils import connect_sqlite, ensure_seen_tables, retry_on_locked, update_seen_item_lifecycle
 from env_utils import load_env
 from http_utils import http_get
 from investment_universe import investment_universe_match, relevant_digest_for_mixed_item
 from international_bank_fed import fed_path_candidate
 from llm_analysis import llm_config
 from macro_policy import is_macro_event
-from market_flow import normalize_market_item, process_market_item
+from market_flow import normalize_market_item, process_market_item, record_rule_comparison
+from market_item import NormalizedMarketItem
 from media_keyword_config import is_media_focus_item
 from rss_monitor import DB_PATH, fetch_article_body, parse_date, strip_tags
 from source_backoff import backoff_state_after_failure, clear_backoff_state
@@ -506,7 +507,11 @@ def enrich_sina_finance_item(item: dict[str, Any]) -> dict[str, Any]:
     return enriched
 
 
-def parse_sina_finance_article_items(*, persist_state: bool = True) -> list[dict[str, Any]]:
+def parse_sina_finance_article_items(
+    *,
+    persist_state: bool = True,
+    enrich_details: bool = True,
+) -> list[dict[str, Any]]:
     source = SINA_FINANCE_SOURCE
     if persist_state:
         SINA_FINANCE_PENDING_ROLL_STATE.clear()
@@ -553,7 +558,7 @@ def parse_sina_finance_article_items(*, persist_state: bool = True) -> list[dict
     if channel_errors:
         print(f"新浪财经滚动 API 部分频道失败：{channel_errors}", flush=True)
     items = sorted(by_key.values(), key=lambda item: str(item.get("published_at") or ""), reverse=True)
-    enriched = [enrich_sina_finance_item(item) for item in items]
+    discovered = [enrich_sina_finance_item(item) for item in items] if enrich_details else items
     if persist_state:
         next_watermarks = dict(watermarks)
         for lid, ctime in max_ctime_by_lid.items():
@@ -568,7 +573,7 @@ def parse_sina_finance_article_items(*, persist_state: bool = True) -> list[dict
         )
         if channel_errors:
             SINA_FINANCE_PENDING_ROLL_STATE["last_partial_errors"] = channel_errors
-    return enriched
+    return discovered
 
 
 def commit_sina_finance_roll_state() -> None:
@@ -868,7 +873,13 @@ def parse_jin10_items() -> list[dict[str, Any]]:
     return items
 
 
-def source_items(source: str, *, persist_state: bool = True, force: bool = False) -> list[dict[str, Any]]:
+def source_items(
+    source: str,
+    *,
+    persist_state: bool = True,
+    force: bool = False,
+    defer_enrichment: bool = False,
+) -> list[dict[str, Any]]:
     if source == "yicai_brief":
         return parse_first_finance_items()
     if source == "cls_telegraph_api":
@@ -878,7 +889,10 @@ def source_items(source: str, *, persist_state: bool = True, force: bool = False
     if source == "jin10_rsshub_important":
         return parse_jin10_items()
     if source == SINA_FINANCE_SOURCE:
-        return parse_sina_finance_article_items(persist_state=persist_state)
+        return parse_sina_finance_article_items(
+            persist_state=persist_state,
+            enrich_details=not defer_enrichment,
+        )
     if source == WALLSTREETCN_SOURCE:
         return wallstreetcn.collect_items(state=load_source_state(source))
     return []
@@ -889,6 +903,8 @@ def enrich_item(source: str, item: dict[str, Any]) -> dict[str, Any]:
     body = ""
     body_source = str(enriched.get("body_source") or "公开页面")
     if source == SINA_FINANCE_SOURCE:
+        if not enriched.get("full_text") and not (enriched.get("raw") or {}).get("detail_fetch_status"):
+            enriched = enrich_sina_finance_item(enriched)
         enriched["full_text"] = str(enriched.get("full_text") or enriched.get("content") or enriched.get("summary") or "")
         enriched.setdefault("source_module", china_media_module(source))
         enriched.setdefault("access_note", china_media_access_note(source, enriched["body_source"]))
@@ -928,6 +944,53 @@ def seen_source(conn: sqlite3.Connection, source: str) -> bool:
     return row is not None
 
 
+def seen_item_id(item: dict[str, Any]) -> str:
+    title = str(item.get("title") or "").strip()
+    url = canonical_url(str(item.get("url") or "").strip())
+    return str(item.get("id") or url or title)
+
+
+def set_seen_item_lifecycle(source: str, item_id: str, **values: str | None) -> None:
+    values["lifecycle_updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    def operation() -> None:
+        with connect_db() as conn:
+            ensure_seen_table(conn)
+            update_seen_item_lifecycle(conn, source, item_id, **values)
+            conn.commit()
+
+    retry_on_locked(operation)
+
+
+def retryable_seen_items(source: str) -> list[dict[str, Any]]:
+    with connect_db() as conn:
+        ensure_seen_table(conn)
+        rows = conn.execute(
+            """
+            SELECT item_id, url, title, summary, published_at
+            FROM seen_items
+            WHERE source = ? AND collection_class = 'live'
+              AND (
+                processability_status IN ('pending', 'failed_retryable')
+                OR admission_status = 'pending'
+                OR processing_status IN ('pending', 'failed_retryable')
+              )
+            ORDER BY first_seen_at ASC
+            """,
+            (source,),
+        ).fetchall()
+    return [
+        {
+            "id": str(row[0] or ""),
+            "url": str(row[1] or ""),
+            "title": str(row[2] or ""),
+            "summary": str(row[3] or ""),
+            "published_at": str(row[4] or ""),
+        }
+        for row in rows
+    ]
+
+
 def save_new_items(
     conn: sqlite3.Connection,
     source: str,
@@ -945,12 +1008,46 @@ def save_new_items(
     now = datetime.now(timezone.utc).isoformat()
     new_items: list[dict[str, Any]] = []
     seen_titles: list[str] = []
+    selected_ids: set[str] = set()
     star_market_sources = {"cls_telegraph_api", "star_market_daily_subject"}
     for item in sorted(items_list, key=lambda row: row.get("published_at") or "", reverse=False):
         title = str(item.get("title") or "").strip()
         url = canonical_url(str(item.get("url") or "").strip())
-        item_id = str(item.get("id") or url or title)
+        item_id = seen_item_id(item)
         if not title and not url:
+            continue
+        existing = conn.execute(
+            """
+            SELECT collection_class, processability_status, admission_status, processing_status
+            FROM seen_items WHERE source = ? AND item_id = ?
+            """,
+            (source, item_id),
+        ).fetchone()
+        if existing:
+            retryable = (
+                str(existing[0]) == "live"
+                and (
+                    str(existing[1]) in {"pending", "failed_retryable"}
+                    or str(existing[2]) == "pending"
+                    or str(existing[3]) in {"pending", "failed_retryable"}
+                )
+            )
+            if retryable and item_id not in selected_ids:
+                update_seen_item_lifecycle(
+                    conn,
+                    source,
+                    item_id,
+                    processability_status="pending",
+                    processability_reason="",
+                    admission_status="pending",
+                    admission_reason="",
+                    processing_status="not_applicable",
+                    processing_error="",
+                    processed_at=None,
+                    lifecycle_updated_at=now,
+                )
+                selected_ids.add(item_id)
+                new_items.append(item)
             continue
         if any(title_similarity(title, prior) for prior in seen_titles):
             continue
@@ -984,8 +1081,12 @@ def save_new_items(
         try:
             conn.execute(
                 """
-                INSERT INTO seen_items (source, item_id, url, title, summary, published_at, first_seen_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO seen_items (
+                    source, item_id, url, title, summary, published_at, first_seen_at,
+                    collection_class, processability_status, processability_reason,
+                    admission_status, admission_reason, processing_status,
+                    processing_error, processed_at, lifecycle_updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     source,
@@ -995,10 +1096,20 @@ def save_new_items(
                     str(item.get("summary") or ""),
                     str(item.get("published_at") or ""),
                     now,
+                    "baseline" if is_baseline and not notify_baseline else "live",
+                    "not_required" if is_baseline and not notify_baseline else "pending",
+                    "",
+                    "not_applicable" if is_baseline and not notify_baseline else "pending",
+                    "",
+                    "not_applicable",
+                    "",
+                    now if is_baseline and not notify_baseline else None,
+                    now,
                 ),
             )
         except sqlite3.IntegrityError:
             continue
+        selected_ids.add(item_id)
         new_items.append(item)
     conn.commit()
     if is_baseline and not notify_baseline:
@@ -1019,21 +1130,74 @@ def save_new_items_with_retry(
     return retry_on_locked(operation)
 
 
-def should_focus_item(item: dict[str, Any], source: str = "") -> bool:
-    if fed_path_candidate(item):
-        return True
-    match = investment_universe_match(source or str(item.get("source") or ""), item)
-    item["_investment_universe_match"] = match
+def current_admission_result(
+    item: dict[str, Any] | NormalizedMarketItem,
+    source: str = "",
+    *,
+    source_module: str = "",
+) -> dict[str, Any]:
+    if isinstance(item, NormalizedMarketItem):
+        admission_item: dict[str, Any] = {
+            "title": item.title,
+            "summary": item.summary,
+            "full_text": item.full_text,
+            "url": item.url,
+            "published_at": item.published_at,
+            "source_module": source_module,
+        }
+        effective_source = source or item.source
+    else:
+        admission_item = item
+        effective_source = source or str(item.get("source") or "")
+    if fed_path_candidate(admission_item):
+        return {"admitted": True, "reason": "fed_path_candidate", "matched_families": ("fed_policy",)}
+    match = investment_universe_match(effective_source, admission_item)
+    if isinstance(item, dict):
+        item["_investment_universe_match"] = match
     if not match.get("matched"):
-        return False
-    if is_macro_event(item):
-        return True
-    return bool({"holding_match", "user_include_keyword"} & set(match.get("tags") or [])) or is_media_focus_item(
-        str(item.get("title") or ""),
-        str(item.get("summary") or ""),
-        str(item.get("full_text") or ""),
-        str(item.get("source_module") or ""),
-    )
+        return {
+            "admitted": False,
+            "reason": "investment_universe_no_match",
+            "matched_families": (),
+            "universe_match": match,
+        }
+    if is_macro_event(admission_item):
+        return {
+            "admitted": True,
+            "reason": "macro_event",
+            "matched_families": ("macro_data",),
+            "universe_match": match,
+        }
+    tags = set(match.get("tags") or [])
+    if {"holding_match", "user_include_keyword"} & tags:
+        return {
+            "admitted": True,
+            "reason": "holding_or_include_keyword",
+            "matched_families": ("holding",),
+            "universe_match": match,
+        }
+    if is_media_focus_item(
+        str(admission_item.get("title") or ""),
+        str(admission_item.get("summary") or ""),
+        str(admission_item.get("full_text") or ""),
+        str(admission_item.get("source_module") or ""),
+    ):
+        return {
+            "admitted": True,
+            "reason": "media_focus",
+            "matched_families": ("semiconductor_ai",),
+            "universe_match": match,
+        }
+    return {
+        "admitted": False,
+        "reason": "media_focus_no_match",
+        "matched_families": (),
+        "universe_match": match,
+    }
+
+
+def should_focus_item(item: dict[str, Any], source: str = "") -> bool:
+    return bool(current_admission_result(item, source)["admitted"])
 
 
 def is_mandatory_yicai_morning_brief(source: str, item: dict[str, Any]) -> bool:
@@ -1044,25 +1208,117 @@ def is_mandatory_yicai_morning_brief(source: str, item: dict[str, Any]) -> bool:
 
 
 def notify_item(source: str, item: dict[str, Any]) -> None:
-    enriched = enrich_item(source, item)
+    item_id = seen_item_id(item)
+    try:
+        enriched = enrich_item(source, item)
+    except Exception as exc:
+        set_seen_item_lifecycle(
+            source,
+            item_id,
+            processability_status="failed_retryable",
+            processability_reason=f"{type(exc).__name__}: {str(exc)[:400]}",
+            admission_status="pending",
+            processing_status="not_applicable",
+        )
+        raise
     if enriched.get("_skip_decision"):
+        set_seen_item_lifecycle(
+            source,
+            item_id,
+            processability_status="failed_terminal",
+            processability_reason="access_unavailable",
+            admission_status="not_applicable",
+            processing_status="not_applicable",
+            processed_at=datetime.now(timezone.utc).isoformat(),
+        )
         return
-    mandatory_morning = is_mandatory_yicai_morning_brief(source, enriched)
-    if not mandatory_morning and not should_focus_item(enriched, source):
+    raw = enriched.get("raw") if isinstance(enriched.get("raw"), dict) else {}
+    fallback = raw.get("detail_fetch_status") == "failed" or "抓取失败" in str(enriched.get("body_source") or "")
+    set_seen_item_lifecycle(
+        source,
+        item_id,
+        processability_status="fallback" if fallback else "succeeded",
+        processability_reason="detail_fallback" if fallback else "",
+        admission_status="pending",
+        processing_status="not_applicable",
+    )
+    try:
+        normalized = normalize_market_item(source, enriched, store_kind="article", source_profile_id=source)
+        mandatory_morning = is_mandatory_yicai_morning_brief(source, enriched)
+        admission = (
+            {"admitted": True, "reason": "yicai_morning_brief", "matched_families": ("semiconductor_ai",)}
+            if mandatory_morning
+            else current_admission_result(
+                normalized,
+                source,
+                source_module=str(enriched.get("source_module") or ""),
+            )
+        )
+    except Exception as exc:
+        set_seen_item_lifecycle(
+            source,
+            item_id,
+            admission_status="pending",
+            admission_reason=f"evaluation_failed:{type(exc).__name__}",
+            processing_status="not_applicable",
+        )
+        raise
+    if not admission["admitted"]:
+        set_seen_item_lifecycle(
+            source,
+            item_id,
+            admission_status="excluded",
+            admission_reason=str(admission["reason"]),
+            processing_status="not_applicable",
+            processed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        record_rule_comparison(
+            normalized,
+            None,
+            {"store_kind": "seen_items", "source": source, "item_id": item_id},
+            current_admission_status="excluded",
+            current_admission_reason=str(admission["reason"]),
+            current_matched_families=tuple(admission["matched_families"]),
+        )
         return
-    universe_match = enriched.get("_investment_universe_match") or investment_universe_match(source, enriched)
+    universe_match = admission.get("universe_match") or investment_universe_match(source, enriched)
     enriched["push_reason"] = (
         "强制推送规则：第一财经券商晨会观点速递为每日固定栏目。"
         if mandatory_morning
         else str(universe_match.get("reason") or "")
     )
-    normalized = normalize_market_item(source, enriched, store_kind="article", source_profile_id=source)
-    outcome = process_market_item(
-        normalized,
-        enriched,
-        store_kind="article",
-        source_profile_id=source,
-        db_path=DB_PATH,
+    set_seen_item_lifecycle(
+        source,
+        item_id,
+        admission_status="admitted",
+        admission_reason=str(admission["reason"]),
+        processing_status="pending",
+    )
+    try:
+        outcome = process_market_item(
+            normalized,
+            enriched,
+            store_kind="article",
+            source_profile_id=source,
+            db_path=DB_PATH,
+            current_admission_status="admitted",
+            current_admission_reason=str(admission["reason"]),
+            current_matched_families=tuple(admission["matched_families"]),
+        )
+    except Exception as exc:
+        set_seen_item_lifecycle(
+            source,
+            item_id,
+            processing_status="failed_retryable",
+            processing_error=f"{type(exc).__name__}: {str(exc)[:800]}",
+        )
+        raise
+    set_seen_item_lifecycle(
+        source,
+        item_id,
+        processing_status="succeeded",
+        processing_error="",
+        processed_at=datetime.now(timezone.utc).isoformat(),
     )
     review = outcome.payload
     print(
@@ -1087,7 +1343,10 @@ def run_once(sources: list[str], notify_baseline: bool = False) -> int:
         label_for_source=china_media_module,
     )
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(source_items, source): source for source in runnable_sources}
+        futures = {
+            executor.submit(source_items, source, defer_enrichment=True): source
+            for source in runnable_sources
+        }
         for future in as_completed(futures):
             source = futures[future]
             try:
@@ -1113,29 +1372,10 @@ def run_once(sources: list[str], notify_baseline: bool = False) -> int:
         if source not in fetched:
             continue
         items = fetched[source]
-        if source == WALLSTREETCN_SOURCE:
-            with connect_db() as conn:
-                baseline = not seen_source(conn, source)
-                seen_ids = {
-                    str(row[0])
-                    for row in conn.execute("SELECT item_id FROM seen_items WHERE source = ?", (source,))
-                }
-            if not baseline:
-                detail_failures: list[str] = []
-                prepared: list[dict[str, Any]] = []
-                for item in items:
-                    if str(item.get("id") or "") in seen_ids:
-                        continue
-                    try:
-                        prepared.append(wallstreetcn.enrich_item(item))
-                    except Exception as exc:  # noqa: BLE001 - failed detail must remain unseen for retry
-                        detail_failures.append(f"{item.get('id')}: {type(exc).__name__}: {exc}")
-                items = prepared
-                with connect_db() as conn:
-                    if detail_failures:
-                        record_source_failure(conn, "wallstreetcn", "detail", RuntimeError("; ".join(detail_failures[:5])))
-                    else:
-                        record_source_success(conn, "wallstreetcn", "detail")
+        by_id = {seen_item_id(item): item for item in items}
+        for retry_item in retryable_seen_items(source):
+            by_id.setdefault(seen_item_id(retry_item), retry_item)
+        items = list(by_id.values())
         try:
             new_items = save_new_items_with_retry(source, items, notify_baseline=notify_baseline)
             if source == SINA_FINANCE_SOURCE:
@@ -1155,8 +1395,20 @@ def run_once(sources: list[str], notify_baseline: bool = False) -> int:
             continue
         total_new += len(new_items)
         print(f"{china_media_module(source)}：发现 {len(new_items)} 条新条目。", flush=True)
+        processing_failed = False
         for item in new_items:
-            notify_item(source, item)
+            try:
+                notify_item(source, item)
+            except Exception as exc:  # noqa: BLE001 - retain retry state and continue the batch
+                processing_failed = True
+                with connect_db() as conn:
+                    record_source_failure(conn, "china_finance_media", source, exc)
+                    if source == WALLSTREETCN_SOURCE:
+                        record_source_failure(conn, "wallstreetcn", "detail", exc)
+                print(f"{china_media_module(source)} 条目处理失败，已保留为可重试：{type(exc).__name__}: {exc}", flush=True)
+        if source == WALLSTREETCN_SOURCE and not processing_failed:
+            with connect_db() as conn:
+                record_source_success(conn, "wallstreetcn", "detail")
     return total_new
 
 

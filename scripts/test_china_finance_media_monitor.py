@@ -143,8 +143,10 @@ def test_run_once_fetches_sources_independently() -> None:
     original_record_success = cfm.record_source_success
     original_record_failure = cfm.record_source_failure
     original_save = cfm.save_new_items_with_retry
+    original_retryable = cfm.retryable_seen_items
+    original_notify = cfm.notify_item
     try:
-        def fake_source_items(source: str):
+        def fake_source_items(source: str, **_kwargs):
             calls.append(source)
             if source == "bad":
                 raise RuntimeError("boom")
@@ -156,6 +158,8 @@ def test_run_once_fetches_sources_independently() -> None:
         cfm.record_source_success = lambda conn, monitor, source: successes.append(source)
         cfm.record_source_failure = lambda conn, monitor, source, exc: failures.append(source)
         cfm.save_new_items_with_retry = lambda source, items, notify_baseline=False: list(items)
+        cfm.retryable_seen_items = lambda source: []
+        cfm.notify_item = lambda source, item: None
         count = cfm.run_once(["good", "bad"], notify_baseline=False)
         assert count == 1
         assert sorted(calls) == ["bad", "good"]
@@ -166,6 +170,198 @@ def test_run_once_fetches_sources_independently() -> None:
         cfm.record_source_success = original_record_success
         cfm.record_source_failure = original_record_failure
         cfm.save_new_items_with_retry = original_save
+        cfm.retryable_seen_items = original_retryable
+        cfm.notify_item = original_notify
+
+
+def test_seen_item_lifecycle_migration_baseline_and_retry() -> None:
+    original_db = cfm.DB_PATH
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfm.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            with cfm.connect_db() as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE seen_items (
+                        source TEXT NOT NULL, item_id TEXT NOT NULL, url TEXT NOT NULL,
+                        title TEXT NOT NULL, summary TEXT, published_at TEXT,
+                        first_seen_at TEXT NOT NULL, PRIMARY KEY (source, item_id)
+                    )
+                    """
+                )
+                conn.execute(
+                    "INSERT INTO seen_items VALUES ('legacy', 'old', '', 'old', '', '', '')"
+                )
+                conn.commit()
+                cfm.ensure_seen_table(conn)
+                legacy = conn.execute(
+                    "SELECT collection_class, processability_status, admission_status, processing_status "
+                    "FROM seen_items WHERE source = 'legacy' AND item_id = 'old'"
+                ).fetchone()
+                assert legacy == (
+                    "legacy_unclassified",
+                    "legacy_unclassified",
+                    "legacy_unclassified",
+                    "legacy_unclassified",
+                )
+
+            baseline_item = {"id": "base", "title": "baseline", "url": "", "summary": ""}
+            assert cfm.save_new_items_with_retry("baseline-source", [baseline_item]) == []
+            with cfm.connect_db() as conn:
+                baseline = conn.execute(
+                    "SELECT collection_class, processability_status, admission_status, processing_status "
+                    "FROM seen_items WHERE source = 'baseline-source' AND item_id = 'base'"
+                ).fetchone()
+                assert baseline == ("baseline", "not_required", "not_applicable", "not_applicable")
+
+            with cfm.connect_db() as conn:
+                conn.execute(
+                    "INSERT INTO seen_sources (source, first_seen_at) VALUES ('live-source', '')"
+                )
+                conn.commit()
+            live_item = {"id": "live", "title": "live", "url": "", "summary": ""}
+            assert cfm.save_new_items_with_retry("live-source", [live_item]) == [live_item]
+            cfm.set_seen_item_lifecycle(
+                "live-source",
+                "live",
+                processability_status="failed_retryable",
+                processability_reason="temporary",
+            )
+            assert cfm.save_new_items_with_retry("live-source", [live_item]) == [live_item]
+            with cfm.connect_db() as conn:
+                retry = conn.execute(
+                    "SELECT processability_status, admission_status, processing_status "
+                    "FROM seen_items WHERE source = 'live-source' AND item_id = 'live'"
+                ).fetchone()
+                assert retry == ("pending", "pending", "not_applicable")
+            cfm.set_seen_item_lifecycle(
+                "live-source",
+                "live",
+                processability_status="succeeded",
+                admission_status="pending",
+                admission_reason="evaluation_failed:RuntimeError",
+                processing_status="not_applicable",
+            )
+            assert [row["id"] for row in cfm.retryable_seen_items("live-source")] == ["live"]
+            assert cfm.save_new_items_with_retry("live-source", [live_item]) == [live_item]
+            cfm.set_seen_item_lifecycle(
+                "live-source",
+                "live",
+                processability_status="succeeded",
+                admission_status="excluded",
+                processing_status="not_applicable",
+            )
+            assert cfm.save_new_items_with_retry("live-source", [live_item]) == []
+    finally:
+        cfm.DB_PATH = original_db
+
+
+def test_excluded_item_uses_one_normalized_item_for_report_only_comparison() -> None:
+    original_db = cfm.DB_PATH
+    original_admission = cfm.current_admission_result
+    original_record = cfm.record_rule_comparison
+    original_process = cfm.process_market_item
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfm.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            with cfm.connect_db() as conn:
+                cfm.ensure_seen_table(conn)
+                conn.execute("INSERT INTO seen_sources (source, first_seen_at) VALUES ('test-source', '')")
+                conn.commit()
+            item = {"id": "excluded", "title": "ordinary market article", "url": "", "summary": "text"}
+            assert cfm.save_new_items_with_retry("test-source", [item]) == [item]
+            captured: list[tuple[object, object, dict, dict]] = []
+            cfm.current_admission_result = lambda item, source='', **_kwargs: {
+                "admitted": False,
+                "reason": "investment_universe_no_match",
+                "matched_families": (),
+            }
+            cfm.record_rule_comparison = lambda normalized, decision, storage, **kwargs: captured.append(
+                (normalized, decision, storage, kwargs)
+            )
+            cfm.process_market_item = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("excluded item must not enter current decision/runtime")
+            )
+            cfm.notify_item("test-source", item)
+            assert len(captured) == 1
+            normalized, decision, storage, kwargs = captured[0]
+            assert normalized.source == "test-source"
+            assert decision is None
+            assert storage["store_kind"] == "seen_items"
+            assert kwargs["current_admission_status"] == "excluded"
+            with cfm.connect_db() as conn:
+                state = conn.execute(
+                    "SELECT processability_status, admission_status, processing_status "
+                    "FROM seen_items WHERE source = 'test-source' AND item_id = 'excluded'"
+                ).fetchone()
+                assert state == ("succeeded", "excluded", "not_applicable")
+    finally:
+        cfm.DB_PATH = original_db
+        cfm.current_admission_result = original_admission
+        cfm.record_rule_comparison = original_record
+        cfm.process_market_item = original_process
+
+
+def test_admitted_item_reuses_normalized_item_and_processing_failure_retries() -> None:
+    original_db = cfm.DB_PATH
+    original_admission = cfm.current_admission_result
+    original_match = cfm.investment_universe_match
+    original_normalize = cfm.normalize_market_item
+    original_process = cfm.process_market_item
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfm.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            with cfm.connect_db() as conn:
+                cfm.ensure_seen_table(conn)
+                conn.execute("INSERT INTO seen_sources (source, first_seen_at) VALUES ('test-source', '')")
+                conn.commit()
+            item = {"id": "admitted", "title": "DRAM supply", "url": "", "summary": "DRAM shortage"}
+            assert cfm.save_new_items_with_retry("test-source", [item]) == [item]
+            captured_normalized: list[NormalizedMarketItem] = []
+
+            def capture_normalize(*args, **kwargs):
+                normalized = original_normalize(*args, **kwargs)
+                captured_normalized.append(normalized)
+                return normalized
+
+            cfm.current_admission_result = lambda item, source='', **_kwargs: {
+                "admitted": True,
+                "reason": "media_focus",
+                "matched_families": ("semiconductor_ai",),
+            }
+            cfm.investment_universe_match = lambda source, item: {
+                "matched": True,
+                "tags": ["user_include_keyword"],
+                "reason": "current admission",
+            }
+            cfm.normalize_market_item = capture_normalize
+
+            def fail_processing(normalized, raw_item, **kwargs):
+                assert normalized is captured_normalized[0]
+                assert kwargs["current_admission_status"] == "admitted"
+                raise RuntimeError("temporary processing failure")
+
+            cfm.process_market_item = fail_processing
+            try:
+                cfm.notify_item("test-source", item)
+            except RuntimeError as exc:
+                assert "temporary processing failure" in str(exc)
+            else:
+                raise AssertionError("processing failure must remain visible")
+            with cfm.connect_db() as conn:
+                state = conn.execute(
+                    "SELECT processability_status, admission_status, processing_status "
+                    "FROM seen_items WHERE source = 'test-source' AND item_id = 'admitted'"
+                ).fetchone()
+                assert state == ("succeeded", "admitted", "failed_retryable")
+            assert [row["id"] for row in cfm.retryable_seen_items("test-source")] == ["admitted"]
+            assert cfm.save_new_items_with_retry("test-source", [item]) == [item]
+    finally:
+        cfm.DB_PATH = original_db
+        cfm.current_admission_result = original_admission
+        cfm.investment_universe_match = original_match
+        cfm.normalize_market_item = original_normalize
+        cfm.process_market_item = original_process
 
 
 def test_yicai_morning_brief_is_mandatory_push() -> None:
@@ -214,6 +410,45 @@ def test_china_media_focus_filters_generic_power_and_accepts_ai_context() -> Non
             cfm.investment_universe_match = original_match
             cfm.is_media_focus_item = original_focus
             iu.media_keyword_match = original_media
+
+
+def test_current_admission_is_equivalent_after_normalization() -> None:
+    original_fed = cfm.fed_path_candidate
+    original_match = cfm.investment_universe_match
+    original_macro = cfm.is_macro_event
+    original_focus = cfm.is_media_focus_item
+    try:
+        cfm.fed_path_candidate = lambda item: False
+        cfm.investment_universe_match = lambda source, item: {
+            "matched": True,
+            "tags": ["semiconductor_ai"],
+            "reason": "industry scope",
+        }
+        cfm.is_macro_event = lambda item: False
+        cfm.is_media_focus_item = lambda *parts: "HBM" in " ".join(parts)
+        mapping = {
+            "id": "same-item",
+            "title": "HBM supply update",
+            "summary": "DRAM supply remains tight",
+            "full_text": "HBM supply update with DRAM evidence",
+            "url": "https://example.test/same-item",
+            "published_at": "2026-07-20T00:00:00+00:00",
+            "source_module": "Test Media",
+        }
+        normalized = cfm.normalize_market_item("test-source", mapping, store_kind="article")
+        before = cfm.current_admission_result(dict(mapping), "test-source")
+        after = cfm.current_admission_result(
+            normalized,
+            "test-source",
+            source_module="Test Media",
+        )
+        for field in ("admitted", "reason", "matched_families"):
+            assert before[field] == after[field]
+    finally:
+        cfm.fed_path_candidate = original_fed
+        cfm.investment_universe_match = original_match
+        cfm.is_macro_event = original_macro
+        cfm.is_media_focus_item = original_focus
 
 
 def test_jin10_mixed_digest_keeps_only_relevant_lines() -> None:
@@ -645,9 +880,13 @@ def main() -> int:
     test_cls_observation_metadata_does_not_change_decision_action()
     test_cls_poll_interval_skips_recent_fetch()
     test_run_once_fetches_sources_independently()
+    test_seen_item_lifecycle_migration_baseline_and_retry()
+    test_excluded_item_uses_one_normalized_item_for_report_only_comparison()
+    test_admitted_item_reuses_normalized_item_and_processing_failure_retries()
     test_yicai_morning_brief_is_mandatory_push()
     test_short_english_keyword_requires_token_boundary()
     test_china_media_focus_filters_generic_power_and_accepts_ai_context()
+    test_current_admission_is_equivalent_after_normalization()
     test_jin10_mixed_digest_keeps_only_relevant_lines()
     test_star_market_daily_next_data_parser()
     test_star_market_daily_cross_source_dedup()

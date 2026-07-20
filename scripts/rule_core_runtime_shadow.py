@@ -82,17 +82,21 @@ def _item_id(item: NormalizedMarketItem, storage_ref: Mapping[str, Any]) -> str:
 
 def _report_payload(
     item: NormalizedMarketItem,
-    current_decision: DecisionResult,
+    current_decision: DecisionResult | None,
     storage_ref: Mapping[str, Any],
     *,
     rule_config: object,
     portfolio: object,
+    current_admission_status: str,
+    current_admission_reason: str,
+    current_matched_families: tuple[str, ...],
 ) -> dict[str, Any]:
     comparison = safe_compare_rule_core(
         item,
         current_decision=current_decision,
-        current_admission_status="unknown",
-        current_admission_reason="current_runtime_does_not_expose_admission",
+        current_admission_status=current_admission_status,
+        current_admission_reason=current_admission_reason,
+        current_matched_families=current_matched_families,
         rule_config=rule_config,
         portfolio=portfolio,
         source_policy=SourceAdmissionPolicy(),
@@ -150,11 +154,14 @@ def _write_report(payload: dict[str, Any], item: NormalizedMarketItem, report_di
 
 def record_runtime_comparison(
     item: NormalizedMarketItem,
-    current_decision: DecisionResult,
+    current_decision: DecisionResult | None,
     storage_ref: Mapping[str, Any],
     *,
     report_dir: Path = REPORT_DIR,
     env: Mapping[str, str] | None = None,
+    current_admission_status: str = "unknown",
+    current_admission_reason: str = "current_runtime_does_not_expose_admission",
+    current_matched_families: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Write one bounded comparison without changing the active runtime result."""
     effective_env = env if env is not None else os.environ
@@ -171,6 +178,9 @@ def record_runtime_comparison(
             storage_ref,
             rule_config=rule_config,
             portfolio=portfolio,
+            current_admission_status=current_admission_status,
+            current_admission_reason=current_admission_reason,
+            current_matched_families=current_matched_families,
         )
         path = _write_report(payload, item, report_dir)
         return {"status": "completed", "report": str(path), "comparison_ok": payload["items"][0]["comparison"]["ok"]}

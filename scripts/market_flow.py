@@ -14,6 +14,7 @@ from market_runtime import (
     is_official_news_source,
     normalize_market_item,
     process_market_item,
+    record_rule_comparison,
 )
 
 

@@ -100,6 +100,14 @@ def _candidate_reason(payload: dict[str, Any]) -> str:
     return reason or admission
 
 
+def _current_reason(payload: dict[str, Any]) -> str:
+    reason = _reason_for(payload)
+    admission = str(payload.get("admission_reason") or "").strip()
+    if reason and admission:
+        return f"{admission}; {reason}"
+    return reason or admission
+
+
 def _md_cell(value: object, limit: int = 180) -> str:
     text = " ".join(str(value or "").split()).replace("|", "\\|")
     if len(text) > limit:
@@ -143,7 +151,7 @@ def build_combined_report(
                 "url": item.get("url") or "",
                 "current_action": current.get("action"),
                 "current_importance": current.get("importance"),
-                "current_reason": _reason_for(current),
+                "current_reason": _current_reason(current),
                 "current_rule_ids": current.get("rule_ids") if isinstance(current.get("rule_ids"), list) else [],
                 "candidate_action": candidate.get("action"),
                 "candidate_importance": candidate.get("importance"),

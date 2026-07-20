@@ -321,7 +321,11 @@ def test_shadow_payload_marks_seen_and_reviewed_without_delivery() -> None:
                 """
             )
             conn.execute(
-                "INSERT INTO seen_items VALUES (?, ?, ?, ?, ?, ?, ?)",
+                """
+                INSERT INTO seen_items (
+                    source, item_id, url, title, summary, published_at, first_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
                 ("value_directory_ib_stocks", "862550", "", "", "", "", "2026-07-10T00:00:00+00:00"),
             )
             conn.execute(
