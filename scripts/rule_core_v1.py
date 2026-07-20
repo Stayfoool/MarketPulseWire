@@ -14,6 +14,7 @@ from typing import Any, Iterable, Mapping
 from ai_compute_supply_demand import classify_ai_compute_supply_demand
 from ai_credit_risk import classify_ai_credit_risk
 from international_bank_fed import allowed_fed_path_banks, classify_international_bank_fed_path
+from macro_policy import classify_macro_policy_content, generic_fed_transmission_classification
 from market_item import (
     AdmissionEvidence,
     AdmissionResult,
@@ -1580,54 +1581,34 @@ def _semiconductor_candidate(
 def _macro_candidate(item: NormalizedMarketItem, text: str, config: RuleConfig) -> dict[str, Any]:
     if _has(text, "综述", "回顾", "仅转述", "roundup"):
         return _candidate("macro_data", "macro_indirect_summary", "archive", text, "二次综述不是数据发布。")
-    expected_evidence = _first_local_match(
-        text,
-        tuple(config.macro_indicators),
-        ("符合预期", "与预期一致", "in line with expectations"),
-        sentence_limit=16,
+    classification = classify_macro_policy_content(
+        _classification_item(item),
+        primary_keywords=(),
+        us_scoped_primary_keywords=config.macro_primary_indicators,
+        secondary_keywords=config.macro_secondary_indicators,
+        us_context_keywords=config.macro_context_aliases,
     )
+    expected_evidence = str(classification.get("expected_evidence") or "")
+    surprise_evidence = str(classification.get("surprise_evidence") or "")
     if expected_evidence:
         return _candidate("macro_data", "macro_release_expected", "daily", expected_evidence, "数据符合预期。")
-    surprise_evidence = _first_local_match(
-        text,
-        tuple(config.macro_indicators),
-        (
-        "高于预期",
-        "低于预期",
-        "超预期",
-        "不及预期",
-        "意外上行",
-        "意外下降",
-        "above expectations",
-        "below expectations",
-        "unexpected",
-        ),
-        sentence_limit=16,
-    )
-    indicator_matches = _matches(surprise_evidence, config.macro_indicators)
-    primary = any(term in config.macro_primary_indicators for term in indicator_matches)
-    lead_text = "\n".join(part for part in (item.title, item.summary) if part)
-    direct_release = bool(_matches(lead_text, config.macro_indicators)) or _has(
-        surprise_evidence,
-        "发布",
-        "公布",
-        "录得",
-        "数据显示",
-        "released",
-        "reported",
-    )
-    reaction = _has(
-        surprise_evidence,
-        "汇市反应",
-        "美元大涨",
-        "美元大跌",
-        "美债收益率大涨",
-        "美债收益率大跌",
-        "market repricing",
-    )
-    if direct_release and surprise_evidence and (primary or reaction):
-        rule_id = "macro_surprise" if primary else "macro_secondary_reaction"
-        return _candidate("macro_data", rule_id, "push", surprise_evidence, "偏离方向明确并达到 v1 反应条件。")
+    if classification.get("preview"):
+        return _candidate("macro_data", "macro_release_preview", "daily", text, "数据尚未发布。")
+    if classification.get("primary") and classification.get("direct_release") and surprise_evidence:
+        return _candidate("macro_data", "macro_surprise", "push", surprise_evidence, "核心数据出现明确偏离。")
+    if (
+        classification.get("secondary")
+        and classification.get("direct_release")
+        and surprise_evidence
+        and classification.get("attributable_market_reaction")
+    ):
+        return _candidate(
+            "macro_data",
+            "macro_secondary_reaction",
+            "push",
+            surprise_evidence,
+            "次重点数据偏离并伴随可归因的大幅市场反应。",
+        )
     return _candidate("macro_data", "macro_release_expected", "daily", text, "数据相关但未形成可推送偏离。")
 
 
@@ -1646,6 +1627,41 @@ def _fed_candidate(item: NormalizedMarketItem, text: str, config: RuleConfig) ->
             classification,
             family="fed_policy",
             default_rule_id="fed_path_unchanged",
+        )
+    transmission = generic_fed_transmission_classification(_classification_item(item))
+    if transmission.get("matched"):
+        return _candidate(
+            "fed_policy",
+            "generic_fed_policy_transmission",
+            "daily",
+            str(transmission.get("evidence_quote") or text),
+            "只有常识性的 Fed 政策到资产价格传导解释。",
+        )
+    transmission_exceptions = tuple(str(value) for value in transmission.get("exceptions") or ())
+    if (
+        transmission.get("impulse")
+        and transmission.get("assets")
+        and transmission.get("evidence_quote")
+        and transmission_exceptions
+    ):
+        expected_policy = "policy_decision" in transmission_exceptions and any(
+            marker in text.casefold()
+            for marker in ("符合预期", "与预期一致", "in line with expectations")
+        )
+        if expected_policy:
+            return _candidate(
+                "fed_policy",
+                "fed_policy_expected",
+                "daily",
+                str(transmission.get("evidence_quote") or text),
+                "正式政策决定符合预期。",
+            )
+        return _candidate(
+            "fed_policy",
+            "fed_policy_material_exception",
+            "push",
+            str(transmission.get("evidence_quote") or text),
+            "包含正式决定、量化重定价、实际行情、直接陈述、更正或资产硬事实。",
         )
     if _has(text, "未说明相对此前", "未证明修订", "没有路径修订", "without a revision"):
         return _candidate("fed_policy", "fed_path_unchanged", "daily", text, "只有当前预测，无法证明路径修订。")

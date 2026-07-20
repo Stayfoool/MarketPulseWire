@@ -10,8 +10,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from rule_center import effective_list, rule_enabled
-
 
 PRIMARY_DATA_KEYWORDS = (
     "非农",
@@ -142,6 +140,32 @@ SURPRISE_PATTERNS = (
     r"(?:高于|低于|不及|超过|逊于|强于|弱于).{0,12}(?:预期|市场预期)",
     r"(?:预期|市场预期).{0,12}(?:高于|低于|不及|超过|逊于|强于|弱于)",
     r"(?:意外|超预期|不及预期|大幅偏离|显著偏离)",
+)
+
+EXPECTED_PATTERNS = (
+    r"(?:符合(?:市场)?预期|与(?:市场)?预期一致|与预测一致)",
+    r"(?:in line with|matched).{0,8}(?:expectations?|forecasts?)",
+)
+
+PREVIEW_PATTERNS = (
+    r"(?:即将|将于|将在|今晚|明晚|等待|公布前|发布前|預計|预计).{0,24}(?:公布|发布|出炉|錄得|录得|升至|降至)",
+    r"(?:公布|发布|出炉).{0,16}(?:前|在即)",
+    r"(?:ahead of|before|awaiting).{0,20}(?:release|publication)",
+    r"(?:will|due to|expected to).{0,16}(?:be )?(?:released|published|reported)",
+)
+
+RELEASE_MARKERS = (
+    "发布",
+    "公布",
+    "出炉",
+    "录得",
+    "錄得",
+    "数据显示",
+    "數據顯示",
+    "reported",
+    "released",
+    "published",
+    "came in",
 )
 
 FED_EASING_MARKERS = (
@@ -286,6 +310,102 @@ def has_surprise(text: str) -> bool:
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in SURPRISE_PATTERNS)
 
 
+def has_expected_result(text: str) -> bool:
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in EXPECTED_PATTERNS)
+
+
+def _sentences(text: str) -> list[str]:
+    return [part.strip() for part in re.split(r"(?<=[。！？!?；;])|[\r\n]+", text) if part.strip()]
+
+
+def _matched_terms(text: str, keywords: tuple[str, ...]) -> tuple[str, ...]:
+    lowered = text.casefold()
+    return tuple(dict.fromkeys(keyword for keyword in keywords if keyword.casefold() in lowered))
+
+
+def _first_macro_window(
+    text: str,
+    indicators: tuple[str, ...],
+    *,
+    require_surprise: bool = False,
+    require_expected: bool = False,
+) -> str:
+    sentences = _sentences(text)
+    for index, sentence in enumerate(sentences):
+        if not contains_any(sentence, indicators):
+            continue
+        if require_surprise and not has_surprise(sentence):
+            continue
+        if require_expected and not has_expected_result(sentence):
+            continue
+        window = " ".join(sentences[index : index + 2])
+        return window[:1000]
+    return ""
+
+
+def classify_macro_policy_content(
+    item: dict[str, Any],
+    *,
+    primary_keywords: tuple[str, ...] = PRIMARY_DATA_KEYWORDS,
+    us_scoped_primary_keywords: tuple[str, ...] = US_SCOPED_PRIMARY_DATA_KEYWORDS,
+    secondary_keywords: tuple[str, ...] = SECONDARY_DATA_KEYWORDS,
+    us_context_keywords: tuple[str, ...] = US_CONTEXT_KEYWORDS,
+) -> dict[str, Any]:
+    """Extract source-neutral macro/Fed evidence without reading runtime configuration."""
+    text = text_blob(item.get("title"), item.get("summary"), item.get("content"), item.get("full_text"))
+    context = contains_any(f"{text} ", us_context_keywords)
+    primary_terms = _matched_terms(text, primary_keywords)
+    scoped_primary_terms = _matched_terms(text, us_scoped_primary_keywords) if context else ()
+    secondary_terms = _matched_terms(text, secondary_keywords)
+    indicator_terms = tuple(dict.fromkeys((*primary_terms, *scoped_primary_terms, *secondary_terms)))
+    surprise_evidence = _first_macro_window(text, indicator_terms, require_surprise=True) if indicator_terms else ""
+    expected_evidence = _first_macro_window(text, indicator_terms, require_expected=True) if indicator_terms else ""
+    market_reaction = contains_any(text, MARKET_REACTION_KEYWORDS)
+    large_move = has_large_move(text)
+    local_reaction = bool(
+        surprise_evidence
+        and (
+            (
+                contains_any(surprise_evidence, MARKET_REACTION_KEYWORDS)
+                and has_large_move(surprise_evidence)
+            )
+            or contains_any(surprise_evidence, ("明确汇市反应", "market repricing"))
+        )
+    )
+    preview = any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in PREVIEW_PATTERNS)
+    direct_release = bool(
+        indicator_terms
+        and not preview
+        and (surprise_evidence or expected_evidence or contains_any(text, RELEASE_MARKERS))
+    )
+    surprise = has_surprise(text)
+    fed_event = fed_event_match(
+        text,
+        market_reaction=market_reaction,
+        large_move=large_move,
+        surprise=surprise,
+    )
+    return {
+        "text": text,
+        "primary": bool(primary_terms or scoped_primary_terms),
+        "secondary": bool(secondary_terms),
+        "primary_terms": list((*primary_terms, *scoped_primary_terms)),
+        "secondary_terms": list(secondary_terms),
+        "us_context": context,
+        "market_reaction": market_reaction,
+        "large_move": large_move,
+        "surprise": surprise,
+        "attributable_surprise": bool(surprise_evidence),
+        "expected": bool(expected_evidence),
+        "preview": preview,
+        "direct_release": direct_release,
+        "attributable_market_reaction": local_reaction,
+        "surprise_evidence": surprise_evidence[:500],
+        "expected_evidence": expected_evidence[:500],
+        "fed_event": fed_event,
+    }
+
+
 def fed_policy_impulse(text: str) -> str:
     easing = contains_any(text, FED_EASING_MARKERS)
     tightening = contains_any(text, FED_TIGHTENING_MARKERS)
@@ -348,6 +468,8 @@ def has_us_context(text: str) -> bool:
 
 
 def primary_data_match(text: str) -> bool:
+    from rule_center import effective_list
+
     primary_keywords = effective_list("macro_policy_line", "extra_primary_keywords", PRIMARY_DATA_KEYWORDS)
     us_scoped_primary = effective_list("macro_policy_line", "extra_primary_keywords", US_SCOPED_PRIMARY_DATA_KEYWORDS)
     if contains_any(text, primary_keywords):
@@ -366,18 +488,30 @@ def fed_event_match(text: str, *, market_reaction: bool, large_move: bool, surpr
 
 
 def macro_policy_match(item: dict[str, Any]) -> dict[str, Any]:
+    from rule_center import effective_list, rule_enabled
+
     if not rule_enabled("macro_policy_line"):
         return {"matched": False, "tier": "disabled", "reason": "宏观政策线规则已停用。"}
     text = text_blob(item.get("title"), item.get("summary"), item.get("content"), item.get("full_text"))
     if is_retail_sales_only(text):
         return {"matched": False, "tier": "ignored", "reason": "零售销售不纳入宏观政策线。"}
 
-    primary = primary_data_match(text)
-    secondary = contains_any(text, effective_list("macro_policy_line", "extra_secondary_keywords", SECONDARY_DATA_KEYWORDS))
-    market_reaction = contains_any(text, MARKET_REACTION_KEYWORDS)
-    large_move = has_large_move(text)
-    surprise = has_surprise(text)
-    fed_event = fed_event_match(text, market_reaction=market_reaction, large_move=large_move, surprise=surprise)
+    classification = classify_macro_policy_content(
+        item,
+        primary_keywords=effective_list("macro_policy_line", "extra_primary_keywords", PRIMARY_DATA_KEYWORDS),
+        us_scoped_primary_keywords=effective_list(
+            "macro_policy_line", "extra_primary_keywords", US_SCOPED_PRIMARY_DATA_KEYWORDS
+        ),
+        secondary_keywords=effective_list(
+            "macro_policy_line", "extra_secondary_keywords", SECONDARY_DATA_KEYWORDS
+        ),
+    )
+    primary = bool(classification["primary"])
+    secondary = bool(classification["secondary"])
+    market_reaction = bool(classification["market_reaction"])
+    large_move = bool(classification["large_move"])
+    surprise = bool(classification["surprise"])
+    fed_event = bool(classification["fed_event"])
 
     if primary or fed_event:
         return {
