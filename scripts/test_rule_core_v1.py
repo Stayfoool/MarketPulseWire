@@ -738,6 +738,108 @@ def test_migrated_ai_compute_and_credit_actions_are_source_neutral() -> None:
     assert {hit["rule_id"] for hit in rumor.rule_hits} == {"semiconductor_ordinary"}
 
 
+def test_migrated_fed_path_and_trade_actions_are_source_neutral() -> None:
+    _, config, portfolios = loaded_contracts()
+    source_variants = (
+        ("industry_media", "research_industry_media", "research_publisher", "article"),
+        ("finance_media", "news_media", "news_media", "flash"),
+    )
+    cases = (
+        (
+            "美银证券此前预计美联储年内不会调整利率，现将预测改为2026年9月、10月和12月各加息25个基点，累计加息75个基点。",
+            "push",
+            "international_bank_fed_rate_path_revision",
+        ),
+        (
+            "高盛将美联储今年降息预期从3次下调至1次。",
+            "push",
+            "international_bank_fed_rate_path_revision",
+        ),
+        (
+            "JPMorgan pushes back its first Fed rate cut from September to December.",
+            "push",
+            "international_bank_fed_rate_path_revision",
+        ),
+        (
+            "UBS raises its Fed terminal rate forecast to 4.5% from 4.0%.",
+            "push",
+            "international_bank_fed_rate_path_revision",
+        ),
+        (
+            "巴克莱预计美联储将在2026年12月降息25个基点。",
+            "daily",
+            "international_bank_fed_rate_path_revision",
+        ),
+        (
+            "美银维持此前美联储年内降息两次的预测不变。",
+            "daily",
+            "fed_path_unchanged",
+        ),
+        (
+            "USTR seeks public comment on a proposed Section 301 tariff action concerning China semiconductor imports.",
+            "push",
+            "trade_friction_escalation",
+        ),
+        (
+            "China and the United States semiconductor trade talks collapse over export controls.",
+            "push",
+            "trade_friction_escalation",
+        ),
+        (
+            "European Commission initiates an anti-subsidy investigation into battery electric vehicles from China.",
+            "archive",
+            "trade_distant_or_unproven",
+        ),
+        (
+            "EU tariffs push Chinese carmakers to seek deeper ties in Europe.",
+            "daily",
+            "trade_friction_escalation",
+        ),
+        (
+            "China and the United States withdraw semiconductor export controls.",
+            "daily",
+            "trade_deescalation",
+        ),
+    )
+    for text, expected_action, expected_rule_id in cases:
+        decisions = [
+            evaluate_market_item(
+                NormalizedMarketItem(
+                    source=source,
+                    source_category=category,
+                    publisher_role=role,
+                    content_type=content_type,
+                    title=text,
+                ),
+                rule_config=config,
+                portfolio=portfolios["empty"],
+                source_policy=SourceAdmissionPolicy(),
+            ).decision
+            for source, category, role, content_type in source_variants
+        ]
+        assert all(decision is not None for decision in decisions), text
+        assert {decision.action for decision in decisions if decision} == {expected_action}, text
+        assert {
+            hit["rule_id"]
+            for decision in decisions
+            if decision
+            for hit in decision.rule_hits
+        } == {expected_rule_id}, text
+
+    for text in (
+        "中国商务部与美国商会代表团会面，就中美经贸关系和企业合作交换意见。",
+        "U.S. Commerce Department: Certain Aluminum Foil From the People's Republic of China: Preliminary Results of Antidumping Duty Administrative Review; 2024-2025.",
+    ):
+        evaluation = evaluate_market_item(
+            NormalizedMarketItem(source="finance_media", title=text),
+            rule_config=config,
+            portfolio=portfolios["empty"],
+            source_policy=SourceAdmissionPolicy(),
+        )
+        assert evaluation.admission.status == "excluded", text
+        assert evaluation.decision is None, text
+
+
 def test_semiconductor_hard_variables_require_current_asserted_change() -> None:
     _, config, portfolios = loaded_contracts()
     cases = (
@@ -1082,13 +1184,20 @@ def test_new_core_has_only_the_report_only_production_importer() -> None:
         "ai_compute_supply_demand",
         "ai_credit_risk",
         "hashlib",
+        "international_bank_fed",
         "re",
         "dataclasses",
+        "trade_friction",
         "typing",
         "market_item",
     }
 
-    for classifier_name in ("ai_compute_supply_demand.py", "ai_credit_risk.py"):
+    for classifier_name in (
+        "ai_compute_supply_demand.py",
+        "ai_credit_risk.py",
+        "international_bank_fed.py",
+        "trade_friction.py",
+    ):
         classifier_path = ROOT / "scripts" / classifier_name
         classifier_tree = ast.parse(
             classifier_path.read_text(encoding="utf-8"), filename=classifier_path.name
@@ -1135,6 +1244,7 @@ def main() -> int:
     test_approved_corporate_material_changes_are_source_neutral()
     test_migrated_semiconductor_hard_variables_are_source_neutral()
     test_migrated_ai_compute_and_credit_actions_are_source_neutral()
+    test_migrated_fed_path_and_trade_actions_are_source_neutral()
     test_semiconductor_hard_variables_require_current_asserted_change()
     test_corporate_background_and_existing_relationships_remain_daily()
     test_materiality_evidence_is_bound_to_the_current_fact()

@@ -398,12 +398,19 @@ def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importe
         "ai_compute_supply_demand",
         "ai_credit_risk",
         "hashlib",
+        "international_bank_fed",
         "re",
         "dataclasses",
+        "trade_friction",
         "typing",
         "market_item",
     }
-    for classifier_name in ("ai_compute_supply_demand.py", "ai_credit_risk.py"):
+    for classifier_name in (
+        "ai_compute_supply_demand.py",
+        "ai_credit_risk.py",
+        "international_bank_fed.py",
+        "trade_friction.py",
+    ):
         classifier = parsed_module(classifier_name)
         top_level_imports: set[str] = set()
         for node in classifier.body:

@@ -51,6 +51,54 @@
       "international_bank": {
         "aliases": ["国际大行"],
         "domains": []
+      },
+      "goldman_sachs": {
+        "aliases": ["高盛"],
+        "domains": []
+      },
+      "morgan_stanley": {
+        "aliases": ["摩根士丹利"],
+        "domains": []
+      },
+      "jpmorgan": {
+        "aliases": ["摩根大通"],
+        "domains": []
+      },
+      "citi": {
+        "aliases": ["花旗"],
+        "domains": []
+      },
+      "ubs": {
+        "aliases": ["瑞银"],
+        "domains": []
+      },
+      "bank_of_america": {
+        "aliases": ["美银"],
+        "domains": []
+      },
+      "barclays": {
+        "aliases": ["巴克莱"],
+        "domains": []
+      },
+      "deutsche_bank": {
+        "aliases": ["德意志银行"],
+        "domains": []
+      },
+      "hsbc": {
+        "aliases": ["汇丰"],
+        "domains": []
+      },
+      "bnp_paribas": {
+        "aliases": ["法国巴黎银行"],
+        "domains": []
+      },
+      "societe_generale": {
+        "aliases": ["法国兴业银行"],
+        "domains": []
+      },
+      "wells_fargo": {
+        "aliases": ["富国银行"],
+        "domains": []
       }
     }
   },
