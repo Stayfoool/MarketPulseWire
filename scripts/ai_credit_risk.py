@@ -6,8 +6,6 @@ import hashlib
 import re
 from typing import Any
 
-from rule_center import rule_enabled
-
 
 RULE_ID = "ai_hyperscaler_credit_stress"
 
@@ -185,9 +183,7 @@ def _dedup_key(issuers: list[str], event_type: str, instrument: str, families: l
     return f"ai_credit:{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:24]}"
 
 
-def ai_credit_risk_rule(source: str, item: dict[str, Any]) -> dict[str, Any] | None:
-    if not rule_enabled(RULE_ID):
-        return None
+def classify_ai_credit_risk(item: dict[str, Any]) -> dict[str, Any] | None:
     text = item_text(item)
     if not text or _contains(text, RUMOR_MARKERS):
         return None
@@ -289,7 +285,28 @@ def ai_credit_risk_rule(source: str, item: dict[str, Any]) -> dict[str, Any] | N
         "hard_outcomes": outcomes,
         "evidence_quotes": evidence,
         "extraction_mode": "deterministic_local_window",
+    }
+
+
+def ai_credit_risk_rule(source: str, item: dict[str, Any]) -> dict[str, Any] | None:
+    from rule_center import rule_enabled
+
+    if not rule_enabled(RULE_ID):
+        return None
+    classification = classify_ai_credit_risk(item)
+    if not classification:
+        return None
+    return {
+        **classification,
         "source": source,
-        "dedup_key": _dedup_key(issuers, event_type, instrument, families, outcomes, text, item),
+        "dedup_key": _dedup_key(
+            classification["issuers"],
+            str(classification["event_type"]),
+            str(classification["instrument"]),
+            classification["stress_signals"],
+            classification["hard_outcomes"],
+            item_text(item),
+            item,
+        ),
         "dedup_lookback_days": 14,
     }

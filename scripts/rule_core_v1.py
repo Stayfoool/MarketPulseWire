@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
+from ai_compute_supply_demand import classify_ai_compute_supply_demand
+from ai_credit_risk import classify_ai_credit_risk
 from market_item import (
     AdmissionEvidence,
     AdmissionResult,
@@ -797,6 +799,31 @@ def _candidate(family: RuleFamily, rule_id: str, action: str, quote: str, reason
     }
 
 
+def _classification_item(item: NormalizedMarketItem) -> dict[str, Any]:
+    return {
+        "title": item.title,
+        "summary": item.summary,
+        "content": item.raw.get("content") or "",
+        "full_text": item.full_text,
+        "published_at": item.published_at,
+        "first_seen_at": item.first_seen_at,
+    }
+
+
+def _classification_candidate(classification: Mapping[str, Any]) -> dict[str, Any]:
+    evidence = classification.get("evidence_quotes")
+    quote = str(evidence[0]) if isinstance(evidence, list) and evidence else ""
+    candidate = _candidate(
+        "semiconductor_ai",
+        str(classification.get("rule_id") or "semiconductor_ordinary"),
+        str(classification.get("decision_action") or "archive"),
+        quote,
+        str(classification.get("reason") or ""),
+    )
+    candidate["event_type"] = str(classification.get("event_type") or "")
+    return candidate
+
+
 def _first_local_match(
     text: str,
     *groups: tuple[str, ...],
@@ -1111,6 +1138,20 @@ def _semiconductor_candidate(
     text: str,
     config: RuleConfig,
 ) -> dict[str, Any]:
+    classification_item = _classification_item(item)
+    specific_candidates = [
+        _classification_candidate(classification)
+        for classification in (
+            classify_ai_compute_supply_demand(classification_item),
+            classify_ai_credit_risk(classification_item),
+        )
+        if classification
+    ]
+    specific_candidate = max(
+        specific_candidates,
+        key=lambda candidate: ACTION_RANK[str(candidate["decision_action"])],
+        default=None,
+    )
     stock_price_template = _has(item.title, "成交额") and _has(
         item.title,
         "主力净流入",
@@ -1118,7 +1159,7 @@ def _semiconductor_candidate(
         "后市是否有机会",
         "人气排名",
     )
-    if stock_price_template:
+    if stock_price_template and not specific_candidate:
         return _candidate(
             "semiconductor_ai",
             "semiconductor_ordinary",
@@ -1126,7 +1167,7 @@ def _semiconductor_candidate(
             item.title,
             "股价行情模板附带的静态业务资料不是新的产业实质变化。",
         )
-    if _routine_corporate_attachment(item.title):
+    if _routine_corporate_attachment(item.title) and not specific_candidate:
         return _candidate(
             "semiconductor_ai",
             "semiconductor_ordinary",
@@ -1134,7 +1175,9 @@ def _semiconductor_candidate(
             item.title,
             "审计、估值或资产评估附件不构成新的产业实质变化。",
         )
-    if _has(text, "教程", "经验分享", "leaderboard", "workflow integration", "工具用法"):
+    if not specific_candidate and _has(
+        text, "教程", "经验分享", "leaderboard", "workflow integration", "工具用法"
+    ):
         return _candidate(
             "semiconductor_ai", "semiconductor_ordinary", "archive", text, "教程或工具内容不是产业实质变化。"
         )
@@ -1151,7 +1194,9 @@ def _semiconductor_candidate(
         "no binding order",
     )
     execution = _has(text, "开始供货", "已供货", "量产", "客户认证", "执行阶段", "binding")
-    if _has(text, "框架协议", "意向合作", "战略合作", "non-binding", "framework agreement") and (
+    if not specific_candidate and _has(
+        text, "框架协议", "意向合作", "战略合作", "non-binding", "framework agreement"
+    ) and (
         non_execution or not execution
     ):
         return _candidate(
@@ -1162,8 +1207,10 @@ def _semiconductor_candidate(
         quote, reason = material_change
         return _candidate("semiconductor_ai", "semiconductor_material_change", "push", quote, reason)
     commercial_development = _semiconductor_commercial_development(text, config)
-    if _is_market_template_title(item.title) and not commercial_development:
+    if _is_market_template_title(item.title) and not commercial_development and not specific_candidate:
         return _candidate("semiconductor_ai", "semiconductor_ordinary", "archive", item.title, "市场行情模板不构成新的产业实质变化。")
+    if specific_candidate and specific_candidate["decision_action"] == "push":
+        return specific_candidate
     hard_variable_change = _semiconductor_hard_variable_change(item, text, config)
     if hard_variable_change and hard_variable_change[0] == "push":
         action, quote, reason = hard_variable_change
@@ -1477,6 +1524,8 @@ def _semiconductor_candidate(
         return _candidate(
             "semiconductor_ai", "semiconductor_material_change", "push", allocation_change, "产业配置发生明确跨主题轮动。"
         )
+    if specific_candidate:
+        return specific_candidate
     if hard_variable_change:
         action, quote, reason = hard_variable_change
         return _candidate("semiconductor_ai", "semiconductor_ordinary", action, quote, reason)

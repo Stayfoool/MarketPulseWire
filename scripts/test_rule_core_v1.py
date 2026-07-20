@@ -554,6 +554,190 @@ def test_migrated_semiconductor_hard_variables_are_source_neutral() -> None:
         } == {expected_rule_id}, title
 
 
+def test_migrated_ai_compute_and_credit_actions_are_source_neutral() -> None:
+    _, config, portfolios = loaded_contracts()
+    source_variants = (
+        ("industry_media", "research_industry_media", "research_publisher", "article"),
+        ("finance_media", "news_media", "news_media", "flash"),
+    )
+    cases = (
+        (
+            "Meta正在构建一项云业务，以出售其过剩的AI算力。",
+            "push",
+            "ai_compute_supply_demand",
+        ),
+        (
+            "谷歌算力告急并限制Meta使用GPU算力，多个项目被迫推迟。",
+            "push",
+            "ai_compute_supply_demand",
+        ),
+        (
+            "CoreWeave取消一项AI算力租赁合同并缩减GPU云容量。",
+            "push",
+            "ai_compute_supply_demand",
+        ),
+        (
+            "Oracle GPU算力服务价格上调20%。",
+            "push",
+            "ai_compute_supply_demand",
+        ),
+        (
+            "Meta的AI算力利用率上升至95%。",
+            "push",
+            "ai_compute_supply_demand",
+        ),
+        (
+            "Meta计划将AI计算能力由7GW提升至14GW，实现算力翻倍。",
+            "push",
+            "ai_compute_supply_demand",
+        ),
+        (
+            "美国纽约州州长宣布暂停新建耗电50兆瓦及以上的AI数据中心。",
+            "push",
+            "ai_compute_supply_demand",
+        ),
+        (
+            "Meta否认算力过剩，并表示出租部分AI算力比自用更有价值。",
+            "push",
+            "ai_compute_supply_demand",
+        ),
+        (
+            "Meta表示其AI算力利用率仅为40%，存在闲置算力。",
+            "push",
+            "ai_compute_supply_demand",
+        ),
+        (
+            "Oracle预计GPU算力服务价格将上涨，但尚未调整定价。",
+            "daily",
+            "ai_compute_supply_demand",
+        ),
+        (
+            "CoreWeave签署一项20亿美元非约束性AI算力框架协议。",
+            "daily",
+            "ai_compute_supply_demand",
+        ),
+        (
+            "Meta plans to expand capacity for AI compute.",
+            "daily",
+            "ai_compute_supply_demand",
+        ),
+        (
+            "联想表示AI算力需求旺盛，但未披露合同或容量变化。",
+            "daily",
+            "ai_compute_supply_demand",
+        ),
+        (
+            "Microsoft issued $40 billion of bonds to finance AI infrastructure.",
+            "daily",
+            "ai_hyperscaler_credit_stress",
+        ),
+        (
+            "Oracle issued bonds for AI data centers, but market absorption was difficult.",
+            "daily",
+            "ai_hyperscaler_credit_stress",
+        ),
+        (
+            "Amazon issued bonds for AI infrastructure; investor demand was weak and the new bonds traded below issue price.",
+            "push",
+            "ai_hyperscaler_credit_stress",
+        ),
+        (
+            "OpenAI postponed its AI infrastructure bond financing because investor demand was weak.",
+            "push",
+            "ai_hyperscaler_credit_stress",
+        ),
+        (
+            "Microsoft's AI debt for AI infrastructure was downgraded and placed on negative outlook.",
+            "push",
+            "ai_hyperscaler_credit_stress",
+        ),
+        (
+            "Oracle disclosed a liquidity shortfall in debt used for AI infrastructure.",
+            "push",
+            "ai_hyperscaler_credit_stress",
+        ),
+    )
+    for text, expected_action, expected_rule_id in cases:
+        decisions = []
+        for source, category, role, content_type in source_variants:
+            evaluation = evaluate_market_item(
+                NormalizedMarketItem(
+                    source=source,
+                    source_category=category,
+                    publisher_role=role,
+                    content_type=content_type,
+                    title=text,
+                ),
+                rule_config=config,
+                portfolio=portfolios["empty"],
+                source_policy=SourceAdmissionPolicy(),
+            )
+            decisions.append(evaluation.decision)
+        assert all(decision is not None for decision in decisions), text
+        assert {decision.action for decision in decisions if decision} == {expected_action}, text
+        assert {
+            hit["rule_id"]
+            for decision in decisions
+            if decision
+            for hit in decision.rule_hits
+        } == {expected_rule_id}, text
+
+    content_overrides = (
+        (
+            "Meta成交额放大，主力净流入居前",
+            "Meta正在构建一项云业务，以出售其过剩的AI算力。",
+            "push",
+            "ai_compute_supply_demand",
+        ),
+        (
+            "Microsoft资产评估报告",
+            "Microsoft issued $40 billion of bonds to finance AI infrastructure.",
+            "daily",
+            "ai_hyperscaler_credit_stress",
+        ),
+    )
+    for title, full_text, expected_action, expected_rule_id in content_overrides:
+        decisions = [
+            evaluate_market_item(
+                NormalizedMarketItem(
+                    source=source,
+                    source_category=category,
+                    publisher_role=role,
+                    content_type=content_type,
+                    title=title,
+                    full_text=full_text,
+                ),
+                rule_config=config,
+                portfolio=portfolios["empty"],
+                source_policy=SourceAdmissionPolicy(),
+            ).decision
+            for source, category, role, content_type in source_variants
+        ]
+        assert all(decision is not None for decision in decisions), title
+        assert {decision.action for decision in decisions if decision} == {expected_action}, title
+        assert {
+            hit["rule_id"]
+            for decision in decisions
+            if decision
+            for hit in decision.rule_hits
+        } == {expected_rule_id}, title
+
+    rumor = evaluate_market_item(
+        NormalizedMarketItem(
+            source="finance_media",
+            source_category="news_media",
+            publisher_role="news_media",
+            content_type="article",
+            title="A rumor says Microsoft may reportedly issue bonds for AI infrastructure.",
+        ),
+        rule_config=config,
+        portfolio=portfolios["empty"],
+        source_policy=SourceAdmissionPolicy(),
+    ).decision
+    assert rumor is not None and rumor.action == "archive"
+    assert {hit["rule_id"] for hit in rumor.rule_hits} == {"semiconductor_ordinary"}
+
+
 def test_semiconductor_hard_variables_require_current_asserted_change() -> None:
     _, config, portfolios = loaded_contracts()
     cases = (
@@ -893,7 +1077,29 @@ def test_new_core_has_only_the_report_only_production_importer() -> None:
             imported.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
-    assert imported == {"__future__", "hashlib", "re", "dataclasses", "typing", "market_item"}
+    assert imported == {
+        "__future__",
+        "ai_compute_supply_demand",
+        "ai_credit_risk",
+        "hashlib",
+        "re",
+        "dataclasses",
+        "typing",
+        "market_item",
+    }
+
+    for classifier_name in ("ai_compute_supply_demand.py", "ai_credit_risk.py"):
+        classifier_path = ROOT / "scripts" / classifier_name
+        classifier_tree = ast.parse(
+            classifier_path.read_text(encoding="utf-8"), filename=classifier_path.name
+        )
+        top_level_imports: set[str] = set()
+        for node in classifier_tree.body:
+            if isinstance(node, ast.Import):
+                top_level_imports.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                top_level_imports.add(node.module.split(".")[0])
+        assert "rule_center" not in top_level_imports
 
     allowed = {
         "rule_core_v1.py",
@@ -928,6 +1134,7 @@ def main() -> int:
     test_holding_capital_change_uses_document_title_to_resolve_routine_attachments()
     test_approved_corporate_material_changes_are_source_neutral()
     test_migrated_semiconductor_hard_variables_are_source_neutral()
+    test_migrated_ai_compute_and_credit_actions_are_source_neutral()
     test_semiconductor_hard_variables_require_current_asserted_change()
     test_corporate_background_and_existing_relationships_remain_daily()
     test_materiality_evidence_is_bound_to_the_current_fact()
