@@ -33,6 +33,253 @@ FAMILY_ORDER: tuple[RuleFamily, ...] = (
 )
 ACTION_RANK = {"ignore": 0, "archive": 1, "daily": 2, "push": 3}
 
+SEMICONDUCTOR_CAPACITY_TERMS = (
+    "capacity",
+    "output",
+    "fab",
+    "fabs",
+    "factory",
+    "factories",
+    "plant",
+    "plants",
+    "manufacturing site",
+    "manufacturing facility",
+    "production line",
+    "产能",
+    "产量",
+    "工厂",
+    "厂区",
+    "厂址",
+    "产线",
+)
+SEMICONDUCTOR_CAPACITY_DIRECT_TERMS = (
+    "capacity expansion",
+    "capacity cut",
+    "production ramp",
+    "mass production",
+    "output increase",
+    "output cut",
+    "production increase",
+    "production increased",
+    "increase production",
+    "increased production",
+    "reduce production",
+    "reduced production",
+    "cut production",
+    "扩产",
+    "产能扩张",
+    "新增产能",
+    "产能爬坡",
+    "产量提升",
+    "增加产量",
+    "减产",
+    "停产",
+    "复产",
+    "投产",
+    "量产",
+)
+SEMICONDUCTOR_CAPACITY_CHANGE_TERMS = (
+    "expand",
+    "expanded",
+    "expansion",
+    "ramp",
+    "ramp-up",
+    "ramp up",
+    "relaunch",
+    "relaunched",
+    "restart",
+    "restarted",
+    "reopen",
+    "reopened",
+    "increase",
+    "increased",
+    "double",
+    "doubled",
+    "add capacity",
+    "added capacity",
+    "cut capacity",
+    "reduce output",
+    "acquires",
+    "acquired",
+    "acquisition",
+    "重启",
+    "收购厂址",
+)
+SEMICONDUCTOR_CAPEX_TERMS = (
+    "capital expenditure",
+    "capex",
+    "fab investment",
+    "equipment investment",
+    "factory investment",
+    "facility investment",
+    "investment in capacity",
+    "investment in production",
+    "investment in manufacturing",
+    "资本开支",
+    "设备投资",
+    "工厂投资",
+    "产能投资",
+    "产线投资",
+    "厂区投资",
+)
+SEMICONDUCTOR_CAPEX_CHANGE_TERMS = (
+    "accelerating",
+    "increase",
+    "increased",
+    "raise",
+    "raised",
+    "additional",
+    "approved",
+    "acquires",
+    "acquired",
+    "completed",
+    "cut",
+    "reduced",
+    "追加",
+    "新增",
+    "增加",
+    "加速",
+    "批准",
+    "审议通过",
+    "完成",
+    "削减",
+    "下调",
+)
+SEMICONDUCTOR_PROCUREMENT_DIRECT_TERMS = (
+    "equipment procurement",
+    "equipment order",
+    "equipment orders",
+    "placed order",
+    "placed orders",
+    "secured order",
+    "secured orders",
+    "signed order",
+    "signed orders",
+    "purchase order",
+    "purchase orders",
+    "supply agreement",
+    "order backlog",
+    "设备采购",
+    "设备订单",
+    "采购订单",
+    "供货协议",
+    "订单积压",
+    "中标",
+    "定点",
+    "客户认证",
+)
+SEMICONDUCTOR_PROCUREMENT_PATTERNS = (
+    r"(?:procure(?:ment|d)?|purchas(?:e|ed|ing)|order(?:ed|s)?).{0,32}(?:equipment|tools?|systems?|machines?)",
+    r"(?:equipment|tools?|systems?|machines?).{0,32}(?:procure(?:ment|d)?|purchas(?:e|ed|ing)|order(?:ed|s)?)",
+    r"(?:采购|订购|下单).{0,24}(?:设备|装备|系统|机台|工具)",
+    r"(?:设备|装备|系统|机台|工具).{0,24}(?:采购|订购|下单|订单)",
+)
+SEMICONDUCTOR_NON_EXECUTION_TERMS = (
+    "尚未",
+    "尚无",
+    "没有",
+    "未进入",
+    "未形成",
+    "未执行",
+    "未披露",
+    "否认",
+    "not yet",
+    "no order",
+    "no binding",
+    "has not",
+    "have not",
+    "not disclosed",
+    "deny",
+    "denies",
+    "denied",
+)
+SEMICONDUCTOR_PLANNING_TERMS = (
+    "计划",
+    "拟建",
+    "拟投",
+    "拟扩",
+    "拟采购",
+    "拟增加",
+    "预计",
+    "有望",
+    "可能",
+    "意向",
+    "目标",
+    "plans to",
+    "plan to",
+    "planned",
+    "to expand",
+    "to increase",
+    "to build",
+    "will expand",
+    "will increase",
+    "will build",
+    "expects to",
+    "expected to",
+    "expected",
+    "may",
+    "could",
+    "intends to",
+    "aims to",
+    "outlook",
+    "forecast",
+    "considering",
+    "exploring",
+)
+SEMICONDUCTOR_EXECUTION_TERMS = (
+    "已",
+    "已经",
+    "审议通过",
+    "董事会批准",
+    "批准了",
+    "批准该",
+    "批准项目",
+    "approved the",
+    "board approved",
+    "has approved",
+    "have approved",
+    "has signed",
+    "have signed",
+    "has started",
+    "have started",
+    "has completed",
+    "have completed",
+    "has acquired",
+    "have acquired",
+    "has expanded",
+    "have expanded",
+    "has relaunched",
+    "have relaunched",
+    "has restarted",
+    "have restarted",
+)
+SEMICONDUCTOR_COMMERCIAL_DEVELOPMENT_TERMS = (
+    "commercialization",
+    "commercialisation",
+    "commercial deployment",
+    "commercial rollout",
+    "商业化",
+    "商业落地",
+    "规模化应用",
+    "规模化部署",
+)
+SEMICONDUCTOR_VALUATION_TERMS = ("valuation", "valued at", "估值")
+SEMICONDUCTOR_VALUATION_CHANGE_TERMS = (
+    "tops",
+    "reaches",
+    "reached",
+    "valued at",
+    "raises",
+    "raised",
+    "funding round",
+    "融资",
+    "募资",
+    "达到",
+    "超过",
+    "突破",
+    "完成",
+)
+
 
 class RuleConfigError(ValueError):
     pass
@@ -636,7 +883,101 @@ def _references_earlier_year(item: NormalizedMarketItem, evidence: str) -> bool:
     if not published_year:
         return False
     year = int(published_year.group(1))
-    return any(int(value) < year for value in re.findall(r"(20\d{2})\s*年", evidence))
+    return any(
+        int(value) < year
+        for value in re.findall(r"(?<!\d)(20\d{2})(?:\s*年)?(?!\d)", evidence)
+    )
+
+
+def _question_without_answer(sentence: str) -> bool:
+    if not _has(sentence, "?", "？"):
+        return False
+    return not _has(
+        sentence,
+        "公司回答",
+        "公司回复",
+        "公司表示",
+        "公司确认",
+        "公司称",
+        "回应称",
+        "答复称",
+        "confirmed",
+    )
+
+
+def _semiconductor_hard_variable_change(
+    item: NormalizedMarketItem,
+    text: str,
+    config: RuleConfig,
+) -> tuple[str, str, str] | None:
+    planned_evidence: tuple[str, str] | None = None
+    sentences = _sentences(text)
+    has_topic_denial = any(
+        _matches(sentence, config.semiconductor_ai_keywords)
+        and _has(sentence, *SEMICONDUCTOR_NON_EXECUTION_TERMS)
+        for sentence in sentences
+    )
+    for sentence in sentences:
+        if not _matches(sentence, config.semiconductor_ai_keywords):
+            continue
+        if _question_without_answer(sentence):
+            continue
+        if has_topic_denial and _has(sentence, "传闻", "rumor", "rumour", "回应"):
+            continue
+        if _references_earlier_year(item, sentence):
+            continue
+
+        category = ""
+        if _has(sentence, *SEMICONDUCTOR_CAPACITY_DIRECT_TERMS) or _all_groups(
+            sentence, SEMICONDUCTOR_CAPACITY_TERMS, SEMICONDUCTOR_CAPACITY_CHANGE_TERMS
+        ):
+            category = "产能或产量"
+        elif (
+            _has(sentence, *SEMICONDUCTOR_CAPEX_TERMS)
+            or _all_groups(sentence, ("investment", "investments"), SEMICONDUCTOR_CAPACITY_TERMS)
+        ) and _has(sentence, *SEMICONDUCTOR_CAPEX_CHANGE_TERMS, *SEMICONDUCTOR_CAPACITY_TERMS):
+            category = "资本开支或产业投资"
+        elif _has(sentence, *SEMICONDUCTOR_PROCUREMENT_DIRECT_TERMS) or any(
+            re.search(pattern, sentence, flags=re.I)
+            for pattern in SEMICONDUCTOR_PROCUREMENT_PATTERNS
+        ):
+            category = "订单或采购"
+        if not category:
+            continue
+
+        non_execution = _has(sentence, *SEMICONDUCTOR_NON_EXECUTION_TERMS)
+        planning = _has(sentence, *SEMICONDUCTOR_PLANNING_TERMS)
+        planned_only = planning and (
+            non_execution or not _has(sentence, *SEMICONDUCTOR_EXECUTION_TERMS)
+        )
+        if planned_only:
+            planned_evidence = planned_evidence or (sentence, category)
+            continue
+        if non_execution:
+            continue
+        return "push", sentence, f"半导体/AI的{category}发生明确变化或进入执行阶段。"
+
+    if planned_evidence:
+        sentence, category = planned_evidence
+        return "daily", sentence, f"半导体/AI的{category}仍处于计划或预期阶段。"
+    return None
+
+
+def _semiconductor_commercial_development(text: str, config: RuleConfig) -> str:
+    for sentence in _sentences(text):
+        if not _matches(sentence, config.semiconductor_ai_keywords):
+            continue
+        if _question_without_answer(sentence) or _has(sentence, *SEMICONDUCTOR_NON_EXECUTION_TERMS):
+            continue
+        if _has(sentence, *SEMICONDUCTOR_COMMERCIAL_DEVELOPMENT_TERMS):
+            return sentence
+        if _all_groups(
+            sentence,
+            SEMICONDUCTOR_VALUATION_TERMS,
+            SEMICONDUCTOR_VALUATION_CHANGE_TERMS,
+        ):
+            return sentence
+    return ""
 
 
 def _routine_corporate_attachment(title: str) -> bool:
@@ -820,8 +1161,13 @@ def _semiconductor_candidate(
     if material_change:
         quote, reason = material_change
         return _candidate("semiconductor_ai", "semiconductor_material_change", "push", quote, reason)
-    if _is_market_template_title(item.title):
+    commercial_development = _semiconductor_commercial_development(text, config)
+    if _is_market_template_title(item.title) and not commercial_development:
         return _candidate("semiconductor_ai", "semiconductor_ordinary", "archive", item.title, "市场行情模板不构成新的产业实质变化。")
+    hard_variable_change = _semiconductor_hard_variable_change(item, text, config)
+    if hard_variable_change and hard_variable_change[0] == "push":
+        action, quote, reason = hard_variable_change
+        return _candidate("semiconductor_ai", "semiconductor_material_change", action, quote, reason)
     platform_change = _first_local_match(
         text,
         tuple(config.semiconductor_ai_keywords),
@@ -1130,6 +1476,17 @@ def _semiconductor_candidate(
     if allocation_change:
         return _candidate(
             "semiconductor_ai", "semiconductor_material_change", "push", allocation_change, "产业配置发生明确跨主题轮动。"
+        )
+    if hard_variable_change:
+        action, quote, reason = hard_variable_change
+        return _candidate("semiconductor_ai", "semiconductor_ordinary", action, quote, reason)
+    if commercial_development:
+        return _candidate(
+            "semiconductor_ai",
+            "semiconductor_commercial_development",
+            "daily",
+            commercial_development,
+            "半导体/AI商业化、融资或估值出现相关进展，但未达到即时推送条件。",
         )
     if _has(text, "泛谈", "长期看好", "基金经理观点", "generic outlook"):
         return _candidate(

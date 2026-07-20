@@ -480,6 +480,139 @@ def test_approved_corporate_material_changes_are_source_neutral() -> None:
     assert {hit["rule_id"] for hit in pending_meeting_notice.rule_hits} == {"holding_ordinary"}
 
 
+def test_migrated_semiconductor_hard_variables_are_source_neutral() -> None:
+    config_payload = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    config_payload["semiconductor_ai_keywords"].extend(
+        ["PCB", "data center", "advanced packaging", "memory"]
+    )
+    config = parse_rule_config(config_payload)
+    portfolio = parse_portfolio_config([])
+    source_variants = (
+        ("digitimes_en_daily", "research_industry_media", "research_publisher", "article"),
+        ("finance_media", "news_media", "news_media", "flash"),
+    )
+    cases = (
+        (
+            "Samsung preps multi-billion-dollar P5 orders as AI boom speeds up memory demand",
+            "Samsung Electronics' latest multi-billion-dollar equipment procurement reflects "
+            "the company's accelerating investment in AI memory capacity.",
+            "push",
+            "semiconductor_material_change",
+        ),
+        (
+            "Intel reassigns global fabs, eyes early 14A and EMIB-T AI wins",
+            "Intel has relaunched its worldwide manufacturing sites, pushing ahead with Intel "
+            "18A mass production and advanced packaging programs including EMIB-T.",
+            "push",
+            "semiconductor_material_change",
+        ),
+        (
+            "Compeq acquires Guanyin site to expand optical and data center PCB capacity",
+            "Compeq approved the acquisition of a new manufacturing site to provide additional "
+            "PCB capacity for optical interconnects and data center applications.",
+            "push",
+            "semiconductor_material_change",
+        ),
+        (
+            "HBM测试设备采购启动",
+            "公司已采购200台HBM测试设备，并开始安排设备交付。",
+            "push",
+            "semiconductor_material_change",
+        ),
+        (
+            "Edge AI becomes China's next battleground as ModelBest tops US$2.8 billion valuation",
+            "China's latest wave of investment in edge AI signals a shift toward large-scale "
+            "commercialization and deployment across consumer and industrial hardware.",
+            "daily",
+            "semiconductor_commercial_development",
+        ),
+    )
+    for title, full_text, expected_action, expected_rule_id in cases:
+        decisions = []
+        for source, category, role, content_type in source_variants:
+            evaluation = evaluate_market_item(
+                NormalizedMarketItem(
+                    source=source,
+                    source_category=category,
+                    publisher_role=role,
+                    content_type=content_type,
+                    title=title,
+                    full_text=full_text,
+                ),
+                rule_config=config,
+                portfolio=portfolio,
+                source_policy=SourceAdmissionPolicy(),
+            )
+            decisions.append(evaluation.decision)
+        assert all(decision is not None for decision in decisions), title
+        assert {decision.action for decision in decisions if decision} == {expected_action}, title
+        assert {
+            hit["rule_id"]
+            for decision in decisions
+            if decision
+            for hit in decision.rule_hits
+        } == {expected_rule_id}, title
+
+
+def test_semiconductor_hard_variables_require_current_asserted_change() -> None:
+    _, config, portfolios = loaded_contracts()
+    cases = (
+        (
+            NormalizedMarketItem(
+                source="finance_media",
+                source_category="news_media",
+                publisher_role="news_media",
+                content_type="article",
+                title="AI芯片产能规划",
+                full_text="公司计划未来扩产AI芯片产能，但尚未批准或启动项目。",
+            ),
+            "daily",
+        ),
+        (
+            NormalizedMarketItem(
+                source="finance_media",
+                source_category="news_media",
+                publisher_role="news_media",
+                content_type="article",
+                title="AI芯片产业回顾",
+                full_text="2025年公司完成AI芯片产能扩张，本文回顾当时的建设过程。",
+                published_at="2026-07-20T09:00:00+08:00",
+            ),
+            "archive",
+        ),
+        (
+            NormalizedMarketItem(
+                source="finance_media",
+                source_category="news_media",
+                publisher_role="news_media",
+                content_type="article",
+                title="AI芯片公司回应扩产传闻",
+                full_text="公司否认已经启动AI芯片扩产，目前尚无新增产能。",
+            ),
+            "archive",
+        ),
+        (
+            NormalizedMarketItem(
+                source="finance_media",
+                source_category="news_media",
+                publisher_role="news_media",
+                content_type="article",
+                title="AI芯片制造成本变化",
+                full_text="能源价格上涨导致AI芯片生产成本增加，但产能和产量没有变化。",
+            ),
+            "archive",
+        ),
+    )
+    for item, expected_action in cases:
+        decision = evaluate_market_item(
+            item,
+            rule_config=config,
+            portfolio=portfolios["empty"],
+            source_policy=SourceAdmissionPolicy(),
+        ).decision
+        assert decision is not None and decision.action == expected_action, item.title
+
+
 def test_corporate_background_and_existing_relationships_remain_daily() -> None:
     _, config, portfolios = loaded_contracts()
     portfolio = portfolios["holding_test"]
@@ -794,6 +927,8 @@ def main() -> int:
     test_source_identity_and_llm_availability_cannot_change_core_result()
     test_holding_capital_change_uses_document_title_to_resolve_routine_attachments()
     test_approved_corporate_material_changes_are_source_neutral()
+    test_migrated_semiconductor_hard_variables_are_source_neutral()
+    test_semiconductor_hard_variables_require_current_asserted_change()
     test_corporate_background_and_existing_relationships_remain_daily()
     test_materiality_evidence_is_bound_to_the_current_fact()
     test_new_core_has_only_the_report_only_production_importer()
