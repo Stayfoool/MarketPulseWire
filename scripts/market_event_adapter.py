@@ -98,14 +98,25 @@ def upsert_event(
     return ingest_event_item(updated, normalized_item or normalized_event_item(updated), db_path)
 
 
-def analyze_event(event_id: int, task: str = "portfolio_event", db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
+def analyze_event(
+    event_id: int,
+    task: str = "portfolio_event",
+    db_path: Path = DEFAULT_DB_PATH,
+    *,
+    normalized_item: NormalizedMarketItem | None = None,
+) -> dict[str, Any]:
     event_row = event_row_by_id(event_id, db_path)
     if not event_row:
         raise RuntimeError(f"事件不存在：{event_id}")
     existing = latest_event_analysis(event_id, task, db_path)
     if existing:
         parsed = existing["analysis"]
-        updated = apply_event_rules_to_analysis(event_row, parsed, db_path=db_path)
+        updated = apply_event_rules_to_analysis(
+            event_row,
+            parsed,
+            db_path=db_path,
+            normalized_item=normalized_item,
+        )
         if updated != parsed:
             importance, classification, direction, impact_duration, should_push = analysis_record_fields(updated)
             store_event_flow_analysis(
@@ -124,12 +135,18 @@ def analyze_event(event_id: int, task: str = "portfolio_event", db_path: Path = 
         return updated
 
     event = event_mapping_from_row(event_row)
-    decision_fields = apply_event_rules_to_analysis(event_row, {}, db_path=db_path)
+    decision_item = normalized_item or prepare_item_for_decision(normalized_event_item(event))
+    decision_fields = apply_event_rules_to_analysis(
+        event_row,
+        {},
+        db_path=db_path,
+        normalized_item=decision_item,
+    )
     decision = decision_result_from_payload(decision_fields)
     if decision is None:
         raise RuntimeError(f"事件决策结果缺失：{event_id}")
     flow_result = evaluate_market_item(
-        normalized_event_item(event),
+        decision_item,
         decision=decision,
         content=build_portfolio_event_input(event_row, db_path=db_path),
         task="为一条已完成规则决策的公告、研报、快讯或异动信息生成极简实时摘要。",
@@ -190,7 +207,11 @@ def analysis_record_fields(parsed: dict[str, Any]) -> tuple[str, str, str, str, 
 
 
 def apply_event_rules_to_analysis(
-    event_row: dict[str, Any], analysis: dict[str, Any], *, db_path: Path = DEFAULT_DB_PATH
+    event_row: dict[str, Any],
+    analysis: dict[str, Any],
+    *,
+    db_path: Path = DEFAULT_DB_PATH,
+    normalized_item: NormalizedMarketItem | None = None,
 ) -> dict[str, Any]:
     try:
         symbols = json.loads(str(event_row.get("symbols_json") or "[]"))
@@ -213,7 +234,7 @@ def apply_event_rules_to_analysis(
     symbol_set = {str(symbol).upper() for symbol in symbols if str(symbol).strip()}
     holdings = load_enabled_holdings(db_path)
     updated = apply_event_push_rules(event, analysis, holdings=holdings, symbols=symbol_set)
-    decision_item = prepare_item_for_decision(normalized_event_item(event))
+    decision_item = normalized_item or prepare_item_for_decision(normalized_event_item(event))
     return attach_decision_to_event_analysis(
         str(event.get("source") or ""),
         decision_item,

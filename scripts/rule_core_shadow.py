@@ -41,6 +41,22 @@ def _rule_ids(decision: DecisionResult | None) -> list[str]:
     )
 
 
+def _attributed_institutions(decision: DecisionResult | None) -> list[str]:
+    if decision is None:
+        return []
+    values: list[str] = []
+    for hit in decision.rule_hits:
+        if not isinstance(hit, dict):
+            continue
+        singular = str(hit.get("attributed_institution") or "").strip()
+        if singular:
+            values.append(singular)
+        plural = hit.get("attributed_institutions")
+        if isinstance(plural, list):
+            values.extend(str(value).strip() for value in plural if str(value).strip())
+    return list(dict.fromkeys(values))[:12]
+
+
 def _families(values: Iterable[str]) -> list[str]:
     return list(dict.fromkeys(str(value) for value in values if str(value)))
 
@@ -53,6 +69,7 @@ def _decision_summary(decision: DecisionResult | None) -> dict[str, Any]:
             "brief_reason": "",
             "reason": "",
             "rule_ids": [],
+            "attributed_institutions": [],
         }
     return {
         "action": decision.action,
@@ -60,6 +77,7 @@ def _decision_summary(decision: DecisionResult | None) -> dict[str, Any]:
         "brief_reason": _clean(decision.brief_reason, 500),
         "reason": _clean(decision.reason, 800),
         "rule_ids": _rule_ids(decision),
+        "attributed_institutions": _attributed_institutions(decision),
     }
 
 

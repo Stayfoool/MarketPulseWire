@@ -202,6 +202,36 @@ def test_trusted_institution_domains_are_optional_and_non_authoritative() -> Non
     assert domain_only.admission.status == "excluded"
     assert domain_only.decision is None
 
+    static_outlook = "HBM市场规模预计增长20%。"
+    official_research = evaluate_market_item(
+        NormalizedMarketItem(
+            source="research_site",
+            source_category="research_industry_media",
+            publisher_role="research_publisher",
+            title=static_outlook,
+            url="https://reports.research.example/hbm-outlook",
+        ),
+        rule_config=with_domains,
+        portfolio=portfolio,
+        source_policy=SourceAdmissionPolicy(),
+    )
+    media_reprint = evaluate_market_item(
+        NormalizedMarketItem(
+            source="finance_media",
+            source_category="news_media",
+            publisher_role="news_media",
+            title=static_outlook,
+            url="https://finance.example/hbm-outlook",
+        ),
+        rule_config=with_domains,
+        portfolio=portfolio,
+        source_policy=SourceAdmissionPolicy(),
+    )
+    assert official_research.decision is not None and media_reprint.decision is not None
+    assert official_research.decision.action == media_reprint.decision.action == "daily"
+    assert official_research.decision.rule_hits[0]["attributed_institutions"] == ["trusted_research"]
+    assert "attributed_institutions" not in media_reprint.decision.rule_hits[0]
+
 
 def test_all_approved_v1_cases_are_executable() -> None:
     corpus, config, portfolios = loaded_contracts()
@@ -805,6 +835,217 @@ def test_migrated_semiconductor_operating_changes_are_source_neutral() -> None:
     ).decision
     assert denied is not None and denied.action == "archive"
     assert {hit["rule_id"] for hit in denied.rule_hits} == {"semiconductor_ordinary"}
+
+
+def test_migrated_semiconductor_performance_and_market_size_are_source_neutral() -> None:
+    _, config, portfolios = loaded_contracts()
+    source_variants = (
+        ("industry_media", "research_industry_media", "research_publisher", "article"),
+        ("finance_media", "news_media", "news_media", "flash"),
+    )
+    cases = (
+        (
+            "HBM厂商本季度营收同比增长，毛利率明显提升。",
+            "",
+            "push",
+            "semiconductor_performance_change",
+        ),
+        (
+            "HBM厂商本季度营收大增并突破历史纪录。",
+            "",
+            "push",
+            "semiconductor_performance_change",
+        ),
+        (
+            "HBM厂商本季度业绩超预期，毛利率达到45%。",
+            "",
+            "push",
+            "semiconductor_performance_change",
+        ),
+        (
+            "HBM supplier revenue surged while gross margin improved.",
+            "",
+            "push",
+            "semiconductor_performance_change",
+        ),
+        (
+            "AI服务器软件年度经常性收入ARR已翻倍。",
+            "",
+            "push",
+            "semiconductor_performance_change",
+        ),
+        (
+            "HBM市场规模同比增长并创历史新高。",
+            "",
+            "push",
+            "semiconductor_performance_change",
+        ),
+        (
+            "受信研究机构预计HBM市场规模将在未来五年翻倍。",
+            "",
+            "push",
+            "semiconductor_performance_change",
+        ),
+        (
+            "受信研究机构将HBM市场规模预测从100亿美元上调至120亿美元。",
+            "",
+            "push",
+            "industry_forecast_revision",
+        ),
+        (
+            "受信研究机构预计HBM市场规模到2028年达到1000亿美元。",
+            "",
+            "daily",
+            "semiconductor_performance_outlook",
+        ),
+        (
+            "HBM厂商本季度毛利率为45%。",
+            "",
+            "daily",
+            "semiconductor_performance_outlook",
+        ),
+        (
+            "机构预计HBM厂商明年毛利率将改善。",
+            "",
+            "daily",
+            "semiconductor_performance_outlook",
+        ),
+        (
+            "HBM市场规模预计增长20%。",
+            "",
+            "daily",
+            "semiconductor_performance_outlook",
+        ),
+        (
+            "HBM产业历史回顾",
+            "2025年HBM市场规模同比增长。",
+            "archive",
+            "semiconductor_ordinary",
+        ),
+    )
+    for title, full_text, expected_action, expected_rule_id in cases:
+        decisions = [
+            evaluate_market_item(
+                NormalizedMarketItem(
+                    source=source,
+                    source_category=category,
+                    publisher_role=role,
+                    content_type=content_type,
+                    title=title,
+                    full_text=full_text,
+                    published_at="2026-07-20T09:00:00+08:00",
+                ),
+                rule_config=config,
+                portfolio=portfolios["empty"],
+                source_policy=SourceAdmissionPolicy(),
+            ).decision
+            for source, category, role, content_type in source_variants
+        ]
+        assert all(decision is not None for decision in decisions), title
+        assert {decision.action for decision in decisions if decision} == {expected_action}, title
+        assert {
+            hit["rule_id"]
+            for decision in decisions
+            if decision
+            for hit in decision.rule_hits
+        } == {expected_rule_id}, title
+
+
+def test_trusted_research_is_audited_without_changing_semiconductor_action() -> None:
+    _, config, portfolios = loaded_contracts()
+    source_variants = (
+        ("industry_media", "research_industry_media", "research_publisher", "article"),
+        ("finance_media", "news_media", "news_media", "flash"),
+    )
+    attributed_cases = (
+        (
+            "受信研究机构表示，HBM市场规模预测已从100亿美元上调至120亿美元。",
+            "push",
+            "industry_forecast_revision",
+        ),
+        (
+            "受信研究机构预计，HBM市场规模到2028年达到1000亿美元。",
+            "daily",
+            "semiconductor_performance_outlook",
+        ),
+    )
+    for text, expected_action, expected_rule_id in attributed_cases:
+        decisions = [
+            evaluate_market_item(
+                NormalizedMarketItem(
+                    source=source,
+                    source_category=category,
+                    publisher_role=role,
+                    content_type=content_type,
+                    title=text,
+                ),
+                rule_config=config,
+                portfolio=portfolios["empty"],
+                source_policy=SourceAdmissionPolicy(),
+            ).decision
+            for source, category, role, content_type in source_variants
+        ]
+        assert all(decision is not None for decision in decisions), text
+        assert {decision.action for decision in decisions if decision} == {expected_action}, text
+        for decision in decisions:
+            assert decision is not None
+            assert {hit["rule_id"] for hit in decision.rule_hits} == {expected_rule_id}
+            hit = decision.rule_hits[0]
+            assert hit["attributed_institutions"] == ["trusted_research"]
+            assert hit["attributed_research_evidence"][0]["claim_quote"] == text
+
+    criticism = evaluate_market_item(
+        NormalizedMarketItem(
+            source="finance_media",
+            title="业内人士反驳受信研究机构此前关于HBM市场规模的预测，当前没有新数据。",
+        ),
+        rule_config=config,
+        portfolio=portfolios["empty"],
+        source_policy=SourceAdmissionPolicy(),
+    ).decision
+    assert criticism is not None and criticism.action != "push"
+    assert "attributed_research_evidence" not in criticism.rule_hits[0]
+
+    mention_only = evaluate_market_item(
+        NormalizedMarketItem(
+            source="finance_media",
+            title="文章介绍受信研究机构。HBM市场规模预计增长20%。",
+        ),
+        rule_config=config,
+        portfolio=portfolios["empty"],
+        source_policy=SourceAdmissionPolicy(),
+    ).decision
+    assert mention_only is not None and mention_only.action == "daily"
+    assert "attributed_research_evidence" not in mention_only.rule_hits[0]
+
+    stored_label_cannot_upgrade = evaluate_market_item(
+        NormalizedMarketItem(
+            source="finance_media",
+            title="受信研究机构表示，HBM市场规模到2028年为1000亿美元。",
+            raw={
+                "_attributed_research": {
+                    "institution_id": "trusted_research",
+                    "attribution": "explicit",
+                    "attribution_quote": "受信研究机构表示，HBM市场规模到2028年为1000亿美元。",
+                    "claims": [
+                        {
+                            "event_type": "price_change",
+                            "evidence_quote": "受信研究机构表示，HBM市场规模到2028年为1000亿美元。",
+                        }
+                    ],
+                    "extraction_mode": "llm",
+                }
+            },
+        ),
+        rule_config=config,
+        portfolio=portfolios["empty"],
+        source_policy=SourceAdmissionPolicy(),
+    ).decision
+    assert stored_label_cannot_upgrade is not None
+    assert stored_label_cannot_upgrade.action == "daily"
+    stored_hit = stored_label_cannot_upgrade.rule_hits[0]
+    assert stored_hit["rule_id"] == "semiconductor_performance_outlook"
+    assert stored_hit["attributed_institutions"] == ["trusted_research"]
 
 
 def test_migrated_ai_compute_and_credit_actions_are_source_neutral() -> None:
@@ -1543,6 +1784,7 @@ def test_new_core_has_only_the_report_only_production_importer() -> None:
         "dataclasses",
         "trade_friction",
         "typing",
+        "urllib",
         "market_item",
     }
 
@@ -1601,6 +1843,8 @@ def main() -> int:
     test_unexecuted_holding_corporate_events_remain_daily_across_sources()
     test_migrated_semiconductor_hard_variables_are_source_neutral()
     test_migrated_semiconductor_operating_changes_are_source_neutral()
+    test_migrated_semiconductor_performance_and_market_size_are_source_neutral()
+    test_trusted_research_is_audited_without_changing_semiconductor_action()
     test_migrated_ai_compute_and_credit_actions_are_source_neutral()
     test_migrated_fed_path_and_trade_actions_are_source_neutral()
     test_migrated_macro_reactions_and_fed_transmission_are_source_neutral()

@@ -10,6 +10,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Literal
 
+from attributed_research import prepare_item_for_decision
 from db_utils import connect_sqlite
 from market_db import DEFAULT_DB_PATH
 from market_delivery import deliver_article_review, deliver_official_review
@@ -225,6 +226,7 @@ def _process_content_item(
 ) -> MarketProcessOutcome:
     module = _selected_module(store_kind)
     source = item.source
+    decision_item = item
     item_id = official_news_item_id(raw_item) if store_kind == "official" else article_item_id(raw_item)
     with connect_sqlite(db_path) as conn:
         existing = (
@@ -236,21 +238,23 @@ def _process_content_item(
             payload = existing
             inserted = False
         elif store_kind == "official":
+            decision_item = prepare_item_for_decision(item)
             payload = module.process_official_review(
                 conn,
                 source,
                 raw_item,
                 source_profile_id=source_profile_id,
-                normalized_item=item,
+                normalized_item=decision_item,
             )
             inserted = existing is None
         else:
+            decision_item = prepare_item_for_decision(item)
             payload = module.process_article_review(
                 conn,
                 source,
                 raw_item,
                 source_profile_id=source_profile_id,
-                normalized_item=item,
+                normalized_item=decision_item,
             )
             inserted = existing is None
         if existing is not None and existing.get("pushed_at"):
@@ -261,17 +265,17 @@ def _process_content_item(
         "source": source,
         "item_id": item_id,
     }
-    flow_result = _flow_result(item, payload, storage_ref)
+    flow_result = _flow_result(decision_item, payload, storage_ref)
     if inserted and not flow_result.decision.audit_json.get("contract_error"):
         if (
             current_admission_status == "unknown"
             and current_admission_reason == "current_runtime_does_not_expose_admission"
             and not current_matched_families
         ):
-            _record_rule_comparison(item, flow_result, storage_ref)
+            _record_rule_comparison(decision_item, flow_result, storage_ref)
         else:
             record_rule_comparison(
-                item,
+                decision_item,
                 flow_result.decision,
                 storage_ref,
                 current_admission_status=current_admission_status,
@@ -344,18 +348,19 @@ def _process_event_item(
             storage_ref=storage_ref,
             delivery_status="baseline" if baseline_only else "not_analyzed",
         )
+    decision_item = prepare_item_for_decision(item)
     partial = MarketProcessOutcome(
-        flow_result=_flow_result(item, empty_payload, storage_ref, missing_is_contract_error=False),
+        flow_result=_flow_result(decision_item, empty_payload, storage_ref, missing_is_contract_error=False),
         inserted=True,
         storage_ref=storage_ref,
     )
     try:
-        analysis = module.analyze_event(event_id, task=task, db_path=db_path)
+        analysis = module.analyze_event(event_id, task=task, db_path=db_path, normalized_item=decision_item)
     except Exception as exc:  # noqa: BLE001 - preserve the inserted event reference for batch recovery
         raise MarketItemProcessingError(str(exc), partial) from exc
-    flow_result = _flow_result(item, analysis, storage_ref)
+    flow_result = _flow_result(decision_item, analysis, storage_ref)
     if not flow_result.decision.audit_json.get("contract_error"):
-        _record_rule_comparison(item, flow_result, storage_ref)
+        _record_rule_comparison(decision_item, flow_result, storage_ref)
     status = module.maybe_deliver_event(event_id, analysis, db_path=db_path) if deliver else "not_requested"
     return MarketProcessOutcome(
         flow_result=flow_result,
