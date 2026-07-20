@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Regression checks for the production-then-report-only wrapper."""
+"""Regression checks for the production-and-report-refresh wrapper."""
 
 from __future__ import annotations
 
-import time
-import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -21,100 +19,51 @@ def test_default_keeps_the_existing_production_command_only() -> None:
 
     assert batch.run_batch("news", env={}, runner=runner) == 0
     assert len(calls) == 1
-    assert calls[0][1:] == list(batch.collector_commands("news")[0])
+    assert calls[0][1:] == list(batch.collector_command("news"))
 
 
-def test_enabled_followup_runs_shadow_then_comparison_without_changing_status() -> None:
+def test_enabled_followup_only_refreshes_reports_without_second_collection() -> None:
     with TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
-        config = root / "rule.json"
-        portfolio = root / "portfolio.json"
-        config.write_text("{}", encoding="utf-8")
-        portfolio.write_text("[]", encoding="utf-8")
         calls: list[list[str]] = []
         report_dir = root / "reports"
-        db_path = root / "surveil.sqlite3"
-        with sqlite3.connect(db_path) as conn:
-            conn.execute("CREATE TABLE seen_items (source TEXT, item_id TEXT)")
-            conn.commit()
 
         def runner(command, **kwargs):
             calls.append(list(command))
-            if "--production" in command:
-                with sqlite3.connect(db_path) as conn:
-                    conn.execute("INSERT INTO seen_items(source, item_id) VALUES ('news', 'new-1')")
-                    conn.commit()
-            if "--direct-shadow" in command:
-                report_dir.mkdir(parents=True, exist_ok=True)
-                (report_dir / "news-collector-shadow-test.json").write_text(
-                    '{"sources": [{"source": "news", "candidates": [{"source": "news", "id": "new-1"}]}]}',
-                    encoding="utf-8",
-                )
-                now = time.time()
-                (report_dir / "news-collector-shadow-test.json").touch()
-                assert now <= (report_dir / "news-collector-shadow-test.json").stat().st_mtime + 1
             return SimpleNamespace(returncode=0)
 
-        env = {
-            "RULE_CORE_SHADOW_AUTORUN": "1",
-            "RULE_CORE_SHADOW_CONFIG": str(config),
-            "RULE_CORE_SHADOW_PORTFOLIO": str(portfolio),
-        }
-        assert batch.run_batch("news", env=env, runner=runner, report_dir=report_dir, db_path=db_path) == 0
-        assert len(calls) == 4
+        assert batch.run_batch(
+            "news",
+            env={"RULE_CORE_SHADOW_AUTORUN": "1"},
+            runner=runner,
+            report_dir=report_dir,
+        ) == 0
+        assert len(calls) == 2
         assert "--production" in calls[0]
-        assert "--direct-shadow" in calls[1]
-        assert "--include-seen" in calls[2]
-        assert "scripts/rule_core_shadow_combined.py" in calls[3]
+        assert "scripts/rule_core_shadow_combined.py" in calls[1]
+        assert all("--direct-shadow" not in call for call in calls)
+        assert all("scripts/rule_core_shadow_report.py" not in call for call in calls)
 
 
 def test_enabled_followup_refreshes_combined_report() -> None:
     with TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
-        config = root / "rule.json"
-        portfolio = root / "portfolio.json"
-        config.write_text("{}", encoding="utf-8")
-        portfolio.write_text("[]", encoding="utf-8")
         report_dir = root / "reports"
-        db_path = root / "surveil.sqlite3"
-        with sqlite3.connect(db_path) as conn:
-            conn.execute("CREATE TABLE seen_items (source TEXT, item_id TEXT)")
-            conn.commit()
         calls: list[list[str]] = []
 
         def runner(command, **kwargs):
             calls.append(list(command))
-            if "--production" in command:
-                with sqlite3.connect(db_path) as conn:
-                    conn.execute("INSERT INTO seen_items(source, item_id) VALUES ('news', 'new-1')")
-                    conn.commit()
-            if "--direct-shadow" in command:
-                report_dir.mkdir(parents=True, exist_ok=True)
-                (report_dir / "news-collector-shadow-test.json").write_text(
-                    '{"sources": [{"source": "news", "candidates": [{"source": "news", "id": "new-1"}]}]}',
-                    encoding="utf-8",
-                )
-                (report_dir / "news-collector-shadow-test.json").touch()
-            if "scripts/rule_core_shadow_report.py" in command:
-                output = Path(command[command.index("--output") + 1])
-                output.write_text(
-                    '{"generated_at":"2026-07-19T11:18:16+00:00","counts":{"compared":0},"items":[]}',
-                    encoding="utf-8",
-                )
             if "scripts/rule_core_shadow_combined.py" in command:
+                report_dir.mkdir(parents=True, exist_ok=True)
                 (report_dir / "rule-core-shadow-combined-latest.md").write_text("# combined\n", encoding="utf-8")
             return SimpleNamespace(returncode=0)
 
-        env = {
-            "RULE_CORE_SHADOW_AUTORUN": "1",
-            "RULE_CORE_SHADOW_CONFIG": str(config),
-            "RULE_CORE_SHADOW_PORTFOLIO": str(portfolio),
-        }
-        assert batch.run_batch("news", env=env, runner=runner, report_dir=report_dir, db_path=db_path) == 0
+        env = {"RULE_CORE_SHADOW_AUTORUN": "1"}
+        assert batch.run_batch("news", env=env, runner=runner, report_dir=report_dir) == 0
         assert any("scripts/rule_core_shadow_combined.py" in call for call in calls)
 
 
-def test_shadow_failure_does_not_change_production_status() -> None:
+def test_report_refresh_failure_does_not_change_production_status() -> None:
     calls = 0
 
     def runner(command, **kwargs):
@@ -128,7 +77,7 @@ def test_shadow_failure_does_not_change_production_status() -> None:
         "RULE_CORE_SHADOW_PORTFOLIO": "/missing/portfolio.json",
     }
     assert batch.run_batch("research", env=env, runner=runner) == 0
-    assert calls == 1
+    assert calls == 2
 
 
 def test_production_units_use_the_wrapper_entrypoint() -> None:
@@ -141,9 +90,9 @@ def test_production_units_use_the_wrapper_entrypoint() -> None:
 
 def main() -> int:
     test_default_keeps_the_existing_production_command_only()
-    test_enabled_followup_runs_shadow_then_comparison_without_changing_status()
+    test_enabled_followup_only_refreshes_reports_without_second_collection()
     test_enabled_followup_refreshes_combined_report()
-    test_shadow_failure_does_not_change_production_status()
+    test_report_refresh_failure_does_not_change_production_status()
     test_production_units_use_the_wrapper_entrypoint()
     print("rule core batch checks passed")
     return 0

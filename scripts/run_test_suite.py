@@ -71,6 +71,7 @@ CI_SAFE_TESTS = (
     "test_rule_core_shadow_combined.py",
     "test_rule_core_shadow_daily.py",
     "test_rule_core_shadow_report.py",
+    "test_rule_core_runtime_shadow.py",
     "test_rule_core_batch.py",
     "test_signals_extract.py",
     "test_sina_stock_news.py",

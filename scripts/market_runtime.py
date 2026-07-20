@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
@@ -53,6 +55,23 @@ class MarketItemProcessingError(RuntimeError):
     def __init__(self, message: str, outcome: MarketProcessOutcome) -> None:
         super().__init__(message)
         self.outcome = outcome
+
+
+def _record_rule_comparison(
+    item: NormalizedMarketItem,
+    flow_result: MarketFlowResult,
+    storage_ref: dict[str, Any],
+) -> None:
+    """Run the optional comparison without making it part of runtime correctness."""
+    if str(os.environ.get("RULE_CORE_SHADOW_AUTORUN") or "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
+    try:
+        module = importlib.import_module("rule_core_runtime_shadow")
+        result = module.record_runtime_comparison(item, flow_result.decision, storage_ref)
+        if result.get("status") == "failed":
+            print(f"rule core comparison failed: {result.get('reason')}", file=sys.stderr, flush=True)
+    except Exception as exc:  # noqa: BLE001 - optional reporting cannot change storage or delivery.
+        print(f"rule core comparison failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
 
 
 def is_official_news_source(source: str) -> bool:
@@ -220,6 +239,8 @@ def _process_content_item(
         "item_id": item_id,
     }
     flow_result = _flow_result(item, payload, storage_ref)
+    if inserted and not flow_result.decision.audit_json.get("contract_error"):
+        _record_rule_comparison(item, flow_result, storage_ref)
     status = "not_requested"
     if deliver:
         if flow_result.decision.audit_json.get("contract_error") == "missing_decision_result":
@@ -296,6 +317,8 @@ def _process_event_item(
     except Exception as exc:  # noqa: BLE001 - preserve the inserted event reference for batch recovery
         raise MarketItemProcessingError(str(exc), partial) from exc
     flow_result = _flow_result(item, analysis, storage_ref)
+    if not flow_result.decision.audit_json.get("contract_error"):
+        _record_rule_comparison(item, flow_result, storage_ref)
     status = module.maybe_deliver_event(event_id, analysis, db_path=db_path) if deliver else "not_requested"
     return MarketProcessOutcome(
         flow_result=flow_result,

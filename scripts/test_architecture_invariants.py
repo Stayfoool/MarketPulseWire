@@ -385,7 +385,7 @@ def test_ai_compute_rule_is_stable_across_transport_metadata() -> None:
     assert {decision.dedup["dedup_key"] for decision in decisions} == {decisions[0].dedup["dedup_key"]}
 
 
-def test_future_rule_core_is_side_effect_free_and_not_production_wired() -> None:
+def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importer() -> None:
     core = parsed_module("rule_core_v1.py")
     imports: set[str] = set()
     for node in ast.walk(core):
@@ -403,6 +403,7 @@ def test_future_rule_core_is_side_effect_free_and_not_production_wired() -> None
         "rule_core_shadow_combined.py",
         "rule_core_shadow_daily.py",
         "rule_core_shadow_report.py",
+        "rule_core_runtime_shadow.py",
         "rule_config_migration_v1.py",
         "market_lifecycle_v1.py",
     }
@@ -416,6 +417,20 @@ def test_future_rule_core_is_side_effect_free_and_not_production_wired() -> None
             elif isinstance(node, ast.ImportFrom):
                 assert node.module not in {Path(name).stem for name in inactive_modules}, path.name
 
+    runtime_shadow = parsed_module("rule_core_runtime_shadow.py")
+    runtime_imports: set[str] = set()
+    for node in ast.walk(runtime_shadow):
+        if isinstance(node, ast.Import):
+            runtime_imports.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            runtime_imports.add(node.module.split(".")[0])
+    assert "rule_core_v1" in runtime_imports
+    assert "rule_core_shadow" in runtime_imports
+    runtime_text = (SCRIPTS / "rule_core_runtime_shadow.py").read_text(encoding="utf-8")
+    assert "market_delivery" not in runtime_text
+    assert "connect_sqlite" not in runtime_text
+    assert '"full_text"' not in runtime_text
+
 
 def main() -> int:
     test_unified_collectors_use_runtime_without_owning_delivery()
@@ -428,7 +443,7 @@ def main() -> int:
     test_common_rule_is_stable_across_transport_metadata()
     test_trade_friction_rule_is_stable_across_transport_metadata()
     test_ai_compute_rule_is_stable_across_transport_metadata()
-    test_future_rule_core_is_side_effect_free_and_not_production_wired()
+    test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importer()
     print("architecture invariant checks passed")
     return 0
 
