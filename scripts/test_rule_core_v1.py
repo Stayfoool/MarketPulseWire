@@ -840,6 +840,106 @@ def test_migrated_fed_path_and_trade_actions_are_source_neutral() -> None:
         assert evaluation.decision is None, text
 
 
+def test_migrated_macro_reactions_and_fed_transmission_are_source_neutral() -> None:
+    _, config, portfolios = loaded_contracts()
+    source_variants = (
+        ("industry_media", "research_industry_media", "research_publisher", "article"),
+        ("finance_media", "news_media", "news_media", "flash"),
+    )
+    cases = (
+        ("美国CPI高于预期，2年期美债收益率大涨8个基点。", "push", "macro_surprise"),
+        ("美国CPI与市场预期一致。", "daily", "macro_release_expected"),
+        ("美国非农就业报告将于明晚公布。", "daily", "macro_release_preview"),
+        ("美国ADP就业人数不及预期，但没有明显市场反应。", "daily", "macro_release_expected"),
+        (
+            "美国ADP就业人数不及预期。数据公布后，2年期美债收益率大跌8个基点。",
+            "push",
+            "macro_secondary_reaction",
+        ),
+        (
+            "美联储降息将利好黄金、比特币和非美货币。",
+            "daily",
+            "generic_fed_policy_transmission",
+        ),
+        (
+            "美联储宣布降息25个基点，降息将利好黄金。",
+            "push",
+            "fed_policy_material_exception",
+        ),
+        (
+            "美联储按预期宣布降息25个基点，决议符合预期，降息将利好黄金。",
+            "daily",
+            "fed_policy_expected",
+        ),
+        (
+            "交易员将美联储降息概率从40%上调至80%，降息将利好黄金。",
+            "push",
+            "fed_policy_material_exception",
+        ),
+        (
+            "美联储降息预期利好比特币，比特币实际上涨3.2%。",
+            "push",
+            "fed_policy_material_exception",
+        ),
+        (
+            "美联储主席沃什表示降息有利于经济，降息将利好黄金。",
+            "push",
+            "fed_policy_material_exception",
+        ),
+        (
+            "美联储降息将利好黄金，同时黄金ETF流入创三个月新高。",
+            "push",
+            "fed_policy_material_exception",
+        ),
+    )
+    for text, expected_action, expected_rule_id in cases:
+        decisions = [
+            evaluate_market_item(
+                NormalizedMarketItem(
+                    source=source,
+                    source_category=category,
+                    publisher_role=role,
+                    content_type=content_type,
+                    title=text,
+                ),
+                rule_config=config,
+                portfolio=portfolios["empty"],
+                source_policy=SourceAdmissionPolicy(),
+            ).decision
+            for source, category, role, content_type in source_variants
+        ]
+        assert all(decision is not None for decision in decisions), text
+        assert {decision.action for decision in decisions if decision} == {expected_action}, text
+        assert {
+            hit["rule_id"]
+            for decision in decisions
+            if decision
+            for hit in decision.rule_hits
+        } == {expected_rule_id}, text
+
+    for text in (
+        "美国零售销售数据今晚公布。",
+        "2年期美债收益率大跌8个基点，但报道没有说明具体原因。",
+    ):
+        evaluations = [
+            evaluate_market_item(
+                NormalizedMarketItem(
+                    source=source,
+                    source_category=category,
+                    publisher_role=role,
+                    content_type=content_type,
+                    title=text,
+                ),
+                rule_config=config,
+                portfolio=portfolios["empty"],
+                source_policy=SourceAdmissionPolicy(),
+            )
+            for source, category, role, content_type in source_variants
+        ]
+        assert {evaluation.admission.status for evaluation in evaluations} == {"excluded"}, text
+        assert all(evaluation.decision is None for evaluation in evaluations), text
+
+
 def test_semiconductor_hard_variables_require_current_asserted_change() -> None:
     _, config, portfolios = loaded_contracts()
     cases = (
@@ -1185,6 +1285,7 @@ def test_new_core_has_only_the_report_only_production_importer() -> None:
         "ai_credit_risk",
         "hashlib",
         "international_bank_fed",
+        "macro_policy",
         "re",
         "dataclasses",
         "trade_friction",
@@ -1196,6 +1297,7 @@ def test_new_core_has_only_the_report_only_production_importer() -> None:
         "ai_compute_supply_demand.py",
         "ai_credit_risk.py",
         "international_bank_fed.py",
+        "macro_policy.py",
         "trade_friction.py",
     ):
         classifier_path = ROOT / "scripts" / classifier_name
@@ -1245,6 +1347,7 @@ def main() -> int:
     test_migrated_semiconductor_hard_variables_are_source_neutral()
     test_migrated_ai_compute_and_credit_actions_are_source_neutral()
     test_migrated_fed_path_and_trade_actions_are_source_neutral()
+    test_migrated_macro_reactions_and_fed_transmission_are_source_neutral()
     test_semiconductor_hard_variables_require_current_asserted_change()
     test_corporate_background_and_existing_relationships_remain_daily()
     test_materiality_evidence_is_bound_to_the_current_fact()

@@ -399,6 +399,7 @@ def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importe
         "ai_credit_risk",
         "hashlib",
         "international_bank_fed",
+        "macro_policy",
         "re",
         "dataclasses",
         "trade_friction",
@@ -409,6 +410,7 @@ def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importe
         "ai_compute_supply_demand.py",
         "ai_credit_risk.py",
         "international_bank_fed.py",
+        "macro_policy.py",
         "trade_friction.py",
     ):
         classifier = parsed_module(classifier_name)

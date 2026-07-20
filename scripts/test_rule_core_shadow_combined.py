@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -62,7 +63,11 @@ def test_combined_report_merges_source_groups_and_writes_markdown() -> None:
             json.dumps(report_payload("digitimes_tw_semiconductors", "archive", "archive"), ensure_ascii=False),
             encoding="utf-8",
         )
-        payload = build_combined_report(report_dir=report_dir, hours=24)
+        payload = build_combined_report(
+            report_dir=report_dir,
+            hours=24,
+            now=datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc),
+        )
         assert payload["comparison_only"] is True
         assert payload["affects_current_decision"] is False
         assert payload["counts"]["reports"] == 2
@@ -95,7 +100,11 @@ def test_combined_report_explains_current_admission_exclusion() -> None:
             json.dumps(payload, ensure_ascii=False),
             encoding="utf-8",
         )
-        combined = build_combined_report(report_dir=report_dir, hours=24)
+        combined = build_combined_report(
+            report_dir=report_dir,
+            hours=24,
+            now=datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc),
+        )
         assert combined["counts"]["action_changes_by_pair"] == {"none->daily": 1}
         text = markdown_report(combined)
         assert "`none`" in text

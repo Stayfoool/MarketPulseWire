@@ -70,6 +70,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `run_production_with_rule_shadow.py` | Production service entry wrapper; runs the existing collector once and, when comparison is enabled, refreshes the combined report after runtime comparison files have been written; it does not start a second collector or evaluate rules |
 | `ai_credit_risk.py` | Source-neutral deterministic AI borrower, funding-event and qualitative credit-stress evidence classification |
 | `ai_compute_supply_demand.py` | Source-neutral deterministic AI compute supply, demand, capacity and constraint classification |
+| `macro_policy.py` | Source-neutral macro-data release/reaction and generic Fed policy-transmission evidence classification; production wrappers read Rule Center lazily and preserve the active production decision contract |
 | `trade_friction.py` | Source-neutral China-US / China-EU trade-friction classification and evidence extraction |
 | `trade_policy_monitor.py` | Official API/RSS/list discovery, new-item detail enrichment, baseline and source health |
 | `company_disclosures.py` | One logical portfolio-disclosure collector, provider selection, baseline, source state and health |
