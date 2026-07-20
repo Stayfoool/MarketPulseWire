@@ -13,6 +13,7 @@ from typing import Any, Iterable, Mapping
 
 from ai_compute_supply_demand import classify_ai_compute_supply_demand
 from ai_credit_risk import classify_ai_credit_risk
+from international_bank_fed import allowed_fed_path_banks, classify_international_bank_fed_path
 from market_item import (
     AdmissionEvidence,
     AdmissionResult,
@@ -22,6 +23,7 @@ from market_item import (
     RuleEvaluation,
     RuleFamily,
 )
+from trade_friction import classify_trade_friction
 
 
 CONTRACT_VERSION = "rule-core-v1"
@@ -710,6 +712,7 @@ def admit_market_item(
         if joint or (china and counterparty):
             corridor_terms.extend(joint or (*china, *counterparty))
     trade_action = _matches(text, (*rule_config.trade_instruments, *rule_config.trade_stages))
+    trade_classification = classify_trade_friction(_classification_item(item))
     local_trade_terms: list[str] = []
     for sentence in _sentences(text):
         sentence_action = _matches(sentence, (*rule_config.trade_instruments, *rule_config.trade_stages))
@@ -730,9 +733,28 @@ def admit_market_item(
                 trade_action or tuple(corridor_terms) or ("direct_trade_surface",),
             )
         )
-    elif local_trade_terms:
+    elif local_trade_terms or trade_classification:
+        classified_terms: tuple[str, ...] = ()
+        if trade_classification:
+            classified_terms = tuple(
+                str(value)
+                for key in (
+                    "corridors",
+                    "policy_tools",
+                    "action_stages",
+                    "strong_tension_terms",
+                    "weak_tension_terms",
+                )
+                for value in trade_classification.get(key) or []
+                if str(value).strip()
+            )
         evidence.append(
-            _evidence("trade_policy", "trade_policy_scope", text, local_trade_terms)
+            _evidence(
+                "trade_policy",
+                "trade_policy_scope",
+                text,
+                tuple(local_trade_terms) or classified_terms,
+            )
         )
 
     if excluded_terms and not direct_holding:
@@ -810,12 +832,17 @@ def _classification_item(item: NormalizedMarketItem) -> dict[str, Any]:
     }
 
 
-def _classification_candidate(classification: Mapping[str, Any]) -> dict[str, Any]:
-    evidence = classification.get("evidence_quotes")
+def _classification_candidate(
+    classification: Mapping[str, Any],
+    *,
+    family: RuleFamily = "semiconductor_ai",
+    default_rule_id: str = "semiconductor_ordinary",
+) -> dict[str, Any]:
+    evidence = classification.get("evidence_quotes") or classification.get("evidence")
     quote = str(evidence[0]) if isinstance(evidence, list) and evidence else ""
     candidate = _candidate(
-        "semiconductor_ai",
-        str(classification.get("rule_id") or "semiconductor_ordinary"),
+        family,
+        str(classification.get("rule_id") or default_rule_id),
         str(classification.get("decision_action") or "archive"),
         quote,
         str(classification.get("reason") or ""),
@@ -1604,7 +1631,22 @@ def _macro_candidate(item: NormalizedMarketItem, text: str, config: RuleConfig) 
     return _candidate("macro_data", "macro_release_expected", "daily", text, "数据相关但未形成可推送偏离。")
 
 
-def _fed_candidate(text: str) -> dict[str, Any]:
+def _fed_candidate(item: NormalizedMarketItem, text: str, config: RuleConfig) -> dict[str, Any]:
+    allowed_banks = allowed_fed_path_banks(
+        alias
+        for institution in config.trusted_institutions
+        for alias in institution.aliases
+    )
+    classification = classify_international_bank_fed_path(
+        _classification_item(item),
+        allowed_banks=allowed_banks,
+    )
+    if classification:
+        return _classification_candidate(
+            classification,
+            family="fed_policy",
+            default_rule_id="fed_path_unchanged",
+        )
     if _has(text, "未说明相对此前", "未证明修订", "没有路径修订", "without a revision"):
         return _candidate("fed_policy", "fed_path_unchanged", "daily", text, "只有当前预测，无法证明路径修订。")
     path_change = _first_local_near_match(
@@ -1625,9 +1667,50 @@ def _fed_candidate(text: str) -> dict[str, Any]:
     return _candidate("fed_policy", "fed_path_unchanged", "daily", text, "Fed 内容未证明路径变化。")
 
 
-def _trade_candidate(text: str, config: RuleConfig) -> dict[str, Any]:
+def _trade_candidate(item: NormalizedMarketItem, text: str, config: RuleConfig) -> dict[str, Any]:
     if _has(text, "终止", "撤销", "豁免", "缓和", "terminate", "withdraw", "exemption"):
         return _candidate("trade_policy", "trade_deescalation", "daily", text, "政策发生有效缓和或撤销。")
+    classification = classify_trade_friction(_classification_item(item))
+    if classification:
+        action = str(classification.get("decision_action") or "archive")
+        if action == "daily":
+            return _classification_candidate(
+                classification,
+                family="trade_policy",
+                default_rule_id="trade_distant_or_unproven",
+            )
+        evidence = classification.get("evidence") or []
+        focus_terms = (*config.trade_focus_industries, *config.semiconductor_ai_keywords)
+        focus_quote = next(
+            (str(quote) for quote in evidence if _matches(str(quote), focus_terms)),
+            "",
+        )
+        if not focus_quote:
+            focus_sector = next(
+                (
+                    str(sector)
+                    for sector in classification.get("affected_sectors") or []
+                    if _matches(str(sector), config.trade_focus_industries)
+                ),
+                "",
+            )
+            if focus_sector:
+                focus_quote = str(evidence[0]) if evidence else focus_sector
+        if focus_quote:
+            return _candidate(
+                "trade_policy",
+                "trade_friction_escalation",
+                "push",
+                focus_quote,
+                str(classification.get("reason") or "关注产业贸易措施发生明确升级。"),
+            )
+        return _candidate(
+            "trade_policy",
+            "trade_distant_or_unproven",
+            "archive",
+            str(evidence[0]) if evidence else text,
+            "正式贸易措施与关注产业距离较远。",
+        )
     escalation = _first_local_match(
         text,
         tuple(config.trade_focus_industries),
@@ -1659,9 +1742,9 @@ def decide_admitted_item(
         elif family == "macro_data":
             candidates.append(_macro_candidate(item, text, rule_config))
         elif family == "fed_policy":
-            candidates.append(_fed_candidate(text))
+            candidates.append(_fed_candidate(item, text, rule_config))
         elif family == "trade_policy":
-            candidates.append(_trade_candidate(text, rule_config))
+            candidates.append(_trade_candidate(item, text, rule_config))
     winning_action = max((str(item["decision_action"]) for item in candidates), key=ACTION_RANK.__getitem__)
     winners = [item for item in candidates if item["decision_action"] == winning_action]
     importance = {"push": "high", "daily": "medium", "archive": "low", "ignore": "low"}[winning_action]

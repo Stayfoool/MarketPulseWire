@@ -6,8 +6,6 @@ import hashlib
 import re
 from typing import Any
 
-from rule_center import rule_enabled
-
 
 RULE_ID = "trade_friction_escalation"
 
@@ -454,10 +452,7 @@ def _dedup_key(corridors: list[str], tools: list[str], sectors: list[str], evide
     return f"{RULE_ID}:{hashlib.sha256(raw.lower().encode('utf-8')).hexdigest()[:24]}"
 
 
-def trade_friction_rule(item: Any) -> dict[str, Any] | None:
-    if not rule_enabled(RULE_ID):
-        return None
-
+def classify_trade_friction(item: Any) -> dict[str, Any] | None:
     title, summary, full_text = _legacy_text(item)
     text = "\n".join(part for part in (title, summary, full_text) if part)
     global_corridors = matched_corridors(text)
@@ -555,7 +550,24 @@ def trade_friction_rule(item: Any) -> dict[str, Any] | None:
             for target in targets
         ],
     }
-    dedup_key = _dedup_key(corridor_ids, tool_ids, sector_ids, rule["evidence"])
+    return rule
+
+
+def trade_friction_rule(item: Any) -> dict[str, Any] | None:
+    from rule_center import rule_enabled
+
+    if not rule_enabled(RULE_ID):
+        return None
+    classification = classify_trade_friction(item)
+    if not classification:
+        return None
+    rule = dict(classification)
+    dedup_key = _dedup_key(
+        rule["corridors"],
+        rule["policy_tools"],
+        rule["affected_sectors"],
+        rule["evidence"],
+    )
     if dedup_key:
         rule["dedup_key"] = dedup_key
         rule["dedup_lookback_days"] = 3
