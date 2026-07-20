@@ -364,6 +364,101 @@ def test_admitted_item_reuses_normalized_item_and_processing_failure_retries() -
         cfm.process_market_item = original_process
 
 
+def test_wallstreetcn_empty_sitemap_detail_is_terminal_and_existing_rows_reconcile() -> None:
+    original_db = cfm.DB_PATH
+    original_enrich = cfm.enrich_item
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfm.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            with cfm.connect_db() as conn:
+                cfm.ensure_seen_table(conn)
+                conn.execute(
+                    "INSERT INTO seen_sources (source, first_seen_at) VALUES (?, '')",
+                    (cfm.WALLSTREETCN_SOURCE,),
+                )
+                conn.commit()
+            item = {
+                "id": "livenews:empty-new",
+                "url": "https://wallstreetcn.com/livenews/1",
+                "title": "",
+                "summary": "",
+            }
+            assert cfm.save_new_items_with_retry(cfm.WALLSTREETCN_SOURCE, [item]) == [item]
+            cfm.enrich_item = lambda source, item: (_ for _ in ()).throw(
+                ValueError(cfm.WALLSTREETCN_EMPTY_DETAIL_ERROR)
+            )
+            cfm.notify_item(cfm.WALLSTREETCN_SOURCE, item)
+            with cfm.connect_db() as conn:
+                state = conn.execute(
+                    "SELECT processability_status, processability_reason, admission_status, processing_status "
+                    "FROM seen_items WHERE source=? AND item_id=?",
+                    (cfm.WALLSTREETCN_SOURCE, item["id"]),
+                ).fetchone()
+                assert state == (
+                    "failed_terminal",
+                    "wallstreetcn_detail_empty",
+                    "not_applicable",
+                    "not_applicable",
+                )
+            assert cfm.retryable_seen_items(cfm.WALLSTREETCN_SOURCE) == []
+
+            existing = {
+                "id": "livenews:empty-existing",
+                "url": "https://wallstreetcn.com/livenews/2",
+                "title": "",
+                "summary": "",
+            }
+            assert cfm.save_new_items_with_retry(cfm.WALLSTREETCN_SOURCE, [existing]) == [existing]
+            cfm.set_seen_item_lifecycle(
+                cfm.WALLSTREETCN_SOURCE,
+                existing["id"],
+                processability_status="failed_retryable",
+                processability_reason=f"ValueError: {cfm.WALLSTREETCN_EMPTY_DETAIL_ERROR}",
+                admission_status="pending",
+                processing_status="not_applicable",
+            )
+            assert cfm.finalize_existing_wallstreetcn_empty_details(cfm.WALLSTREETCN_SOURCE) == 1
+            with cfm.connect_db() as conn:
+                reconciled = conn.execute(
+                    "SELECT processability_status, processability_reason, admission_status "
+                    "FROM seen_items WHERE source=? AND item_id=?",
+                    (cfm.WALLSTREETCN_SOURCE, existing["id"]),
+                ).fetchone()
+                assert reconciled == ("failed_terminal", "wallstreetcn_detail_empty", "not_applicable")
+
+            interrupted = {
+                "id": "livenews:empty-interrupted-retry",
+                "url": "https://wallstreetcn.com/livenews/3",
+                "title": "",
+                "summary": "",
+            }
+            assert cfm.save_new_items_with_retry(cfm.WALLSTREETCN_SOURCE, [interrupted]) == [interrupted]
+            cfm.set_seen_item_lifecycle(
+                cfm.WALLSTREETCN_SOURCE,
+                interrupted["id"],
+                processability_status="failed_retryable",
+                processability_reason=f"ValueError: {cfm.WALLSTREETCN_EMPTY_DETAIL_ERROR}",
+                admission_status="pending",
+                processing_status="not_applicable",
+            )
+            assert cfm.save_new_items_with_retry(cfm.WALLSTREETCN_SOURCE, [interrupted]) == [interrupted]
+            assert cfm.finalize_existing_wallstreetcn_empty_details(cfm.WALLSTREETCN_SOURCE) == 1
+            with cfm.connect_db() as conn:
+                interrupted_state = conn.execute(
+                    "SELECT processability_status, processability_reason, admission_status "
+                    "FROM seen_items WHERE source=? AND item_id=?",
+                    (cfm.WALLSTREETCN_SOURCE, interrupted["id"]),
+                ).fetchone()
+                assert interrupted_state == (
+                    "failed_terminal",
+                    "wallstreetcn_detail_empty",
+                    "not_applicable",
+                )
+    finally:
+        cfm.DB_PATH = original_db
+        cfm.enrich_item = original_enrich
+
+
 def test_yicai_morning_brief_is_mandatory_push() -> None:
     item = {
         "title": "<b>券商晨会观点速递  |</b> ①中信建投：半导体设备全球景气周期持续确认",
@@ -883,6 +978,7 @@ def main() -> int:
     test_seen_item_lifecycle_migration_baseline_and_retry()
     test_excluded_item_uses_one_normalized_item_for_report_only_comparison()
     test_admitted_item_reuses_normalized_item_and_processing_failure_retries()
+    test_wallstreetcn_empty_sitemap_detail_is_terminal_and_existing_rows_reconcile()
     test_yicai_morning_brief_is_mandatory_push()
     test_short_english_keyword_requires_token_boundary()
     test_china_media_focus_filters_generic_power_and_accepts_ai_context()
