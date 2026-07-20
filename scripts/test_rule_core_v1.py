@@ -751,7 +751,7 @@ def test_materiality_evidence_is_bound_to_the_current_fact() -> None:
     assert holding_market_template is not None and holding_market_template.action == "archive"
 
 
-def test_new_core_is_not_wired_into_production_or_side_effect_modules() -> None:
+def test_new_core_has_only_the_report_only_production_importer() -> None:
     core_path = ROOT / "scripts" / "rule_core_v1.py"
     tree = ast.parse(core_path.read_text(encoding="utf-8"), filename=core_path.name)
     imported: set[str] = set()
@@ -783,7 +783,7 @@ def test_new_core_is_not_wired_into_production_or_side_effect_modules() -> None:
                 production_importers.append(path.name)
             elif isinstance(node, ast.ImportFrom) and node.module == "rule_core_v1":
                 production_importers.append(path.name)
-    assert production_importers == []
+    assert production_importers == ["rule_core_runtime_shadow.py"]
 
 
 def main() -> int:
@@ -796,7 +796,7 @@ def main() -> int:
     test_approved_corporate_material_changes_are_source_neutral()
     test_corporate_background_and_existing_relationships_remain_daily()
     test_materiality_evidence_is_bound_to_the_current_fact()
-    test_new_core_is_not_wired_into_production_or_side_effect_modules()
+    test_new_core_has_only_the_report_only_production_importer()
     print("rule core v1 checks passed")
     return 0
 

@@ -365,6 +365,143 @@ def test_existing_legacy_review_without_decision_fails_closed() -> None:
     assert outcome.delivery_status == "missing_decision"
 
 
+def test_runtime_comparison_receives_the_exact_item_before_delivery() -> None:
+    original_connect = market_runtime.connect_sqlite
+    original_existing = market_runtime.article_review_exists
+    original_module = market_runtime._selected_module
+    original_record = market_runtime._record_rule_comparison
+    original_deliver = market_runtime.deliver_article_review
+    order: list[str] = []
+    observed: list[NormalizedMarketItem] = []
+
+    class FakeModule:
+        @staticmethod
+        def process_article_review(*_args, **_kwargs):
+            return {
+                "raw": {
+                    "decision_result": DecisionResult(
+                        action="daily",
+                        importance="medium",
+                        reason="现有规则结果",
+                    ).to_dict()
+                }
+            }
+
+        @staticmethod
+        def gate_lines(_review):
+            return []
+
+    item = NormalizedMarketItem(
+        source="wallstreetcn_news",
+        source_category="news_media",
+        collector="news_collector",
+        content_type="article",
+        title="DRAM价格上涨",
+        full_text="完整生产正文。",
+        raw={"id": "same-item-1"},
+    )
+    try:
+        market_runtime.connect_sqlite = lambda *_args, **_kwargs: _DummyContext()
+        market_runtime.article_review_exists = lambda *_args, **_kwargs: None
+        market_runtime._selected_module = lambda _kind: FakeModule
+
+        def fake_record(normalized, flow_result, storage_ref):
+            order.append("comparison")
+            observed.append(normalized)
+            assert flow_result.decision.action == "daily"
+            assert storage_ref["item_id"] == "same-item-1"
+
+        def fake_deliver(*_args, **_kwargs):
+            order.append("delivery")
+            return "skipped"
+
+        market_runtime._record_rule_comparison = fake_record
+        market_runtime.deliver_article_review = fake_deliver
+        outcome = market_runtime.process_market_item(
+            item,
+            {"id": "same-item-1", "title": item.title, "full_text": item.full_text},
+            store_kind="article",
+        )
+    finally:
+        market_runtime.connect_sqlite = original_connect
+        market_runtime.article_review_exists = original_existing
+        market_runtime._selected_module = original_module
+        market_runtime._record_rule_comparison = original_record
+        market_runtime.deliver_article_review = original_deliver
+    assert observed == [item]
+    assert order == ["comparison", "delivery"]
+    assert outcome.flow_result.item is item
+
+
+def test_analyzed_event_compares_before_delivery_and_baseline_does_not() -> None:
+    original_module = market_runtime._selected_module
+    original_record = market_runtime._record_rule_comparison
+    order: list[str] = []
+
+    class FakeEventModule:
+        next_id = 40
+
+        @classmethod
+        def upsert_event(cls, *_args, **_kwargs):
+            cls.next_id += 1
+            return cls.next_id, True
+
+        @staticmethod
+        def analyze_event(*_args, **_kwargs):
+            return {
+                "analysis": {
+                    "decision_result": DecisionResult(
+                        action="push",
+                        importance="high",
+                        reason="现有事件规则结果",
+                    ).to_dict()
+                }
+            }
+
+        @staticmethod
+        def maybe_deliver_event(*_args, **_kwargs):
+            order.append("delivery")
+            return "skipped"
+
+    item = NormalizedMarketItem(
+        source="sina_flash",
+        source_category="news_media",
+        collector="sina_flash",
+        content_type="flash",
+        title="美国CPI低于预期",
+        full_text="美国CPI低于预期，市场调整降息预期。",
+        raw={"source_event_id": "event-1"},
+    )
+    try:
+        market_runtime._selected_module = lambda _kind: FakeEventModule
+
+        def fake_record(normalized, flow_result, _storage_ref):
+            order.append("comparison")
+            assert normalized is item
+            assert flow_result.decision.action == "push"
+
+        market_runtime._record_rule_comparison = fake_record
+        baseline = market_runtime.process_market_item(
+            item,
+            {"source_event_id": "baseline-1", "title": item.title},
+            store_kind="event",
+            baseline_only=True,
+        )
+        assert baseline.delivery_status == "baseline"
+        assert order == []
+
+        analyzed = market_runtime.process_market_item(
+            item,
+            {"source_event_id": "event-1", "title": item.title},
+            store_kind="event",
+        )
+    finally:
+        market_runtime._selected_module = original_module
+        market_runtime._record_rule_comparison = original_record
+    assert analyzed.flow_result.item is item
+    assert order == ["comparison", "delivery"]
+
+
 def main() -> int:
     test_five_content_types_share_one_decision_and_interpretation_contract()
     test_interpretation_failure_preserves_deterministic_action()
@@ -375,6 +512,8 @@ def main() -> int:
     test_post_decision_finalization_cannot_promote_non_push_action()
     test_reprocessing_existing_review_preserves_pushed_marker()
     test_existing_legacy_review_without_decision_fails_closed()
+    test_runtime_comparison_receives_the_exact_item_before_delivery()
+    test_analyzed_event_compares_before_delivery_and_baseline_does_not()
     print("market flow checks passed")
     return 0
 

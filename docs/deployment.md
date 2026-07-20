@@ -121,23 +121,23 @@ The installer copies but keeps these standalone report-only shadow collector tim
 These standalone shadow jobs are migration aids and are not used by the normal
 production schedule. The three production collector services now enter through
 `run_production_with_rule_shadow.py`. Its default behavior is exactly the old
-production command. Only when the private `.env` sets
+production command. When the private `.env` sets
 `RULE_CORE_SHADOW_AUTORUN=1` and supplies both
-`RULE_CORE_SHADOW_CONFIG` and `RULE_CORE_SHADOW_PORTFOLIO` does it run the
-matching shadow collector after the production collector finishes, then write
-a bounded rule comparison report. The follow-up is report-only: it does not
-send Feishu messages, run LLM gates, write production `seen_items` or review
-tables, and a shadow/comparison failure cannot change the production collector
-exit status.
+`RULE_CORE_SHADOW_CONFIG` and `RULE_CORE_SHADOW_PORTFOLIO`, the unified runtime
+compares the current and candidate rules after the current `DecisionResult`
+exists and before delivery, using the exact production `NormalizedMarketItem`.
+It writes one bounded report without body text. The service wrapper does not
+run a second collector; after the production collector succeeds it only
+refreshes the combined Markdown/JSON view. Configuration, candidate evaluation
+or report failures cannot change the production collector exit status, current
+decision, review storage, dedup reservation or delivery.
 
 The private paths should point to the reviewed v1 rule and portfolio snapshots,
 for example under a service-user-readable private directory. Do not put these
-paths or their contents in Git. The wrapper snapshots `seen_items` before and
-after the production collector, filters the shadow report to newly added
-`(source, item_id)` pairs, and uses `--include-seen` because those pairs have
-already been recorded by production. The report remains a comparison record
-and does not promote the candidate action to delivery authority. Each source
-family keeps its raw comparison JSON for audit, and the wrapper refreshes
+paths or their contents in Git. The runtime compares newly inserted review
+records and newly analyzed events; baseline, unanalysed and existing items do
+not create comparison records. Each source family keeps its bounded comparison
+JSON for audit, and the wrapper refreshes
 `reports/rule-core-shadow-combined-latest.md` plus `.json` as the daily
 operator view across research, official-company and news batches.
 
