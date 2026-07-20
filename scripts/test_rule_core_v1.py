@@ -554,6 +554,76 @@ def test_migrated_semiconductor_hard_variables_are_source_neutral() -> None:
         } == {expected_rule_id}, title
 
 
+def test_migrated_semiconductor_operating_changes_are_source_neutral() -> None:
+    _, _, portfolios = loaded_contracts()
+    config_payload = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    config_payload["semiconductor_ai_keywords"].append("semiconductor")
+    config = parse_rule_config(config_payload)
+    source_variants = (
+        ("industry_media", "research_industry_media", "research_publisher", "article"),
+        ("finance_media", "news_media", "news_media", "flash"),
+    )
+    cases = (
+        ("HBM供应商已开始出货新一代产品，交付周期同步缩短。", "push", "semiconductor_material_change"),
+        ("HBM供应商已开始出货，但未披露本批交付数量。", "push", "semiconductor_material_change"),
+        ("AI服务器需求激增，产业链进入新一轮备货。", "push", "semiconductor_material_change"),
+        ("先进GPU出口管制正式生效，并扩大受限芯片范围。", "push", "semiconductor_material_change"),
+        ("芯片厂已从钨切换至钼互连工艺。", "push", "semiconductor_material_change"),
+        ("CPO芯片已完成送样并通过客户认证。", "push", "semiconductor_material_change"),
+        ("CPO芯片已通过目标客户认证并进入交付准备。", "push", "semiconductor_material_change"),
+        (
+            "Semiconductor equipment supplier raised its 2026 shipment guidance.",
+            "push",
+            "semiconductor_material_change",
+        ),
+        ("机构预计NAND出货预测将下调，但尚未发布新指引。", "daily", "semiconductor_ordinary"),
+        ("HBM供应商发布出货指引，但没有相对此前发生修订。", "daily", "semiconductor_ordinary"),
+        ("监管机构拟议扩大AI芯片出口管制，草案仍在征求意见。", "daily", "semiconductor_ordinary"),
+        ("芯片公司计划从通用GPU转向自研ASIC，尚未开始实施。", "daily", "semiconductor_ordinary"),
+        ("HBM产品计划下季度开始送样，目前尚未交付样品。", "daily", "semiconductor_ordinary"),
+        ("AI芯片关税豁免正式生效。", "daily", "semiconductor_ordinary"),
+    )
+    for text, expected_action, expected_rule_id in cases:
+        decisions = [
+            evaluate_market_item(
+                NormalizedMarketItem(
+                    source=source,
+                    source_category=category,
+                    publisher_role=role,
+                    content_type=content_type,
+                    title=text,
+                ),
+                rule_config=config,
+                portfolio=portfolios["empty"],
+                source_policy=SourceAdmissionPolicy(),
+            ).decision
+            for source, category, role, content_type in source_variants
+        ]
+        assert all(decision is not None for decision in decisions), text
+        assert {decision.action for decision in decisions if decision} == {expected_action}, text
+        assert {
+            hit["rule_id"]
+            for decision in decisions
+            if decision
+            for hit in decision.rule_hits
+        } == {expected_rule_id}, text
+
+    denied = evaluate_market_item(
+        NormalizedMarketItem(
+            source="finance_media",
+            source_category="news_media",
+            publisher_role="news_media",
+            content_type="article",
+            title="HBM公司否认已经开始出货，当前尚无客户认证。",
+        ),
+        rule_config=config,
+        portfolio=portfolios["empty"],
+        source_policy=SourceAdmissionPolicy(),
+    ).decision
+    assert denied is not None and denied.action == "archive"
+    assert {hit["rule_id"] for hit in denied.rule_hits} == {"semiconductor_ordinary"}
+
+
 def test_migrated_ai_compute_and_credit_actions_are_source_neutral() -> None:
     _, config, portfolios = loaded_contracts()
     source_variants = (
@@ -1345,6 +1415,7 @@ def main() -> int:
     test_holding_capital_change_uses_document_title_to_resolve_routine_attachments()
     test_approved_corporate_material_changes_are_source_neutral()
     test_migrated_semiconductor_hard_variables_are_source_neutral()
+    test_migrated_semiconductor_operating_changes_are_source_neutral()
     test_migrated_ai_compute_and_credit_actions_are_source_neutral()
     test_migrated_fed_path_and_trade_actions_are_source_neutral()
     test_migrated_macro_reactions_and_fed_transmission_are_source_neutral()

@@ -230,6 +230,43 @@ SEMICONDUCTOR_PLANNING_TERMS = (
     "forecast",
     "considering",
     "exploring",
+    "proposed",
+    "proposal",
+    "draft",
+    "拟议",
+    "提议",
+    "草案",
+    "征求意见",
+)
+SEMICONDUCTOR_SPECULATIVE_TERMS = (
+    "计划",
+    "拟建",
+    "拟投",
+    "拟扩",
+    "拟采购",
+    "拟增加",
+    "预计",
+    "有望",
+    "可能",
+    "意向",
+    "plans to",
+    "plan to",
+    "planned",
+    "expects to",
+    "expected to",
+    "may",
+    "could",
+    "intends to",
+    "aims to",
+    "considering",
+    "exploring",
+    "proposed",
+    "proposal",
+    "draft",
+    "拟议",
+    "提议",
+    "草案",
+    "征求意见",
 )
 SEMICONDUCTOR_EXECUTION_TERMS = (
     "已",
@@ -283,6 +320,154 @@ SEMICONDUCTOR_VALUATION_CHANGE_TERMS = (
     "超过",
     "突破",
     "完成",
+)
+SEMICONDUCTOR_SHIPMENT_EXECUTION_TERMS = (
+    "started shipments",
+    "began shipments",
+    "commenced shipments",
+    "shipping has started",
+    "started delivery",
+    "began delivery",
+    "开始出货",
+    "正式出货",
+    "已出货",
+    "开始交付",
+    "正式交付",
+    "已交付",
+)
+SEMICONDUCTOR_SHIPMENT_TERMS = (
+    "shipment forecast",
+    "shipment guidance",
+    "delivery cycle",
+    "delivery time",
+    "出货指引",
+    "出货预测",
+    "交付周期",
+    "交付时间",
+)
+SEMICONDUCTOR_SHIPMENT_CHANGE_TERMS = (
+    "raises",
+    "raised",
+    "cuts",
+    "cut",
+    "revised",
+    "shortened",
+    "extended",
+    "increased",
+    "decreased",
+    "上调",
+    "下调",
+    "上修",
+    "下修",
+    "缩短",
+    "延长",
+    "增加",
+    "减少",
+)
+SEMICONDUCTOR_DEMAND_CHANGE_TERMS = (
+    "demand surge",
+    "demand surged",
+    "demand jumped",
+    "demand decline",
+    "demand contraction",
+    "volume contraction",
+    "需求激增",
+    "需求大增",
+    "需求大幅增长",
+    "需求下滑",
+    "需求下降",
+    "需求收缩",
+    "销量收缩",
+)
+SEMICONDUCTOR_REGULATION_TERMS = (
+    "export control",
+    "trade restriction",
+    "sanction",
+    "sanctions",
+    "export ban",
+    "import ban",
+    "出口管制",
+    "贸易限制",
+    "制裁",
+    "出口禁令",
+    "进口禁令",
+)
+SEMICONDUCTOR_REGULATION_EXECUTION_TERMS = (
+    "announced",
+    "imposed",
+    "implemented",
+    "effective",
+    "takes effect",
+    "tightened",
+    "expanded",
+    "正式生效",
+    "生效",
+    "实施",
+    "宣布",
+    "出台",
+    "发布",
+    "收紧",
+    "扩大",
+    "新增",
+)
+SEMICONDUCTOR_REGULATION_EASING_TERMS = (
+    "tariff exception",
+    "tariff exemption",
+    "exemption",
+    "lifted",
+    "withdrawn",
+    "relaxed",
+    "关税例外",
+    "关税豁免",
+    "豁免",
+    "撤销",
+    "取消",
+    "放宽",
+)
+SEMICONDUCTOR_SAMPLING_EXECUTION_TERMS = (
+    "started sampling",
+    "began sampling",
+    "sent samples",
+    "sample delivery started",
+    "passed qualification",
+    "completed qualification",
+    "received certification",
+    "obtained certification",
+    "开始送样",
+    "已送样",
+    "完成送样",
+    "样品已交付",
+    "通过客户认证",
+    "完成客户认证",
+    "获得客户认证",
+    "取得认证",
+)
+SEMICONDUCTOR_OPERATING_NON_EXECUTION_TERMS = (
+    "否认",
+    "并未",
+    "尚未出货",
+    "未开始出货",
+    "没有出货",
+    "尚未交付",
+    "未开始交付",
+    "没有交付",
+    "尚未送样",
+    "未开始送样",
+    "没有送样",
+    "尚未通过认证",
+    "未通过认证",
+    "认证尚未完成",
+    "尚未生效",
+    "未生效",
+    "denies",
+    "denied",
+    "has not started shipments",
+    "have not started shipments",
+    "not shipping",
+    "not delivered",
+    "not yet sampling",
+    "not qualified",
+    "not yet effective",
 )
 
 
@@ -1018,6 +1203,73 @@ def _semiconductor_hard_variable_change(
     return None
 
 
+def _semiconductor_operating_change(
+    item: NormalizedMarketItem,
+    text: str,
+    config: RuleConfig,
+) -> tuple[str, str, str] | None:
+    planned_evidence: tuple[str, str] | None = None
+    for sentence in _sentences(text):
+        if not _matches(sentence, config.semiconductor_ai_keywords):
+            continue
+        if _question_without_answer(sentence) or _references_earlier_year(item, sentence):
+            continue
+
+        category = ""
+        confirmed = False
+        if _has(sentence, *SEMICONDUCTOR_SHIPMENT_EXECUTION_TERMS):
+            category = "出货或交付"
+            confirmed = True
+        elif _has(sentence, *SEMICONDUCTOR_SHIPMENT_TERMS):
+            category = "出货或交付"
+            confirmed = _has(sentence, *SEMICONDUCTOR_SHIPMENT_CHANGE_TERMS)
+        elif _has(sentence, *SEMICONDUCTOR_DEMAND_CHANGE_TERMS):
+            category = "需求"
+            confirmed = True
+        elif _has(sentence, *SEMICONDUCTOR_REGULATION_EASING_TERMS):
+            category = "监管或贸易限制缓和"
+        elif _has(sentence, *SEMICONDUCTOR_REGULATION_TERMS):
+            category = "监管或贸易限制"
+            confirmed = _has(sentence, *SEMICONDUCTOR_REGULATION_EXECUTION_TERMS)
+        elif _has(sentence, *SEMICONDUCTOR_SAMPLING_EXECUTION_TERMS):
+            category = "送样或客户认证"
+            confirmed = True
+        else:
+            route_change = any(
+                re.search(pattern, sentence, flags=re.IGNORECASE)
+                for pattern in (
+                    r"(?:switch|shift|migrate).{0,28}from.{0,28}to",
+                    r"replace.{0,28}with",
+                    r"(?:develop|adopt|launch|use).{0,28}custom asics?",
+                    r"custom asics?.{0,28}(?:bypass|replace)",
+                    r"从.{1,24}(?:切换至|替换为|转向).{1,24}",
+                    r"(?:采用|开发|推出|使用).{0,24}自研(?:芯片|asic)",
+                )
+            )
+            if route_change or _has(sentence, "绕过英伟达", "bypass nvidia"):
+                category = "技术路线替换"
+                confirmed = True
+
+        if not category:
+            continue
+        planning = _has(sentence, *SEMICONDUCTOR_SPECULATIVE_TERMS)
+        non_execution = _has(sentence, *SEMICONDUCTOR_OPERATING_NON_EXECUTION_TERMS)
+        if planning:
+            planned_evidence = planned_evidence or (sentence, category)
+            continue
+        if non_execution:
+            continue
+        if not confirmed:
+            planned_evidence = planned_evidence or (sentence, category)
+            continue
+        return "push", sentence, f"半导体/AI的{category}已发生、已生效或进入执行阶段。"
+
+    if planned_evidence:
+        sentence, category = planned_evidence
+        return "daily", sentence, f"半导体/AI的{category}仍处于计划、预测、提案或未证实阶段。"
+    return None
+
+
 def _semiconductor_commercial_development(text: str, config: RuleConfig) -> str:
     for sentence in _sentences(text):
         if not _matches(sentence, config.semiconductor_ai_keywords):
@@ -1243,6 +1495,10 @@ def _semiconductor_candidate(
     if hard_variable_change and hard_variable_change[0] == "push":
         action, quote, reason = hard_variable_change
         return _candidate("semiconductor_ai", "semiconductor_material_change", action, quote, reason)
+    operating_change = _semiconductor_operating_change(item, text, config)
+    if operating_change and operating_change[0] == "push":
+        action, quote, reason = operating_change
+        return _candidate("semiconductor_ai", "semiconductor_material_change", action, quote, reason)
     platform_change = _first_local_match(
         text,
         tuple(config.semiconductor_ai_keywords),
@@ -1311,7 +1567,13 @@ def _semiconductor_candidate(
         ("上调", "下调", "上修", "下修", "raises", "cuts"),
         ("预测", "指引", "forecast", "guidance"),
     )
-    if forecast_revision and _matches(forecast_revision, config.semiconductor_ai_keywords):
+    if (
+        forecast_revision
+        and _matches(forecast_revision, config.semiconductor_ai_keywords)
+        and not _has(forecast_revision, *SEMICONDUCTOR_SPECULATIVE_TERMS)
+        and not _has(forecast_revision, *SEMICONDUCTOR_NON_EXECUTION_TERMS)
+        and not _references_earlier_year(item, forecast_revision)
+    ):
         return _candidate(
             "semiconductor_ai", "industry_forecast_revision", "push", forecast_revision, "产业预测或指引发生明确修订。"
         )
@@ -1556,6 +1818,9 @@ def _semiconductor_candidate(
         return specific_candidate
     if hard_variable_change:
         action, quote, reason = hard_variable_change
+        return _candidate("semiconductor_ai", "semiconductor_ordinary", action, quote, reason)
+    if operating_change:
+        action, quote, reason = operating_change
         return _candidate("semiconductor_ai", "semiconductor_ordinary", action, quote, reason)
     if commercial_development:
         return _candidate(
