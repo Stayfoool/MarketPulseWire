@@ -393,7 +393,25 @@ def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importe
             imports.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imports.add(node.module.split(".")[0])
-    assert imports == {"__future__", "hashlib", "re", "dataclasses", "typing", "market_item"}
+    assert imports == {
+        "__future__",
+        "ai_compute_supply_demand",
+        "ai_credit_risk",
+        "hashlib",
+        "re",
+        "dataclasses",
+        "typing",
+        "market_item",
+    }
+    for classifier_name in ("ai_compute_supply_demand.py", "ai_credit_risk.py"):
+        classifier = parsed_module(classifier_name)
+        top_level_imports: set[str] = set()
+        for node in classifier.body:
+            if isinstance(node, ast.Import):
+                top_level_imports.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                top_level_imports.add(node.module.split(".")[0])
+        assert "rule_center" not in top_level_imports
     inactive_modules = {
         "rule_core_v1.py",
         "rule_core_fixture.py",

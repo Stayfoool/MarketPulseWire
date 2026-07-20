@@ -6,8 +6,6 @@ import hashlib
 import re
 from typing import Any
 
-from rule_center import rule_enabled
-
 
 RULE_ID = "ai_compute_supply_demand"
 DEDUP_LOOKBACK_MINUTES = 14 * 24 * 60
@@ -633,9 +631,7 @@ def _dedup_key(extraction: dict[str, Any]) -> str:
     return f"ai_compute:{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:24]}"
 
 
-def ai_compute_supply_demand_rule(source: str, item: dict[str, Any]) -> dict[str, Any] | None:
-    if not rule_enabled(RULE_ID):
-        return None
+def classify_ai_compute_supply_demand(item: dict[str, Any]) -> dict[str, Any] | None:
     extraction = extract_compute_supply_demand(item)
     if not extraction:
         return None
@@ -657,9 +653,22 @@ def ai_compute_supply_demand_rule(source: str, item: dict[str, Any]) -> dict[str
         "related_targets": [
             {"name": "AI算力供需", "code": "", "relation": event_type, "direction": direction},
         ],
-        "dedup_key": _dedup_key(extraction),
+        **extraction,
+    }
+
+
+def ai_compute_supply_demand_rule(source: str, item: dict[str, Any]) -> dict[str, Any] | None:
+    from rule_center import rule_enabled
+
+    if not rule_enabled(RULE_ID):
+        return None
+    classification = classify_ai_compute_supply_demand(item)
+    if not classification:
+        return None
+    return {
+        **classification,
+        "dedup_key": _dedup_key(classification),
         "dedup_lookback_minutes": DEDUP_LOOKBACK_MINUTES,
         "dedup_kind": "ai_compute_supply_demand",
-        **extraction,
         "source": source,
     }
