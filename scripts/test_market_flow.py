@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import market_content_adapter
 import market_event_adapter
 import market_flow
@@ -371,12 +373,14 @@ def test_runtime_comparison_receives_the_exact_item_before_delivery() -> None:
     original_module = market_runtime._selected_module
     original_record = market_runtime._record_rule_comparison
     original_deliver = market_runtime.deliver_article_review
+    original_prepare = market_runtime.prepare_item_for_decision
     order: list[str] = []
     observed: list[NormalizedMarketItem] = []
 
     class FakeModule:
         @staticmethod
-        def process_article_review(*_args, **_kwargs):
+        def process_article_review(*_args, **kwargs):
+            assert kwargs["normalized_item"] is prepared
             return {
                 "raw": {
                     "decision_result": DecisionResult(
@@ -400,10 +404,13 @@ def test_runtime_comparison_receives_the_exact_item_before_delivery() -> None:
         full_text="完整生产正文。",
         raw={"id": "same-item-1"},
     )
+    prepared = replace(item, raw={**item.raw, "_attributed_research": {"extraction_mode": "not_confirmed"}})
+    prepare_calls: list[NormalizedMarketItem] = []
     try:
         market_runtime.connect_sqlite = lambda *_args, **_kwargs: _DummyContext()
         market_runtime.article_review_exists = lambda *_args, **_kwargs: None
         market_runtime._selected_module = lambda _kind: FakeModule
+        market_runtime.prepare_item_for_decision = lambda normalized: prepare_calls.append(normalized) or prepared
 
         def fake_record(normalized, flow_result, storage_ref):
             order.append("comparison")
@@ -428,14 +435,17 @@ def test_runtime_comparison_receives_the_exact_item_before_delivery() -> None:
         market_runtime._selected_module = original_module
         market_runtime._record_rule_comparison = original_record
         market_runtime.deliver_article_review = original_deliver
-    assert observed == [item]
+        market_runtime.prepare_item_for_decision = original_prepare
+    assert prepare_calls == [item]
+    assert observed == [prepared]
     assert order == ["comparison", "delivery"]
-    assert outcome.flow_result.item is item
+    assert outcome.flow_result.item is prepared
 
 
 def test_analyzed_event_compares_before_delivery_and_baseline_does_not() -> None:
     original_module = market_runtime._selected_module
     original_record = market_runtime._record_rule_comparison
+    original_prepare = market_runtime.prepare_item_for_decision
     order: list[str] = []
 
     class FakeEventModule:
@@ -447,7 +457,8 @@ def test_analyzed_event_compares_before_delivery_and_baseline_does_not() -> None
             return cls.next_id, True
 
         @staticmethod
-        def analyze_event(*_args, **_kwargs):
+        def analyze_event(*_args, **kwargs):
+            assert kwargs["normalized_item"] is prepared
             return {
                 "analysis": {
                     "decision_result": DecisionResult(
@@ -472,12 +483,15 @@ def test_analyzed_event_compares_before_delivery_and_baseline_does_not() -> None
         full_text="美国CPI低于预期，市场调整降息预期。",
         raw={"source_event_id": "event-1"},
     )
+    prepared = replace(item, raw={**item.raw, "_attributed_research": {"extraction_mode": "not_confirmed"}})
+    prepare_calls: list[NormalizedMarketItem] = []
     try:
         market_runtime._selected_module = lambda _kind: FakeEventModule
+        market_runtime.prepare_item_for_decision = lambda normalized: prepare_calls.append(normalized) or prepared
 
         def fake_record(normalized, flow_result, _storage_ref):
             order.append("comparison")
-            assert normalized is item
+            assert normalized is prepared
             assert flow_result.decision.action == "push"
 
         market_runtime._record_rule_comparison = fake_record
@@ -498,7 +512,9 @@ def test_analyzed_event_compares_before_delivery_and_baseline_does_not() -> None
     finally:
         market_runtime._selected_module = original_module
         market_runtime._record_rule_comparison = original_record
-    assert analyzed.flow_result.item is item
+        market_runtime.prepare_item_for_decision = original_prepare
+    assert prepare_calls == [item]
+    assert analyzed.flow_result.item is prepared
     assert order == ["comparison", "delivery"]
 
 

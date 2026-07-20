@@ -103,6 +103,41 @@ def test_disabled_and_invalid_config_are_fail_safe() -> None:
         assert not (root / "reports").exists() or not list((root / "reports").glob("*.json"))
 
 
+def test_runtime_report_keeps_only_trusted_institution_id() -> None:
+    with TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        config, portfolio = _files(root)
+        quote = "受信研究机构表示，HBM市场规模预测已从100亿美元上调至120亿美元。"
+        item = NormalizedMarketItem(
+            source="wallstreetcn_news",
+            source_category="news_media",
+            title=quote,
+            raw={
+                "id": "article:attributed-1",
+                "_attributed_research": {
+                    "institution_id": "trusted_research",
+                    "attribution": "explicit",
+                    "attribution_quote": quote,
+                    "claims": [{"event_type": "forecast_revision", "evidence_quote": quote}],
+                    "extraction_mode": "llm",
+                },
+            },
+        )
+        result = runtime_shadow.record_runtime_comparison(
+            item,
+            DecisionResult(action="push", importance="high", reason="现有规则结果"),
+            {"store_kind": "article_reviews", "item_id": "article:attributed-1"},
+            report_dir=root / "reports",
+            env=_env(config, portfolio),
+        )
+        assert result["status"] == "completed"
+        payload = json.loads(Path(result["report"]).read_text(encoding="utf-8"))
+        comparison = payload["items"][0]["comparison"]
+        assert comparison["candidate"]["attributed_institutions"] == ["trusted_research"]
+        assert "attribution_quote" not in json.dumps(comparison, ensure_ascii=False)
+        assert "claim_quote" not in json.dumps(comparison, ensure_ascii=False)
+
+
 def test_current_admission_exclusion_compares_without_a_current_decision() -> None:
     with TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
@@ -148,6 +183,7 @@ def test_config_cache_reloads_only_after_input_changes() -> None:
 def main() -> int:
     test_runtime_item_writes_bounded_comparison_without_body()
     test_disabled_and_invalid_config_are_fail_safe()
+    test_runtime_report_keeps_only_trusted_institution_id()
     test_current_admission_exclusion_compares_without_a_current_decision()
     test_config_cache_reloads_only_after_input_changes()
     print("rule core runtime shadow checks passed")

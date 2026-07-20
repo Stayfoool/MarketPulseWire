@@ -404,6 +404,7 @@ def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importe
         "dataclasses",
         "trade_friction",
         "typing",
+        "urllib",
         "market_item",
     }
     for classifier_name in (

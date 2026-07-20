@@ -97,8 +97,11 @@ def test_llm_only_extracts_evidence_and_deterministic_engine_decides() -> None:
     original_config = attributed_research.llm_config
     original_call = attributed_research.call_chat_completion_with_prompts
     captured: dict[str, str] = {}
+    call_count = 0
 
     def fake_call(system_prompt: str, user_prompt: str, **_kwargs):
+        nonlocal call_count
+        call_count += 1
         captured["system"] = system_prompt
         captured["user"] = user_prompt
         return (
@@ -122,11 +125,14 @@ def test_llm_only_extracts_evidence_and_deterministic_engine_decides() -> None:
         attributed_research.llm_config = lambda: ("key", "https://example.com", "fake-model")
         attributed_research.call_chat_completion_with_prompts = fake_call
         prepared = prepare_item_for_decision(item)
+        prepared_again = prepare_item_for_decision(prepared)
     finally:
         attributed_research.llm_config = original_config
         attributed_research.call_chat_completion_with_prompts = original_call
 
     extraction = prepared.raw[EXTRACTION_KEY]
+    assert prepared_again is prepared
+    assert call_count == 1
     assert extraction["extraction_mode"] == "llm"
     assert extraction["claims"][0]["event_type"] == "deployment_delay"
     assert "禁止输出 importance、action、push" in captured["system"]

@@ -527,6 +527,8 @@ def llm_extraction(item: NormalizedMarketItem, mentions: list[dict[str, str]]) -
 
 
 def prepare_item_for_decision(item: NormalizedMarketItem) -> NormalizedMarketItem:
+    if isinstance(item.raw.get(EXTRACTION_KEY), dict):
+        return item
     if not rule_enabled(RULE_ID):
         return item
     text = item_text(item)

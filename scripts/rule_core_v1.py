@@ -10,6 +10,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
+from urllib.parse import urlparse
 
 from ai_compute_supply_demand import classify_ai_compute_supply_demand
 from ai_credit_risk import classify_ai_credit_risk
@@ -613,6 +614,167 @@ CORPORATE_CONFIRMED_STAGE_TERMS = (
     "secured",
     "awarded",
     "entered into",
+)
+
+SEMICONDUCTOR_PERFORMANCE_TERMS = (
+    "revenue",
+    "profit",
+    "earnings",
+    "业绩",
+    "gross margin",
+    "annual recurring revenue",
+    "arr",
+    "营收",
+    "收入",
+    "利润",
+    "净利",
+    "盈利",
+    "亏损",
+    "毛利率",
+    "年度经常性收入",
+)
+SEMICONDUCTOR_MARKET_SIZE_TERMS = (
+    "market size",
+    "addressable market",
+    "total addressable market",
+    "tam",
+    "市场规模",
+    "可寻址市场",
+)
+SEMICONDUCTOR_PERFORMANCE_CHANGE_TERMS = (
+    "大增",
+    "大降",
+    "激增",
+    "骤降",
+    "突破",
+    "同比增长",
+    "同比下降",
+    "环比增长",
+    "环比下降",
+    "转盈",
+    "转亏",
+    "扭亏",
+    "改善",
+    "恶化",
+    "提升",
+    "下降",
+    "增长",
+    "减少",
+    "扩大",
+    "收缩",
+    "翻倍",
+    "减半",
+    "创纪录",
+    "创新高",
+    "grew",
+    "growth",
+    "rose",
+    "increased",
+    "improved",
+    "declined",
+    "fell",
+    "decreased",
+    "contracted",
+    "doubled",
+    "halved",
+    "turned profitable",
+    "turned to a loss",
+    "record high",
+    "surged",
+    "plunged",
+    "jumped",
+    "slumped",
+    "broke through",
+)
+SEMICONDUCTOR_MATERIAL_FORECAST_TERMS = (
+    "翻倍",
+    "减半",
+    "大幅增长",
+    "大幅下降",
+    "显著增长",
+    "显著下降",
+    "加速增长",
+    "快速收缩",
+    "doubled",
+    "double",
+    "halved",
+    "halve",
+    "surge",
+    "surged",
+    "plunge",
+    "plunged",
+    "sharp growth",
+    "sharp decline",
+    "accelerating growth",
+)
+SEMICONDUCTOR_PERFORMANCE_SURPRISE_TERMS = (
+    "超预期",
+    "超过预期",
+    "好于预期",
+    "低于预期",
+    "不及预期",
+    "逊于预期",
+    "beat expectations",
+    "beats expectations",
+    "above expectations",
+    "exceeded expectations",
+    "missed expectations",
+    "below expectations",
+)
+SEMICONDUCTOR_FORECAST_TERMS = (
+    "预计",
+    "预期",
+    "预测",
+    "有望",
+    "将达到",
+    "将增长",
+    "将下降",
+    "forecast",
+    "forecasts",
+    "forecasted",
+    "expects",
+    "expected",
+    "projected",
+    "projection",
+    "outlook",
+    "will reach",
+    "will grow",
+    "will decline",
+)
+RESEARCH_ATTRIBUTION_TERMS = (
+    "指出",
+    "表示",
+    "认为",
+    "预计",
+    "预测",
+    "强调",
+    "警告",
+    "报告称",
+    "报告指出",
+    "根据",
+    "said",
+    "says",
+    "reported",
+    "according to",
+    "expects",
+    "forecasts",
+    "believes",
+    "warned",
+    "projects",
+    "estimates",
+)
+RESEARCH_CRITICISM_TERMS = (
+    "批评",
+    "质疑",
+    "反驳",
+    "驳斥",
+    "否认",
+    "错误",
+    "不准确",
+    "criticized",
+    "disputed",
+    "rejected",
+    "inaccurate",
 )
 
 
@@ -1415,6 +1577,204 @@ def _semiconductor_operating_change(
     return None
 
 
+def _semiconductor_performance_change(
+    item: NormalizedMarketItem,
+    text: str,
+    config: RuleConfig,
+) -> tuple[str, str, str, str] | None:
+    ordinary_evidence: tuple[str, str] | None = None
+    historical_evidence: tuple[str, str] | None = None
+    for sentence in _sentences(text):
+        if not _matches(sentence, config.semiconductor_ai_keywords):
+            continue
+        performance = _has(sentence, *SEMICONDUCTOR_PERFORMANCE_TERMS)
+        market_size = _has(sentence, *SEMICONDUCTOR_MARKET_SIZE_TERMS)
+        if not performance and not market_size:
+            continue
+        category = "市场规模" if market_size else "业绩或经营指标"
+        if _question_without_answer(sentence):
+            continue
+        if _references_earlier_year(item, sentence) or _has(
+            sentence,
+            "历史上",
+            "此前年度",
+            "过去几年",
+            "回顾",
+            "historically",
+            "in prior years",
+            "previous years",
+        ):
+            historical_evidence = historical_evidence or (sentence, category)
+            continue
+        if _has(sentence, *SEMICONDUCTOR_NON_EXECUTION_TERMS):
+            ordinary_evidence = ordinary_evidence or (sentence, category)
+            continue
+        actual_surprise = _has(sentence, *SEMICONDUCTOR_PERFORMANCE_SURPRISE_TERMS)
+        forecast = _has(sentence, *SEMICONDUCTOR_FORECAST_TERMS) and not actual_surprise
+        changed = _has(sentence, *SEMICONDUCTOR_PERFORMANCE_CHANGE_TERMS)
+        material_forecast = forecast and _has(sentence, *SEMICONDUCTOR_MATERIAL_FORECAST_TERMS)
+        if actual_surprise or (changed and not forecast) or material_forecast:
+            reason = (
+                f"半导体/AI的{category}出现明确实质变化。"
+                if not forecast
+                else f"半导体/AI的{category}预测包含翻倍、减半或显著加速/收缩等实质变化。"
+            )
+            return "push", sentence, reason, "semiconductor_performance_change"
+        ordinary_evidence = ordinary_evidence or (sentence, category)
+
+    if ordinary_evidence:
+        sentence, category = ordinary_evidence
+        return (
+            "daily",
+            sentence,
+            f"半导体/AI的{category}只有静态数值或普通预测，未证明相对既有判断发生实质变化。",
+            "semiconductor_performance_outlook",
+        )
+    if historical_evidence:
+        sentence, category = historical_evidence
+        return (
+            "archive",
+            sentence,
+            f"半导体/AI的{category}只属于历史回顾。",
+            "semiconductor_ordinary",
+        )
+    return None
+
+
+def _normalized_quote_in_text(text: str, quote: str) -> bool:
+    normalized_text = _clean(text)
+    normalized_quote = _clean(quote)
+    return bool(normalized_quote) and normalized_quote in normalized_text
+
+
+def _trusted_research_evidence(
+    item: NormalizedMarketItem,
+    text: str,
+    config: RuleConfig,
+) -> tuple[dict[str, str], ...]:
+    institutions = {institution.institution_id: institution for institution in config.trusted_institutions}
+    evidence: list[dict[str, str]] = []
+
+    stored = item.raw.get("_attributed_research") if isinstance(item.raw, Mapping) else None
+    if isinstance(stored, Mapping) and str(stored.get("attribution") or "") == "explicit":
+        institution_id = str(stored.get("institution_id") or "").strip()
+        institution = institutions.get(institution_id)
+        attribution_quote = str(stored.get("attribution_quote") or "").strip()
+        alias_match = bool(institution and _matches(attribution_quote, institution.aliases))
+        if (
+            institution
+            and alias_match
+            and _normalized_quote_in_text(text, attribution_quote)
+            and not _has(attribution_quote, *RESEARCH_CRITICISM_TERMS)
+        ):
+            claims = stored.get("claims") if isinstance(stored.get("claims"), list) else []
+            for claim in claims:
+                if not isinstance(claim, Mapping):
+                    continue
+                claim_quote = str(claim.get("evidence_quote") or "").strip()
+                if not _normalized_quote_in_text(text, claim_quote):
+                    continue
+                if not _matches(claim_quote, config.semiconductor_ai_keywords):
+                    continue
+                evidence.append(
+                    {
+                        "institution_id": institution_id,
+                        "attribution_quote": attribution_quote,
+                        "claim_quote": claim_quote,
+                        "extraction_mode": str(stored.get("extraction_mode") or "stored"),
+                    }
+                )
+
+    sentences = _sentences(text)
+    hostname = (urlparse(item.url).hostname or "").casefold()
+    for institution in config.trusted_institutions:
+        matching_domain = next(
+            (
+                domain
+                for domain in institution.domains
+                if hostname == domain or hostname.endswith(f".{domain}")
+            ),
+            "",
+        )
+        if not matching_domain:
+            continue
+        for claim_quote in sentences:
+            if not _matches(claim_quote, config.semiconductor_ai_keywords):
+                continue
+            evidence.append(
+                {
+                    "institution_id": institution.institution_id,
+                    "attribution_quote": "",
+                    "attribution_domain": matching_domain,
+                    "claim_quote": claim_quote,
+                    "extraction_mode": "official_domain",
+                }
+            )
+
+    for institution in config.trusted_institutions:
+        for index, sentence in enumerate(sentences):
+            if not _matches(sentence, institution.aliases):
+                continue
+            if _has(sentence, *RESEARCH_CRITICISM_TERMS):
+                continue
+            if _question_without_answer(sentence):
+                continue
+            if not _has(sentence, *RESEARCH_ATTRIBUTION_TERMS):
+                continue
+            for claim_quote in sentences[index : index + 2]:
+                if not _matches(claim_quote, config.semiconductor_ai_keywords):
+                    continue
+                evidence.append(
+                    {
+                        "institution_id": institution.institution_id,
+                        "attribution_quote": sentence,
+                        "claim_quote": claim_quote,
+                        "extraction_mode": "deterministic",
+                    }
+                )
+
+    unique: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item_evidence in evidence:
+        key = (
+            item_evidence["institution_id"],
+            _clean(item_evidence.get("attribution_quote") or item_evidence.get("attribution_domain")),
+            _clean(item_evidence["claim_quote"]),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item_evidence)
+    return tuple(unique[:6])
+
+
+def _attach_trusted_research_evidence(
+    candidate: dict[str, Any],
+    item: NormalizedMarketItem,
+    text: str,
+    config: RuleConfig,
+) -> dict[str, Any]:
+    claims = _trusted_research_evidence(item, text, config)
+    if not claims:
+        return candidate
+    candidate_quote = _clean(candidate.get("evidence_quote"))
+    matched = tuple(
+        claim
+        for claim in claims
+        if not candidate_quote
+        or _clean(claim["claim_quote"]) in candidate_quote
+        or candidate_quote in _clean(claim["claim_quote"])
+    )
+    if not matched:
+        return candidate
+    enriched = dict(candidate)
+    enriched["attributed_institutions"] = list(
+        dict.fromkeys(claim["institution_id"] for claim in matched)
+    )
+    enriched["attributed_research_evidence"] = [dict(claim) for claim in matched]
+    return enriched
+
+
 def _semiconductor_commercial_development(text: str, config: RuleConfig) -> str:
     for sentence in _sentences(text):
         if not _matches(sentence, config.semiconductor_ai_keywords):
@@ -2071,6 +2431,10 @@ def _semiconductor_candidate(
         return _candidate(
             "semiconductor_ai", "industry_forecast_revision", "push", forecast_revision, "产业预测或指引发生明确修订。"
         )
+    performance_change = _semiconductor_performance_change(item, text, config)
+    if performance_change and performance_change[0] == "push":
+        action, quote, reason, rule_id = performance_change
+        return _candidate("semiconductor_ai", rule_id, action, quote, reason)
     company_supply_confirmation = _first_local_match(
         text,
         ("供货", "供应商", "供应关系", "supplies", "supplier"),
@@ -2316,6 +2680,9 @@ def _semiconductor_candidate(
     if operating_change:
         action, quote, reason = operating_change
         return _candidate("semiconductor_ai", "semiconductor_ordinary", action, quote, reason)
+    if performance_change:
+        action, quote, reason, rule_id = performance_change
+        return _candidate("semiconductor_ai", rule_id, action, quote, reason)
     if commercial_development:
         return _candidate(
             "semiconductor_ai",
@@ -2513,7 +2880,15 @@ def decide_admitted_item(
         if family == "holding":
             candidates.append(_holding_candidate(item, text, admission, portfolio))
         elif family == "semiconductor_ai":
-            candidates.append(_semiconductor_candidate(item, text, rule_config))
+            semiconductor_candidate = _semiconductor_candidate(item, text, rule_config)
+            candidates.append(
+                _attach_trusted_research_evidence(
+                    semiconductor_candidate,
+                    item,
+                    text,
+                    rule_config,
+                )
+            )
         elif family == "macro_data":
             candidates.append(_macro_candidate(item, text, rule_config))
         elif family == "fed_policy":
