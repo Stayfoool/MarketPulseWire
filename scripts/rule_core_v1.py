@@ -470,6 +470,151 @@ SEMICONDUCTOR_OPERATING_NON_EXECUTION_TERMS = (
     "not yet effective",
 )
 
+CORPORATE_PLANNING_OR_UNCONFIRMED_TERMS = (
+    "计划",
+    "拟建",
+    "拟投",
+    "拟扩",
+    "拟采购",
+    "拟增加",
+    "拟收购",
+    "拟出售",
+    "拟签署",
+    "拟签订",
+    "拟上调",
+    "拟下调",
+    "拟实施",
+    "拟处罚",
+    "传闻",
+    "据传",
+    "可能",
+    "预计",
+    "征求意见",
+    "待批准",
+    "等待批准",
+    "尚待",
+    "plan to",
+    "plans to",
+    "planned",
+    "proposed",
+    "proposal",
+    "intend",
+    "intends",
+    "rumor",
+    "rumour",
+    "reportedly",
+    "may",
+    "could",
+    "pending",
+)
+CORPORATE_NON_EXECUTION_TERMS = (
+    "尚未",
+    "尚无",
+    "没有",
+    "未签署",
+    "未签订",
+    "未中标",
+    "未获得",
+    "未批准",
+    "未生效",
+    "未实施",
+    "未执行",
+    "未完成",
+    "未披露",
+    "否认",
+    "不涉及",
+    "意向",
+    "框架",
+    "框架协议",
+    "战略合作",
+    "事先告知书",
+    "not yet",
+    "has not",
+    "have not",
+    "not signed",
+    "not awarded",
+    "not approved",
+    "not effective",
+    "not implemented",
+    "not completed",
+    "not disclosed",
+    "denies",
+    "denied",
+    "non-binding",
+    "framework agreement",
+    "letter of intent",
+    "preliminary notice",
+)
+CORPORATE_HISTORICAL_TERMS = (
+    "背景资料",
+    "历史资料",
+    "此前曾",
+    "过去曾",
+    "回顾",
+    "已有",
+    "现有",
+    "一直",
+    "长期以来",
+    "historically",
+    "previously",
+    "in the past",
+    "last year",
+    "existing",
+    "long-standing",
+)
+CORPORATE_FORMAL_STAGE_TERMS = (
+    "已经",
+    "已",
+    "正式",
+    "审议通过",
+    "表决通过",
+    "董事会批准",
+    "批准了",
+    "决定",
+    "生效",
+    "实施",
+    "执行",
+    "完成",
+    "签署",
+    "签订",
+    "获得",
+    "取得",
+    "中标",
+    "定点",
+    "announced",
+    "approved",
+    "effective",
+    "implemented",
+    "executed",
+    "completed",
+    "signed",
+    "secured",
+    "awarded",
+    "won",
+    "entered into",
+)
+CORPORATE_CONFIRMED_STAGE_TERMS = (
+    "审议通过",
+    "表决通过",
+    "董事会批准",
+    "批准了",
+    "决定",
+    "正式生效",
+    "开始执行",
+    "完成",
+    "签署",
+    "签订",
+    "approved",
+    "effective",
+    "implemented",
+    "executed",
+    "completed",
+    "signed",
+    "secured",
+    "awarded",
+    "entered into",
+)
+
 
 class RuleConfigError(ValueError):
     pass
@@ -1291,7 +1436,73 @@ def _routine_corporate_attachment(title: str) -> bool:
     return _has(title, "审计报告", "审计附件", "资产评估报告", "估值报告", "valuation report")
 
 
-def _corporate_material_change(item: NormalizedMarketItem, text: str) -> tuple[str, str] | None:
+def _current_corporate_event(
+    item: NormalizedMarketItem,
+    text: str,
+    event_terms: tuple[str, ...],
+    *,
+    subject_terms: tuple[str, ...] = (),
+    action_terms: tuple[str, ...] = (),
+    require_action_term: bool = False,
+    max_action_gap: int | None = None,
+    sentence_limit: int = 16,
+) -> str:
+    for sentence in _sentences(text)[:sentence_limit]:
+        if not _has(sentence, *event_terms):
+            continue
+        if subject_terms and not (
+            _matches(sentence, subject_terms)
+            or _has(
+                sentence,
+                "本公司已",
+                "公司已",
+                "公司已经",
+                "公司正式",
+                "公司决定",
+                "公司宣布",
+                "公司董事会",
+                "公司签署",
+                "公司签订",
+                "公司新获",
+                "公司获得",
+                "公司完成",
+                "the company has",
+                "the company announced",
+                "the company approved",
+                "the company signed",
+            )
+        ):
+            continue
+        if _question_without_answer(sentence) or _references_earlier_year(item, sentence):
+            continue
+        if _has(sentence, *CORPORATE_HISTORICAL_TERMS, *CORPORATE_NON_EXECUTION_TERMS):
+            continue
+        formal_stage = _has(sentence, *CORPORATE_FORMAL_STAGE_TERMS)
+        confirmed_stage = _has(sentence, *CORPORATE_CONFIRMED_STAGE_TERMS)
+        if _has(sentence, *CORPORATE_PLANNING_OR_UNCONFIRMED_TERMS) and not confirmed_stage:
+            continue
+        matched_action = bool(action_terms and _has(sentence, *action_terms))
+        if matched_action and max_action_gap is not None:
+            event_spans = _term_spans(sentence, event_terms)
+            action_spans = _term_spans(sentence, action_terms)
+            matched_action = any(
+                max(event_start, action_start) - min(event_end, action_end) <= max_action_gap
+                for event_start, event_end in event_spans
+                for action_start, action_end in action_spans
+            )
+        if require_action_term and not matched_action:
+            continue
+        if formal_stage or matched_action:
+            return sentence
+    return ""
+
+
+def _corporate_material_change(
+    item: NormalizedMarketItem,
+    text: str,
+    *,
+    subject_terms: tuple[str, ...] = (),
+) -> tuple[str, str] | None:
     title = item.title
     if _routine_corporate_attachment(title):
         return None
@@ -1356,6 +1567,282 @@ def _corporate_material_change(item: NormalizedMarketItem, text: str) -> tuple[s
     )
     if project_schedule_change:
         return project_schedule_change, "募投、扩产或生产项目的执行时间表发生明确变化。"
+
+    executed_order = _current_corporate_event(
+        item,
+        text,
+        (
+            "订单",
+            "大单",
+            "重大合同",
+            "销售合约",
+            "供货协议",
+            "供应协议",
+            "采购订单",
+            "中标",
+            "定点",
+            "order",
+            "contract",
+            "supply agreement",
+            "purchase order",
+        ),
+        subject_terms=subject_terms,
+        action_terms=(
+            "签署",
+            "签订",
+            "新签",
+            "新获",
+            "新增",
+            "获得",
+            "取得",
+            "赢得",
+            "中标",
+            "定点",
+            "获批",
+            "signed",
+            "secured",
+            "awarded",
+            "won",
+            "entered into",
+        ),
+        require_action_term=True,
+        max_action_gap=10,
+    )
+    if executed_order:
+        return executed_order, "公司已签署、获得或开始执行订单、重大合同或供货协议。"
+
+    executed_price_change = _current_corporate_event(
+        item,
+        text,
+        (
+            "涨价",
+            "提价",
+            "价格上调",
+            "降价",
+            "价格下调",
+            "价格调整",
+            "price increase",
+            "price hike",
+            "price cut",
+            "price adjustment",
+        ),
+        subject_terms=subject_terms,
+        action_terms=(
+            "上调",
+            "下调",
+            "生效",
+            "实施",
+            "执行",
+            "raised prices",
+            "cut prices",
+            "takes effect",
+            "implemented",
+        ),
+        require_action_term=True,
+    )
+    if executed_price_change:
+        return executed_price_change, "公司已决定、实施或正式生效产品价格调整。"
+
+    executed_capacity_change = _current_corporate_event(
+        item,
+        text,
+        (
+            "扩产",
+            "产能扩张",
+            "新增产能",
+            "减产",
+            "停产",
+            "复产",
+            "投产",
+            "产能",
+            "产量",
+            "良率",
+            "资本开支",
+            "capacity expansion",
+            "capacity cut",
+            "production halt",
+            "production restart",
+            "production ramp",
+            "output",
+            "yield",
+            "capital expenditure",
+            "capex",
+        ),
+        subject_terms=subject_terms,
+        action_terms=(
+            "扩产",
+            "减产",
+            "停产",
+            "复产",
+            "投产",
+            "上调",
+            "下调",
+            "提高",
+            "降低",
+            "提升",
+            "下降",
+            "增加",
+            "削减",
+            "expanded",
+            "cut capacity",
+            "halted production",
+            "restarted production",
+            "raised",
+            "increased",
+            "reduced",
+            "improved",
+            "declined",
+        ),
+        require_action_term=True,
+    )
+    if executed_capacity_change:
+        return executed_capacity_change, "公司已批准或实施产能、产量、停复产、资本开支或良率变化。"
+
+    executed_asset_transaction = _current_corporate_event(
+        item,
+        text,
+        (
+            "收购",
+            "并购",
+            "资产出售",
+            "出售资产",
+            "出售子公司",
+            "股权出售",
+            "出售股权",
+            "处置资产",
+            "资产处置",
+            "资产剥离",
+            "剥离资产",
+            "acquisition",
+            "acquire",
+            "asset sale",
+            "asset disposal",
+            "divestiture",
+            "divestment",
+        ),
+        subject_terms=subject_terms,
+        action_terms=(
+            "审议通过",
+            "批准",
+            "签署",
+            "签订",
+            "完成",
+            "交割",
+            "对价支付",
+            "approved",
+            "signed",
+            "completed",
+            "closed",
+            "closing",
+            "divested",
+            "disposed",
+        ),
+        require_action_term=True,
+    )
+    if executed_asset_transaction:
+        return executed_asset_transaction, "并购、资产出售或资产剥离已经签署、批准或完成。"
+
+    formal_regulatory_decision = ""
+    for sentence in _sentences(text)[:16]:
+        if not _all_groups(
+            sentence,
+            (
+                "监管",
+                "证监会",
+                "交易所",
+                "法院",
+                "行政机关",
+                "主管部门",
+                "regulator",
+                "regulatory authority",
+                "commission",
+                "exchange",
+                "court",
+                "fda",
+            ),
+            (
+                "处罚",
+                "罚款",
+                "批准",
+                "许可",
+                "否决",
+                "驳回",
+                "暂停",
+                "终止",
+                "禁令",
+                "制裁",
+                "penalty",
+                "fine",
+                "approval",
+                "approved",
+                "rejected",
+                "suspended",
+                "terminated",
+                "ban",
+                "sanction",
+            ),
+        ):
+            continue
+        if subject_terms and not _matches(sentence, subject_terms):
+            continue
+        if _question_without_answer(sentence) or _references_earlier_year(item, sentence):
+            continue
+        if _has(
+            sentence,
+            *CORPORATE_HISTORICAL_TERMS,
+            *CORPORATE_NON_EXECUTION_TERMS,
+            *CORPORATE_PLANNING_OR_UNCONFIRMED_TERMS,
+        ):
+            continue
+        if _has(
+            sentence,
+            *CORPORATE_FORMAL_STAGE_TERMS,
+            "作出",
+            "下达",
+            "imposed",
+            "issued",
+            "rejected",
+            "suspended",
+            "terminated",
+        ):
+            formal_regulatory_decision = sentence
+            break
+    if formal_regulatory_decision:
+        return formal_regulatory_decision, "监管机关已经作出正式处罚、批准、否决、暂停或终止决定。"
+
+    if _has(title, "业绩快报", "earnings flash", "preliminary earnings report"):
+        return title, "公司正式披露业绩快报。"
+
+    guidance_revision = _current_corporate_event(
+        item,
+        text,
+        (
+            "业绩指引",
+            "盈利指引",
+            "营收指引",
+            "earnings guidance",
+            "profit guidance",
+            "revenue guidance",
+        ),
+        subject_terms=subject_terms,
+        action_terms=(
+            "上修",
+            "下修",
+            "上调",
+            "下调",
+            "提高",
+            "降低",
+            "raises",
+            "raised",
+            "cuts",
+            "cut",
+            "revises",
+            "revised",
+        ),
+        require_action_term=True,
+    )
+    if guidance_revision:
+        return guidance_revision, "公司明确上修或下修正式业绩指引。"
     return None
 
 
@@ -1369,6 +1856,13 @@ def _holding_candidate(
         item.rule_family == "holding" and item.reason_code == "holding_direct_identity"
         for item in admission.evidence
     )
+    item_symbols = set(item.symbols)
+    direct_subjects = tuple(
+        name
+        for holding in portfolio.holdings
+        if holding.symbol in item_symbols or _matches(text, holding.names)
+        for name in holding.names
+    )
     immediate = tuple(term for holding in portfolio.holdings for term in holding.immediate_alert_keywords)
     if _matches(text, immediate):
         return _candidate("holding", "holding_immediate_alert", "push", text, "命中显式即时提醒关键词。")
@@ -1379,7 +1873,7 @@ def _holding_candidate(
     )
     if routine_meeting_notice or _routine_corporate_attachment(item.title):
         return _candidate("holding", "holding_ordinary", "archive", text, "例行会议或审计附件不构成实质变化。")
-    material_change = _corporate_material_change(item, text)
+    material_change = _corporate_material_change(item, text, subject_terms=direct_subjects)
     if material_change:
         quote, reason = material_change
         return _candidate("holding", "holding_material_event", "push", quote, reason)
@@ -1482,6 +1976,8 @@ def _semiconductor_candidate(
         return _candidate(
             "semiconductor_ai", "semiconductor_ordinary", "archive", text, "非约束性合作未进入执行阶段。"
         )
+    if specific_candidate and specific_candidate["decision_action"] == "push":
+        return specific_candidate
     material_change = _corporate_material_change(item, text)
     if material_change:
         quote, reason = material_change
@@ -1489,8 +1985,6 @@ def _semiconductor_candidate(
     commercial_development = _semiconductor_commercial_development(text, config)
     if _is_market_template_title(item.title) and not commercial_development and not specific_candidate:
         return _candidate("semiconductor_ai", "semiconductor_ordinary", "archive", item.title, "市场行情模板不构成新的产业实质变化。")
-    if specific_candidate and specific_candidate["decision_action"] == "push":
-        return specific_candidate
     hard_variable_change = _semiconductor_hard_variable_change(item, text, config)
     if hard_variable_change and hard_variable_change[0] == "push":
         action, quote, reason = hard_variable_change

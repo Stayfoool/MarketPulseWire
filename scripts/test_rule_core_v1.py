@@ -480,6 +480,189 @@ def test_approved_corporate_material_changes_are_source_neutral() -> None:
     assert {hit["rule_id"] for hit in pending_meeting_notice.rule_hits} == {"holding_ordinary"}
 
 
+def test_migrated_holding_corporate_events_are_source_neutral() -> None:
+    _, config, portfolios = loaded_contracts()
+    portfolio = parse_portfolio_config(
+        [
+            {
+                "symbol": "TEST1.SZ",
+                "names": ["甲公司", "Company A"],
+                "related_news_keywords": [],
+                "exclude_keywords": [],
+                "immediate_alert_keywords": [],
+            }
+        ]
+    )
+    source_variants = (
+        ("company_disclosure", "company_disclosure", "company_official", "company_disclosure"),
+        ("finance_media", "news_media", "news_media", "article"),
+    )
+    cases = (
+        (
+            "甲公司签署重大供货合同",
+            "甲公司已与乙公司签署供货协议，合同自今日起生效。",
+        ),
+        (
+            "甲公司获得新订单",
+            "甲公司新获客户订单并已开始执行。",
+        ),
+        (
+            "甲公司产品价格调整",
+            "甲公司决定从本月起将主要产品价格上调。",
+        ),
+        (
+            "甲公司调整生产安排",
+            "甲公司已正式减产，并暂停一条生产线。",
+        ),
+        (
+            "甲公司资本开支调整",
+            "甲公司董事会批准扩产，并上调年度资本开支。",
+        ),
+        (
+            "甲公司工艺改造完成",
+            "甲公司已完成工艺改造，产品良率得到提升。",
+        ),
+        (
+            "甲公司收购事项进展",
+            "甲公司董事会审议通过收购乙公司的议案。",
+        ),
+        (
+            "甲公司出售子公司股权",
+            "甲公司已签署出售子公司股权的正式协议。",
+        ),
+        (
+            "监管机构批准甲公司产品上市",
+            "监管机构正式批准甲公司的产品上市申请。",
+        ),
+        (
+            "甲公司收到行政处罚决定",
+            "主管部门已经作出对甲公司的正式罚款决定。",
+        ),
+        (
+            "甲公司2026年半年度业绩快报",
+            "公司正式披露半年度主要财务数据。",
+        ),
+        (
+            "甲公司下修全年业绩指引",
+            "甲公司正式下修全年营收指引。",
+        ),
+        (
+            "Company A signs customer contract",
+            "Company A has signed a new supply agreement with a customer.",
+        ),
+        (
+            "Company A revises capital spending",
+            "Company A has reduced annual capex and halted one production line.",
+        ),
+    )
+    for title, full_text in cases:
+        decisions = [
+            evaluate_market_item(
+                NormalizedMarketItem(
+                    source=source,
+                    source_category=category,
+                    publisher_role=role,
+                    content_type=content_type,
+                    title=title,
+                    full_text=full_text,
+                    symbols=["TEST1.SZ"],
+                ),
+                rule_config=config,
+                portfolio=portfolio,
+                source_policy=SourceAdmissionPolicy(),
+            ).decision
+            for source, category, role, content_type in source_variants
+        ]
+        assert all(decision is not None for decision in decisions), title
+        assert {decision.action for decision in decisions if decision} == {"push"}, title
+        assert {
+            hit["rule_id"]
+            for decision in decisions
+            if decision
+            for hit in decision.rule_hits
+        } == {"holding_material_event"}, title
+
+
+def test_unexecuted_holding_corporate_events_remain_daily_across_sources() -> None:
+    _, config, portfolios = loaded_contracts()
+    source_variants = (
+        ("company_disclosure", "company_disclosure", "company_official", "company_disclosure"),
+        ("finance_media", "news_media", "news_media", "article"),
+    )
+    cases = (
+        (
+            "甲公司扩产计划",
+            "甲公司计划明年扩产，但项目尚未获得批准或启动。",
+        ),
+        (
+            "甲公司签署框架供货协议",
+            "甲公司签署非约束性框架供货协议，尚未形成订单。",
+        ),
+        (
+            "甲公司回应收购传闻",
+            "市场传闻甲公司可能收购乙公司，公司没有确认交易。",
+        ),
+        (
+            "甲公司订单情况问答",
+            "投资者提问：甲公司是否已经获得新订单？",
+        ),
+        (
+            "甲公司经营回顾",
+            "背景资料显示，甲公司2025年已完成资产出售。",
+        ),
+        (
+            "甲公司补充监管备案材料",
+            "监管机构要求甲公司补充备案材料，尚未批准、否决、暂停或终止申请。",
+        ),
+        (
+            "甲公司收到行政处罚事先告知书",
+            "主管部门向甲公司送达拟处罚事先告知书，尚未作出正式决定。",
+        ),
+        (
+            "甲公司产品市场价格变化",
+            "市场价格上涨，但甲公司没有决定或实施产品价格调整。",
+        ),
+        (
+            "甲公司行业观点",
+            "行业整体产能已经增加。甲公司仅就行业趋势发表观点。",
+        ),
+        (
+            "甲公司客户关系更新",
+            "甲公司一直向乙公司供货，但没有新订单或新协议。",
+        ),
+        (
+            "甲公司研究更新",
+            "分析师上调甲公司盈利预测，但公司没有修订业绩指引。",
+        ),
+    )
+    for title, full_text in cases:
+        decisions = [
+            evaluate_market_item(
+                NormalizedMarketItem(
+                    source=source,
+                    source_category=category,
+                    publisher_role=role,
+                    content_type=content_type,
+                    title=title,
+                    full_text=full_text,
+                    symbols=["TEST1.SZ"],
+                ),
+                rule_config=config,
+                portfolio=portfolios["holding_test"],
+                source_policy=SourceAdmissionPolicy(),
+            ).decision
+            for source, category, role, content_type in source_variants
+        ]
+        assert all(decision is not None for decision in decisions), title
+        assert {decision.action for decision in decisions if decision} == {"daily"}, title
+        assert {
+            hit["rule_id"]
+            for decision in decisions
+            if decision
+            for hit in decision.rule_hits
+        } == {"holding_ordinary"}, title
+
+
 def test_migrated_semiconductor_hard_variables_are_source_neutral() -> None:
     config_payload = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     config_payload["semiconductor_ai_keywords"].extend(
@@ -1414,6 +1597,8 @@ def main() -> int:
     test_source_identity_and_llm_availability_cannot_change_core_result()
     test_holding_capital_change_uses_document_title_to_resolve_routine_attachments()
     test_approved_corporate_material_changes_are_source_neutral()
+    test_migrated_holding_corporate_events_are_source_neutral()
+    test_unexecuted_holding_corporate_events_remain_daily_across_sources()
     test_migrated_semiconductor_hard_variables_are_source_neutral()
     test_migrated_semiconductor_operating_changes_are_source_neutral()
     test_migrated_ai_compute_and_credit_actions_are_source_neutral()
