@@ -8,6 +8,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import rule_core_runtime_shadow as runtime_shadow
+from llm_analysis import ChatCompletionResponse
+from llm_rule_catalog import CATALOG_VERSION, RULE_MATRIX_VERSION, rules_for_families
+from llm_rule_decision import ENGINE_VERSION as LLM_RULE_ENGINE_VERSION, SCHEMA_VERSION
 from market_item import DecisionResult, NormalizedMarketItem
 
 
@@ -29,6 +32,47 @@ def _env(config: Path, portfolio: Path) -> dict[str, str]:
         "RULE_CORE_SHADOW_CONFIG": str(config),
         "RULE_CORE_SHADOW_PORTFOLIO": str(portfolio),
     }
+
+
+def _llm_response() -> ChatCompletionResponse:
+    quote = "DRAM价格持续上涨，供应极度紧缺，预计第三季度环比涨幅13%至18%。"
+    assessments = []
+    for rule in rules_for_families(("semiconductor_ai",)):
+        matched = rule.rule_id == "semiconductor_price_supply_change"
+        assessments.append(
+            {
+                "rule_id": rule.rule_id,
+                "judgement": "matched" if matched else "not_matched",
+                "selected_action": "push" if matched else None,
+                "subjects": ["DRAM"] if matched else [],
+                "change_object": "DRAM价格和供应" if matched else "",
+                "direction": "价格上涨、供应紧缺" if matched else "",
+                "event_status": "confirmed" if matched else "unknown",
+                "time_scope": "current" if matched else "unknown",
+                "attribution": "测试来源" if matched else "",
+                "evidence": [{"field": "full_text", "quote": quote}] if matched else [],
+                "counterevidence": [],
+                "explanation": "原文显示价格持续上涨和供应紧缺。" if matched else "缺少规则事实。",
+                "uncertainty_reason": "",
+            }
+        )
+    return ChatCompletionResponse(
+        content=json.dumps(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "rule_matrix_version": RULE_MATRIX_VERSION,
+                "final_action": "push",
+                "rule_assessments": assessments,
+            },
+            ensure_ascii=False,
+        ),
+        model="fixed-test-model",
+        provider="provider.example",
+        response_id="response-1",
+        usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        attempts=1,
+        elapsed_seconds=0.5,
+    )
 
 
 def _item() -> NormalizedMarketItem:
@@ -99,6 +143,38 @@ def test_runtime_report_records_deployed_application_revision() -> None:
             runtime_shadow.ROOT = original_root
         payload = json.loads(Path(result["report"]).read_text(encoding="utf-8"))
         assert payload["application_revision"] == "abc123"
+
+
+def test_llm_candidate_mode_writes_one_bounded_report_without_changing_current_decision() -> None:
+    with TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        config, portfolio = _files(root)
+        env = _env(config, portfolio)
+        env["RULE_COMPARISON_CANDIDATE"] = "llm"
+        calls = []
+        result = runtime_shadow.record_runtime_comparison(
+            _item(),
+            DecisionResult(action="daily", importance="medium", reason="现有规则结果"),
+            {"store_kind": "article_reviews", "item_id": "article:llm-1"},
+            report_dir=root / "reports",
+            env=env,
+            llm_caller=lambda prompt: calls.append(prompt) or _llm_response(),
+        )
+        assert result["status"] == "completed"
+        assert len(calls) == 1
+        text = Path(result["report"]).read_text(encoding="utf-8")
+        assert "PRIVATE_BODY" not in text
+        payload = json.loads(text)
+        assert payload["candidate_mode"] == "llm"
+        assert payload["candidate_engine"] == LLM_RULE_ENGINE_VERSION
+        assert payload["candidate_version"] == CATALOG_VERSION
+        assert payload["rule_core_version"] == ""
+        assert payload["counts"]["compared"] == 1
+        comparison = payload["items"][0]["comparison"]
+        assert comparison["current"]["action"] == "daily"
+        assert comparison["candidate"]["action"] == "push"
+        assert comparison["candidate"]["usage"]["total_tokens"] == 150
+        assert comparison["affects_current_decision"] is False
 
 
 def test_disabled_and_invalid_config_are_fail_safe() -> None:
@@ -207,6 +283,7 @@ def test_config_cache_reloads_only_after_input_changes() -> None:
 def main() -> int:
     test_runtime_item_writes_bounded_comparison_without_body()
     test_runtime_report_records_deployed_application_revision()
+    test_llm_candidate_mode_writes_one_bounded_report_without_changing_current_decision()
     test_disabled_and_invalid_config_are_fail_safe()
     test_runtime_report_keeps_only_trusted_institution_id()
     test_current_admission_exclusion_compares_without_a_current_decision()

@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from llm_rule_catalog import CATALOG_VERSION
+from llm_rule_decision import ENGINE_VERSION as LLM_RULE_ENGINE_VERSION
 from rule_core_shadow_combined import RULE_CORE_VERSION, build_combined_report, markdown_report, write_combined
 
 
@@ -152,10 +154,136 @@ def test_combined_report_marks_latest_explicit_and_legacy_records() -> None:
             assert row["is_latest_rule_core_version"] is is_latest
 
 
+def test_llm_failure_remains_visible_without_becoming_action_downgrade() -> None:
+    with TemporaryDirectory() as tmpdir:
+        report_dir = Path(tmpdir)
+        payload = report_payload("digitimes", "push", "archive")
+        payload["candidate_engine"] = LLM_RULE_ENGINE_VERSION
+        payload["candidate_version"] = CATALOG_VERSION
+        payload["rule_core_version"] = ""
+        payload["counts"] = {
+            "compared": 0,
+            "action_changes": 0,
+            "action_changes_by_pair": {},
+            "skipped": {"invalid_output": 1},
+        }
+        comparison = payload["items"][0]["comparison"]
+        comparison["comparable"] = False
+        comparison["changed_fields"] = []
+        comparison["candidate"] = {
+            "action": None,
+            "importance": None,
+            "reason": "",
+            "admission_status": "admitted",
+            "admission_reason": "content_scope_match",
+            "rule_ids": [],
+            "evaluation_status": "invalid_output",
+            "failure_reason": "response is not valid JSON",
+            "usage": {"prompt_tokens": 100, "completion_tokens": 5, "total_tokens": 105},
+            "elapsed_seconds": 0.5,
+        }
+        (report_dir / "rule-core-shadow-research-llm-failure.json").write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+        combined = build_combined_report(
+            report_dir=report_dir,
+            hours=24,
+            now=datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc),
+        )
+        assert combined["candidate_label"] == "大模型候选"
+        assert combined["counts"]["items"] == 1
+        assert combined["counts"]["compared"] == 0
+        assert combined["counts"]["unable_to_compare"] == 1
+        assert combined["counts"]["action_changes"] == 0
+        assert combined["counts"]["evaluation_statuses"] == {"invalid_output": 1}
+        assert combined["counts"]["usage"]["total_tokens"] == 105
+        row = combined["items"][0]
+        assert row["current_action"] == "push"
+        assert row["candidate_action"] is None
+        assert row["comparable"] is False
+        assert row["is_latest_candidate_version"] is True
+        assert "invalid_output" in markdown_report(combined)
+
+
+def test_llm_completed_row_preserves_bounded_audit_fields_without_body_or_raw_response() -> None:
+    with TemporaryDirectory() as tmpdir:
+        report_dir = Path(tmpdir)
+        payload = report_payload("digitimes", "daily", "push")
+        payload["candidate_engine"] = LLM_RULE_ENGINE_VERSION
+        payload["candidate_version"] = CATALOG_VERSION
+        payload["rule_core_version"] = ""
+        comparison = payload["items"][0]["comparison"]
+        comparison["comparable"] = True
+        comparison["candidate"].update(
+            {
+                "evaluation_status": "completed",
+                "model": "fixed-test-model",
+                "provider": "provider.example",
+                "model_response_id": "private-response-id",
+                "usage": {"prompt_tokens": 120, "completion_tokens": 40, "total_tokens": 160},
+                "attempts": 1,
+                "elapsed_seconds": 0.75,
+                "input_text_scope": "title_summary_full_text",
+                "article_chars": 1800,
+                "prompt_chars": 5200,
+                "rule_evidence": [
+                    {
+                        "rule_id": "semiconductor_price_supply_change",
+                        "quote": "DRAM价格持续上涨，供应极度紧缺。",
+                    }
+                ],
+                "rule_assessments": [
+                    {
+                        "rule_id": "semiconductor_price_supply_change",
+                        "judgement": "matched",
+                        "selected_action": "push",
+                        "evidence": [
+                            {"field": "full_text", "quote": "DRAM价格持续上涨，供应极度紧缺。"}
+                        ],
+                        "explanation": "价格与供应变化达到 push。",
+                    }
+                ],
+            }
+        )
+        payload["items"][0]["input_evidence"] = {
+            "title_chars": 12,
+            "summary_chars": 20,
+            "full_text_chars": 1800,
+        }
+        serialized = json.dumps(payload, ensure_ascii=False)
+        assert "PRIVATE_COMPLETE_BODY" not in serialized
+        (report_dir / "rule-core-shadow-research-llm-completed.json").write_text(
+            serialized, encoding="utf-8"
+        )
+        combined = build_combined_report(
+            report_dir=report_dir,
+            hours=24,
+            now=datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc),
+        )
+        assert combined["candidate_label"] == "大模型候选"
+        assert combined["counts"]["compared"] == 1
+        assert combined["counts"]["usage"] == {
+            "prompt_tokens": 120,
+            "completion_tokens": 40,
+            "total_tokens": 160,
+        }
+        row = combined["items"][0]
+        assert row["candidate_engine"] == LLM_RULE_ENGINE_VERSION
+        assert row["candidate_version"] == CATALOG_VERSION
+        assert row["model"] == "fixed-test-model"
+        assert row["provider"] == "provider.example"
+        assert row["candidate_rule_evidence"][0]["quote"] == "DRAM价格持续上涨，供应极度紧缺。"
+        combined_text = json.dumps(combined, ensure_ascii=False)
+        assert "private-response-id" not in combined_text
+        assert "PRIVATE_COMPLETE_BODY" not in combined_text
+
+
 def main() -> int:
     test_combined_report_merges_source_groups_and_writes_markdown()
     test_combined_report_explains_current_admission_exclusion()
     test_combined_report_marks_latest_explicit_and_legacy_records()
+    test_llm_failure_remains_visible_without_becoming_action_downgrade()
+    test_llm_completed_row_preserves_bounded_audit_fields_without_body_or_raw_response()
     print("rule core shadow combined checks passed")
     return 0
 

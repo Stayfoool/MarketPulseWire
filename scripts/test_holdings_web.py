@@ -76,16 +76,22 @@ def test_rule_shadow_report_view_is_read_only_and_path_bounded() -> None:
     assert "/api/rule-shadow-reports" in source
     assert "Current Reason" not in source
     assert "现有规则" in source
-    assert "新规则" in source
+    assert "对比判断" in source
     assert "safeExternalUrl" in source
-    assert "新规则升级" in source
-    assert "新规则降级" in source
+    assert "对比判断升级" in source
+    assert "对比判断降级" in source
+    assert "无法比较" in source
     assert "ruleShadowCurrentAction" in source
     assert "ruleShadowCandidateAction" in source
     assert "ruleShadowRuleVersion" in source
-    assert "最新规则文章" in source
+    assert "ruleShadowEvaluationStatus" in source
+    assert "最新版本文章" in source
     assert "较早或无法确认" in source
-    assert "ruleVersion === 'latest' && item.is_latest_rule_core_version === true" in source
+    assert "item.is_latest_candidate_version ?? item.is_latest_rule_core_version" in source
+    assert "item.comparable === false" in source
+    assert "candidate_rule_evidence" in source
+    assert "failure_reason" in source
+    assert "usage.total_tokens" in source
     assert "renderRuleShadowRows" in source
     assert "ruleShadowActionRank" in source
     assert "显示 ${filtered.length} / ${items.length} 条" in source

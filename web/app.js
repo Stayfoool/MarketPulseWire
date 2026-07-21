@@ -1323,15 +1323,61 @@ async function saveInvestmentBankThemeRules() {
   }
 }
 
+function ruleShadowUsageText(usage) {
+  if (!usage || typeof usage !== 'object') return '';
+  const prompt = Number(usage.prompt_tokens || 0);
+  const completion = Number(usage.completion_tokens || 0);
+  const total = Number(usage.total_tokens || 0);
+  if (!prompt && !completion && !total) return '';
+  return `token：输入 ${prompt}，输出 ${completion}，合计 ${total}`;
+}
+
+function ruleShadowEvaluationStatusLabel(status) {
+  return {
+    completed: '已完成',
+    not_admitted: '未通过范围准入',
+    insufficient_input: '正文不足',
+    model_unavailable: '大模型不可用',
+    invalid_output: '大模型输出无效',
+    evidence_invalid: '原文证据校验失败',
+    conflict: '判断结果冲突'
+  }[status] || '其他无法比较';
+}
+
+function ruleShadowEngineLabel(engine) {
+  if (String(engine || '').startsWith('llm_rule_decision')) return '大模型候选';
+  if (engine === 'rule_core_v1') return '新规则候选';
+  return engine || '对比判断';
+}
+
+function ruleShadowEvidence(item) {
+  const evidence = Array.isArray(item.candidate_rule_evidence) ? item.candidate_rule_evidence : [];
+  return evidence.slice(0, 8).map(row => {
+    const ruleId = row && typeof row === 'object' ? row.rule_id || '' : '';
+    const quote = row && typeof row === 'object' ? row.quote || '' : '';
+    return quote ? `<div class="hint">原文证据：${escapeHtml(ruleId ? `${ruleId}：${quote}` : quote)}</div>` : '';
+  }).join('');
+}
+
 function ruleShadowDecisionCell(item, prefix) {
   const action = item[`${prefix}_action`] || 'none';
   const importance = item[`${prefix}_importance`] || '';
   const reason = item[`${prefix}_reason`] || '';
   const rules = item[`${prefix}_rule_ids`] || [];
+  if (prefix === 'candidate' && item.comparable === false) {
+    const status = ruleShadowEvaluationStatusLabel(item.evaluation_status || 'unknown');
+    const failure = item.failure_reason || reason || '未记录失败原因';
+    return `
+      <div>${badge('无法比较')} ${badge(status)}</div>
+      <div class="summary-cell" style="margin-top:6px">${escapeHtml(failure)}</div>
+      <div class="hint">未生成候选 action</div>
+    `;
+  }
   return `
     <div>${badge(action)} ${importance ? badge(importance) : ''}</div>
     <div class="summary-cell" style="margin-top:6px">${escapeHtml(reason || '未记录原因')}</div>
     <div class="hint">${rules.length ? escapeHtml(rules.join('，')) : '未命中规则'}</div>
+    ${prefix === 'candidate' ? ruleShadowEvidence(item) : ''}
   `;
 }
 
@@ -1343,6 +1389,7 @@ function ruleShadowAction(item, prefix) {
 }
 
 function ruleShadowChange(item) {
+  if (item.comparable === false) return 'unavailable';
   const current = ruleShadowAction(item, 'current');
   const candidate = ruleShadowAction(item, 'candidate');
   if (current === candidate) return 'same';
@@ -1355,13 +1402,18 @@ function renderRuleShadowRows() {
   const currentAction = document.getElementById('ruleShadowCurrentAction')?.value || 'all';
   const candidateAction = document.getElementById('ruleShadowCandidateAction')?.value || 'all';
   const ruleVersion = document.getElementById('ruleShadowRuleVersion')?.value || 'all';
+  const evaluationStatus = document.getElementById('ruleShadowEvaluationStatus')?.value || 'all';
   const filtered = items.filter(item =>
     (change === 'all' || ruleShadowChange(item) === change) &&
     (currentAction === 'all' || ruleShadowAction(item, 'current') === currentAction) &&
     (candidateAction === 'all' || ruleShadowAction(item, 'candidate') === candidateAction) &&
     (ruleVersion === 'all' ||
-      (ruleVersion === 'latest' && item.is_latest_rule_core_version === true) ||
-      (ruleVersion === 'earlier' && item.is_latest_rule_core_version !== true))
+      (ruleVersion === 'latest' && (item.is_latest_candidate_version ?? item.is_latest_rule_core_version) === true) ||
+      (ruleVersion === 'earlier' && (item.is_latest_candidate_version ?? item.is_latest_rule_core_version) !== true)) &&
+    (evaluationStatus === 'all' ||
+      (evaluationStatus === 'unknown'
+        ? !['completed', 'not_admitted', 'insufficient_input', 'model_unavailable', 'invalid_output', 'evidence_invalid', 'conflict'].includes(item.evaluation_status || 'unknown')
+        : (item.evaluation_status || 'unknown') === evaluationStatus))
   );
 
   document.getElementById('ruleShadowFilterSummary').textContent = `显示 ${filtered.length} / ${items.length} 条`;
@@ -1370,12 +1422,19 @@ function renderRuleShadowRows() {
     const title = safeUrl
       ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title || '')}</a>`
       : escapeHtml(item.title || '');
+    const candidateVersion = item.candidate_version || item.rule_core_version || '版本无法确认';
+    const candidateEngine = ruleShadowEngineLabel(item.candidate_engine || 'rule_core_v1');
+    const model = item.model ? `模型：${item.model}` : '';
+    const provider = item.provider ? `服务地址：${item.provider}` : '';
+    const usage = ruleShadowUsageText(item.usage);
+    const elapsed = Number(item.elapsed_seconds || 0) > 0 ? `耗时：${Number(item.elapsed_seconds).toFixed(2)} 秒` : '';
+    const candidateMeta = [`判断方式：${candidateEngine}`, `版本：${candidateVersion}`, model, provider, usage, elapsed].filter(Boolean);
     return `
       <tr>
-        <td>${escapeHtml(item.source || '')}<div class="hint">${escapeHtml(item.source_group || '')}</div><div class="hint">${escapeHtml(item.rule_core_version || '规则版本无法确认')}</div><div class="hint">${escapeHtml(formatTime(item.comparison_generated_at || ''))}</div></td>
+        <td>${escapeHtml(item.source || '')}<div class="hint">${escapeHtml(item.source_group || '')}</div><div class="hint">${escapeHtml(formatTime(item.comparison_generated_at || ''))}</div></td>
         <td><strong>${title}</strong><div class="hint">${escapeHtml(item.item_id || '')}</div></td>
         <td>${ruleShadowDecisionCell(item, 'current')}</td>
-        <td>${ruleShadowDecisionCell(item, 'candidate')}</td>
+        <td>${ruleShadowDecisionCell(item, 'candidate')}<div class="hint" style="margin-top:6px">${candidateMeta.map(escapeHtml).join('<br>')}</div></td>
       </tr>
     `;
   }).join('') || '<tr><td colspan="4">没有符合当前筛选条件的文章。</td></tr>';
@@ -1386,6 +1445,7 @@ function resetRuleShadowFilters() {
   document.getElementById('ruleShadowCurrentAction').value = 'all';
   document.getElementById('ruleShadowCandidateAction').value = 'all';
   document.getElementById('ruleShadowRuleVersion').value = 'all';
+  document.getElementById('ruleShadowEvaluationStatus').value = 'all';
   renderRuleShadowRows();
 }
 
@@ -1401,22 +1461,27 @@ async function loadRuleShadowReports(reportDate='') {
 
     const report = data.report || {};
     const counts = report.counts || {};
-    const skipped = Object.values(counts.skipped || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+    const unableToCompare = Number(counts.unable_to_compare ?? Object.values(counts.skipped || {}).reduce((sum, value) => sum + Number(value || 0), 0));
+    const usage = counts.usage || {};
     const currentSummary = (data.reports || []).find(item => item.date === selected) || {};
+    const candidateLabel = report.candidate_label || '对比判断';
+    document.getElementById('ruleShadowCandidateHeader').textContent = candidateLabel;
     document.getElementById('ruleShadowMetrics').innerHTML = [
+      ['全部文章', counts.items ?? ((counts.compared || 0) + unableToCompare)],
       ['可比较文章', counts.compared || 0],
       ['action 不一致', counts.action_changes || 0],
-      ['最新规则文章', counts.latest_rule_items || 0],
+      ['最新版本文章', counts.latest_candidate_items ?? counts.latest_rule_items ?? 0],
       ['涉及 push', currentSummary.push_changes || 0],
-      ['无法比较', skipped],
+      ['无法比较', unableToCompare],
+      ['token 合计', usage.total_tokens || 0],
       ['飞书提醒', currentSummary.notification_status || '-']
     ].map(item => `<section class="metric"><div class="label">${escapeHtml(item[0])}</div><div class="value">${escapeHtml(item[1])}</div></section>`).join('');
     const rebuild = report.rebuild || {};
     const rebuildNotice = rebuild.source === 'stored_comparison_reports' && rebuild.candidate_re_evaluated === false
-      ? '<span>本报告仅重新汇总已保存的新旧判断，没有重新执行新规则。</span>'
+      ? '<span>本报告仅重新汇总已保存的现有生产判断和对比判断，没有重新执行对比判断。</span>'
       : '';
     document.getElementById('ruleShadowWindow').innerHTML = report.window_start
-      ? `<span>统计区间：${escapeHtml(formatTime(report.window_start))} 至 ${escapeHtml(formatTime(report.window_end))}</span><span>报告生成：${escapeHtml(formatTime(report.generated_at))}</span><span>最新规则版本：${escapeHtml(report.latest_rule_core_version || '无法确认')}</span>${rebuildNotice}`
+      ? `<span>统计区间：${escapeHtml(formatTime(report.window_start))} 至 ${escapeHtml(formatTime(report.window_end))}</span><span>报告生成：${escapeHtml(formatTime(report.generated_at))}</span><span>对比判断：${escapeHtml(candidateLabel)}</span>${rebuildNotice}`
       : '<span>暂无日期报告。</span>';
     ruleShadowReportCache = report;
     renderRuleShadowRows();

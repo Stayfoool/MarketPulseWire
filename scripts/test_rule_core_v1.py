@@ -2122,6 +2122,9 @@ def test_new_core_has_only_the_report_only_production_importer() -> None:
         assert "rule_center" not in top_level_imports
 
     allowed = {
+        "llm_rule_catalog.py",
+        "llm_rule_decision.py",
+        "llm_rule_shadow.py",
         "rule_core_v1.py",
         "rule_core_fixture.py",
         "rule_core_replay.py",

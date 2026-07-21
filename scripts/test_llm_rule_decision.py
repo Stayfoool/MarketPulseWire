@@ -14,6 +14,7 @@ from llm_rule_decision import (
     SCHEMA_VERSION,
     LLMRuleCandidateResult,
     LLMRuleInputError,
+    apply_source_admission_boundary,
     applicable_rules,
     build_llm_rule_prompt,
     source_allowed_families,
@@ -31,7 +32,7 @@ def _item(
     source: str = "finance_media",
     source_category: str = "news_media",
     content_type: str = "article",
-    full_text: str = QUOTE,
+    full_text: str = f"前文。{QUOTE}后文。",
 ) -> NormalizedMarketItem:
     return NormalizedMarketItem(
         source=source,
@@ -199,6 +200,9 @@ def test_source_applicability_keeps_company_disclosures_and_sina_stock_news_hold
     for item in variants:
         assert source_allowed_families(item) == ("holding",)
         assert {rule.family for rule in applicable_rules(item, admission)} == {"holding"}
+        bounded = apply_source_admission_boundary(item, admission)
+        assert bounded.reason_code == "holding_scope_match"
+        assert bounded.matched_families == ("holding",)
 
     same_content_sources = (
         _item(source="digitimes", source_category="research_industry_media"),
@@ -410,6 +414,17 @@ def test_evidence_must_be_verbatim_bounded_and_not_copy_complete_body() -> None:
     copied_result = validate_llm_rule_response(copied, _item(full_text=long_body), admission)
     assert copied_result.evaluation_status == "evidence_invalid"
     assert copied_result.candidate_action is None
+
+    short_body = QUOTE
+    copied_short = _response("macro_data", "macro_surprise", "push")
+    copied_short["rule_assessments"][0]["evidence"][0]["quote"] = short_body
+    copied_short_result = validate_llm_rule_response(
+        copied_short,
+        _item(full_text=short_body),
+        admission,
+    )
+    assert copied_short_result.evaluation_status == "evidence_invalid"
+    assert copied_short_result.candidate_action is None
 
     omitted_full_text = validate_llm_rule_response(
         _response("macro_data", "macro_surprise", "push"),
