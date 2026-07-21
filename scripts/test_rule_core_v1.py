@@ -1237,6 +1237,69 @@ def test_investment_bank_allocation_changes_require_trusted_local_evidence() -> 
     assert official.rule_hits[0]["institution_id"] == "goldman_sachs"
 
 
+def test_investment_bank_allocation_does_not_promote_macro_fed_or_trade() -> None:
+    _, config, portfolios = loaded_contracts()
+    source_variants = (
+        ("industry_media", "research_industry_media", "research_publisher", "article"),
+        ("finance_media", "news_media", "news_media", "flash"),
+    )
+    cases = (
+        ("高盛建议增配美国CPI。", "daily", "macro_release_expected"),
+        ("高盛建议增配美联储降息交易。", "daily", "fed_path_unchanged"),
+        ("高盛建议减配受中美关税影响的汽车行业。", "daily", "trade_friction_escalation"),
+    )
+    for text, expected_action, expected_rule_id in cases:
+        decisions = [
+            evaluate_market_item(
+                NormalizedMarketItem(
+                    source=source,
+                    source_category=category,
+                    publisher_role=role,
+                    content_type=content_type,
+                    title=text,
+                ),
+                rule_config=config,
+                portfolio=portfolios["empty"],
+                source_policy=SourceAdmissionPolicy(),
+            ).decision
+            for source, category, role, content_type in source_variants
+        ]
+        assert all(decision is not None for decision in decisions), text
+        assert {decision.action for decision in decisions if decision} == {expected_action}, text
+        assert {
+            hit["rule_id"]
+            for decision in decisions
+            if decision
+            for hit in decision.rule_hits
+        } == {expected_rule_id}, text
+        assert all(
+            hit["rule_id"] != "investment_bank_allocation_change"
+            for decision in decisions
+            if decision
+            for hit in decision.rule_hits
+        ), text
+
+    mixed = evaluate_market_item(
+        NormalizedMarketItem(
+            source="finance_media",
+            source_category="news_media",
+            publisher_role="news_media",
+            content_type="article",
+            title="高盛建议减配受美国关税影响的中国半导体。",
+        ),
+        rule_config=config,
+        portfolio=portfolios["empty"],
+        source_policy=SourceAdmissionPolicy(),
+    ).decision
+    assert mixed is not None and mixed.action == "push"
+    allocation_hits = [
+        hit for hit in mixed.rule_hits if hit["rule_id"] == "investment_bank_allocation_change"
+    ]
+    assert len(allocation_hits) == 1
+    assert allocation_hits[0]["rule_family"] == "semiconductor_ai"
+    assert allocation_hits[0]["target_families"] == ["semiconductor_ai"]
+
+
 def test_migrated_ai_compute_and_credit_actions_are_source_neutral() -> None:
     _, config, portfolios = loaded_contracts()
     source_variants = (
@@ -2038,6 +2101,7 @@ def main() -> int:
     test_trusted_research_is_audited_without_changing_semiconductor_action()
     test_investment_bank_rating_changes_are_locally_bound_and_source_neutral()
     test_investment_bank_allocation_changes_require_trusted_local_evidence()
+    test_investment_bank_allocation_does_not_promote_macro_fed_or_trade()
     test_migrated_ai_compute_and_credit_actions_are_source_neutral()
     test_migrated_fed_path_and_trade_actions_are_source_neutral()
     test_migrated_macro_reactions_and_fed_transmission_are_source_neutral()
