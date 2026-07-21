@@ -12,7 +12,7 @@ from typing import Any, Mapping
 
 from market_item import DecisionResult, NormalizedMarketItem
 from rule_core_shadow import safe_compare_rule_core
-from rule_core_v1 import SourceAdmissionPolicy, parse_portfolio_config, parse_rule_config
+from rule_core_v1 import RULE_CORE_VERSION, SourceAdmissionPolicy, parse_portfolio_config, parse_rule_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +68,18 @@ def _source_group(item: NormalizedMarketItem) -> str:
     return "news"
 
 
+def _application_revision() -> str:
+    try:
+        marker = (ROOT / "REVISION").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    for line in marker.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == "commit":
+            return value.strip()
+    return ""
+
+
 def _item_id(item: NormalizedMarketItem, storage_ref: Mapping[str, Any]) -> str:
     value = storage_ref.get("item_id")
     if value not in (None, ""):
@@ -116,7 +128,9 @@ def _report_payload(
         "affects_current_decision": False,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "input_mode": "production_normalized_item",
+        "rule_core_version": RULE_CORE_VERSION,
         "rule_config_version": str(getattr(rule_config, "config_version", "")),
+        "application_revision": _application_revision(),
         "counts": {
             "compared": 1,
             "comparison_errors": 0 if comparison.get("ok") else 1,

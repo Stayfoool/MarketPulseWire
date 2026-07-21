@@ -76,12 +76,16 @@ def test_rule_shadow_report_view_is_read_only_and_path_bounded() -> None:
     assert "/api/rule-shadow-reports" in source
     assert "Current Reason" not in source
     assert "现有规则" in source
-    assert "新内核" in source
+    assert "新规则" in source
     assert "safeExternalUrl" in source
     assert "新规则升级" in source
     assert "新规则降级" in source
     assert "ruleShadowCurrentAction" in source
     assert "ruleShadowCandidateAction" in source
+    assert "ruleShadowRuleVersion" in source
+    assert "最新规则文章" in source
+    assert "较早或无法确认" in source
+    assert "ruleVersion === 'latest' && item.is_latest_rule_core_version === true" in source
     assert "renderRuleShadowRows" in source
     assert "ruleShadowActionRank" in source
     assert "显示 ${filtered.length} / ${items.length} 条" in source
@@ -101,6 +105,9 @@ def test_rule_shadow_report_view_is_read_only_and_path_bounded() -> None:
                     "report_path": "/opt/surveil/reports/private.json",
                     "current_action": "daily",
                     "candidate_action": "archive",
+                    "comparison_generated_at": "2026-07-19T07:29:00+00:00",
+                    "rule_core_version": "rule-core-v1-20260721-5d701b1",
+                    "is_latest_rule_core_version": True,
                 }
             ],
             "notification": {"status": "sent"},
@@ -111,6 +118,7 @@ def test_rule_shadow_report_view_is_read_only_and_path_bounded() -> None:
         assert response["selected_date"] == "2026-07-19"
         assert "report_dir" not in response["report"]
         assert "report_path" not in response["report"]["items"][0]
+        assert response["report"]["items"][0]["is_latest_rule_core_version"] is True
         try:
             rule_shadow_reports_payload("../../.env", report_dir=report_dir)
         except ValueError:

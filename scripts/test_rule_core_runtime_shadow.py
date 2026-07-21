@@ -67,6 +67,9 @@ def test_runtime_item_writes_bounded_comparison_without_body() -> None:
             for evidence in payload["items"][0]["comparison"]["candidate"]["admission_evidence"]
         )
         assert payload["input_mode"] == "production_normalized_item"
+        assert payload["rule_core_version"] == "rule-core-v1-20260721-5d701b1"
+        assert payload["rule_config_version"] == "public-test-v1"
+        assert payload["application_revision"] == ""
         assert payload["comparison_only"] is True
         assert payload["affects_current_decision"] is False
         assert payload["counts"]["compared"] == 1
@@ -75,6 +78,27 @@ def test_runtime_item_writes_bounded_comparison_without_body() -> None:
         assert payload["items"][0]["comparison"]["current"]["action"] == "daily"
         assert payload["items"][0]["comparison"]["candidate"]["action"] == "archive"
         assert payload["counts"]["action_changes_by_pair"] == {"daily->archive": 1}
+
+
+def test_runtime_report_records_deployed_application_revision() -> None:
+    with TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        config, portfolio = _files(root)
+        (root / "REVISION").write_text("commit=abc123\ndirty=0\n", encoding="utf-8")
+        original_root = runtime_shadow.ROOT
+        runtime_shadow.ROOT = root
+        try:
+            result = runtime_shadow.record_runtime_comparison(
+                _item(),
+                DecisionResult(action="daily"),
+                {"item_id": "article:revision"},
+                report_dir=root / "reports",
+                env=_env(config, portfolio),
+            )
+        finally:
+            runtime_shadow.ROOT = original_root
+        payload = json.loads(Path(result["report"]).read_text(encoding="utf-8"))
+        assert payload["application_revision"] == "abc123"
 
 
 def test_disabled_and_invalid_config_are_fail_safe() -> None:
@@ -182,6 +206,7 @@ def test_config_cache_reloads_only_after_input_changes() -> None:
 
 def main() -> int:
     test_runtime_item_writes_bounded_comparison_without_body()
+    test_runtime_report_records_deployed_application_revision()
     test_disabled_and_invalid_config_are_fail_safe()
     test_runtime_report_keeps_only_trusted_institution_id()
     test_current_admission_exclusion_compares_without_a_current_decision()

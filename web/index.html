@@ -527,6 +527,14 @@
             <option value="none">none</option>
           </select>
         </label>
+        <label class="rule-shadow-filter-field">
+          <span>新规则版本</span>
+          <select id="ruleShadowRuleVersion" onchange="renderRuleShadowRows()">
+            <option value="all">全部版本</option>
+            <option value="latest">最新规则</option>
+            <option value="earlier">较早或无法确认</option>
+          </select>
+        </label>
         <button onclick="resetRuleShadowFilters()">重置筛选</button>
         <span id="ruleShadowFilterSummary" class="summary"></span>
       </div>
@@ -538,7 +546,7 @@
                 <th style="width:150px">来源</th>
                 <th>文章</th>
                 <th style="width:280px">现有规则</th>
-                <th style="width:280px">新内核</th>
+                <th style="width:280px">新规则</th>
               </tr>
             </thead>
             <tbody id="ruleShadowRows"></tbody>

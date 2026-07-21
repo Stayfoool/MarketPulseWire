@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from rule_core_shadow_combined import build_combined_report, markdown_report, write_combined
+from rule_core_shadow_combined import RULE_CORE_VERSION, build_combined_report, markdown_report, write_combined
 
 
 def report_payload(source: str, current: str, candidate: str) -> dict:
@@ -74,6 +74,8 @@ def test_combined_report_merges_source_groups_and_writes_markdown() -> None:
         assert payload["counts"]["compared"] == 2
         assert payload["counts"]["action_changes_by_pair"] == {"daily->archive": 1}
         assert payload["counts"]["skipped"] == {"missing_full_text_or_shadow": 2}
+        assert payload["latest_rule_core_version"] == RULE_CORE_VERSION
+        assert payload["counts"]["latest_rule_items"] == 0
         text = markdown_report(payload)
         assert "sina_finance_articles" in text
         assert "digitimes_tw_semiconductors" in text
@@ -111,9 +113,49 @@ def test_combined_report_explains_current_admission_exclusion() -> None:
         assert "investment_universe_no_match" in text
 
 
+def test_combined_report_marks_latest_explicit_and_legacy_records() -> None:
+    with TemporaryDirectory() as tmpdir:
+        report_dir = Path(tmpdir)
+        cases = (
+            ("before", "2026-07-21T02:32:50+00:00", "", False, "unconfirmed"),
+            ("boundary", "2026-07-21T02:32:51+00:00", "", True, "inferred_from_deployment_time"),
+            ("explicit-old", "2026-07-21T03:00:00+00:00", "rule-core-v1-old", False, "recorded"),
+            ("explicit-latest", "2026-07-21T03:01:00+00:00", RULE_CORE_VERSION, True, "recorded"),
+        )
+        for suffix, generated_at, version, _, _ in cases:
+            payload = report_payload("wallstreetcn_news", "daily", "daily")
+            payload["generated_at"] = generated_at
+            payload["rule_config_version"] = "private-test-v1"
+            payload["application_revision"] = f"revision-{suffix}"
+            payload["items"][0]["item_id"] = suffix
+            if version:
+                payload["rule_core_version"] = version
+            (report_dir / f"rule-core-shadow-news-{suffix}.json").write_text(
+                json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+            )
+
+        combined = build_combined_report(
+            report_dir=report_dir,
+            since=datetime(2026, 7, 21, 2, 0, tzinfo=timezone.utc),
+            until=datetime(2026, 7, 21, 4, 0, tzinfo=timezone.utc),
+        )
+        rows = {item["item_id"]: item for item in combined["items"]}
+        assert combined["counts"]["latest_rule_items"] == 2
+        assert combined["counts"]["earlier_or_unconfirmed_rule_items"] == 2
+        for suffix, generated_at, version, is_latest, source in cases:
+            row = rows[suffix]
+            assert row["comparison_generated_at"] == generated_at
+            assert row["rule_core_version"] == (version or (RULE_CORE_VERSION if is_latest else ""))
+            assert row["rule_core_version_source"] == source
+            assert row["rule_config_version"] == "private-test-v1"
+            assert row["application_revision"] == f"revision-{suffix}"
+            assert row["is_latest_rule_core_version"] is is_latest
+
+
 def main() -> int:
     test_combined_report_merges_source_groups_and_writes_markdown()
     test_combined_report_explains_current_admission_exclusion()
+    test_combined_report_marks_latest_explicit_and_legacy_records()
     print("rule core shadow combined checks passed")
     return 0
 
