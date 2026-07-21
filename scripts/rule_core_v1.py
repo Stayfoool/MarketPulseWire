@@ -14,7 +14,11 @@ from urllib.parse import urlparse
 
 from ai_compute_supply_demand import classify_ai_compute_supply_demand
 from ai_credit_risk import classify_ai_credit_risk
-from international_bank_fed import allowed_fed_path_banks, classify_international_bank_fed_path
+from international_bank_fed import (
+    allowed_fed_path_banks,
+    classify_international_bank_fed_path,
+    classify_trusted_financial_leader_macro_judgement,
+)
 from investment_bank_research import extract_allocation_claims, extract_rating_claims
 from macro_policy import classify_macro_policy_content, generic_fed_transmission_classification
 from market_item import (
@@ -31,7 +35,7 @@ from trade_friction import classify_trade_friction
 
 CONTRACT_VERSION = "rule-core-v1"
 CONFIG_SCHEMA_VERSION = "rule-config-v1"
-RULE_CORE_VERSION = "rule-core-v1-20260721-5d701b1"
+RULE_CORE_VERSION = "rule-core-v1-20260721-macro-credit-v2"
 FAMILY_ORDER: tuple[RuleFamily, ...] = (
     "holding",
     "semiconductor_ai",
@@ -1198,6 +1202,27 @@ def admit_market_item(
     )
     if fed_terms:
         evidence.append(_evidence("fed_policy", "fed_policy_scope", text, fed_terms))
+    allowed_banks = allowed_fed_path_banks(
+        alias
+        for institution in rule_config.trusted_institutions
+        for alias in institution.aliases
+    )
+    leader_judgement = classify_trusted_financial_leader_macro_judgement(
+        _classification_item(item),
+        allowed_banks=allowed_banks,
+    )
+    if leader_judgement:
+        institutions = tuple(str(value) for value in leader_judgement.get("institutions") or ())
+        evidence.append(
+            _evidence(
+                "fed_policy",
+                "trusted_financial_leader_scope",
+                text,
+                institutions or ("受信任大型金融机构负责人",),
+                subjects=institutions,
+                relation="trusted_institution_leader",
+            )
+        )
 
     corridor_terms: list[str] = []
     for corridor in rule_config.trade_corridors:
@@ -2455,7 +2480,7 @@ def _semiconductor_candidate(
         _classification_candidate(classification)
         for classification in (
             classify_ai_compute_supply_demand(classification_item),
-            classify_ai_credit_risk(classification_item),
+            classify_ai_credit_risk(classification_item, include_regulatory_constraints=True),
         )
         if classification
     ]
@@ -2921,6 +2946,16 @@ def _fed_candidate(item: NormalizedMarketItem, text: str, config: RuleConfig) ->
             classification,
             family="fed_policy",
             default_rule_id="fed_path_unchanged",
+        )
+    leader_judgement = classify_trusted_financial_leader_macro_judgement(
+        _classification_item(item),
+        allowed_banks=allowed_banks,
+    )
+    if leader_judgement:
+        return _classification_candidate(
+            leader_judgement,
+            family="fed_policy",
+            default_rule_id="fed_policy_material_exception",
         )
     transmission = generic_fed_transmission_classification(_classification_item(item))
     if transmission.get("matched"):

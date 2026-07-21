@@ -39,6 +39,11 @@ RUMOR_MARKERS = (
     "rumor", "rumour", "unverified", "may reportedly", "据传", "传闻", "市场传言", "未经证实",
 )
 
+REGULATORY_FUNDING_MARKERS = (
+    "guarantee", "guarantees", "collateral", "letter of credit", "cash collateral",
+    "credit rating", "担保", "抵押", "信用证", "信用评级", "评级下调",
+)
+
 STRESS_PATTERNS: dict[str, tuple[str, ...]] = {
     "weak_absorption": (
         r"(?:market|investors?|市场|投资者).{0,28}(?:struggl\w* to absorb|could not absorb|难以消化|承接困难|消化困难)",
@@ -100,6 +105,21 @@ HARD_OUTCOME_PATTERNS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+REGULATORY_HARD_OUTCOME_PATTERNS: dict[str, tuple[str, ...]] = {
+    "regulatory_guarantee_requirement": (
+        r"(?:regulator|regulatory|commission|authority).{0,80}(?:maintain|uphold|require|order|rule).{0,80}(?:guarantee|collateral|letter of credit)",
+        r"(?:maintained|upheld|required|ordered).{0,80}(?:guarantee|collateral|letter of credit).{0,40}(?:regulator|commission|authority|rule|requirement)",
+        r"(?:监管机构|监管部门|委员会).{0,80}(?:维持|拒绝撤销|要求|裁定|规定).{0,80}(?:担保|抵押|信用证)",
+        r"(?:维持|要求|裁定|规定).{0,60}(?:现金|信用证|担保|抵押).{0,40}(?:要求|规定|担保)",
+    ),
+    "ai_infrastructure_rating_downgrade": (
+        r"(?:credit rating|rating).{0,20}(?:downgraded|cut|lowered|negative outlook|rating watch negative)",
+        r"(?:downgraded|cut|lowered).{0,20}(?:credit rating|rating)",
+        r"(?:信用评级|评级).{0,20}(?:下调|调降|降低|降至|负面展望|列入负面观察)",
+        r"(?:下调|调降|降低).{0,20}(?:信用评级|评级)",
+    ),
+}
+
 MARKET_OUTCOME_FAMILIES = {
     "weak_absorption", "weak_orderbook", "higher_funding_cost", "weak_secondary_performance", "spread_widening",
 }
@@ -152,6 +172,8 @@ def _amount(text: str) -> str:
 
 def _instrument(text: str) -> str:
     lowered = text.casefold()
+    if _contains(text, ("guarantee", "collateral", "letter of credit", "担保", "抵押", "信用证")):
+        return "guarantee_or_collateral"
     if "convertible" in lowered or "可转债" in text:
         return "convertible_bond"
     if "bond" in lowered or "note" in lowered or "债券" in text or "发债" in text:
@@ -162,6 +184,8 @@ def _instrument(text: str) -> str:
 
 
 def _event_type(text: str, hard_outcomes: list[str]) -> str:
+    if "regulatory_guarantee_requirement" in hard_outcomes:
+        return "regulatory_funding_constraint"
     if "funding_driven_capex_cut" in hard_outcomes:
         return "capex_funding_response"
     if "ai_debt_rating_action" in hard_outcomes:
@@ -183,11 +207,21 @@ def _dedup_key(issuers: list[str], event_type: str, instrument: str, families: l
     return f"ai_credit:{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:24]}"
 
 
-def classify_ai_credit_risk(item: dict[str, Any]) -> dict[str, Any] | None:
+def classify_ai_credit_risk(
+    item: dict[str, Any],
+    *,
+    include_regulatory_constraints: bool = False,
+) -> dict[str, Any] | None:
     text = item_text(item)
     if not text or _contains(text, RUMOR_MARKERS):
         return None
-    if not (_contains(text, AI_MARKERS) and _contains(text, DEBT_MARKERS)):
+    debt_markers = DEBT_MARKERS + (REGULATORY_FUNDING_MARKERS if include_regulatory_constraints else ())
+    hard_outcome_patterns = (
+        {**HARD_OUTCOME_PATTERNS, **REGULATORY_HARD_OUTCOME_PATTERNS}
+        if include_regulatory_constraints
+        else HARD_OUTCOME_PATTERNS
+    )
+    if not (_contains(text, AI_MARKERS) and _contains(text, debt_markers)):
         return None
     sentences = _sentences(text)
     claims: list[dict[str, Any]] = []
@@ -206,10 +240,10 @@ def classify_ai_credit_risk(item: dict[str, Any]) -> dict[str, Any] | None:
                 break
             window_parts.append(following)
         window = " ".join(window_parts)
-        if not _contains(window, DEBT_MARKERS):
+        if not _contains(window, debt_markers):
             continue
         families = _pattern_labels(window, STRESS_PATTERNS)
-        outcomes = _pattern_labels(window, HARD_OUTCOME_PATTERNS)
+        outcomes = _pattern_labels(window, hard_outcome_patterns)
         issuance = _is_issuance(window)
         if not (families or outcomes or issuance):
             continue

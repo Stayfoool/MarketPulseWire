@@ -112,6 +112,110 @@ OTHER_CENTRAL_BANK_MARKERS = (
 )
 TARGETS = ("美债收益率/美元", "A股风险偏好", "成长股估值")
 
+FINANCIAL_LEADER_ROLE_MARKERS = (
+    "首席执行官",
+    "行政总裁",
+    "董事长",
+    "董事会主席",
+    "掌门人",
+    "chief executive officer",
+    "chief executive",
+    "ceo",
+    "chairman",
+)
+FINANCIAL_LEADER_STATEMENT_MARKERS = (
+    "表示",
+    "称",
+    "指出",
+    "认为",
+    "警告",
+    "预测",
+    "预计",
+    "said",
+    "stated",
+    "believes",
+    "warned",
+    "expects",
+    "predicted",
+)
+LONG_RATE_MARKERS = (
+    "长期美国国债",
+    "长期美债",
+    "美国国债",
+    "美债收益率",
+    "10年期国债",
+    "十年期国债",
+    "利率",
+    "long-term treasuries",
+    "long-term treasury",
+    "u.s. treasuries",
+    "us treasuries",
+    "treasury bonds",
+    "government bonds",
+    "treasury yields",
+    "10-year treasury",
+    "interest rate",
+    "rate outlook",
+    "higher rates",
+)
+EQUITY_VALUATION_MARKERS = (
+    "股票",
+    "股市",
+    "标普 500",
+    "标普500",
+    "估值",
+    "stocks",
+    "equities",
+    "stock market",
+    "s&p 500",
+    "valuation",
+    "valuations",
+)
+CROSS_ASSET_RISK_MARKERS = (
+    "市场低估风险",
+    "低估了风险",
+    "未充分计入",
+    "地缘政治风险",
+    "财政风险",
+    "预算赤字",
+    "重大冲击",
+    "风险偏好",
+    "underestimates risk",
+    "underestimate the risk",
+    "underpricing risk",
+    "not fully priced",
+    "geopolitical risk",
+    "fiscal risk",
+    "budget deficit",
+    "major shock",
+    "risk appetite",
+)
+EXPLICIT_ALLOCATION_STANCE_MARKERS = (
+    "不会买入",
+    "不会购买",
+    "不愿买入",
+    "避免买入",
+    "would not buy",
+    "wouldn't buy",
+    "will not buy",
+    "avoid buying",
+)
+RATE_DIRECTION_MARKERS = (
+    "利率走高",
+    "利率上升",
+    "收益率走高",
+    "收益率上升",
+    "维持在",
+    "rates will rise",
+    "rates could rise",
+    "rates may rise",
+    "higher rates",
+    "yields will rise",
+    "yields could rise",
+    "yields may rise",
+    "remain at",
+)
+
 _CN_NUMBERS = {"零": 0, "一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6}
 
 
@@ -335,6 +439,108 @@ def _source_tier(item: dict[str, Any]) -> str:
 
 def fed_path_candidate(item: dict[str, Any]) -> bool:
     return international_bank_fed_rate_path_rule(str(item.get("source") or ""), item) is not None
+
+
+def classify_trusted_financial_leader_macro_judgement(
+    item: dict[str, Any],
+    *,
+    allowed_banks: set[str] | None = None,
+) -> dict[str, Any] | None:
+    """Recognize a material cross-asset judgment explicitly attributed to a trusted bank leader."""
+    text = item_text(item)
+    if not text or (allowed_banks is not None and not allowed_banks):
+        return None
+    allowed = allowed_banks or {name.casefold() for name in FED_PATH_BANKS}
+    banks = banks_in_mention_order(text, allowed_banks=allowed)
+    if not banks:
+        return None
+    sentences = [part.strip() for part in re.split(r"(?<=[。！？!?;；])\s*|\n+", text) if part.strip()]
+    for index, sentence in enumerate(sentences):
+        selected_bank = next(
+            (
+                bank
+                for bank in banks
+                if bank_mention_position(sentence, bank) is not None
+                and contains_any(sentence, FINANCIAL_LEADER_ROLE_MARKERS)
+            ),
+            "",
+        )
+        if not selected_bank:
+            continue
+        window_parts = [sentence]
+        for following in sentences[index + 1 : index + 7]:
+            mentioned = [bank for bank in banks if bank_mention_position(following, bank) is not None]
+            if mentioned and selected_bank not in mentioned:
+                break
+            window_parts.append(following)
+        window = compact_text(*window_parts)
+        if not contains_any(window, FINANCIAL_LEADER_STATEMENT_MARKERS):
+            continue
+        has_rates = contains_any(window, LONG_RATE_MARKERS)
+        has_equities = contains_any(window, EQUITY_VALUATION_MARKERS)
+        has_risk = contains_any(window, CROSS_ASSET_RISK_MARKERS)
+        explicit_cross_asset_stance = bool(
+            (
+                contains_any(window, EXPLICIT_ALLOCATION_STANCE_MARKERS)
+                or re.search(r"(?:不会|不愿|避免).{0,20}(?:买入|购买)", window)
+            )
+            and has_rates
+            and has_equities
+        )
+        explicit_rate_view = bool(
+            has_rates
+            and contains_any(window, RATE_DIRECTION_MARKERS)
+            and (
+                re.search(r"\d+(?:\.\d+)?\s*[%％]", window)
+                or contains_any(window, ("预测", "预计", "认为", "expects", "predicted", "believes"))
+            )
+        )
+        material_risk_view = bool(
+            has_risk
+            and contains_any(
+                window,
+                (
+                    "低估",
+                    "未充分计入",
+                    "警告",
+                    "underestimat",
+                    "underpricing",
+                    "not fully priced",
+                    "warned",
+                ),
+            )
+        )
+        signals = [
+            name
+            for name, matched in (
+                ("cross_asset_allocation_stance", explicit_cross_asset_stance),
+                ("explicit_rate_or_yield_view", explicit_rate_view),
+                ("material_cross_asset_risk_view", material_risk_view),
+            )
+            if matched
+        ]
+        if len(signals) < 2 or sum((has_rates, has_equities, has_risk)) < 2:
+            continue
+        reason = (
+            f"受信任大型金融机构负责人重大判断：{selected_bank}负责人对利率或长期美债、"
+            "股市估值及跨资产风险作出明确判断。"
+        )
+        return {
+            "matched": True,
+            "rule_id": "fed_policy_material_exception",
+            "decision_action": "push",
+            "importance": "high",
+            "push_now": True,
+            "should_push": True,
+            "reason": reason,
+            "brief_reason": reason,
+            "event_type": "trusted_financial_leader_material_judgement",
+            "institutions": [selected_bank],
+            "material_signals": signals,
+            "affected_targets": list(TARGETS),
+            "evidence_quotes": [window[:900]],
+        }
+    return None
 
 
 def classify_international_bank_fed_path(
