@@ -67,7 +67,7 @@ def test_runtime_item_writes_bounded_comparison_without_body() -> None:
             for evidence in payload["items"][0]["comparison"]["candidate"]["admission_evidence"]
         )
         assert payload["input_mode"] == "production_normalized_item"
-        assert payload["rule_core_version"] == "rule-core-v1-20260721-5d701b1"
+        assert payload["rule_core_version"] == runtime_shadow.RULE_CORE_VERSION
         assert payload["rule_config_version"] == "public-test-v1"
         assert payload["application_revision"] == runtime_shadow._application_revision()
         assert payload["comparison_only"] is True

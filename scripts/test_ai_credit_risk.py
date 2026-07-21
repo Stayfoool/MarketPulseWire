@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from ai_credit_risk import ai_credit_risk_rule
+from ai_credit_risk import ai_credit_risk_rule, classify_ai_credit_risk
 from decision_engine import decide_market_item
 
 
@@ -154,6 +154,45 @@ def test_stress_families_from_different_issuers_cannot_combine() -> None:
     assert rule["issuer_scope"] == "single"
 
 
+def test_new_rule_regulatory_guarantee_and_rating_outcomes_push() -> None:
+    item = {
+        "title": "监管收紧，甲骨文需为AI数据中心提供超70亿美元担保",
+        "full_text": (
+            "甲骨文在威斯康星州建设AI数据中心。"
+            "州公共服务委员会维持信用抵押要求，甲骨文须以现金或信用证提供逾70亿美元担保，"
+            "每年额外成本逾1亿美元。"
+            "标普本月已将甲骨文信用评级下调至BBB-，理由是AI重度投入导致盈利路径不确定。"
+        ),
+        "published_at": "2026-07-21T00:00:00+00:00",
+    }
+    assert classify_ai_credit_risk(item) is None
+    classification = classify_ai_credit_risk(item, include_regulatory_constraints=True)
+    assert classification is not None
+    assert classification["decision_action"] == "push"
+    assert classification["event_type"] == "regulatory_funding_constraint"
+    assert classification["instrument"] == "guarantee_or_collateral"
+    assert set(classification["hard_outcomes"]) == {
+        "regulatory_guarantee_requirement",
+        "ai_infrastructure_rating_downgrade",
+    }
+    assert classification["amount"] == "70亿"
+
+
+def test_new_rule_regulatory_constraints_require_formal_or_hard_evidence() -> None:
+    cases = (
+        {
+            "title": "监管可能收紧，甲骨文AI数据中心或需提供70亿美元担保",
+            "full_text": "市场尚未确认监管机构是否会提出担保要求。",
+        },
+        {
+            "title": "甲骨文AI数据中心项目背景",
+            "full_text": "项目用于履行既有3000亿美元算力合同，总投资150亿美元。",
+        },
+    )
+    for item in cases:
+        assert classify_ai_credit_risk(item, include_regulatory_constraints=True) is None, item["title"]
+
+
 def main() -> int:
     test_production_anchor_pushes_with_separate_evidence_families()
     test_exact_chinese_production_anchor_has_three_evidence_families()
@@ -166,6 +205,8 @@ def main() -> int:
     test_commentary_rumor_equity_and_non_ai_debt_do_not_match()
     test_repeated_wording_in_one_family_cannot_combine_into_push()
     test_stress_families_from_different_issuers_cannot_combine()
+    test_new_rule_regulatory_guarantee_and_rating_outcomes_push()
+    test_new_rule_regulatory_constraints_require_formal_or_hard_evidence()
     print("AI credit-risk checks passed")
     return 0
 

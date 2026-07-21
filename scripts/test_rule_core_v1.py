@@ -1484,6 +1484,66 @@ def test_migrated_ai_compute_and_credit_actions_are_source_neutral() -> None:
     assert {hit["rule_id"] for hit in rumor.rule_hits} == {"semiconductor_ordinary"}
 
 
+def test_confirmed_macro_leader_and_ai_funding_gaps_are_source_neutral() -> None:
+    _, config, portfolios = loaded_contracts()
+    source_variants = (
+        ("industry_media", "research_industry_media", "research_publisher", "article"),
+        ("finance_media", "news_media", "news_media", "flash"),
+    )
+    cases = (
+        (
+            "摩根大通戴蒙：市场低估风险",
+            (
+                "摩根大通首席执行官杰米·戴蒙警告市场低估地缘政治和财政风险。"
+                "他表示不会在当前价位买入股票或长期美国国债，并预测预算赤字可能导致利率进一步走高。"
+                "即便通胀回落至美联储2%的目标水平，10年期国债收益率可能仍应维持在4%至4.5%之间。"
+            ),
+            "fed_policy_material_exception",
+            ("fed_policy",),
+        ),
+        (
+            "监管收紧，甲骨文需为AI数据中心提供超70亿美元担保",
+            (
+                "甲骨文在威斯康星州建设AI数据中心。"
+                "州公共服务委员会维持信用抵押要求，甲骨文须以现金或信用证提供逾70亿美元担保，"
+                "每年额外成本逾1亿美元。"
+                "标普本月已将甲骨文信用评级下调至BBB-，理由是AI重度投入导致盈利路径不确定。"
+            ),
+            "ai_hyperscaler_credit_stress",
+            ("semiconductor_ai",),
+        ),
+    )
+    for title, full_text, expected_rule_id, expected_families in cases:
+        evaluations = [
+            evaluate_market_item(
+                NormalizedMarketItem(
+                    source=source,
+                    source_category=category,
+                    publisher_role=role,
+                    content_type=content_type,
+                    title=title,
+                    full_text=full_text,
+                ),
+                rule_config=config,
+                portfolio=portfolios["empty"],
+                source_policy=SourceAdmissionPolicy(),
+            )
+            for source, category, role, content_type in source_variants
+        ]
+        assert {evaluation.admission.matched_families for evaluation in evaluations} == {
+            expected_families
+        }
+        decisions = [evaluation.decision for evaluation in evaluations]
+        assert all(decision is not None for decision in decisions)
+        assert {decision.action for decision in decisions if decision} == {"push"}
+        assert {
+            hit["rule_id"]
+            for decision in decisions
+            if decision
+            for hit in decision.rule_hits
+        } == {expected_rule_id}
+
+
 def test_migrated_fed_path_and_trade_actions_are_source_neutral() -> None:
     _, config, portfolios = loaded_contracts()
     source_variants = (
@@ -2103,6 +2163,7 @@ def main() -> int:
     test_investment_bank_allocation_changes_require_trusted_local_evidence()
     test_investment_bank_allocation_does_not_promote_macro_fed_or_trade()
     test_migrated_ai_compute_and_credit_actions_are_source_neutral()
+    test_confirmed_macro_leader_and_ai_funding_gaps_are_source_neutral()
     test_migrated_fed_path_and_trade_actions_are_source_neutral()
     test_migrated_macro_reactions_and_fed_transmission_are_source_neutral()
     test_semiconductor_hard_variables_require_current_asserted_change()
