@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from llm_rule_catalog import CATALOG_VERSION
+from llm_rule_decision import ENGINE_VERSION as LLM_RULE_ENGINE_VERSION
 from rule_core_shadow_daily import (
     build_reminder_card,
     list_daily_reports,
@@ -152,6 +154,47 @@ def test_empty_daily_report_writes_files_without_notification() -> None:
         assert payload["notification"]["status"] == "not_sent_no_content"
 
 
+def test_llm_daily_report_uses_dynamic_label_and_counts_failed_comparisons() -> None:
+    with TemporaryDirectory() as tmpdir:
+        report_dir = Path(tmpdir)
+        payload = comparison_report("2026-07-19T07:00:00+00:00", "llm-failure")
+        payload["candidate_engine"] = LLM_RULE_ENGINE_VERSION
+        payload["candidate_version"] = CATALOG_VERSION
+        payload["counts"] = {"compared": 0, "skipped": {"model_unavailable": 1}}
+        comparison = payload["items"][0]["comparison"]
+        comparison["comparable"] = False
+        comparison["changed_fields"] = []
+        comparison["candidate"] = {
+            "action": None,
+            "importance": None,
+            "reason": "",
+            "admission_reason": "content_scope_match",
+            "admission_status": "admitted",
+            "rule_ids": [],
+            "evaluation_status": "model_unavailable",
+            "failure_reason": "timeout",
+        }
+        (report_dir / "rule-core-shadow-news-llm-failure.json").write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+        cards: list[dict] = []
+        result = run_daily_report(
+            report_dir=report_dir,
+            now=datetime(2026, 7, 19, 8, 0, tzinfo=timezone.utc),
+            sender=lambda card: cards.append(card) or True,
+        )
+        assert result["notification_status"] == "sent"
+        assert result["counts"]["compared"] == 0
+        assert result["counts"]["unable_to_compare"] == 1
+        payload = load_daily_report(report_dir, "2026-07-19")
+        assert payload is not None
+        assert payload["candidate_label"] == "大模型候选"
+        assert payload["report_title"] == "现有生产规则与大模型候选每日对比报告"
+        card_text = json.dumps(cards[0], ensure_ascii=False)
+        assert "现有生产规则与大模型候选每日对比报告" in card_text
+        assert "无法比较**：1" in card_text
+
+
 def test_historical_rebuild_fails_when_retained_reports_are_missing() -> None:
     with TemporaryDirectory() as tmpdir:
         report_dir = Path(tmpdir)
@@ -203,6 +246,7 @@ def main() -> None:
     test_review_window_uses_consecutive_beijing_1530_boundaries()
     test_daily_report_is_bounded_dated_and_notified_once()
     test_empty_daily_report_writes_files_without_notification()
+    test_llm_daily_report_uses_dynamic_label_and_counts_failed_comparisons()
     test_historical_rebuild_fails_when_retained_reports_are_missing()
     test_systemd_timer_and_installer_use_beijing_1530()
     print("rule core shadow daily checks passed")

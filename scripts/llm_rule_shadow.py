@@ -1,0 +1,361 @@
+"""Build one bounded report-only comparison for the reviewed LLM rules."""
+
+from __future__ import annotations
+
+import hashlib
+from typing import Any, Callable, Iterable
+
+from llm_analysis import ChatCompletionResponse, LLMBalanceInsufficientError
+from llm_rule_catalog import CATALOG_VERSION, RULE_MATRIX_VERSION
+from llm_rule_decision import (
+    ENGINE_VERSION,
+    PROMPT_VERSION,
+    LLMRuleInputError,
+    LLMRulePrompt,
+    apply_source_admission_boundary,
+    build_llm_rule_prompt,
+    validate_llm_rule_response,
+)
+from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem
+from rule_core_v1 import (
+    PortfolioRuleConfig,
+    RuleConfig,
+    SourceAdmissionPolicy,
+    admit_market_item,
+)
+
+
+CONTRACT_VERSION = "llm-rule-shadow-v1"
+VALID_CURRENT_ADMISSION_STATUSES = {"admitted", "excluded", "not_applicable", "unknown"}
+VALID_CURRENT_ACTIONS = {"push", "daily", "archive", "ignore"}
+ModelCaller = Callable[[LLMRulePrompt], ChatCompletionResponse]
+
+
+def _clean(value: object, limit: int = 500) -> str:
+    return " ".join(str(value or "").split())[:limit]
+
+
+def _families(values: Iterable[str]) -> list[str]:
+    return list(dict.fromkeys(str(value) for value in values if str(value)))
+
+
+def _rule_ids(decision: DecisionResult | None) -> list[str]:
+    if decision is None:
+        return []
+    return list(
+        dict.fromkeys(
+            str(hit.get("rule_id") or "")
+            for hit in decision.rule_hits
+            if isinstance(hit, dict) and hit.get("rule_id")
+        )
+    )[:24]
+
+
+def _rule_evidence(decision: DecisionResult | None) -> list[dict[str, str]]:
+    if decision is None:
+        return []
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for hit in decision.rule_hits:
+        if not isinstance(hit, dict):
+            continue
+        rule_id = _clean(hit.get("rule_id"), 120)
+        quotes: list[str] = []
+        for key in ("evidence_quote", "matched_text", "quote"):
+            value = hit.get(key)
+            if isinstance(value, str) and value.strip():
+                quotes.append(value)
+        evidence = hit.get("evidence")
+        if isinstance(evidence, list):
+            for item in evidence:
+                if isinstance(item, dict) and isinstance(item.get("quote"), str):
+                    quotes.append(str(item["quote"]))
+                elif isinstance(item, str):
+                    quotes.append(item)
+        for quote in quotes:
+            cleaned = _clean(quote, 300)
+            identity = (rule_id, cleaned)
+            if not cleaned or identity in seen:
+                continue
+            seen.add(identity)
+            result.append({"rule_id": rule_id, "quote": cleaned})
+            if len(result) >= 8:
+                return result
+    return result
+
+
+def _decision_summary(decision: DecisionResult | None) -> dict[str, Any]:
+    if decision is None:
+        return {
+            "action": None,
+            "importance": None,
+            "brief_reason": "",
+            "reason": "",
+            "rule_ids": [],
+            "rule_evidence": [],
+        }
+    return {
+        "action": decision.action,
+        "importance": decision.importance,
+        "brief_reason": _clean(decision.brief_reason, 500),
+        "reason": _clean(decision.reason, 800),
+        "rule_ids": _rule_ids(decision),
+        "rule_evidence": _rule_evidence(decision),
+    }
+
+def _admission_evidence(admission: AdmissionResult) -> list[dict[str, Any]]:
+    return [
+        {
+            "rule_family": evidence.rule_family,
+            "reason_code": evidence.reason_code,
+            "matched_subjects": list(evidence.matched_subjects),
+            "matched_term_ids": list(evidence.matched_term_ids),
+            "relation": evidence.relation,
+        }
+        for evidence in admission.evidence[:8]
+    ]
+
+
+def _term_id(value: str) -> str:
+    return f"term:{hashlib.sha256(value.casefold().encode('utf-8')).hexdigest()[:12]}"
+
+
+def _matched_context(
+    item: NormalizedMarketItem,
+    admission: AdmissionResult,
+    portfolio: PortfolioRuleConfig,
+) -> dict[str, list[str]]:
+    holding_evidence = [evidence for evidence in admission.evidence if evidence.rule_family == "holding"]
+    holding_subjects = list(
+        dict.fromkeys(subject for evidence in holding_evidence for subject in evidence.matched_subjects if subject)
+    )
+    matched_term_ids = {
+        term_id for evidence in holding_evidence for term_id in evidence.matched_term_ids if term_id
+    }
+    matched_holdings = [
+        holding
+        for holding in portfolio.holdings
+        if any(subject in holding.names for subject in holding_subjects)
+    ]
+    related_keywords = [
+        keyword
+        for holding in matched_holdings
+        for keyword in holding.related_news_keywords
+        if _term_id(keyword) in matched_term_ids
+    ]
+    immediate_keywords = [
+        keyword for holding in matched_holdings for keyword in holding.immediate_alert_keywords
+    ]
+    trusted_ids: list[str] = []
+    extraction = item.raw.get("_attributed_research")
+    if isinstance(extraction, dict) and str(extraction.get("institution_id") or "").strip():
+        trusted_ids.append(str(extraction["institution_id"]).strip())
+    trusted_aliases = [
+        subject
+        for evidence in admission.evidence
+        if evidence.rule_family in {"semiconductor_ai", "fed_policy"}
+        for subject in evidence.matched_subjects
+        if subject
+    ]
+    context = {
+        "holding_subjects": holding_subjects,
+        "holding_symbols": [holding.symbol for holding in matched_holdings],
+        "matched_related_keywords": related_keywords,
+        "immediate_alert_keywords": immediate_keywords,
+        "trusted_institution_ids": trusted_ids,
+        "trusted_institution_aliases": trusted_aliases,
+    }
+    return {key: list(dict.fromkeys(values)) for key, values in context.items() if values}
+
+
+def _candidate_base(admission: AdmissionResult) -> dict[str, Any]:
+    return {
+        "admission_status": admission.status,
+        "admission_reason": admission.reason_code,
+        "matched_families": list(admission.matched_families),
+        "admission_evidence": _admission_evidence(admission),
+        "evaluation_status": "not_admitted" if admission.status != "admitted" else "pending",
+        "failure_reason": "",
+        "action": None,
+        "importance": None,
+        "brief_reason": "",
+        "reason": "",
+        "rule_ids": [],
+        "rule_evidence": [],
+        "rule_assessments": [],
+        "model": "",
+        "provider": "",
+        "model_response_id": "",
+        "usage": {},
+        "attempts": 0,
+        "elapsed_seconds": 0.0,
+        "input_text_scope": "",
+        "article_chars": 0,
+        "prompt_chars": 0,
+        "rule_matrix_version": RULE_MATRIX_VERSION,
+        "rule_catalog_version": CATALOG_VERSION,
+        "prompt_version": PROMPT_VERSION,
+        "candidate_engine": ENGINE_VERSION,
+    }
+
+
+def _failure_candidate(
+    admission: AdmissionResult,
+    status: str,
+    reason: str,
+    *,
+    prompt: LLMRulePrompt | None = None,
+    response: ChatCompletionResponse | None = None,
+) -> dict[str, Any]:
+    candidate = _candidate_base(admission)
+    candidate.update(
+        {
+            "evaluation_status": status,
+            "failure_reason": _clean(reason, 500),
+            "input_text_scope": prompt.input_text_scope if prompt else "",
+            "article_chars": prompt.article_chars if prompt else 0,
+            "prompt_chars": prompt.input_chars if prompt else 0,
+        }
+    )
+    if response is not None:
+        candidate.update(
+            {
+                "model": _clean(response.model, 200),
+                "provider": _clean(response.provider, 200),
+                "model_response_id": _clean(response.response_id, 200),
+                "usage": dict(response.usage),
+                "attempts": response.attempts,
+                "elapsed_seconds": response.elapsed_seconds,
+            }
+        )
+    return candidate
+
+
+def _completed_candidate(
+    admission: AdmissionResult,
+    prompt: LLMRulePrompt,
+    response: ChatCompletionResponse,
+    result: Any,
+) -> dict[str, Any]:
+    decision = result.decision
+    if decision is None:
+        raise ValueError("completed model validation did not return DecisionResult")
+    candidate = _candidate_base(admission)
+    candidate.update(
+        {
+            **_decision_summary(decision),
+            "evaluation_status": "completed",
+            "failure_reason": "",
+            "rule_assessments": [dict(assessment) for assessment in result.rule_assessments],
+            "model": _clean(response.model, 200),
+            "provider": _clean(response.provider, 200),
+            "model_response_id": _clean(response.response_id, 200),
+            "usage": dict(response.usage),
+            "attempts": response.attempts,
+            "elapsed_seconds": response.elapsed_seconds,
+            "input_text_scope": prompt.input_text_scope,
+            "article_chars": prompt.article_chars,
+            "prompt_chars": prompt.input_chars,
+        }
+    )
+    return candidate
+
+
+def compare_llm_rule_candidate(
+    item: NormalizedMarketItem,
+    *,
+    current_decision: DecisionResult | None,
+    current_admission_status: str,
+    current_admission_reason: str,
+    current_matched_families: Iterable[str],
+    rule_config: RuleConfig,
+    portfolio: PortfolioRuleConfig,
+    source_policy: SourceAdmissionPolicy,
+    model_caller: ModelCaller,
+    input_text_scope: str = "title_summary_full_text",
+    max_input_chars: int = 120_000,
+) -> dict[str, Any]:
+    if current_admission_status not in VALID_CURRENT_ADMISSION_STATUSES:
+        raise ValueError(f"invalid current admission status: {current_admission_status}")
+    if current_decision is not None and current_decision.action not in VALID_CURRENT_ACTIONS:
+        raise ValueError(f"invalid current decision action: {current_decision.action}")
+
+    admission = apply_source_admission_boundary(
+        item,
+        admit_market_item(
+            item,
+            rule_config=rule_config,
+            portfolio=portfolio,
+            source_policy=source_policy,
+        ),
+    )
+    current = {
+        "admission_status": current_admission_status,
+        "admission_reason": _clean(current_admission_reason, 500),
+        "matched_families": _families(current_matched_families),
+        **_decision_summary(current_decision),
+    }
+    if admission.status != "admitted":
+        candidate = _candidate_base(admission)
+    else:
+        try:
+            prompt = build_llm_rule_prompt(
+                item,
+                admission,
+                input_text_scope=input_text_scope,
+                matched_context=_matched_context(item, admission, portfolio),
+                max_input_chars=max_input_chars,
+            )
+        except LLMRuleInputError as exc:
+            candidate = _failure_candidate(admission, "insufficient_input", f"{exc.code}: {exc}")
+        else:
+            try:
+                response = model_caller(prompt)
+            except LLMBalanceInsufficientError:
+                candidate = _failure_candidate(admission, "model_unavailable", "balance_insufficient", prompt=prompt)
+            except TimeoutError:
+                candidate = _failure_candidate(admission, "model_unavailable", "timeout", prompt=prompt)
+            except Exception as exc:  # noqa: BLE001 - report-only failure must remain isolated.
+                category = "not_configured" if "未配置" in str(exc) else "request_failed"
+                candidate = _failure_candidate(admission, "model_unavailable", category, prompt=prompt)
+            else:
+                result = validate_llm_rule_response(
+                    response.content,
+                    item,
+                    admission,
+                    input_text_scope=prompt.input_text_scope,
+                    model=response.model,
+                )
+                if result.evaluation_status == "completed":
+                    candidate = _completed_candidate(admission, prompt, response, result)
+                else:
+                    candidate = _failure_candidate(
+                        admission,
+                        result.evaluation_status,
+                        "; ".join(result.validation_errors),
+                        prompt=prompt,
+                        response=response,
+                    )
+
+    comparable = candidate.get("evaluation_status") == "completed"
+    changed_fields = [
+        field
+        for field in ("admission_status", "admission_reason", "matched_families")
+        if current[field] != candidate[field]
+    ]
+    if comparable:
+        changed_fields.extend(
+            field
+            for field in ("action", "rule_ids")
+            if current[field] != candidate[field]
+        )
+    return {
+        "ok": True,
+        "contract_version": CONTRACT_VERSION,
+        "comparison_only": True,
+        "affects_current_decision": False,
+        "comparable": comparable,
+        "current": current,
+        "candidate": candidate,
+        "changed_fields": changed_fields,
+    }

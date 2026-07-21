@@ -4,13 +4,70 @@
 from __future__ import annotations
 
 import os
+import json
 
 os.environ["SURVEIL_DISABLE_LLM"] = "1"
 
+import llm_analysis
 from llm_analysis import analyze_with_llm, format_llm_analysis, parse_json_object
 
 
+def test_raw_chat_completion_returns_bounded_usage_metadata() -> None:
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "id": "provider-response-1",
+                    "choices": [{"message": {"content": '{"ok":true}'}}],
+                    "usage": {"prompt_tokens": 123, "completion_tokens": 45, "total_tokens": 168},
+                }
+            ).encode("utf-8")
+
+    original_config = llm_analysis.llm_config
+    original_urlopen = llm_analysis.urllib.request.urlopen
+    original_retry_count = llm_analysis.retry_count
+    try:
+        llm_analysis.llm_config = lambda: ("test-key", "https://provider.example/v1", "test-model")
+        llm_analysis.retry_count = lambda: 0
+
+        def fake_urlopen(request, timeout):
+            captured["payload"] = json.loads(request.data.decode("utf-8"))
+            captured["timeout"] = timeout
+            return FakeResponse()
+
+        llm_analysis.urllib.request.urlopen = fake_urlopen
+        response = llm_analysis.call_chat_completion_raw_with_prompts(
+            "system",
+            "user",
+            truncate_user_prompt=False,
+            temperature_override=0,
+        )
+    finally:
+        llm_analysis.llm_config = original_config
+        llm_analysis.urllib.request.urlopen = original_urlopen
+        llm_analysis.retry_count = original_retry_count
+
+    assert response.content == '{"ok":true}'
+    assert response.model == "test-model"
+    assert response.provider == "provider.example"
+    assert response.response_id == "provider-response-1"
+    assert response.usage == {"prompt_tokens": 123, "completion_tokens": 45, "total_tokens": 168}
+    assert response.attempts == 1
+    assert response.elapsed_seconds >= 0
+    assert captured["payload"]["temperature"] == 0
+    assert captured["payload"]["messages"][1]["content"] == "user"
+
+
 def main() -> int:
+    test_raw_chat_completion_returns_bounded_usage_metadata()
     if analyze_with_llm("AI ASIC demand lifts MLCC demand") is not None:
         raise AssertionError("LLM should be disabled during this test")
 

@@ -7,7 +7,9 @@ import os
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from typing import Any
 
 from env_utils import get_env
@@ -15,6 +17,17 @@ from env_utils import get_env
 
 class LLMBalanceInsufficientError(RuntimeError):
     """Raised when the model provider reports insufficient balance."""
+
+
+@dataclass(frozen=True)
+class ChatCompletionResponse:
+    content: str
+    model: str
+    provider: str
+    response_id: str
+    usage: dict[str, int]
+    attempts: int
+    elapsed_seconds: float
 
 
 SYSTEM_PROMPT = """你是半导体、AI 基础设施和二级市场研究助理。
@@ -220,7 +233,7 @@ def log_llm_retry(message: str) -> None:
     print(message, flush=True)
 
 
-def call_chat_completion_with_prompts(
+def call_chat_completion_raw_with_prompts(
     system_prompt: str,
     user_prompt: str,
     *,
@@ -228,7 +241,8 @@ def call_chat_completion_with_prompts(
     truncate_user_prompt: bool = True,
     thinking_override: str | None = None,
     max_tokens_override: int | None = None,
-) -> tuple[dict[str, Any], str]:
+    temperature_override: float | None = None,
+) -> ChatCompletionResponse:
     config = llm_config()
     if not config:
         raise RuntimeError("LLM 未配置")
@@ -242,7 +256,7 @@ def call_chat_completion_with_prompts(
                 "content": user_prompt.strip()[: input_limit()] if truncate_user_prompt else user_prompt.strip(),
             },
         ],
-        "temperature": 0.2,
+        "temperature": 0.2 if temperature_override is None else float(temperature_override),
         "max_tokens": max_tokens_override or max_output_tokens(),
     }
     thinking = (thinking_override or thinking_type(base_url, model)).strip().lower()
@@ -265,7 +279,10 @@ def call_chat_completion_with_prompts(
     )
     last_error: Exception | None = None
     attempts = retry_count() + 1
+    total_started_at = time.monotonic()
+    attempts_used = 0
     for attempt in range(attempts):
+        attempts_used = attempt + 1
         started_at = time.monotonic()
         try:
             with urllib.request.urlopen(request, timeout=timeout_seconds()) as response:
@@ -308,7 +325,43 @@ def call_chat_completion_with_prompts(
     ).strip()
     if not raw_content:
         raise RuntimeError("LLM 响应为空")
-    return parse_json_object(raw_content), model
+    raw_usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+    usage: dict[str, int] = {}
+    for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+        value = raw_usage.get(key)
+        if isinstance(value, (int, float)) and int(value) >= 0:
+            usage[key] = int(value)
+    return ChatCompletionResponse(
+        content=raw_content,
+        model=model,
+        provider=urllib.parse.urlparse(base_url).hostname or "",
+        response_id=str(result.get("id") or "")[:200],
+        usage=usage,
+        attempts=attempts_used,
+        elapsed_seconds=round(time.monotonic() - total_started_at, 6),
+    )
+
+
+def call_chat_completion_with_prompts(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    user_agent: str = "surveil-llm-analysis/0.1",
+    truncate_user_prompt: bool = True,
+    thinking_override: str | None = None,
+    max_tokens_override: int | None = None,
+    temperature_override: float | None = None,
+) -> tuple[dict[str, Any], str]:
+    response = call_chat_completion_raw_with_prompts(
+        system_prompt,
+        user_prompt,
+        user_agent=user_agent,
+        truncate_user_prompt=truncate_user_prompt,
+        thinking_override=thinking_override,
+        max_tokens_override=max_tokens_override,
+        temperature_override=temperature_override,
+    )
+    return parse_json_object(response.content), response.model
 
 
 def call_chat_completion(

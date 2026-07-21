@@ -10,6 +10,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from llm_analysis import call_chat_completion_raw_with_prompts
+from llm_rule_catalog import CATALOG_VERSION
+from llm_rule_decision import ENGINE_VERSION as LLM_RULE_ENGINE_VERSION, LLMRulePrompt
+from llm_rule_shadow import compare_llm_rule_candidate
 from market_item import DecisionResult, NormalizedMarketItem
 from rule_core_shadow import safe_compare_rule_core
 from rule_core_v1 import RULE_CORE_VERSION, SourceAdmissionPolicy, parse_portfolio_config, parse_rule_config
@@ -17,7 +21,8 @@ from rule_core_v1 import RULE_CORE_VERSION, SourceAdmissionPolicy, parse_portfol
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORT_DIR = ROOT / "reports"
-CONTRACT_VERSION = "rule-core-runtime-shadow-report-v1"
+CONTRACT_VERSION = "rule-core-runtime-shadow-report-v2"
+CANDIDATE_MODES = {"deterministic", "llm"}
 
 _CONFIG_LOCK = threading.Lock()
 _CONFIG_CACHE: tuple[tuple[object, ...], object, object] | None = None
@@ -25,6 +30,55 @@ _CONFIG_CACHE: tuple[tuple[object, ...], object, object] | None = None
 
 def _enabled(env: Mapping[str, str]) -> bool:
     return str(env.get("RULE_CORE_SHADOW_AUTORUN") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _candidate_mode(env: Mapping[str, str]) -> str:
+    mode = str(env.get("RULE_COMPARISON_CANDIDATE") or "deterministic").strip().lower()
+    if mode not in CANDIDATE_MODES:
+        raise ValueError(f"unsupported RULE_COMPARISON_CANDIDATE: {mode}")
+    return mode
+
+
+def _bounded_int(env: Mapping[str, str], key: str, default: int, minimum: int, maximum: int) -> int:
+    raw = str(env.get(key) or "").strip()
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _llm_input_scope(item: NormalizedMarketItem, env: Mapping[str, str]) -> str:
+    summary_sources = {
+        value.strip()
+        for value in str(env.get("RULE_COMPARISON_LLM_TITLE_SUMMARY_SOURCES") or "").split(",")
+        if value.strip()
+    }
+    return "title_summary" if item.source in summary_sources else "title_summary_full_text"
+
+
+def _default_llm_caller(env: Mapping[str, str]):
+    thinking = str(env.get("RULE_COMPARISON_LLM_THINKING_TYPE") or "").strip() or None
+    max_tokens = _bounded_int(
+        env,
+        "RULE_COMPARISON_LLM_MAX_OUTPUT_TOKENS",
+        6000,
+        300,
+        16000,
+    )
+
+    def call(prompt: LLMRulePrompt):
+        return call_chat_completion_raw_with_prompts(
+            prompt.system_prompt,
+            json.dumps(prompt.user_payload, ensure_ascii=False, separators=(",", ":")),
+            user_agent="surveil-llm-rule-comparison/0.1",
+            truncate_user_prompt=False,
+            thinking_override=thinking,
+            max_tokens_override=max_tokens,
+            temperature_override=0,
+        )
+
+    return call
 
 
 def _config_paths(env: Mapping[str, str]) -> tuple[Path, Path] | None:
@@ -102,22 +156,53 @@ def _report_payload(
     current_admission_status: str,
     current_admission_reason: str,
     current_matched_families: tuple[str, ...],
+    env: Mapping[str, str],
+    llm_caller: Any = None,
 ) -> dict[str, Any]:
-    comparison = safe_compare_rule_core(
-        item,
-        current_decision=current_decision,
-        current_admission_status=current_admission_status,
-        current_admission_reason=current_admission_reason,
-        current_matched_families=current_matched_families,
-        rule_config=rule_config,
-        portfolio=portfolio,
-        source_policy=SourceAdmissionPolicy(),
-    )
+    candidate_mode = _candidate_mode(env)
+    if candidate_mode == "llm":
+        comparison = compare_llm_rule_candidate(
+            item,
+            current_decision=current_decision,
+            current_admission_status=current_admission_status,
+            current_admission_reason=current_admission_reason,
+            current_matched_families=current_matched_families,
+            rule_config=rule_config,
+            portfolio=portfolio,
+            source_policy=SourceAdmissionPolicy(),
+            model_caller=llm_caller or _default_llm_caller(env),
+            input_text_scope=_llm_input_scope(item, env),
+            max_input_chars=_bounded_int(
+                env,
+                "RULE_COMPARISON_LLM_MAX_INPUT_CHARS",
+                120000,
+                1000,
+                1000000,
+            ),
+        )
+        candidate_engine = LLM_RULE_ENGINE_VERSION
+        candidate_version = CATALOG_VERSION
+        rule_core_version = ""
+    else:
+        comparison = safe_compare_rule_core(
+            item,
+            current_decision=current_decision,
+            current_admission_status=current_admission_status,
+            current_admission_reason=current_admission_reason,
+            current_matched_families=current_matched_families,
+            rule_config=rule_config,
+            portfolio=portfolio,
+            source_policy=SourceAdmissionPolicy(),
+        )
+        candidate_engine = "rule_core_v1"
+        candidate_version = RULE_CORE_VERSION
+        rule_core_version = RULE_CORE_VERSION
     candidate_payload = comparison.get("candidate") if isinstance(comparison.get("candidate"), dict) else {}
     for evidence in candidate_payload.get("admission_evidence") or []:
         if isinstance(evidence, dict):
             evidence.pop("evidence_quote", None)
-    changed_action = bool(comparison.get("ok") and "action" in comparison.get("changed_fields", []))
+    comparable = bool(comparison.get("ok") and comparison.get("comparable", True))
+    changed_action = bool(comparable and "action" in comparison.get("changed_fields", []))
     current = comparison.get("current") if isinstance(comparison.get("current"), dict) else {}
     candidate = comparison.get("candidate") if isinstance(comparison.get("candidate"), dict) else {}
     pair = f"{current.get('action') or 'none'}->{candidate.get('action') or 'none'}"
@@ -128,14 +213,23 @@ def _report_payload(
         "affects_current_decision": False,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "input_mode": "production_normalized_item",
-        "rule_core_version": RULE_CORE_VERSION,
+        "candidate_mode": candidate_mode,
+        "candidate_engine": candidate_engine,
+        "candidate_version": candidate_version,
+        "rule_core_version": rule_core_version,
         "rule_config_version": str(getattr(rule_config, "config_version", "")),
         "application_revision": _application_revision(),
         "counts": {
-            "compared": 1,
+            "compared": 1 if comparable else 0,
             "comparison_errors": 0 if comparison.get("ok") else 1,
             "action_changes": 1 if changed_action else 0,
-            "skipped": {},
+            "skipped": (
+                {}
+                if comparable
+                else {
+                    str(candidate.get("evaluation_status") or "comparison_error"): 1
+                }
+            ),
             "action_changes_by_pair": {pair: 1} if changed_action else {},
         },
         "items": [
@@ -176,6 +270,7 @@ def record_runtime_comparison(
     current_admission_status: str = "unknown",
     current_admission_reason: str = "current_runtime_does_not_expose_admission",
     current_matched_families: tuple[str, ...] = (),
+    llm_caller: Any = None,
 ) -> dict[str, Any]:
     """Write one bounded comparison without changing the active runtime result."""
     effective_env = env if env is not None else os.environ
@@ -195,6 +290,8 @@ def record_runtime_comparison(
             current_admission_status=current_admission_status,
             current_admission_reason=current_admission_reason,
             current_matched_families=current_matched_families,
+            env=effective_env,
+            llm_caller=llm_caller,
         )
         path = _write_report(payload, item, report_dir)
         return {"status": "completed", "report": str(path), "comparison_ok": payload["items"][0]["comparison"]["ok"]}

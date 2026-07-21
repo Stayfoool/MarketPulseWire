@@ -68,10 +68,11 @@ def sort_review_items(payload: dict[str, Any]) -> None:
         row = item if isinstance(item, dict) else {}
         current = str(row.get("current_action") or "none")
         candidate = str(row.get("candidate_action") or "none")
+        comparable = bool(row.get("comparable", True))
         changed = current != candidate
         involves_push = "push" in {current, candidate}
         return (
-            0 if changed and involves_push else 1 if changed else 2,
+            0 if not comparable and current == "push" else 1 if changed and involves_push else 2 if not comparable else 3 if changed else 4,
             0 if candidate == "push" else 1,
             str(row.get("source") or ""),
             str(row.get("title") or ""),
@@ -99,7 +100,10 @@ def build_reminder_card(payload: dict[str, Any]) -> dict[str, Any]:
         "config": {"wide_screen_mode": True},
         "header": {
             "template": "orange" if int(counts.get("action_changes") or 0) else "blue",
-            "title": {"tag": "plain_text", "content": "新旧规则每日对比报告"},
+            "title": {
+                "tag": "plain_text",
+                "content": f"现有生产规则与{payload.get('candidate_label') or '对比判断'}每日对比报告",
+            },
         },
         "elements": [div_markdown("\n".join(details))],
     }
@@ -164,7 +168,7 @@ def run_daily_report(
     payload.update(
         {
             "report_kind": "daily_review",
-            "report_title": "Rule Core Daily Comparison Report",
+            "report_title": f"现有生产规则与{payload.get('candidate_label') or '对比判断'}每日对比报告",
             "review_date": review_date,
             "notification": {"status": "pending"},
         }

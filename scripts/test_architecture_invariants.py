@@ -424,7 +424,10 @@ def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importe
             elif isinstance(node, ast.ImportFrom) and node.module:
                 top_level_imports.add(node.module.split(".")[0])
         assert "rule_center" not in top_level_imports
-    inactive_modules = {
+    report_only_modules = {
+        "llm_rule_catalog.py",
+        "llm_rule_decision.py",
+        "llm_rule_shadow.py",
         "rule_core_v1.py",
         "rule_core_fixture.py",
         "rule_core_replay.py",
@@ -438,14 +441,14 @@ def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importe
         "market_lifecycle_v1.py",
     }
     for path in SCRIPTS.glob("*.py"):
-        if path.name.startswith("test_") or path.name in inactive_modules:
+        if path.name.startswith("test_") or path.name in report_only_modules:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=path.name)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                assert all(alias.name not in {Path(name).stem for name in inactive_modules} for alias in node.names), path.name
+                assert all(alias.name not in {Path(name).stem for name in report_only_modules} for alias in node.names), path.name
             elif isinstance(node, ast.ImportFrom):
-                assert node.module not in {Path(name).stem for name in inactive_modules}, path.name
+                assert node.module not in {Path(name).stem for name in report_only_modules}, path.name
 
     runtime_shadow = parsed_module("rule_core_runtime_shadow.py")
     runtime_imports: set[str] = set()
@@ -456,10 +459,16 @@ def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importe
             runtime_imports.add(node.module.split(".")[0])
     assert "rule_core_v1" in runtime_imports
     assert "rule_core_shadow" in runtime_imports
+    assert "llm_rule_shadow" in runtime_imports
+    assert "llm_rule_catalog" in runtime_imports
+    assert "llm_rule_decision" in runtime_imports
     runtime_text = (SCRIPTS / "rule_core_runtime_shadow.py").read_text(encoding="utf-8")
     assert "market_delivery" not in runtime_text
     assert "connect_sqlite" not in runtime_text
     assert '"full_text"' not in runtime_text
+    llm_shadow_text = (SCRIPTS / "llm_rule_shadow.py").read_text(encoding="utf-8")
+    assert "market_delivery" not in llm_shadow_text
+    assert "connect_sqlite" not in llm_shadow_text
 
 
 def main() -> int:

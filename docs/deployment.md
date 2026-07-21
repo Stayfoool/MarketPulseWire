@@ -153,15 +153,49 @@ workbench exposes the dated JSON reports read-only under `规则对比报告`; i
 not expose candidate enablement or delivery controls. If the private comparison
 switch is disabled, installation disables this daily timer as well.
 
-Each new per-item comparison records its comparison time, explicit new-rule
+Each new per-item comparison records its comparison time, candidate engine and
 version, private rule-configuration version and deployed code revision. The
 combined/daily report preserves those fields. The Web workbench can filter the
-selected report to items evaluated by the latest new-rule version, while still
-combining that filter with action-change and current/new action filters. For
-retained reports created before the explicit new-rule version field existed,
+selected report to items evaluated by the latest candidate version, while still
+combining that filter with action-change, execution-status and current/candidate
+action filters. For retained deterministic reports created before the explicit
+new-rule version field existed,
 the combiner conservatively treats only records at or after the verified
 completion time of the latest rule-changing deployment as latest-version
 records; earlier records remain `较早或无法确认`.
+
+The comparison candidate remains deterministic unless the private server
+configuration explicitly sets:
+
+```text
+RULE_COMPARISON_CANDIDATE=llm
+```
+
+Do not set this value merely because the supporting code has been deployed.
+Before enabling it, calculate the admitted-item call volume and expected token
+and cost range, explain the production impact, and obtain explicit user
+approval. The current production `DecisionResult`, review, delivery and dedup
+remain authoritative after the selector is enabled; the LLM result is still
+used only in the comparison report.
+
+Optional private limits for that later approved observation are:
+
+```text
+RULE_COMPARISON_LLM_MAX_INPUT_CHARS=120000
+RULE_COMPARISON_LLM_MAX_OUTPUT_TOKENS=6000
+RULE_COMPARISON_LLM_THINKING_TYPE=
+RULE_COMPARISON_LLM_TITLE_SUMMARY_SOURCES=
+```
+
+`RULE_COMPARISON_LLM_TITLE_SUMMARY_SOURCES` is a comma-separated source-id
+allowlist. It defaults empty, so an admitted item must have complete body text
+before the LLM comparison runs. An allowlisted source may use title and summary
+only; adding a source requires a separate evidence-quality review. Invalid or
+unavailable model output is recorded as unable to compare and never falls back
+to the deterministic candidate. A valid result records bounded original-text
+evidence, model/provider metadata, token usage, attempts and elapsed time. It
+does not store the complete article body, provider raw response or response id
+in the combined/daily reports.
 
 An operator may explicitly rebuild a historical daily file from its retained
 per-item comparison reports without sending another reminder:
@@ -172,8 +206,8 @@ sudo -u surveil /opt/surveil/.venv/bin/python \
   --date YYYY-MM-DD --force-rebuild --dry-run --json
 ```
 
-This only re-aggregates stored current/new decisions. Comparison reports do not
-retain article bodies, so the command does not re-run the current new rule core
+This only re-aggregates stored current/candidate decisions. Comparison reports do not
+retain article bodies, so the command does not re-run the selected candidate
 against historical `NormalizedMarketItem` inputs. The rebuilt report records
 that limitation and preserves an existing `notification.status=sent` without
 sending a second Feishu reminder. A historical rebuild updates only the dated

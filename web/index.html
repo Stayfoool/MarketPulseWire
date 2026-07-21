@@ -501,8 +501,9 @@
           <select id="ruleShadowChange" onchange="renderRuleShadowRows()">
             <option value="all">全部</option>
             <option value="same">一致</option>
-            <option value="upgrade">新规则升级</option>
-            <option value="downgrade">新规则降级</option>
+            <option value="upgrade">对比判断升级</option>
+            <option value="downgrade">对比判断降级</option>
+            <option value="unavailable">无法比较</option>
           </select>
         </label>
         <label class="rule-shadow-filter-field">
@@ -517,7 +518,7 @@
           </select>
         </label>
         <label class="rule-shadow-filter-field">
-          <span>新规则</span>
+          <span>对比判断</span>
           <select id="ruleShadowCandidateAction" onchange="renderRuleShadowRows()">
             <option value="all">全部 action</option>
             <option value="push">push</option>
@@ -528,11 +529,25 @@
           </select>
         </label>
         <label class="rule-shadow-filter-field">
-          <span>新规则版本</span>
+          <span>对比判断版本</span>
           <select id="ruleShadowRuleVersion" onchange="renderRuleShadowRows()">
             <option value="all">全部版本</option>
-            <option value="latest">最新规则</option>
+            <option value="latest">最新版本</option>
             <option value="earlier">较早或无法确认</option>
+          </select>
+        </label>
+        <label class="rule-shadow-filter-field">
+          <span>执行状态</span>
+          <select id="ruleShadowEvaluationStatus" onchange="renderRuleShadowRows()">
+            <option value="all">全部状态</option>
+            <option value="completed">已完成</option>
+            <option value="not_admitted">未通过范围准入</option>
+            <option value="insufficient_input">正文不足</option>
+            <option value="model_unavailable">大模型不可用</option>
+            <option value="invalid_output">大模型输出无效</option>
+            <option value="evidence_invalid">原文证据校验失败</option>
+            <option value="conflict">判断结果冲突</option>
+            <option value="unknown">其他无法比较</option>
           </select>
         </label>
         <button onclick="resetRuleShadowFilters()">重置筛选</button>
@@ -546,7 +561,7 @@
                 <th style="width:150px">来源</th>
                 <th>文章</th>
                 <th style="width:280px">现有规则</th>
-                <th style="width:280px">新规则</th>
+                <th id="ruleShadowCandidateHeader" style="width:320px">对比判断</th>
               </tr>
             </thead>
             <tbody id="ruleShadowRows"></tbody>

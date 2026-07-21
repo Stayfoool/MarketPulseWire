@@ -37,7 +37,7 @@ MATCHED_CONTEXT_FIELDS = {
     "holding_subjects",
     "holding_symbols",
     "matched_related_keywords",
-    "matched_immediate_alert_keywords",
+    "immediate_alert_keywords",
     "trusted_institution_ids",
     "trusted_institution_aliases",
 }
@@ -184,10 +184,36 @@ def source_allowed_families(item: NormalizedMarketItem) -> tuple[RuleFamily, ...
     return ("holding", "semiconductor_ai", "macro_data", "fed_policy", "trade_policy")
 
 
+def apply_source_admission_boundary(
+    item: NormalizedMarketItem,
+    admission: AdmissionResult,
+) -> AdmissionResult:
+    if source_allowed_families(item) != ("holding",) or admission.status != "admitted":
+        return admission
+    if "holding" not in admission.matched_families:
+        return AdmissionResult(
+            status="excluded",
+            reason_code="holding_scope_required_for_source",
+            matched_families=(),
+            evidence=(),
+            config_version=admission.config_version,
+            rule_contract_version=admission.rule_contract_version,
+        )
+    return AdmissionResult(
+        status="admitted",
+        reason_code="holding_scope_match",
+        matched_families=("holding",),
+        evidence=tuple(evidence for evidence in admission.evidence if evidence.rule_family == "holding"),
+        config_version=admission.config_version,
+        rule_contract_version=admission.rule_contract_version,
+    )
+
+
 def applicable_rules(
     item: NormalizedMarketItem,
     admission: AdmissionResult,
 ) -> tuple[LLMRuleDefinition, ...]:
+    admission = apply_source_admission_boundary(item, admission)
     if admission.status != "admitted":
         raise LLMRuleInputError("not_admitted", "LLM decision requires an admitted AdmissionResult")
     allowed = set(source_allowed_families(item))
@@ -236,6 +262,7 @@ def build_llm_rule_prompt(
     matched_context: Mapping[str, Any] | None = None,
     max_input_chars: int = MAX_INPUT_CHARS,
 ) -> LLMRulePrompt:
+    admission = apply_source_admission_boundary(item, admission)
     rules = applicable_rules(item, admission)
     article, input_chars, _allowed_evidence_fields = _validated_article(
         item,
@@ -408,7 +435,7 @@ def _quote_list(
         normalized_source = _normalized_text(source_fields[field])
         if not normalized_source or normalized_quote not in normalized_source:
             evidence_errors.append(f"{path}[{index}].quote is not verbatim in {field}")
-        if field == "full_text" and len(normalized_source) > 160 and normalized_quote == normalized_source:
+        if field == "full_text" and normalized_quote == normalized_source:
             evidence_errors.append(f"{path}[{index}].quote cannot copy the complete full_text")
         total_chars += len(quote)
         result.append({"field": field, "quote": quote})
@@ -590,6 +617,7 @@ def validate_llm_rule_response(
     model: str = "",
 ) -> LLMRuleCandidateResult:
     digest = _item_digest(item)
+    admission = apply_source_admission_boundary(item, admission)
     try:
         _article, _input_chars, allowed_evidence_fields = _validated_article(
             item,
