@@ -37,6 +37,7 @@ rsync -az --delete \
   --include '.env.example' \
   --exclude '.env' \
   --exclude '.env.*' \
+  --exclude '.git/' \
   --exclude 'proxy.env' \
   --exclude "$PRIVATE_PROXY_YAML_PATTERN" \
   --exclude 'config/portfolio.json' \
