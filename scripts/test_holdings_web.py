@@ -78,6 +78,13 @@ def test_rule_shadow_report_view_is_read_only_and_path_bounded() -> None:
     assert "现有规则" in source
     assert "新内核" in source
     assert "safeExternalUrl" in source
+    assert "新规则升级" in source
+    assert "新规则降级" in source
+    assert "ruleShadowCurrentAction" in source
+    assert "ruleShadowCandidateAction" in source
+    assert "renderRuleShadowRows" in source
+    assert "ruleShadowActionRank" in source
+    assert "显示 ${filtered.length} / ${items.length} 条" in source
 
     with TemporaryDirectory() as tmpdir:
         report_dir = Path(tmpdir)

@@ -83,6 +83,9 @@ td textarea { min-height: 38px; resize: vertical; }
 .rule-shadow-table { min-width: 1080px; }
 .rule-shadow-table td { vertical-align: top; }
 .rule-shadow-table tr:first-child td { border-top-color: #99d6cc; }
+.rule-shadow-filters { align-items: end; }
+.rule-shadow-filter-field { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
+.rule-shadow-filter-field select { width: 160px; height: 34px; padding: 5px 8px; color: var(--text); }
 .events-table a { color: var(--accent); text-decoration: none; }
 .table-wrap { max-height: calc(100vh - 190px); overflow: auto; }
 .health-table { min-width: 1180px; }

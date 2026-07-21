@@ -202,6 +202,12 @@ def markdown_report(payload: dict[str, Any]) -> str:
     ]
     if payload.get("review_date"):
         lines.insert(2, f"- Review date: {payload.get('review_date')} (Asia/Shanghai)")
+    rebuild = payload.get("rebuild") if isinstance(payload.get("rebuild"), dict) else {}
+    if rebuild:
+        lines.insert(
+            3,
+            "- Rebuilt from stored comparison records; candidate rules were not re-evaluated.",
+        )
     pairs = counts.get("action_changes_by_pair") if isinstance(counts.get("action_changes_by_pair"), dict) else {}
     if pairs:
         lines.append("| Action Change | Count |")

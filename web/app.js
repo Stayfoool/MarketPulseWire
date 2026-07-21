@@ -15,6 +15,7 @@ let editingSignalFeedback = null;
 let sourceProfileCache = {categories: [], profiles: []};
 let ruleCenterCache = {rules: []};
 let eventSourceOptionsLoaded = false;
+let ruleShadowReportCache = {items: []};
 
 function headers() {
   const h = {'Content-Type': 'application/json'};
@@ -1334,6 +1335,55 @@ function ruleShadowDecisionCell(item, prefix) {
   `;
 }
 
+const ruleShadowActionRank = {none: 0, ignore: 1, archive: 2, daily: 3, push: 4};
+
+function ruleShadowAction(item, prefix) {
+  const action = String(item[`${prefix}_action`] || 'none').toLowerCase();
+  return Object.prototype.hasOwnProperty.call(ruleShadowActionRank, action) ? action : 'none';
+}
+
+function ruleShadowChange(item) {
+  const current = ruleShadowAction(item, 'current');
+  const candidate = ruleShadowAction(item, 'candidate');
+  if (current === candidate) return 'same';
+  return ruleShadowActionRank[candidate] > ruleShadowActionRank[current] ? 'upgrade' : 'downgrade';
+}
+
+function renderRuleShadowRows() {
+  const items = Array.isArray(ruleShadowReportCache.items) ? ruleShadowReportCache.items : [];
+  const change = document.getElementById('ruleShadowChange')?.value || 'all';
+  const currentAction = document.getElementById('ruleShadowCurrentAction')?.value || 'all';
+  const candidateAction = document.getElementById('ruleShadowCandidateAction')?.value || 'all';
+  const filtered = items.filter(item =>
+    (change === 'all' || ruleShadowChange(item) === change) &&
+    (currentAction === 'all' || ruleShadowAction(item, 'current') === currentAction) &&
+    (candidateAction === 'all' || ruleShadowAction(item, 'candidate') === candidateAction)
+  );
+
+  document.getElementById('ruleShadowFilterSummary').textContent = `显示 ${filtered.length} / ${items.length} 条`;
+  document.getElementById('ruleShadowRows').innerHTML = filtered.map(item => {
+    const safeUrl = safeExternalUrl(item.url);
+    const title = safeUrl
+      ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title || '')}</a>`
+      : escapeHtml(item.title || '');
+    return `
+      <tr>
+        <td>${escapeHtml(item.source || '')}<div class="hint">${escapeHtml(item.source_group || '')}</div></td>
+        <td><strong>${title}</strong><div class="hint">${escapeHtml(item.item_id || '')}</div></td>
+        <td>${ruleShadowDecisionCell(item, 'current')}</td>
+        <td>${ruleShadowDecisionCell(item, 'candidate')}</td>
+      </tr>
+    `;
+  }).join('') || '<tr><td colspan="4">没有符合当前筛选条件的文章。</td></tr>';
+}
+
+function resetRuleShadowFilters() {
+  document.getElementById('ruleShadowChange').value = 'all';
+  document.getElementById('ruleShadowCurrentAction').value = 'all';
+  document.getElementById('ruleShadowCandidateAction').value = 'all';
+  renderRuleShadowRows();
+}
+
 async function loadRuleShadowReports(reportDate='') {
   try {
     const query = reportDate ? `?date=${encodeURIComponent(reportDate)}` : '';
@@ -1355,24 +1405,15 @@ async function loadRuleShadowReports(reportDate='') {
       ['无法比较', skipped],
       ['飞书提醒', currentSummary.notification_status || '-']
     ].map(item => `<section class="metric"><div class="label">${escapeHtml(item[0])}</div><div class="value">${escapeHtml(item[1])}</div></section>`).join('');
+    const rebuild = report.rebuild || {};
+    const rebuildNotice = rebuild.source === 'stored_comparison_reports' && rebuild.candidate_re_evaluated === false
+      ? '<span>本报告仅重新汇总已保存的新旧判断，没有重新执行新规则。</span>'
+      : '';
     document.getElementById('ruleShadowWindow').innerHTML = report.window_start
-      ? `<span>统计区间：${escapeHtml(formatTime(report.window_start))} 至 ${escapeHtml(formatTime(report.window_end))}</span><span>报告生成：${escapeHtml(formatTime(report.generated_at))}</span>`
+      ? `<span>统计区间：${escapeHtml(formatTime(report.window_start))} 至 ${escapeHtml(formatTime(report.window_end))}</span><span>报告生成：${escapeHtml(formatTime(report.generated_at))}</span>${rebuildNotice}`
       : '<span>暂无日期报告。</span>';
-
-    document.getElementById('ruleShadowRows').innerHTML = (report.items || []).map(item => {
-      const safeUrl = safeExternalUrl(item.url);
-      const title = safeUrl
-        ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title || '')}</a>`
-        : escapeHtml(item.title || '');
-      return `
-        <tr>
-          <td>${escapeHtml(item.source || '')}<div class="hint">${escapeHtml(item.source_group || '')}</div></td>
-          <td><strong>${title}</strong><div class="hint">${escapeHtml(item.item_id || '')}</div></td>
-          <td>${ruleShadowDecisionCell(item, 'current')}</td>
-          <td>${ruleShadowDecisionCell(item, 'candidate')}</td>
-        </tr>
-      `;
-    }).join('') || '<tr><td colspan="4">该报告没有可比较文章。</td></tr>';
+    ruleShadowReportCache = report;
+    renderRuleShadowRows();
   } catch (err) {
     showStatus(err.message, 'err');
   }

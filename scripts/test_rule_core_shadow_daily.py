@@ -104,6 +104,33 @@ def test_daily_report_is_bounded_dated_and_notified_once() -> None:
         assert load_daily_report(report_dir, "2026-07-19")["generated_at"] == original_generated_at
         assert list_daily_reports(report_dir)[0]["push_changes"] == 2
 
+        write_comparison(report_dir, "2026-07-19T07:00:00+00:00", "late-retained-report")
+        rebuilt = run_daily_report(
+            report_dir=report_dir,
+            now=datetime(2026, 7, 19, 10, 0, tzinfo=timezone.utc),
+            force_rebuild=True,
+            sender=lambda card: cards.append(card) or True,
+        )
+        assert rebuilt["notification_status"] == "preserved_sent"
+        assert rebuilt["counts"]["compared"] == 3
+        assert len(cards) == 1
+        rebuilt_payload = load_daily_report(report_dir, "2026-07-19")
+        assert rebuilt_payload is not None
+        assert rebuilt_payload["notification"]["status"] == "sent"
+        assert rebuilt_payload["notification"]["rebuild_notification"] == "not_sent"
+        assert rebuilt_payload["rebuild"] == {
+            "rebuilt_at": "2026-07-19T10:00:00+00:00",
+            "source": "stored_comparison_reports",
+            "candidate_re_evaluated": False,
+        }
+        assert "candidate rules were not re-evaluated" in (
+            report_dir / "rule-core-shadow-daily-2026-07-19.md"
+        ).read_text(encoding="utf-8")
+        latest_payload = json.loads(
+            (report_dir / "rule-core-shadow-combined-latest.json").read_text(encoding="utf-8")
+        )
+        assert latest_payload["counts"]["compared"] == 2
+
         card_text = json.dumps(build_reminder_card(payload), ensure_ascii=False)
         assert "规则对比报告" in card_text
         assert "涉及 push 的差异" in card_text
@@ -123,6 +150,34 @@ def test_empty_daily_report_writes_files_without_notification() -> None:
         payload = load_daily_report(Path(tmpdir), "2026-07-19")
         assert payload is not None
         assert payload["notification"]["status"] == "not_sent_no_content"
+
+
+def test_historical_rebuild_fails_when_retained_reports_are_missing() -> None:
+    with TemporaryDirectory() as tmpdir:
+        report_dir = Path(tmpdir)
+        write_comparison(report_dir, "2026-07-19T07:00:00+00:00", "retained")
+        first = run_daily_report(
+            report_dir=report_dir,
+            now=datetime(2026, 7, 19, 8, 0, tzinfo=timezone.utc),
+            sender=lambda _card: True,
+        )
+        assert first["notification_status"] == "sent"
+        original = load_daily_report(report_dir, "2026-07-19")
+        assert original is not None and original["counts"]["reports"] == 1
+        (report_dir / "rule-core-shadow-news-retained.json").unlink()
+
+        try:
+            run_daily_report(
+                report_dir=report_dir,
+                now=datetime(2026, 7, 19, 10, 0, tzinfo=timezone.utc),
+                force_rebuild=True,
+                deliver=False,
+            )
+        except RuntimeError as exc:
+            assert "found 0 of 1" in str(exc)
+        else:
+            raise AssertionError("incomplete retained reports must fail historical rebuild")
+        assert load_daily_report(report_dir, "2026-07-19") == original
 
 
 def test_systemd_timer_and_installer_use_beijing_1530() -> None:
@@ -148,6 +203,7 @@ def main() -> None:
     test_review_window_uses_consecutive_beijing_1530_boundaries()
     test_daily_report_is_bounded_dated_and_notified_once()
     test_empty_daily_report_writes_files_without_notification()
+    test_historical_rebuild_fails_when_retained_reports_are_missing()
     test_systemd_timer_and_installer_use_beijing_1530()
     print("rule core shadow daily checks passed")
 
