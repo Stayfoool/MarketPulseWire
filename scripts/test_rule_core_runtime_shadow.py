@@ -69,7 +69,7 @@ def test_runtime_item_writes_bounded_comparison_without_body() -> None:
         assert payload["input_mode"] == "production_normalized_item"
         assert payload["rule_core_version"] == "rule-core-v1-20260721-5d701b1"
         assert payload["rule_config_version"] == "public-test-v1"
-        assert payload["application_revision"] == ""
+        assert payload["application_revision"] == runtime_shadow._application_revision()
         assert payload["comparison_only"] is True
         assert payload["affects_current_decision"] is False
         assert payload["counts"]["compared"] == 1
