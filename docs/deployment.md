@@ -153,6 +153,16 @@ workbench exposes the dated JSON reports read-only under `规则对比报告`; i
 not expose candidate enablement or delivery controls. If the private comparison
 switch is disabled, installation disables this daily timer as well.
 
+Each new per-item comparison records its comparison time, explicit new-rule
+version, private rule-configuration version and deployed code revision. The
+combined/daily report preserves those fields. The Web workbench can filter the
+selected report to items evaluated by the latest new-rule version, while still
+combining that filter with action-change and current/new action filters. For
+retained reports created before the explicit new-rule version field existed,
+the combiner conservatively treats only records at or after the verified
+completion time of the latest rule-changing deployment as latest-version
+records; earlier records remain `较早或无法确认`.
+
 An operator may explicitly rebuild a historical daily file from its retained
 per-item comparison reports without sending another reminder:
 

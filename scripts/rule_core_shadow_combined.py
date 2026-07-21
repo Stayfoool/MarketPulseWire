@@ -11,10 +11,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from rule_core_v1 import RULE_CORE_VERSION
+
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORT_DIR = ROOT / "reports"
 CONTRACT_VERSION = "rule-core-shadow-combined-v1"
+# PR #162 is the last rule-changing deployment before explicit rule versions
+# were added to comparison records. The completed workflow time is a
+# conservative compatibility boundary for already-retained reports.
+LEGACY_LATEST_RULE_CORE_SINCE = datetime(2026, 7, 21, 2, 32, 51, tzinfo=timezone.utc)
 
 
 def parse_iso(value: object) -> datetime | None:
@@ -108,6 +114,16 @@ def _current_reason(payload: dict[str, Any]) -> str:
     return reason or admission
 
 
+def _rule_core_metadata(report: dict[str, Any]) -> tuple[str, str, bool]:
+    recorded = str(report.get("rule_core_version") or "").strip()
+    if recorded:
+        return recorded, "recorded", recorded == RULE_CORE_VERSION
+    generated_at = parse_iso(report.get("generated_at"))
+    if generated_at is not None and generated_at >= LEGACY_LATEST_RULE_CORE_SINCE:
+        return RULE_CORE_VERSION, "inferred_from_deployment_time", True
+    return "", "unconfirmed", False
+
+
 def _md_cell(value: object, limit: int = 180) -> str:
     text = " ".join(str(value or "").split()).replace("|", "\\|")
     if len(text) > limit:
@@ -131,9 +147,11 @@ def build_combined_report(
     action_changes = Counter()
     source_groups = Counter()
     items: list[dict[str, Any]] = []
+    latest_rule_items = 0
 
     for report in reports:
         source_group_name = str(report.get("_source_group") or "")
+        rule_core_version, rule_core_version_source, is_latest_rule_core_version = _rule_core_metadata(report)
         source_groups[source_group_name] += 1
         counts = report.get("counts") if isinstance(report.get("counts"), dict) else {}
         skipped.update(counts.get("skipped") if isinstance(counts.get("skipped"), dict) else {})
@@ -159,9 +177,17 @@ def build_combined_report(
                 "changed_fields": comparison.get("changed_fields") if isinstance(comparison.get("changed_fields"), list) else [],
                 "candidate_admission": candidate.get("admission_status") or "",
                 "candidate_rule_ids": candidate.get("rule_ids") if isinstance(candidate.get("rule_ids"), list) else [],
+                "comparison_generated_at": report.get("generated_at") or "",
+                "rule_core_version": rule_core_version,
+                "rule_core_version_source": rule_core_version_source,
+                "rule_config_version": report.get("rule_config_version") or "",
+                "application_revision": report.get("application_revision") or "",
+                "is_latest_rule_core_version": is_latest_rule_core_version,
                 "report_path": report.get("_path") or "",
             }
             items.append(row)
+            if is_latest_rule_core_version:
+                latest_rule_items += 1
             if row["current_action"] != row["candidate_action"]:
                 action_changes.update([_pair_for(item)])
 
@@ -174,6 +200,8 @@ def build_combined_report(
         "window_hours": round((window_end - window_start).total_seconds() / 3600, 3),
         "window_start": window_start.isoformat(),
         "window_end": window_end.isoformat(),
+        "latest_rule_core_version": RULE_CORE_VERSION,
+        "legacy_latest_rule_core_since": LEGACY_LATEST_RULE_CORE_SINCE.isoformat(),
         "report_dir": str(report_dir),
         "counts": {
             "reports": len(reports),
@@ -182,6 +210,8 @@ def build_combined_report(
             "action_changes": sum(action_changes.values()),
             "action_changes_by_pair": dict(action_changes),
             "skipped": dict(skipped),
+            "latest_rule_items": latest_rule_items,
+            "earlier_or_unconfirmed_rule_items": len(items) - latest_rule_items,
         },
         "items": items,
     }
@@ -197,6 +227,8 @@ def markdown_report(payload: dict[str, Any]) -> str:
         f"- Reports scanned: {counts.get('reports', 0)}",
         f"- Compared items: {counts.get('compared', 0)}",
         f"- Action changes: {counts.get('action_changes', 0)}",
+        f"- Latest new-rule version: {payload.get('latest_rule_core_version') or '-'}",
+        f"- Latest-version items: {counts.get('latest_rule_items', 0)}",
         f"- Skipped: {json.dumps(counts.get('skipped', {}), ensure_ascii=False, sort_keys=True)}",
         "",
     ]

@@ -1354,10 +1354,14 @@ function renderRuleShadowRows() {
   const change = document.getElementById('ruleShadowChange')?.value || 'all';
   const currentAction = document.getElementById('ruleShadowCurrentAction')?.value || 'all';
   const candidateAction = document.getElementById('ruleShadowCandidateAction')?.value || 'all';
+  const ruleVersion = document.getElementById('ruleShadowRuleVersion')?.value || 'all';
   const filtered = items.filter(item =>
     (change === 'all' || ruleShadowChange(item) === change) &&
     (currentAction === 'all' || ruleShadowAction(item, 'current') === currentAction) &&
-    (candidateAction === 'all' || ruleShadowAction(item, 'candidate') === candidateAction)
+    (candidateAction === 'all' || ruleShadowAction(item, 'candidate') === candidateAction) &&
+    (ruleVersion === 'all' ||
+      (ruleVersion === 'latest' && item.is_latest_rule_core_version === true) ||
+      (ruleVersion === 'earlier' && item.is_latest_rule_core_version !== true))
   );
 
   document.getElementById('ruleShadowFilterSummary').textContent = `显示 ${filtered.length} / ${items.length} 条`;
@@ -1368,7 +1372,7 @@ function renderRuleShadowRows() {
       : escapeHtml(item.title || '');
     return `
       <tr>
-        <td>${escapeHtml(item.source || '')}<div class="hint">${escapeHtml(item.source_group || '')}</div></td>
+        <td>${escapeHtml(item.source || '')}<div class="hint">${escapeHtml(item.source_group || '')}</div><div class="hint">${escapeHtml(item.rule_core_version || '规则版本无法确认')}</div><div class="hint">${escapeHtml(formatTime(item.comparison_generated_at || ''))}</div></td>
         <td><strong>${title}</strong><div class="hint">${escapeHtml(item.item_id || '')}</div></td>
         <td>${ruleShadowDecisionCell(item, 'current')}</td>
         <td>${ruleShadowDecisionCell(item, 'candidate')}</td>
@@ -1381,6 +1385,7 @@ function resetRuleShadowFilters() {
   document.getElementById('ruleShadowChange').value = 'all';
   document.getElementById('ruleShadowCurrentAction').value = 'all';
   document.getElementById('ruleShadowCandidateAction').value = 'all';
+  document.getElementById('ruleShadowRuleVersion').value = 'all';
   renderRuleShadowRows();
 }
 
@@ -1401,6 +1406,7 @@ async function loadRuleShadowReports(reportDate='') {
     document.getElementById('ruleShadowMetrics').innerHTML = [
       ['可比较文章', counts.compared || 0],
       ['action 不一致', counts.action_changes || 0],
+      ['最新规则文章', counts.latest_rule_items || 0],
       ['涉及 push', currentSummary.push_changes || 0],
       ['无法比较', skipped],
       ['飞书提醒', currentSummary.notification_status || '-']
@@ -1410,7 +1416,7 @@ async function loadRuleShadowReports(reportDate='') {
       ? '<span>本报告仅重新汇总已保存的新旧判断，没有重新执行新规则。</span>'
       : '';
     document.getElementById('ruleShadowWindow').innerHTML = report.window_start
-      ? `<span>统计区间：${escapeHtml(formatTime(report.window_start))} 至 ${escapeHtml(formatTime(report.window_end))}</span><span>报告生成：${escapeHtml(formatTime(report.generated_at))}</span>${rebuildNotice}`
+      ? `<span>统计区间：${escapeHtml(formatTime(report.window_start))} 至 ${escapeHtml(formatTime(report.window_end))}</span><span>报告生成：${escapeHtml(formatTime(report.generated_at))}</span><span>最新规则版本：${escapeHtml(report.latest_rule_core_version || '无法确认')}</span>${rebuildNotice}`
       : '<span>暂无日期报告。</span>';
     ruleShadowReportCache = report;
     renderRuleShadowRows();

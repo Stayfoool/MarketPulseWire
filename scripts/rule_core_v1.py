@@ -31,6 +31,7 @@ from trade_friction import classify_trade_friction
 
 CONTRACT_VERSION = "rule-core-v1"
 CONFIG_SCHEMA_VERSION = "rule-config-v1"
+RULE_CORE_VERSION = "rule-core-v1-20260721-5d701b1"
 FAMILY_ORDER: tuple[RuleFamily, ...] = (
     "holding",
     "semiconductor_ai",
