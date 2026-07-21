@@ -247,7 +247,15 @@ def build_combined_report(
                 "attempts": _safe_int(candidate.get("attempts")),
                 "elapsed_seconds": _safe_float(candidate.get("elapsed_seconds")),
                 "input_text_scope": candidate.get("input_text_scope") or "",
+                "provided_fields": (
+                    candidate.get("provided_fields")
+                    if isinstance(candidate.get("provided_fields"), list)
+                    else []
+                ),
                 "article_chars": _safe_int(candidate.get("article_chars")),
+                "body_original_chars": _safe_int(candidate.get("body_original_chars")),
+                "body_provided_chars": _safe_int(candidate.get("body_provided_chars")),
+                "body_truncated": bool(candidate.get("body_truncated")),
                 "prompt_chars": _safe_int(candidate.get("prompt_chars")),
                 "comparison_generated_at": report.get("generated_at") or "",
                 "rule_core_version": rule_core_version,

@@ -12,7 +12,11 @@ from typing import Any, Mapping
 
 from llm_analysis import call_chat_completion_raw_with_prompts
 from llm_rule_catalog import CATALOG_VERSION
-from llm_rule_decision import ENGINE_VERSION as LLM_RULE_ENGINE_VERSION, LLMRulePrompt
+from llm_rule_decision import (
+    ENGINE_VERSION as LLM_RULE_ENGINE_VERSION,
+    LLMRulePrompt,
+    resolve_input_text_scope,
+)
 from llm_rule_shadow import compare_llm_rule_candidate
 from market_item import DecisionResult, NormalizedMarketItem
 from rule_core_shadow import safe_compare_rule_core
@@ -46,15 +50,6 @@ def _bounded_int(env: Mapping[str, str], key: str, default: int, minimum: int, m
     except ValueError:
         value = default
     return max(minimum, min(maximum, value))
-
-
-def _llm_input_scope(item: NormalizedMarketItem, env: Mapping[str, str]) -> str:
-    summary_sources = {
-        value.strip()
-        for value in str(env.get("RULE_COMPARISON_LLM_TITLE_SUMMARY_SOURCES") or "").split(",")
-        if value.strip()
-    }
-    return "title_summary" if item.source in summary_sources else "title_summary_full_text"
 
 
 def _default_llm_caller(env: Mapping[str, str]):
@@ -171,7 +166,7 @@ def _report_payload(
             portfolio=portfolio,
             source_policy=SourceAdmissionPolicy(),
             model_caller=llm_caller or _default_llm_caller(env),
-            input_text_scope=_llm_input_scope(item, env),
+            input_text_scope=resolve_input_text_scope(item),
             max_input_chars=_bounded_int(
                 env,
                 "RULE_COMPARISON_LLM_MAX_INPUT_CHARS",

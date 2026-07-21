@@ -190,7 +190,11 @@ def _candidate_base(admission: AdmissionResult) -> dict[str, Any]:
         "attempts": 0,
         "elapsed_seconds": 0.0,
         "input_text_scope": "",
+        "provided_fields": [],
         "article_chars": 0,
+        "body_original_chars": 0,
+        "body_provided_chars": 0,
+        "body_truncated": False,
         "prompt_chars": 0,
         "rule_matrix_version": RULE_MATRIX_VERSION,
         "rule_catalog_version": CATALOG_VERSION,
@@ -213,7 +217,11 @@ def _failure_candidate(
             "evaluation_status": status,
             "failure_reason": _clean(reason, 500),
             "input_text_scope": prompt.input_text_scope if prompt else "",
+            "provided_fields": list(prompt.provided_fields) if prompt else [],
             "article_chars": prompt.article_chars if prompt else 0,
+            "body_original_chars": prompt.body_original_chars if prompt else 0,
+            "body_provided_chars": prompt.body_provided_chars if prompt else 0,
+            "body_truncated": prompt.body_truncated if prompt else False,
             "prompt_chars": prompt.input_chars if prompt else 0,
         }
     )
@@ -254,7 +262,11 @@ def _completed_candidate(
             "attempts": response.attempts,
             "elapsed_seconds": response.elapsed_seconds,
             "input_text_scope": prompt.input_text_scope,
+            "provided_fields": list(prompt.provided_fields),
             "article_chars": prompt.article_chars,
+            "body_original_chars": prompt.body_original_chars,
+            "body_provided_chars": prompt.body_provided_chars,
+            "body_truncated": prompt.body_truncated,
             "prompt_chars": prompt.input_chars,
         }
     )
@@ -272,7 +284,7 @@ def compare_llm_rule_candidate(
     portfolio: PortfolioRuleConfig,
     source_policy: SourceAdmissionPolicy,
     model_caller: ModelCaller,
-    input_text_scope: str = "title_summary_full_text",
+    input_text_scope: str | None = None,
     max_input_chars: int = 120_000,
 ) -> dict[str, Any]:
     if current_admission_status not in VALID_CURRENT_ADMISSION_STATUSES:

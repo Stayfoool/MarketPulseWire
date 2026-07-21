@@ -1428,7 +1428,26 @@ function renderRuleShadowRows() {
     const provider = item.provider ? `服务地址：${item.provider}` : '';
     const usage = ruleShadowUsageText(item.usage);
     const elapsed = Number(item.elapsed_seconds || 0) > 0 ? `耗时：${Number(item.elapsed_seconds).toFixed(2)} 秒` : '';
-    const candidateMeta = [`判断方式：${candidateEngine}`, `版本：${candidateVersion}`, model, provider, usage, elapsed].filter(Boolean);
+    const inputFieldLabels = {title: '标题', summary: '摘要', full_text: '正文'};
+    const providedFields = Array.isArray(item.provided_fields)
+      ? item.provided_fields.map(field => inputFieldLabels[field] || field).join('、')
+      : '';
+    const inputFields = providedFields ? `判断依据：${providedFields}` : '';
+    const originalBodyChars = Number(item.body_original_chars || 0);
+    const providedBodyChars = Number(item.body_provided_chars || 0);
+    const bodyInput = originalBodyChars > 0
+      ? `正文：提供 ${providedBodyChars} / 原文 ${originalBodyChars} 字${item.body_truncated ? '（已截断）' : ''}`
+      : '';
+    const candidateMeta = [
+      `判断方式：${candidateEngine}`,
+      `版本：${candidateVersion}`,
+      model,
+      provider,
+      inputFields,
+      bodyInput,
+      usage,
+      elapsed,
+    ].filter(Boolean);
     return `
       <tr>
         <td>${escapeHtml(item.source || '')}<div class="hint">${escapeHtml(item.source_group || '')}</div><div class="hint">${escapeHtml(formatTime(item.comparison_generated_at || ''))}</div></td>
