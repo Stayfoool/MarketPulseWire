@@ -72,14 +72,6 @@ def _assessment(rule_id: str, *, judgement: str = "not_matched", action: str | N
             "rule_id": rule_id,
             "judgement": judgement,
             "action": action,
-            "facts": {
-                "subjects": ["测试主体"],
-                "change_object": "测试变化",
-                "direction": "明确变化",
-                "event_status": "confirmed",
-                "time_scope": "current",
-                "attribution": "测试来源",
-            },
             "evidence": [{"field": "full_text", "quote": QUOTE}],
             "reason": "满足已审定规则。",
         }
@@ -249,6 +241,11 @@ def test_prompt_uses_bounded_available_input_without_current_production_decision
     assert "production_action" not in serialized
     assert "prompt_version" not in prompt.user_payload
     assert prompt.user_payload["output_contract"]["policy"].endswith("最终 action。")
+    matched_contract = prompt.user_payload["output_contract"]["matched"]
+    assert set(matched_contract) == {"rule_id", "judgement", "action", "evidence", "reason"}
+    assert '"facts":' not in serialized
+    assert "event_status" not in serialized
+    assert "time_scope" not in serialized
     assert prompt.user_payload["matched_context"] == {
         "trusted_institution_ids": ["trusted-research-1"]
     }
@@ -388,6 +385,14 @@ def test_invalid_json_unknown_missing_and_forbidden_fields_fail_closed() -> None
     forbidden_nested["rule_results"][0]["importance"] = "high"
     forbidden_result = validate_llm_rule_response(forbidden_nested, item, admission)
     assert forbidden_result.evaluation_status == "invalid_output"
+
+    obsolete_facts = copy.deepcopy(base)
+    obsolete_facts["rule_results"][0]["facts"] = {
+        "event_status": "confirmed",
+        "time_scope": "current",
+    }
+    obsolete_facts_result = validate_llm_rule_response(obsolete_facts, item, admission)
+    assert obsolete_facts_result.evaluation_status == "invalid_output"
 
 
 def test_undefined_action_and_duplicate_rule_fail_closed() -> None:

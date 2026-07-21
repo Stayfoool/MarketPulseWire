@@ -27,14 +27,6 @@ def _assessment(rule_id: str, *, matched: bool, action: str | None = None) -> di
         "rule_id": rule_id,
         "judgement": "matched",
         "action": action,
-        "facts": {
-            "subjects": ["测试公司"],
-            "change_object": "HBM产能",
-            "direction": "扩张",
-            "event_status": "executing",
-            "time_scope": "current",
-            "attribution": "公司公告",
-        },
         "evidence": [{"field": "full_text", "quote": QUOTE}],
         "reason": "原文证明产能扩张已进入执行。",
     }

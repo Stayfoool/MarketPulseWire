@@ -22,14 +22,12 @@ from llm_rule_catalog import (
 from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem, RuleFamily
 
 
-SCHEMA_VERSION = "llm-rule-match-v2"
-PROMPT_VERSION = "llm-rule-match-prompt-v2"
-ENGINE_VERSION = "llm-rule-decision-v2"
+SCHEMA_VERSION = "llm-rule-match-v3"
+PROMPT_VERSION = "llm-rule-match-prompt-v3"
+ENGINE_VERSION = "llm-rule-decision-v3"
 ACTION_RANK = {"archive": 1, "daily": 2, "push": 3}
 JUDGEMENTS = {"matched", "not_matched", "uncertain"}
 EVIDENCE_FIELDS = {"title", "summary", "full_text"}
-EVENT_STATUSES = {"occurred", "confirmed", "executing", "planned", "forecast", "rumor", "historical", "unknown"}
-TIME_SCOPES = {"current", "current_new_forecast", "future_plan", "historical", "unknown"}
 FAILURE_STATUSES = {"insufficient_input", "model_unavailable", "invalid_output", "evidence_invalid", "conflict"}
 HOLDING_ONLY_SOURCES = {"company_disclosures", "company_disclosure", "ifind_notice", "sina_stock_news"}
 HOLDING_ONLY_SOURCE_CATEGORIES = {"company_disclosures", "company_disclosure", "portfolio_stock_news"}
@@ -51,17 +49,9 @@ MAX_BODY_INPUT_CHARS = 3_000
 
 TOP_LEVEL_FIELDS = {"rule_results"}
 COMMON_RESULT_FIELDS = {"rule_id", "judgement"}
-MATCHED_RESULT_FIELDS = COMMON_RESULT_FIELDS | {"action", "facts", "evidence", "reason"}
+MATCHED_RESULT_FIELDS = COMMON_RESULT_FIELDS | {"action", "evidence", "reason"}
 NOT_MATCHED_RESULT_FIELDS = COMMON_RESULT_FIELDS
 UNCERTAIN_RESULT_FIELDS = COMMON_RESULT_FIELDS | {"counterevidence", "reason"}
-FACT_FIELDS = {
-    "subjects",
-    "change_object",
-    "direction",
-    "event_status",
-    "time_scope",
-    "attribution",
-}
 QUOTE_FIELDS = {"field", "quote"}
 
 
@@ -350,14 +340,6 @@ def build_llm_rule_prompt(
                 "rule_id": "string",
                 "judgement": "matched",
                 "action": "该规则 action_conditions 中的一项",
-                "facts": {
-                    "subjects": ["string"],
-                    "change_object": "string",
-                    "direction": "string",
-                    "event_status": sorted(EVENT_STATUSES - {"unknown"}),
-                    "time_scope": sorted(TIME_SCOPES - {"unknown"}),
-                    "attribution": "string，可为空",
-                },
                 "evidence": [{"field": "title|summary|full_text", "quote": "逐字引文"}],
                 "reason": "简短说明",
             },
@@ -501,12 +483,6 @@ def _assessment_payload(
 
     rule_id = _bounded_string(payload.get("rule_id"), f"{path}.rule_id", structure_errors, allow_empty=False)
     selected_action: str | None = None
-    subjects: list[str] = []
-    change_object = ""
-    direction = ""
-    event_status = "unknown"
-    time_scope = "unknown"
-    attribution = ""
     evidence: list[dict[str, str]] = []
     counterevidence: list[dict[str, str]] = []
     evidence_chars = 0
@@ -519,26 +495,6 @@ def _assessment_payload(
         if not isinstance(selected_action, str):
             structure_errors.append(f"{path}.action must be a string")
             selected_action = None
-        facts = _exact_fields(payload.get("facts"), FACT_FIELDS, f"{path}.facts", structure_errors)
-        if facts is not None:
-            subjects = _string_list(facts.get("subjects"), f"{path}.facts.subjects", structure_errors)
-            change_object = _bounded_string(
-                facts.get("change_object"), f"{path}.facts.change_object", structure_errors, allow_empty=False
-            )
-            direction = _bounded_string(
-                facts.get("direction"), f"{path}.facts.direction", structure_errors, allow_empty=False
-            )
-            event_status = facts.get("event_status")
-            if not isinstance(event_status, str) or event_status not in EVENT_STATUSES - {"unknown"}:
-                structure_errors.append(f"{path}.facts.event_status is invalid")
-                event_status = "unknown"
-            time_scope = facts.get("time_scope")
-            if not isinstance(time_scope, str) or time_scope not in TIME_SCOPES - {"unknown"}:
-                structure_errors.append(f"{path}.facts.time_scope is invalid")
-                time_scope = "unknown"
-            attribution = _bounded_string(
-                facts.get("attribution"), f"{path}.facts.attribution", structure_errors
-            )
         evidence, evidence_chars = _quote_list(
             payload.get("evidence"),
             f"{path}.evidence",
@@ -569,8 +525,6 @@ def _assessment_payload(
     if judgement == "matched":
         if rule is not None and selected_action not in rule.allowed_actions:
             structure_errors.append(f"{path}.action is not allowed for {rule_id}")
-        if not subjects or not change_object or not direction or event_status == "unknown" or time_scope == "unknown":
-            structure_errors.append(f"{path} matched result lacks required facts")
         if not evidence:
             structure_errors.append(f"{path} matched result requires evidence")
     elif judgement == "uncertain":
@@ -582,12 +536,6 @@ def _assessment_payload(
             "rule_id": rule_id,
             "judgement": judgement,
             "selected_action": selected_action,
-            "subjects": subjects,
-            "change_object": change_object,
-            "direction": direction,
-            "event_status": event_status,
-            "time_scope": time_scope,
-            "attribution": attribution,
             "evidence": evidence,
             "counterevidence": counterevidence,
             "explanation": explanation,
@@ -627,12 +575,6 @@ def _candidate_decision(
             "rule_id": rule.rule_id,
             "rule_family": rule.family,
             "decision_action": assessment["selected_action"],
-            "subjects": list(assessment["subjects"]),
-            "change_object": assessment["change_object"],
-            "direction": assessment["direction"],
-            "event_status": assessment["event_status"],
-            "time_scope": assessment["time_scope"],
-            "attribution": assessment["attribution"],
             "evidence": list(assessment["evidence"]),
             "counterevidence": list(assessment["counterevidence"]),
             "reason": assessment["explanation"],
