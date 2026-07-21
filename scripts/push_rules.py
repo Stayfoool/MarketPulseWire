@@ -15,64 +15,24 @@ from typing import Any
 
 from investment_bank_theme_config import load_config
 from investment_bank_theme_taxonomy import ROTATION_THEME_BUCKETS, ROTATION_THEME_BY_ID
+from investment_bank_research import (
+    ROTATION_ADVISORY_MARKERS,
+    ROTATION_ALLOCATION_CONTEXT_MARKERS,
+    ROTATION_DIRECT_PATTERNS,
+    ROTATION_NON_ALLOCATION_PATTERNS,
+    ROTATION_PAIRED_PATTERNS,
+    ROTATION_PRICE_ACTION_MARKERS,
+    ROTATION_RETROSPECTIVE_MARKERS,
+    ROTATION_RUMOR_OR_NEGATION_MARKERS,
+    THEME_STRATEGY_ACTIONS,
+    extract_rating_claims,
+)
 from investment_universe import investment_universe_match
 from international_banks import INTERNATIONAL_BANK_ALIASES, matched_bank_names
 from media_keyword_config import keyword_matches_text
 from rule_center import effective_list, rule_enabled, rule_priority, rule_settings
 from stock_relations import portfolio_relation_matches
 
-
-RATING_STANCES = (
-    "买入",
-    "卖出",
-    "中性",
-    "增持",
-    "减持",
-    "超配",
-    "低配",
-    "强于大盘",
-    "弱于大盘",
-    "buy",
-    "sell",
-    "neutral",
-    "overweight",
-    "underweight",
-    "outperform",
-    "underperform",
-)
-
-RATING_ACTION_PATTERNS = (
-    re.compile(r"(?:目标价|target\s+price|\bTP\b)", re.I),
-    re.compile(r"(?:首次|初次|恢复|启动).{0,12}(?:覆盖|评级)|(?:initiat\w*|resume\w*).{0,16}coverage", re.I),
-    re.compile(r"(?:上调|下调|调高|调低|维持|重申).{0,16}(?:评级|目标价)", re.I),
-    re.compile(r"(?:评级|目标价).{0,16}(?:上调|下调|调高|调低|维持|重申|至|为)", re.I),
-    re.compile(r"(?:upgrade\w*|downgrade\w*|raise\w*|lower\w*|reiterate\w*).{0,20}(?:rating|target\s+price)", re.I),
-    re.compile(r"(?:rating|target\s+price).{0,20}(?:upgrade\w*|downgrade\w*|raise\w*|lower\w*|reiterate\w*)", re.I),
-    re.compile(
-        rf"(?:给予|评为|评级为|维持|重申|上调至|下调至).{{0,16}}(?:{'|'.join(map(re.escape, RATING_STANCES[:8]))})",
-        re.I,
-    ),
-    re.compile(
-        rf"(?:{'|'.join(map(re.escape, RATING_STANCES))}).{{0,12}}(?:评级|rating)",
-        re.I,
-    ),
-    re.compile(
-        rf"[:：-]\s*(?:{'|'.join(map(re.escape, RATING_STANCES))})\s*(?=[:：-]|$)",
-        re.I,
-    ),
-)
-
-THEME_STRATEGY_ACTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("做多", ("做多", "long", "go long")),
-    ("做空", ("做空", "short", "go short")),
-    ("超配", ("超配", "overweight")),
-    ("低配", ("低配", "underweight")),
-    ("加仓", ("加仓", "增配", "增持", "add exposure")),
-    ("减仓", ("减仓", "减配", "减持", "reduce exposure")),
-    ("买入", ("买入", "买进", "buy")),
-    ("卖出", ("卖出", "卖出", "sell")),
-    ("配置转向", ("配置转向", "资金切换", "资金轮动", "切换至", "rotate", "rotation", "switch to")),
-)
 
 THEME_STRATEGY_THEMES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("AI/算力价值链", ("ai价值链", "人工智能价值链", "ai基础设施", "算力", "大模型", "ai")),
@@ -111,134 +71,6 @@ THEME_EVIDENCE_PATTERNS: tuple[tuple[str, int, tuple[str, ...]], ...] = (
             "资金流.{0,18}(?:\\d|%|亿|万)",
         ),
     ),
-)
-
-ROTATION_DIRECT_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(
-        r"(?:从|由)\s*(?P<from>[^，,。；;！？!?]{1,80}?)\s*"
-        r"(?:(?:轮动|切换|调仓|换仓|撤出|调整)\s*(?:到|至|向|进入|转入)|转向)\s*"
-        r"(?P<to>[^。；;！？!?]{1,100})",
-        re.I,
-    ),
-    re.compile(
-        r"(?:rotat(?:e|es|ed|ing)|rotation|switch(?:es|ed|ing)?|shift(?:s|ed|ing)?|"
-        r"reallocat(?:e|es|ed|ing)|mov(?:e|es|ed|ing))"
-        r"(?:\s+(?:capital|funds|money|allocation|allocations|exposure|positioning|investors?)){0,3}"
-        r"\s+(?:away\s+)?from\s+(?P<from>[^,.;!?]{1,100}?)\s+"
-        r"(?:to|into|toward|towards)\s+(?P<to>[^.;!?]{1,120})",
-        re.I,
-    ),
-)
-
-ROTATION_PAIRED_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(
-        r"(?:减持|减配|低配|卖出|减仓|降低配置|削减配置)\s*"
-        r"(?P<from>[^，,。；;！？!?]{1,80}?)\s*(?:，|,|；|;|、|并(?:且)?|同时|转而)\s*"
-        r"(?:增持|增配|超配|买入|加仓|提高配置)\s*(?P<to>[^。；;！？!?]{1,100})",
-        re.I,
-    ),
-    re.compile(
-        r"(?:underweight|reduce|trim|sell|cut)\s+(?:exposure|allocation|holdings|positions)?\s*(?:to|in)?\s*"
-        r"(?P<from>[^,.;!?]{1,100}?)\s*(?:,|;|\band\b|\bwhile\b)\s*"
-        r"(?:overweight|add|increase|buy)\s+(?:exposure|allocation|holdings|positions)?\s*(?:to|in)?\s*"
-        r"(?P<to>[^.;!?]{1,120})",
-        re.I,
-    ),
-)
-
-ROTATION_RETROSPECTIVE_MARKERS = (
-    "去年",
-    "前年",
-    "上季度",
-    "此前曾",
-    "回顾",
-    "历史上",
-    "last year",
-    "last quarter",
-    "historically",
-    "in retrospect",
-    "had rotated",
-    "previously rotated",
-)
-
-ROTATION_RUMOR_OR_NEGATION_MARKERS = (
-    "传闻",
-    "网传",
-    "据传",
-    "未经证实",
-    "并未建议",
-    "没有建议",
-    "不建议",
-    "否认",
-    "rumor",
-    "unconfirmed",
-    "does not recommend",
-    "did not recommend",
-    "not recommend",
-    "denied",
-)
-
-ROTATION_PRICE_ACTION_MARKERS = (
-    "市场资金从",
-    "板块资金从",
-    "股价轮动",
-    "涨幅轮动",
-    "成交轮动",
-    "market rotated",
-    "market rotation",
-    "price action",
-    "fund flows rotated",
-)
-
-ROTATION_NON_ALLOCATION_PATTERNS = (
-    re.compile(r"(?:capex|capital expenditure).{0,30}(?:opex|operating expenditure)", re.I),
-    re.compile(r"(?:资本开支|资本支出).{0,30}(?:运营开支|运营支出)", re.I),
-    re.compile(r"(?:商业模式|盈利模式|会计处理).{0,30}(?:轮动|转向|切换)", re.I),
-)
-
-ROTATION_ADVISORY_MARKERS = (
-    "建议",
-    "提示投资者",
-    "主张",
-    "配置策略",
-    "投资策略",
-    "调整配置",
-    "recommend",
-    "advise",
-    "strategy",
-    "allocation",
-    "positioning",
-    "calls for",
-    "urges investors",
-)
-
-ROTATION_ALLOCATION_CONTEXT_MARKERS = (
-    "投资者",
-    "投资策略",
-    "资金",
-    "配置",
-    "仓位",
-    "持仓",
-    "头寸",
-    "调仓",
-    "减配",
-    "增配",
-    "超配",
-    "低配",
-    "买入",
-    "卖出",
-    "资产轮动",
-    "portfolio",
-    "investor",
-    "funds",
-    "allocation",
-    "exposure",
-    "positioning",
-    "overweight",
-    "underweight",
-    "buy",
-    "sell",
-    "reallocate",
 )
 
 VALUE_DIRECTORY_STRATEGY_TITLE_MARKERS = (
@@ -367,100 +199,6 @@ VALUE_DIRECTORY_SOURCES = {"value_directory_ib_stocks", "value_directory_ib_indu
 
 def compact_text(*values: object) -> str:
     return re.sub(r"\s+", " ", " ".join(str(value or "") for value in values)).strip()
-
-
-def _research_evidence_segments(item: dict[str, Any]) -> list[str]:
-    segments: list[str] = []
-    for value in (item.get("title"), item.get("summary"), item.get("content"), item.get("full_text")):
-        text = str(value or "").strip()
-        if not text:
-            continue
-        for part in re.split(r"(?<=[。！？!?；;])|(?<=\.)\s+|\n+", text):
-            normalized = compact_text(part)
-            if normalized and normalized not in segments:
-                segments.append(normalized)
-    return segments
-
-
-def _research_actions(text: str, extra_keywords: tuple[str, ...]) -> list[str]:
-    actions: list[str] = []
-    if re.search(r"(?:目标价|target\s+price|\bTP\b)", text, flags=re.I):
-        actions.append("目标价")
-    if re.search(r"(?:首次|初次|恢复|启动).{0,12}(?:覆盖|评级)|(?:initiat\w*|resume\w*).{0,16}coverage", text, flags=re.I):
-        actions.append("覆盖")
-    if any(pattern.search(text) for pattern in RATING_ACTION_PATTERNS[2:]):
-        actions.append("评级")
-    for keyword in extra_keywords:
-        if contains_keyword(text, (keyword,)):
-            actions.append(f"自定义:{keyword}")
-    return list(dict.fromkeys(actions))
-
-
-def _rating_transition(text: str) -> tuple[str, str]:
-    stance = "|".join(map(re.escape, RATING_STANCES))
-    patterns = (
-        rf"(?:从|由)\s*(?P<previous>{stance})\s*(?:评级)?\s*(?:上调|下调|调整)?\s*(?:至|为)\s*(?P<revised>{stance})",
-        rf"(?P<action>上调至|下调至|调高至|调低至)\s*(?P<revised>{stance})",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.I)
-        if match:
-            return str(match.groupdict().get("previous") or ""), str(match.group("revised") or "")
-    return "", ""
-
-
-def _local_bank_research_claims(
-    item: dict[str, Any],
-    holdings: list[dict[str, Any]],
-    *,
-    allowed_banks: set[str] | None,
-    extra_keywords: tuple[str, ...],
-) -> list[dict[str, Any]]:
-    segments = _research_evidence_segments(item)
-    claims: list[dict[str, Any]] = []
-    seen: set[tuple[str, str, str]] = set()
-
-    def append_claim(window: str, banks: list[str], subjects: list[dict[str, Any]], actions: list[str]) -> None:
-        if len(banks) != 1 or len(subjects) != 1 or not actions:
-            return
-        subject = subjects[0]
-        subject_key = str(subject.get("symbol") or subject.get("name") or "").upper()
-        key = (banks[0], subject_key, "|".join(actions))
-        if key in seen:
-            return
-        seen.add(key)
-        previous_rating, revised_rating = _rating_transition(window)
-        claims.append(
-            {
-                "institution": banks[0],
-                "subject": subject,
-                "research_actions": actions,
-                "previous_rating": previous_rating,
-                "revised_rating": revised_rating,
-                "target_gap": extract_target_gap(window),
-                "evidence_quote": window[:700],
-            }
-        )
-
-    for window in segments:
-        banks = matched_bank_names(window, allowed_banks=allowed_banks)
-        subjects = matched_holdings(window, holdings, symbols=None)
-        actions = _research_actions(window, extra_keywords)
-        append_claim(window, banks, subjects, actions)
-
-    for index in range(len(segments) - 1):
-        attribution, continuation = segments[index], segments[index + 1]
-        banks = matched_bank_names(attribution, allowed_banks=allowed_banks)
-        if len(banks) != 1 or _research_actions(attribution, extra_keywords):
-            continue
-        if matched_bank_names(continuation, allowed_banks=allowed_banks):
-            continue
-        if not re.match(r"^(?:该行|其|报告|研报|the\s+bank\b|it\b)", continuation, flags=re.I):
-            continue
-        subjects = matched_holdings(continuation, holdings, symbols=None)
-        actions = _research_actions(continuation, extra_keywords)
-        append_claim(compact_text(attribution, continuation), banks, subjects, actions)
-    return claims
 
 
 def contains_keyword(text: str, keywords: tuple[str, ...]) -> bool:
@@ -1011,18 +749,34 @@ def investment_bank_research_rule(
     }
     configured = rule_settings("investment_bank_rating_target_direct_holding").get("extra_keywords")
     extra_keywords = tuple(str(value).strip() for value in configured or [] if str(value).strip())
-    claims = _local_bank_research_claims(
-        item,
-        holdings,
-        allowed_banks=allowed_banks or None,
+    institution_aliases = tuple(
+        (display, aliases)
+        for display, aliases in INTERNATIONAL_BANK_ALIASES
+        if not allowed_banks
+        or display.casefold() in allowed_banks
+        or any(alias.casefold() in allowed_banks for alias in aliases)
+    )
+    subject_aliases = tuple(
+        (
+            str(holding.get("symbol") or holding.get("name") or "").upper(),
+            tuple(holding_tokens(holding)),
+            holding,
+        )
+        for holding in holdings
+        if str(holding.get("symbol") or holding.get("name") or "").strip()
+    )
+    claims = extract_rating_claims(
+        text_parts=(item.get("title"), item.get("summary"), item.get("content"), item.get("full_text")),
+        institutions=institution_aliases,
+        subjects=subject_aliases,
         extra_keywords=extra_keywords,
     )
     if not claims:
         return None
     claim = claims[0]
-    institution = str(claim["institution"])
+    institution = str(claim["institution_id"])
     holding = claim["subject"]
-    gap = dict(claim["target_gap"])
+    gap = extract_target_gap(str(claim["evidence_quote"]))
     gap_text = ""
     if gap:
         gap_text = f"；目标价较现价约 {gap['target_gap_pct'] * 100:.1f}%"

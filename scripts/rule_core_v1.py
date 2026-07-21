@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 from ai_compute_supply_demand import classify_ai_compute_supply_demand
 from ai_credit_risk import classify_ai_credit_risk
 from international_bank_fed import allowed_fed_path_banks, classify_international_bank_fed_path
+from investment_bank_research import extract_allocation_claims, extract_rating_claims
 from macro_policy import classify_macro_policy_content, generic_fed_transmission_classification
 from market_item import (
     AdmissionEvidence,
@@ -1553,6 +1554,23 @@ def _semiconductor_operating_change(
                     r"(?:采用|开发|推出|使用).{0,24}自研(?:芯片|asic)",
                 )
             )
+            if route_change and _has(
+                sentence,
+                "投资者",
+                "投资策略",
+                "配置",
+                "仓位",
+                "持仓",
+                "头寸",
+                "轮动",
+                "增配",
+                "减配",
+                "portfolio",
+                "allocation",
+                "exposure",
+                "positioning",
+            ):
+                route_change = False
             if route_change or _has(sentence, "绕过英伟达", "bypass nvidia"):
                 category = "技术路线替换"
                 confirmed = True
@@ -1746,6 +1764,200 @@ def _trusted_research_evidence(
         seen.add(key)
         unique.append(item_evidence)
     return tuple(unique[:6])
+
+
+def _trusted_institution_registry(config: RuleConfig) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    return tuple(
+        (institution.institution_id, institution.aliases)
+        for institution in config.trusted_institutions
+    )
+
+
+def _official_institution_ids(
+    item: NormalizedMarketItem,
+    config: RuleConfig,
+) -> tuple[str, ...]:
+    result: list[str] = []
+    hostname = (urlparse(item.url).hostname or "").casefold()
+    for institution in config.trusted_institutions:
+        if any(hostname == domain or hostname.endswith(f".{domain}") for domain in institution.domains):
+            result.append(institution.institution_id)
+    return tuple(dict.fromkeys(result))
+
+
+def _stored_attributed_claim_quotes(
+    item: NormalizedMarketItem,
+    text: str,
+    config: RuleConfig,
+) -> dict[str, tuple[str, ...]]:
+    stored = item.raw.get("_attributed_research") if isinstance(item.raw, Mapping) else None
+    if not isinstance(stored, Mapping) or str(stored.get("attribution") or "") != "explicit":
+        return {}
+    institution_id = str(stored.get("institution_id") or "").strip()
+    institution = next(
+        (value for value in config.trusted_institutions if value.institution_id == institution_id),
+        None,
+    )
+    attribution_quote = str(stored.get("attribution_quote") or "").strip()
+    if (
+        institution is None
+        or not _matches(attribution_quote, institution.aliases)
+        or not _normalized_quote_in_text(text, attribution_quote)
+        or _has(attribution_quote, *RESEARCH_CRITICISM_TERMS)
+    ):
+        return {}
+    claims = stored.get("claims") if isinstance(stored.get("claims"), list) else []
+    quotes = tuple(
+        dict.fromkeys(
+            quote
+            for claim in claims
+            if isinstance(claim, Mapping)
+            for quote in (str(claim.get("evidence_quote") or "").strip(),)
+            if quote and _normalized_quote_in_text(text, quote)
+        )
+    )
+    return {institution_id: quotes} if quotes else {}
+
+
+def _holding_subject_registry(
+    portfolio: PortfolioRuleConfig,
+) -> tuple[tuple[str, tuple[str, ...], Mapping[str, Any]], ...]:
+    return tuple(
+        (
+            holding.symbol,
+            tuple(dict.fromkeys((*holding.names, holding.symbol, *holding.related_news_keywords))),
+            {
+                "symbol": holding.symbol,
+                "names": list(holding.names),
+                "related_news_keywords": list(holding.related_news_keywords),
+            },
+        )
+        for holding in portfolio.holdings
+    )
+
+
+def _investment_bank_rating_candidate(
+    item: NormalizedMarketItem,
+    text: str,
+    config: RuleConfig,
+    portfolio: PortfolioRuleConfig,
+) -> dict[str, Any] | None:
+    claims = extract_rating_claims(
+        text_parts=(item.title, item.summary, item.raw.get("content") or "", item.full_text),
+        institutions=_trusted_institution_registry(config),
+        subjects=_holding_subject_registry(portfolio),
+        official_institution_ids=_official_institution_ids(item, config),
+        attributed_claim_quotes=_stored_attributed_claim_quotes(item, text, config),
+    )
+    if not claims:
+        return None
+    claim = claims[0]
+    change_type = str(claim["change_type"])
+    subject = dict(claim["subject"])
+    evidence_quote = str(claim["evidence_quote"])
+    direct_subject = any(
+        _contains(evidence_quote, term)
+        for term in (*subject.get("names", []), str(subject.get("symbol") or ""))
+        if str(term).strip()
+    )
+    action = "push" if direct_subject and change_type in {"revision", "coverage_start"} else "daily"
+    reason = (
+        "受信机构对直接持仓的评级、目标价或覆盖状态发生明确变化。"
+        if action == "push"
+        else "受信机构维持、静态陈述或仅涉及持仓关联关键词的评级、目标价或覆盖状态。"
+    )
+    candidate = _candidate(
+        "holding",
+        "holding_rating_revision" if action == "push" else "holding_ordinary",
+        action,
+        evidence_quote,
+        reason,
+    )
+    candidate.update(
+        {
+            "institution_id": str(claim["institution_id"]),
+            "attributed_institutions": [str(claim["institution_id"])],
+            "subject": subject,
+            "subject_relation": "direct" if direct_subject else "configured_related",
+            "research_actions": list(claim["research_actions"]),
+            "research_change_type": change_type,
+            "previous_rating": str(claim["previous_rating"]),
+            "revised_rating": str(claim["revised_rating"]),
+            "target_price_change": dict(claim["target_price_change"]),
+        }
+    )
+    return candidate
+
+
+def _investment_bank_allocation_candidates(
+    item: NormalizedMarketItem,
+    text: str,
+    config: RuleConfig,
+    portfolio: PortfolioRuleConfig,
+) -> dict[RuleFamily, dict[str, Any]]:
+    holding_terms = tuple(
+        dict.fromkeys(
+            term
+            for holding in portfolio.holdings
+            for term in (*holding.names, holding.symbol, *holding.related_news_keywords)
+        )
+    )
+    targets_by_family: dict[str, tuple[str, ...]] = {
+        "holding": holding_terms,
+        "semiconductor_ai": config.semiconductor_ai_keywords,
+        "macro_data": (*config.macro_indicators, *config.macro_context_aliases),
+        "fed_policy": (*config.fed_event_aliases, *config.fed_actor_aliases, *config.fed_path_aliases),
+        "trade_policy": (
+            *config.trade_focus_industries,
+            *config.trade_instruments,
+            *config.trade_stages,
+            *(
+                term
+                for corridor in config.trade_corridors
+                for term in (*corridor.china_terms, *corridor.counterparty_terms, *corridor.joint_terms)
+            ),
+        ),
+    }
+    claims = extract_allocation_claims(
+        text_parts=(item.title, item.summary, item.raw.get("content") or "", item.full_text),
+        institutions=_trusted_institution_registry(config),
+        targets_by_family=targets_by_family,
+        official_institution_ids=_official_institution_ids(item, config),
+        attributed_claim_quotes=_stored_attributed_claim_quotes(item, text, config),
+    )
+    candidates: dict[RuleFamily, dict[str, Any]] = {}
+    for claim in claims:
+        action = "daily" if claim["change_type"] == "maintained" else "push"
+        target_families = [str(family) for family in claim["target_families"]]
+        for family in FAMILY_ORDER:
+            if family not in target_families:
+                continue
+            candidate = _candidate(
+                family,
+                "investment_bank_allocation_change" if action == "push" else "investment_bank_allocation_maintained",
+                action,
+                str(claim["evidence_quote"]),
+                (
+                    "受信机构明确调整已准入内容范围内的配置，或给出完整的跨主题配置轮动。"
+                    if action == "push"
+                    else "受信机构维持原有配置观点。"
+                ),
+            )
+            candidate.update(
+                {
+                    "institution_id": str(claim["institution_id"]),
+                    "attributed_institutions": [str(claim["institution_id"])],
+                    "strategy_type": str(claim["strategy_type"]),
+                    "allocation_actions": list(claim["actions"]),
+                    "target_families": target_families,
+                    "from_text": str(claim["from_text"]),
+                    "to_text": str(claim["to_text"]),
+                }
+            )
+            previous = candidates.get(family)
+            if previous is None or ACTION_RANK[action] > ACTION_RANK[str(previous["decision_action"])]:
+                candidates[family] = candidate
+    return candidates
 
 
 def _attach_trusted_research_evidence(
@@ -2237,29 +2449,6 @@ def _holding_candidate(
     if material_change:
         quote, reason = material_change
         return _candidate("holding", "holding_material_event", "push", quote, reason)
-    rating_revision = _first_local_ordered_match(
-        text,
-        ("上调", "下调", "upgrade", "downgrade", "raises", "cuts"),
-        ("评级", "目标价", "rating", "target price"),
-        max_gap=6,
-        sentence_limit=8,
-    ) or _first_local_ordered_match(
-        text,
-        ("评级", "目标价", "rating", "target price"),
-        ("上调", "下调", "upgrade", "downgrade", "raises", "cuts"),
-        max_gap=20,
-        sentence_limit=8,
-    )
-    if rating_revision:
-        return _candidate("holding", "holding_rating_revision", "push", rating_revision, "评级或估值锚明确修订。")
-    rating_maintained = _first_local_match(
-        text,
-        ("维持", "reiterates", "maintains"),
-        ("评级", "目标价", "rating", "target price"),
-        sentence_limit=8,
-    )
-    if rating_maintained:
-        return _candidate("holding", "holding_ordinary", "daily", rating_maintained, "相关评级维持不变。")
     if _is_market_template_title(item.title):
         return _candidate("holding", "holding_ordinary", "archive", item.title, "市场行情模板不构成新的持仓实质变化。")
     if direct:
@@ -2662,16 +2851,6 @@ def _semiconductor_candidate(
         return _candidate(
             "semiconductor_ai", "semiconductor_material_change", "push", roadmap_change, "产业时间表或技术路线明确变化。"
         )
-    allocation_change = _first_local_match(
-        text,
-        ("轮动", "增配", "减配", "rotate", "rotation"),
-        ("芯片", "半导体", "chip", "semiconductor"),
-        ("云服务", "ai 云", "ai cloud", "cloud service"),
-    )
-    if allocation_change:
-        return _candidate(
-            "semiconductor_ai", "semiconductor_material_change", "push", allocation_change, "产业配置发生明确跨主题轮动。"
-        )
     if specific_candidate:
         return specific_candidate
     if hard_variable_change:
@@ -2876,25 +3055,39 @@ def decide_admitted_item(
         raise ValueError("admission/config version mismatch")
     text = item.text_for_rules
     candidates: list[dict[str, Any]] = []
+    rating_candidate = _investment_bank_rating_candidate(item, text, rule_config, portfolio)
+    allocation_candidates = _investment_bank_allocation_candidates(item, text, rule_config, portfolio)
     for family in admission.matched_families:
         if family == "holding":
-            candidates.append(_holding_candidate(item, text, admission, portfolio))
+            family_candidates = [_holding_candidate(item, text, admission, portfolio)]
+            if rating_candidate:
+                family_candidates.insert(0, rating_candidate)
         elif family == "semiconductor_ai":
             semiconductor_candidate = _semiconductor_candidate(item, text, rule_config)
-            candidates.append(
+            family_candidates = [
                 _attach_trusted_research_evidence(
                     semiconductor_candidate,
                     item,
                     text,
                     rule_config,
                 )
-            )
+            ]
         elif family == "macro_data":
-            candidates.append(_macro_candidate(item, text, rule_config))
+            family_candidates = [_macro_candidate(item, text, rule_config)]
         elif family == "fed_policy":
-            candidates.append(_fed_candidate(item, text, rule_config))
+            family_candidates = [_fed_candidate(item, text, rule_config)]
         elif family == "trade_policy":
-            candidates.append(_trade_candidate(item, text, rule_config))
+            family_candidates = [_trade_candidate(item, text, rule_config)]
+        else:
+            continue
+        if family in allocation_candidates:
+            family_candidates.append(allocation_candidates[family])
+        candidates.append(
+            max(
+                family_candidates,
+                key=lambda candidate: ACTION_RANK[str(candidate["decision_action"])],
+            )
+        )
     winning_action = max((str(item["decision_action"]) for item in candidates), key=ACTION_RANK.__getitem__)
     winners = [item for item in candidates if item["decision_action"] == winning_action]
     importance = {"push": "high", "daily": "medium", "archive": "low", "ignore": "low"}[winning_action]

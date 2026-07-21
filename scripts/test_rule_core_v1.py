@@ -1048,6 +1048,195 @@ def test_trusted_research_is_audited_without_changing_semiconductor_action() -> 
     assert stored_hit["attributed_institutions"] == ["trusted_research"]
 
 
+def test_investment_bank_rating_changes_are_locally_bound_and_source_neutral() -> None:
+    _, config, portfolios = loaded_contracts()
+    source_variants = (
+        ("industry_media", "research_industry_media", "research_publisher", "article"),
+        ("finance_media", "news_media", "news_media", "flash"),
+    )
+    cases = (
+        ("高盛将甲公司评级从中性上调至买入。", "push", "revision"),
+        ("摩根士丹利首次覆盖甲公司并给予买入评级。", "push", "coverage_start"),
+        ("高盛将甲公司目标价从100元上调至120元。", "push", "revision"),
+        ("高盛维持甲公司买入评级和100元目标价。", "daily", "maintained"),
+        ("高盛给予甲公司买入评级，目标价100元。", "daily", "static"),
+    )
+    for text, expected_action, expected_change_type in cases:
+        decisions = [
+            evaluate_market_item(
+                NormalizedMarketItem(
+                    source=source,
+                    source_category=category,
+                    publisher_role=role,
+                    content_type=content_type,
+                    title=text,
+                ),
+                rule_config=config,
+                portfolio=portfolios["holding_test"],
+                source_policy=SourceAdmissionPolicy(),
+            ).decision
+            for source, category, role, content_type in source_variants
+        ]
+        assert all(decision is not None for decision in decisions), text
+        assert {decision.action for decision in decisions if decision} == {expected_action}, text
+        for decision in decisions:
+            assert decision is not None
+            hit = next(item for item in decision.rule_hits if item["rule_family"] == "holding")
+            assert hit["institution_id"] in {"goldman_sachs", "morgan_stanley"}
+            assert hit["research_change_type"] == expected_change_type
+            assert hit["evidence_quote"] == text
+
+    negatives = (
+        NormalizedMarketItem(source="finance_media", title="甲公司评级上调至买入。"),
+        NormalizedMarketItem(source="finance_media", title="高盛和瑞银讨论甲公司，评级上调至买入。"),
+        NormalizedMarketItem(source="finance_media", title="高盛上调英伟达评级。甲公司股价下跌。"),
+        NormalizedMarketItem(
+            source="finance_media",
+            title="甲公司评级上调至买入。",
+            raw={
+                "_attributed_research": {
+                    "institution_id": "goldman_sachs",
+                    "attribution": "explicit",
+                    "attribution_quote": "高盛发布研报。",
+                    "claims": [],
+                    "extraction_mode": "llm",
+                }
+            },
+        ),
+    )
+    for item in negatives:
+        decision = evaluate_market_item(
+            item,
+            rule_config=config,
+            portfolio=portfolios["holding_test"],
+            source_policy=SourceAdmissionPolicy(),
+        ).decision
+        assert decision is not None and decision.action != "push", item.title
+        assert all(hit["rule_id"] != "holding_rating_revision" for hit in decision.rule_hits)
+
+    stored_text = "高盛发布最新研报。甲公司评级从中性上调至买入。"
+    stored = evaluate_market_item(
+        NormalizedMarketItem(
+            source="finance_media",
+            title=stored_text,
+            raw={
+                "_attributed_research": {
+                    "institution_id": "goldman_sachs",
+                    "attribution": "explicit",
+                    "attribution_quote": "高盛发布最新研报。",
+                    "claims": [
+                        {
+                            "event_type": "rating_change",
+                            "evidence_quote": "甲公司评级从中性上调至买入。",
+                        }
+                    ],
+                    "extraction_mode": "llm",
+                }
+            },
+        ),
+        rule_config=config,
+        portfolio=portfolios["holding_test"],
+        source_policy=SourceAdmissionPolicy(),
+    ).decision
+    assert stored is not None and stored.action == "push"
+    assert stored.rule_hits[0]["attributed_institutions"] == ["goldman_sachs"]
+
+
+def test_investment_bank_allocation_changes_require_trusted_local_evidence() -> None:
+    _, config, portfolios = loaded_contracts()
+    source_variants = (
+        ("industry_media", "research_industry_media", "research_publisher", "article"),
+        ("finance_media", "news_media", "news_media", "flash"),
+    )
+    positives = (
+        "花旗建议增配HBM和半导体设备。",
+        "摩根士丹利建议投资者从芯片轮动至AI云服务商。",
+        "高盛建议减配受美国关税影响的中国半导体。",
+        "瑞银建议加仓甲公司。",
+    )
+    for text in positives:
+        decisions = [
+            evaluate_market_item(
+                NormalizedMarketItem(
+                    source=source,
+                    source_category=category,
+                    publisher_role=role,
+                    content_type=content_type,
+                    title=text,
+                ),
+                rule_config=config,
+                portfolio=portfolios["holding_test"],
+                source_policy=SourceAdmissionPolicy(),
+            ).decision
+            for source, category, role, content_type in source_variants
+        ]
+        assert all(decision is not None for decision in decisions), text
+        assert {decision.action for decision in decisions if decision} == {"push"}, text
+        for decision in decisions:
+            assert decision is not None
+            assert any(hit["rule_id"] == "investment_bank_allocation_change" for hit in decision.rule_hits)
+
+    maintained = evaluate_market_item(
+        NormalizedMarketItem(source="finance_media", title="花旗维持超配HBM的原有配置观点。"),
+        rule_config=config,
+        portfolio=portfolios["empty"],
+        source_policy=SourceAdmissionPolicy(),
+    ).decision
+    assert maintained is not None and maintained.action == "daily"
+    assert maintained.rule_hits[0]["rule_id"] == "investment_bank_allocation_maintained"
+
+    negatives = (
+        NormalizedMarketItem(source="finance_media", title="基金经理建议增配HBM。"),
+        NormalizedMarketItem(source="finance_media", title="摩根士丹利认为AI云盈利前景比芯片更好。"),
+        NormalizedMarketItem(source="finance_media", title="摩根士丹利建议投资者从芯片转向其他方向。"),
+        NormalizedMarketItem(source="finance_media", title="高盛回顾去年建议增配HBM的历史观点。"),
+        NormalizedMarketItem(source="finance_media", title="市场资金从芯片轮动至AI云，高盛另有行业报告。"),
+        NormalizedMarketItem(
+            source="finance_media",
+            title="建议增配HBM。",
+            raw={
+                "_attributed_research": {
+                    "institution_id": "goldman_sachs",
+                    "attribution": "explicit",
+                    "attribution_quote": "高盛发布报告。",
+                    "claims": [],
+                    "extraction_mode": "llm",
+                }
+            },
+        ),
+    )
+    for item in negatives:
+        decision = evaluate_market_item(
+            item,
+            rule_config=config,
+            portfolio=portfolios["empty"],
+            source_policy=SourceAdmissionPolicy(),
+        ).decision
+        assert decision is not None and decision.action != "push", item.title
+        assert all(hit["rule_id"] != "investment_bank_allocation_change" for hit in decision.rule_hits)
+
+    config_payload = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    config_payload["trusted_attribution"]["institutions"]["goldman_sachs"]["domains"] = [
+        "research.goldman.example.com"
+    ]
+    domain_config = parse_rule_config(config_payload)
+    official = evaluate_market_item(
+        NormalizedMarketItem(
+            source="official_research",
+            source_category="research",
+            publisher_role="investment_bank",
+            content_type="article",
+            title="建议增配HBM和半导体设备。",
+            url="https://research.goldman.example.com/report/1",
+        ),
+        rule_config=domain_config,
+        portfolio=portfolios["empty"],
+        source_policy=SourceAdmissionPolicy(),
+    ).decision
+    assert official is not None and official.action == "push"
+    assert official.rule_hits[0]["institution_id"] == "goldman_sachs"
+
+
 def test_migrated_ai_compute_and_credit_actions_are_source_neutral() -> None:
     _, config, portfolios = loaded_contracts()
     source_variants = (
@@ -1779,6 +1968,7 @@ def test_new_core_has_only_the_report_only_production_importer() -> None:
         "ai_credit_risk",
         "hashlib",
         "international_bank_fed",
+        "investment_bank_research",
         "macro_policy",
         "re",
         "dataclasses",
@@ -1792,6 +1982,7 @@ def test_new_core_has_only_the_report_only_production_importer() -> None:
         "ai_compute_supply_demand.py",
         "ai_credit_risk.py",
         "international_bank_fed.py",
+        "investment_bank_research.py",
         "macro_policy.py",
         "trade_friction.py",
     ):
@@ -1845,6 +2036,8 @@ def main() -> int:
     test_migrated_semiconductor_operating_changes_are_source_neutral()
     test_migrated_semiconductor_performance_and_market_size_are_source_neutral()
     test_trusted_research_is_audited_without_changing_semiconductor_action()
+    test_investment_bank_rating_changes_are_locally_bound_and_source_neutral()
+    test_investment_bank_allocation_changes_require_trusted_local_evidence()
     test_migrated_ai_compute_and_credit_actions_are_source_neutral()
     test_migrated_fed_path_and_trade_actions_are_source_neutral()
     test_migrated_macro_reactions_and_fed_transmission_are_source_neutral()
