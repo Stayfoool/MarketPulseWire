@@ -1905,18 +1905,6 @@ def _investment_bank_allocation_candidates(
     targets_by_family: dict[str, tuple[str, ...]] = {
         "holding": holding_terms,
         "semiconductor_ai": config.semiconductor_ai_keywords,
-        "macro_data": (*config.macro_indicators, *config.macro_context_aliases),
-        "fed_policy": (*config.fed_event_aliases, *config.fed_actor_aliases, *config.fed_path_aliases),
-        "trade_policy": (
-            *config.trade_focus_industries,
-            *config.trade_instruments,
-            *config.trade_stages,
-            *(
-                term
-                for corridor in config.trade_corridors
-                for term in (*corridor.china_terms, *corridor.counterparty_terms, *corridor.joint_terms)
-            ),
-        ),
     }
     claims = extract_allocation_claims(
         text_parts=(item.title, item.summary, item.raw.get("content") or "", item.full_text),
