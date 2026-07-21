@@ -46,6 +46,7 @@ CI_SAFE_TESTS = (
     "test_link_enrichment.py",
     "test_llm_analysis.py",
     "test_llm_json_recovery.py",
+    "test_llm_rule_decision.py",
     "test_macro_event_dedup.py",
     "test_macro_policy.py",
     "test_market_delivery.py",
