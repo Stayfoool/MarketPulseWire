@@ -83,6 +83,28 @@ def test_investment_bank_rule_binds_institution_subject_and_action_locally() -> 
     assert {tuple(rule["research_action"]) for rule in production_ratings if rule} == {("目标价", "评级")}
     assert {rule["revised_rating"] for rule in production_ratings if rule} == {"中性"}
 
+    coverage_changes = (
+        "高盛首次覆盖锐捷网络并给予买入评级。",
+        "摩根士丹利恢复覆盖锐捷网络，评级为增持。",
+    )
+    for text in coverage_changes:
+        coverage = investment_bank_research_rule(
+            source="cls_telegraph_api",
+            item={"title": text},
+            holdings=[RUIJIE],
+        )
+        assert coverage is not None
+        assert "覆盖" in coverage["research_action"]
+        assert coverage["evidence_quote"] == text
+
+    maintained = investment_bank_research_rule(
+        source="sina_finance_articles",
+        item={"title": "高盛维持锐捷网络买入评级和120元目标价。"},
+        holdings=[RUIJIE],
+    )
+    assert maintained is not None
+    assert maintained["research_action"] == ["目标价", "评级"]
+
     crossed_subject = {
         "title": "高盛将英伟达评级下调至中性。绿的谐波今日下跌10%。",
         "summary": "",
@@ -96,6 +118,13 @@ def test_investment_bank_rule_binds_institution_subject_and_action_locally() -> 
         )
         is None
     )
+
+    ambiguous_banks = {"title": "高盛和瑞银讨论锐捷网络，评级上调至买入。"}
+    assert investment_bank_research_rule(
+        source="cls_telegraph_api",
+        item=ambiguous_banks,
+        holdings=[RUIJIE],
+    ) is None
 
     symbol_only = {"title": "高盛将英伟达评级下调至中性。", "summary": ""}
     assert (

@@ -207,7 +207,7 @@
       "text": "国际大行明确从芯片轮动至 AI 云服务商并调整配置。",
       "symbols": [],
       "portfolio_fixture": "empty",
-      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "semiconductor_material_change"},
+      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "investment_bank_allocation_change"},
       "variants": [{"variant_id": "SEMI-010", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
     },
     {

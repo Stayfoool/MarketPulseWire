@@ -399,6 +399,7 @@ def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importe
         "ai_credit_risk",
         "hashlib",
         "international_bank_fed",
+        "investment_bank_research",
         "macro_policy",
         "re",
         "dataclasses",
@@ -411,6 +412,7 @@ def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importe
         "ai_compute_supply_demand.py",
         "ai_credit_risk.py",
         "international_bank_fed.py",
+        "investment_bank_research.py",
         "macro_policy.py",
         "trade_friction.py",
     ):
