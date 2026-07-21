@@ -224,7 +224,11 @@ def test_llm_completed_row_preserves_bounded_audit_fields_without_body_or_raw_re
                 "attempts": 1,
                 "elapsed_seconds": 0.75,
                 "input_text_scope": "title_summary_full_text",
+                "provided_fields": ["title", "summary", "full_text"],
                 "article_chars": 1800,
+                "body_original_chars": 4200,
+                "body_provided_chars": 3000,
+                "body_truncated": True,
                 "prompt_chars": 5200,
                 "rule_evidence": [
                     {
@@ -272,6 +276,10 @@ def test_llm_completed_row_preserves_bounded_audit_fields_without_body_or_raw_re
         assert row["candidate_version"] == CATALOG_VERSION
         assert row["model"] == "fixed-test-model"
         assert row["provider"] == "provider.example"
+        assert row["provided_fields"] == ["title", "summary", "full_text"]
+        assert row["body_original_chars"] == 4200
+        assert row["body_provided_chars"] == 3000
+        assert row["body_truncated"] is True
         assert row["candidate_rule_evidence"][0]["quote"] == "DRAM价格持续上涨，供应极度紧缺。"
         combined_text = json.dumps(combined, ensure_ascii=False)
         assert "private-response-id" not in combined_text

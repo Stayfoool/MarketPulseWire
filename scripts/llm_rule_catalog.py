@@ -14,7 +14,7 @@ from market_item import RuleFamily
 
 
 RULE_MATRIX_VERSION = "llm-reviewed-rule-matrix-v1-20260721"
-CATALOG_VERSION = "llm-rule-catalog-v1"
+CATALOG_VERSION = "llm-rule-catalog-v2"
 MODEL_ACTIONS = ("push", "daily", "archive")
 
 
@@ -47,13 +47,10 @@ class LLMRuleDefinition:
     def to_prompt_dict(self) -> dict[str, object]:
         return {
             "rule_id": self.rule_id,
-            "family": self.family,
             "title": self.title,
-            "allowed_actions": list(self.allowed_actions),
             "action_conditions": dict(self.action_conditions),
             "required_facts": list(self.required_facts),
             "exclusions": list(self.exclusions),
-            "version": self.version,
         }
 
 

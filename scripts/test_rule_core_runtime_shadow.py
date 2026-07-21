@@ -9,8 +9,8 @@ from tempfile import TemporaryDirectory
 
 import rule_core_runtime_shadow as runtime_shadow
 from llm_analysis import ChatCompletionResponse
-from llm_rule_catalog import CATALOG_VERSION, RULE_MATRIX_VERSION, rules_for_families
-from llm_rule_decision import ENGINE_VERSION as LLM_RULE_ENGINE_VERSION, SCHEMA_VERSION
+from llm_rule_catalog import CATALOG_VERSION, rules_for_families
+from llm_rule_decision import ENGINE_VERSION as LLM_RULE_ENGINE_VERSION
 from market_item import DecisionResult, NormalizedMarketItem
 
 
@@ -40,29 +40,30 @@ def _llm_response() -> ChatCompletionResponse:
     for rule in rules_for_families(("semiconductor_ai",)):
         matched = rule.rule_id == "semiconductor_price_supply_change"
         assessments.append(
-            {
-                "rule_id": rule.rule_id,
-                "judgement": "matched" if matched else "not_matched",
-                "selected_action": "push" if matched else None,
-                "subjects": ["DRAM"] if matched else [],
-                "change_object": "DRAM价格和供应" if matched else "",
-                "direction": "价格上涨、供应紧缺" if matched else "",
-                "event_status": "confirmed" if matched else "unknown",
-                "time_scope": "current" if matched else "unknown",
-                "attribution": "测试来源" if matched else "",
-                "evidence": [{"field": "full_text", "quote": quote}] if matched else [],
-                "counterevidence": [],
-                "explanation": "原文显示价格持续上涨和供应紧缺。" if matched else "缺少规则事实。",
-                "uncertainty_reason": "",
-            }
+            (
+                {
+                    "rule_id": rule.rule_id,
+                    "judgement": "matched",
+                    "action": "push",
+                    "facts": {
+                        "subjects": ["DRAM"],
+                        "change_object": "DRAM价格和供应",
+                        "direction": "价格上涨、供应紧缺",
+                        "event_status": "confirmed",
+                        "time_scope": "current",
+                        "attribution": "测试来源",
+                    },
+                    "evidence": [{"field": "full_text", "quote": quote}],
+                    "reason": "原文显示价格持续上涨和供应紧缺。",
+                }
+                if matched
+                else {"rule_id": rule.rule_id, "judgement": "not_matched"}
+            )
         )
     return ChatCompletionResponse(
         content=json.dumps(
             {
-                "schema_version": SCHEMA_VERSION,
-                "rule_matrix_version": RULE_MATRIX_VERSION,
-                "final_action": "push",
-                "rule_assessments": assessments,
+                "rule_results": assessments,
             },
             ensure_ascii=False,
         ),
@@ -152,8 +153,10 @@ def test_llm_candidate_mode_writes_one_bounded_report_without_changing_current_d
         env = _env(config, portfolio)
         env["RULE_COMPARISON_CANDIDATE"] = "llm"
         calls = []
+        item = _item()
+        item.full_text += "后续正文" * 1_000
         result = runtime_shadow.record_runtime_comparison(
-            _item(),
+            item,
             DecisionResult(action="daily", importance="medium", reason="现有规则结果"),
             {"store_kind": "article_reviews", "item_id": "article:llm-1"},
             report_dir=root / "reports",
@@ -174,6 +177,10 @@ def test_llm_candidate_mode_writes_one_bounded_report_without_changing_current_d
         assert comparison["current"]["action"] == "daily"
         assert comparison["candidate"]["action"] == "push"
         assert comparison["candidate"]["usage"]["total_tokens"] == 150
+        assert comparison["candidate"]["provided_fields"] == ["title", "summary", "full_text"]
+        assert comparison["candidate"]["body_original_chars"] == len(item.full_text)
+        assert comparison["candidate"]["body_provided_chars"] == 3000
+        assert comparison["candidate"]["body_truncated"] is True
         assert comparison["affects_current_decision"] is False
 
 

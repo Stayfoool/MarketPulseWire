@@ -184,13 +184,12 @@ Optional private limits for that later approved observation are:
 RULE_COMPARISON_LLM_MAX_INPUT_CHARS=120000
 RULE_COMPARISON_LLM_MAX_OUTPUT_TOKENS=6000
 RULE_COMPARISON_LLM_THINKING_TYPE=
-RULE_COMPARISON_LLM_TITLE_SUMMARY_SOURCES=
 ```
 
-`RULE_COMPARISON_LLM_TITLE_SUMMARY_SOURCES` is a comma-separated source-id
-allowlist. It defaults empty, so an admitted item must have complete body text
-before the LLM comparison runs. An allowlisted source may use title and summary
-only; adding a source requires a separate evidence-quality review. Invalid or
+An admitted item with a non-empty title may enter LLM comparison even when
+`full_text` is empty. Available summary is included. Available body text is
+limited by code to its first 3,000 characters; the report records the original
+and provided body lengths plus whether truncation occurred. Invalid or
 unavailable model output is recorded as unable to compare and never falls back
 to the deterministic candidate. A valid result records bounded original-text
 evidence, model/provider metadata, token usage, attempts and elapsed time. It

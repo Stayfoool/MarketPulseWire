@@ -7,8 +7,7 @@ import json
 from pathlib import Path
 
 from llm_analysis import ChatCompletionResponse
-from llm_rule_catalog import RULE_MATRIX_VERSION, rules_for_families
-from llm_rule_decision import SCHEMA_VERSION
+from llm_rule_catalog import rules_for_families
 from llm_rule_shadow import compare_llm_rule_candidate
 from market_item import DecisionResult, NormalizedMarketItem, RuleFamily
 from rule_core_v1 import SourceAdmissionPolicy, parse_portfolio_config, parse_rule_config
@@ -22,30 +21,29 @@ QUOTE = "HBM产能扩张项目已确认进入执行阶段。"
 
 
 def _assessment(rule_id: str, *, matched: bool, action: str | None = None) -> dict:
+    if not matched:
+        return {"rule_id": rule_id, "judgement": "not_matched"}
     return {
         "rule_id": rule_id,
-        "judgement": "matched" if matched else "not_matched",
-        "selected_action": action if matched else None,
-        "subjects": ["测试公司"] if matched else [],
-        "change_object": "HBM产能" if matched else "",
-        "direction": "扩张" if matched else "",
-        "event_status": "executing" if matched else "unknown",
-        "time_scope": "current" if matched else "unknown",
-        "attribution": "公司公告" if matched else "",
-        "evidence": [{"field": "full_text", "quote": QUOTE}] if matched else [],
-        "counterevidence": [],
-        "explanation": "原文证明产能扩张已进入执行。" if matched else "缺少该规则要求的事实。",
-        "uncertainty_reason": "",
+        "judgement": "matched",
+        "action": action,
+        "facts": {
+            "subjects": ["测试公司"],
+            "change_object": "HBM产能",
+            "direction": "扩张",
+            "event_status": "executing",
+            "time_scope": "current",
+            "attribution": "公司公告",
+        },
+        "evidence": [{"field": "full_text", "quote": QUOTE}],
+        "reason": "原文证明产能扩张已进入执行。",
     }
 
 
 def _response(family: RuleFamily, rule_id: str, action: str) -> str:
     return json.dumps(
         {
-            "schema_version": SCHEMA_VERSION,
-            "rule_matrix_version": RULE_MATRIX_VERSION,
-            "final_action": action,
-            "rule_assessments": [
+            "rule_results": [
                 _assessment(rule.rule_id, matched=rule.rule_id == rule_id, action=action)
                 for rule in rules_for_families((family,))
             ],
@@ -128,12 +126,13 @@ def test_completed_comparison_records_usage_and_bounded_evidence_without_body() 
     assert candidate["attempts"] == 1
     assert candidate["elapsed_seconds"] == 0.25
     assert candidate["rule_ids"] == ["semiconductor_material_change"]
-    assert "action" not in captured["prompt"].user_payload["source_metadata"]
+    assert "source_metadata" not in captured["prompt"].user_payload
+    assert "current_decision" not in json.dumps(captured["prompt"].user_payload, ensure_ascii=False)
     serialized = json.dumps(comparison, ensure_ascii=False)
     assert "PRIVATE_BODY_START" not in serialized
 
 
-def test_invalid_output_model_failure_and_missing_text_never_create_candidate_action() -> None:
+def test_invalid_output_model_failure_and_missing_body_behavior() -> None:
     invalid = _compare(_item(), lambda _prompt: _model_response("not-json"))
     assert invalid["comparable"] is False
     assert invalid["candidate"]["evaluation_status"] == "invalid_output"
@@ -146,10 +145,19 @@ def test_invalid_output_model_failure_and_missing_text_never_create_candidate_ac
     assert unavailable["candidate"]["action"] is None
 
     calls = []
-    insufficient = _compare(_item(full_text=""), lambda prompt: calls.append(prompt))
-    assert calls == []
-    assert insufficient["candidate"]["evaluation_status"] == "insufficient_input"
-    assert insufficient["candidate"]["action"] is None
+    response = json.loads(_response("semiconductor_ai", "semiconductor_material_change", "push"))
+    matched = next(result for result in response["rule_results"] if result["judgement"] == "matched")
+    matched["evidence"] = [{"field": "title", "quote": "HBM产能扩张"}]
+
+    def title_summary_caller(prompt):
+        calls.append(prompt)
+        return _model_response(json.dumps(response, ensure_ascii=False))
+
+    title_summary = _compare(_item(full_text=""), title_summary_caller)
+    assert len(calls) == 1
+    assert calls[0].input_text_scope == "title_summary"
+    assert title_summary["candidate"]["evaluation_status"] == "completed"
+    assert title_summary["candidate"]["action"] == "push"
 
 
 def test_excluded_item_does_not_call_model() -> None:
@@ -197,7 +205,7 @@ def test_company_disclosure_receives_only_holding_rules_and_minimal_matched_cont
     )
     prompt = captured["prompt"]
     assert {rule_id.split("_")[0] for rule_id in prompt.rule_ids} == {"holding"}
-    assert prompt.user_payload["admission"]["matched_families"] == ["holding"]
+    assert "admission" not in prompt.user_payload
     assert prompt.user_payload["matched_context"] == {
         "holding_subjects": ["甲公司"],
         "holding_symbols": ["000001.SZ"],
@@ -208,7 +216,7 @@ def test_company_disclosure_receives_only_holding_rules_and_minimal_matched_cont
 
 def main() -> int:
     test_completed_comparison_records_usage_and_bounded_evidence_without_body()
-    test_invalid_output_model_failure_and_missing_text_never_create_candidate_action()
+    test_invalid_output_model_failure_and_missing_body_behavior()
     test_excluded_item_does_not_call_model()
     test_company_disclosure_receives_only_holding_rules_and_minimal_matched_context()
     print("LLM rule shadow checks passed")
