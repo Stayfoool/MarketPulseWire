@@ -144,14 +144,32 @@ operator view across research, official-company and news batches.
 When `RULE_CORE_SHADOW_AUTORUN=1`, installation also enables
 `surveil-rule-shadow-daily.timer`. It runs every day at 15:30
 `Asia/Shanghai`, covers the continuous interval from the previous 15:30
-inclusive to the current 15:30 exclusive, and writes immutable dated
+inclusive to the current 15:30 exclusive, and writes dated
 `reports/rule-core-shadow-daily-YYYY-MM-DD.md` and `.json` files. A successful
 report with comparable or skipped new items sends one Feishu reminder through
 the existing private webhook settings; an empty interval sends nothing. A
-successfully notified date is not recalculated or notified again. The Web
+successfully notified date is not recalculated or notified again by the scheduled job. The Web
 workbench exposes the dated JSON reports read-only under `规则对比报告`; it does
 not expose candidate enablement or delivery controls. If the private comparison
 switch is disabled, installation disables this daily timer as well.
+
+An operator may explicitly rebuild a historical daily file from its retained
+per-item comparison reports without sending another reminder:
+
+```bash
+sudo -u surveil /opt/surveil/.venv/bin/python \
+  /opt/surveil/scripts/rule_core_shadow_daily.py \
+  --date YYYY-MM-DD --force-rebuild --dry-run --json
+```
+
+This only re-aggregates stored current/new decisions. Comparison reports do not
+retain article bodies, so the command does not re-run the current new rule core
+against historical `NormalizedMarketItem` inputs. The rebuilt report records
+that limitation and preserves an existing `notification.status=sent` without
+sending a second Feishu reminder. A historical rebuild updates only the dated
+report and does not replace the rolling `rule-core-shadow-combined-latest` view.
+It fails without changing the dated report if fewer retained per-item reports
+are available than the original daily report recorded.
 
 The installer also copies the production collector units:
 

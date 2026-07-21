@@ -112,11 +112,17 @@ def _atomic_write(path: Path, text: str) -> None:
     temporary.replace(path)
 
 
-def _write_outputs(payload: dict[str, Any], report_dir: Path) -> dict[str, str]:
+def _write_outputs(
+    payload: dict[str, Any],
+    report_dir: Path,
+    *,
+    update_latest: bool = True,
+) -> dict[str, str]:
     json_path, markdown_path = daily_paths(report_dir, str(payload.get("review_date") or ""))
     _atomic_write(json_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     _atomic_write(markdown_path, markdown_report(payload))
-    write_combined(payload, report_dir)
+    if update_latest:
+        write_combined(payload, report_dir)
     return {"json_path": str(json_path), "markdown_path": str(markdown_path)}
 
 
@@ -126,6 +132,7 @@ def run_daily_report(
     now: datetime | None = None,
     report_date: str = "",
     deliver: bool = True,
+    force_rebuild: bool = False,
     sender: Callable[[dict[str, Any]], bool] = send_card,
 ) -> dict[str, Any]:
     review_date, start, end = review_window(now=now, report_date=report_date)
@@ -134,7 +141,7 @@ def run_daily_report(
         previous.get("notification") if isinstance(previous.get("notification"), dict) else {}
     )
     already_sent = previous_notification.get("status") == "sent"
-    if already_sent:
+    if already_sent and not force_rebuild:
         output = {
             "json_path": str(daily_paths(report_dir, review_date)[0]),
             "markdown_path": str(daily_paths(report_dir, review_date)[1]),
@@ -162,8 +169,39 @@ def run_daily_report(
             "notification": {"status": "pending"},
         }
     )
+    if force_rebuild:
+        previous_counts = previous.get("counts") if isinstance(previous.get("counts"), dict) else {}
+        current_counts = payload.get("counts") if isinstance(payload.get("counts"), dict) else {}
+        previous_reports = int(previous_counts.get("reports") or 0)
+        retained_reports = int(current_counts.get("reports") or 0)
+        if previous_reports and retained_reports < previous_reports:
+            raise RuntimeError(
+                f"historical rebuild requires all retained comparison reports: "
+                f"found {retained_reports} of {previous_reports}"
+            )
+        payload["rebuild"] = {
+            "rebuilt_at": (now or datetime.now(timezone.utc)).isoformat(),
+            "source": "stored_comparison_reports",
+            "candidate_re_evaluated": False,
+        }
     sort_review_items(payload)
-    output = _write_outputs(payload, report_dir)
+
+    if already_sent:
+        payload["notification"] = {
+            **previous_notification,
+            "status": "sent",
+            "rebuild_notification": "not_sent",
+        }
+        output = _write_outputs(payload, report_dir, update_latest=not force_rebuild)
+        return {
+            "ok": True,
+            "review_date": review_date,
+            "notification_status": "preserved_sent",
+            "counts": payload.get("counts") or {},
+            "output": output,
+        }
+
+    output = _write_outputs(payload, report_dir, update_latest=not force_rebuild)
 
     if not needs_review(payload):
         payload["notification"] = {"status": "not_sent_no_content"}
@@ -179,7 +217,7 @@ def run_daily_report(
         }
         notification_status = payload["notification"]["status"]
 
-    output = _write_outputs(payload, report_dir)
+    output = _write_outputs(payload, report_dir, update_latest=not force_rebuild)
     return {
         "ok": notification_status != "failed",
         "review_date": review_date,
@@ -195,12 +233,18 @@ def main() -> int:
     parser.add_argument("--report-dir", type=Path, default=REPORT_DIR)
     parser.add_argument("--date", default="", help="report end date in Beijing, YYYY-MM-DD")
     parser.add_argument("--dry-run", action="store_true", help="write reports without sending Feishu")
+    parser.add_argument(
+        "--force-rebuild",
+        action="store_true",
+        help="rebuild from stored comparisons without re-evaluating candidate rules or resending a prior reminder",
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
     result = run_daily_report(
         report_dir=args.report_dir,
         report_date=args.date,
         deliver=not args.dry_run,
+        force_rebuild=args.force_rebuild,
     )
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
