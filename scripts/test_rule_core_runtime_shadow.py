@@ -45,14 +45,6 @@ def _llm_response() -> ChatCompletionResponse:
                     "rule_id": rule.rule_id,
                     "judgement": "matched",
                     "action": "push",
-                    "facts": {
-                        "subjects": ["DRAM"],
-                        "change_object": "DRAM价格和供应",
-                        "direction": "价格上涨、供应紧缺",
-                        "event_status": "confirmed",
-                        "time_scope": "current",
-                        "attribution": "测试来源",
-                    },
                     "evidence": [{"field": "full_text", "quote": quote}],
                     "reason": "原文显示价格持续上涨和供应紧缺。",
                 }
