@@ -1420,26 +1420,66 @@ function ruleShadowChange(item) {
   return ruleShadowActionRank[candidate] > ruleShadowActionRank[current] ? 'upgrade' : 'downgrade';
 }
 
+const ruleShadowMultiSelectIds = [
+  'ruleShadowComparisonStatus',
+  'ruleShadowChange',
+  'ruleShadowCurrentAction',
+  'ruleShadowCandidateAction',
+  'ruleShadowRuleVersion',
+  'ruleShadowEvaluationStatus',
+];
+
+function ruleShadowSelectedValues(id) {
+  const root = document.getElementById(id);
+  return new Set(Array.from(root?.querySelectorAll('input[type="checkbox"]:checked') || []).map(input => input.value));
+}
+
+function ruleShadowFilterMatches(selected, value) {
+  return selected.size === 0 || selected.has(value);
+}
+
+function updateRuleShadowMultiSelectLabel(id) {
+  const root = document.getElementById(id);
+  const summary = root?.querySelector('summary');
+  if (!summary) return;
+  const checked = Array.from(root.querySelectorAll('input[type="checkbox"]:checked'));
+  if (!checked.length) {
+    summary.textContent = summary.dataset.defaultLabel || '全部';
+  } else if (checked.length === 1) {
+    summary.textContent = checked[0].closest('label')?.textContent.trim() || checked[0].value;
+  } else {
+    summary.textContent = `已选 ${checked.length} 项`;
+  }
+}
+
+function ruleShadowMultiSelectChanged(id) {
+  updateRuleShadowMultiSelectLabel(id);
+  renderRuleShadowRows();
+}
+
 function renderRuleShadowRows() {
   const items = Array.isArray(ruleShadowReportCache.items) ? ruleShadowReportCache.items : [];
-  const comparisonStatus = document.getElementById('ruleShadowComparisonStatus')?.value || 'all';
-  const change = document.getElementById('ruleShadowChange')?.value || 'all';
-  const currentAction = document.getElementById('ruleShadowCurrentAction')?.value || 'all';
-  const candidateAction = document.getElementById('ruleShadowCandidateAction')?.value || 'all';
-  const ruleVersion = document.getElementById('ruleShadowRuleVersion')?.value || 'all';
-  const evaluationStatus = document.getElementById('ruleShadowEvaluationStatus')?.value || 'all';
+  const comparisonStatuses = ruleShadowSelectedValues('ruleShadowComparisonStatus');
+  const changes = ruleShadowSelectedValues('ruleShadowChange');
+  const currentActions = ruleShadowSelectedValues('ruleShadowCurrentAction');
+  const candidateActions = ruleShadowSelectedValues('ruleShadowCandidateAction');
+  const ruleVersions = ruleShadowSelectedValues('ruleShadowRuleVersion');
+  const evaluationStatuses = ruleShadowSelectedValues('ruleShadowEvaluationStatus');
   const filtered = items.filter(item =>
-    (comparisonStatus === 'all' || (item.comparison_status || (item.comparable === false ? 'model_validation_failed' : 'action_compared')) === comparisonStatus) &&
-    (change === 'all' || ruleShadowChange(item) === change) &&
-    (currentAction === 'all' || ruleShadowAction(item, 'current') === currentAction) &&
-    (candidateAction === 'all' || ruleShadowAction(item, 'candidate') === candidateAction) &&
-    (ruleVersion === 'all' ||
-      (ruleVersion === 'latest' && (item.is_latest_candidate_version ?? item.is_latest_rule_core_version) === true) ||
-      (ruleVersion === 'earlier' && (item.is_latest_candidate_version ?? item.is_latest_rule_core_version) !== true)) &&
-    (evaluationStatus === 'all' ||
-      (evaluationStatus === 'unknown'
-        ? !['completed', 'not_admitted', 'insufficient_input', 'model_unavailable', 'invalid_output', 'evidence_invalid', 'conflict'].includes(item.evaluation_status || 'unknown')
-        : (item.evaluation_status || 'unknown') === evaluationStatus))
+    ruleShadowFilterMatches(comparisonStatuses, item.comparison_status || (item.comparable === false ? 'model_validation_failed' : 'action_compared')) &&
+    ruleShadowFilterMatches(changes, ruleShadowChange(item)) &&
+    ruleShadowFilterMatches(currentActions, ruleShadowAction(item, 'current')) &&
+    ruleShadowFilterMatches(candidateActions, ruleShadowAction(item, 'candidate')) &&
+    ruleShadowFilterMatches(
+      ruleVersions,
+      (item.is_latest_candidate_version ?? item.is_latest_rule_core_version) === true ? 'latest' : 'earlier'
+    ) &&
+    ruleShadowFilterMatches(
+      evaluationStatuses,
+      ['completed', 'not_admitted', 'insufficient_input', 'model_unavailable', 'invalid_output', 'evidence_invalid', 'conflict'].includes(item.evaluation_status || 'unknown')
+        ? (item.evaluation_status || 'unknown')
+        : 'unknown'
+    )
   );
 
   document.getElementById('ruleShadowFilterSummary').textContent = `显示 ${filtered.length} / ${items.length} 条`;
@@ -1489,12 +1529,12 @@ function renderRuleShadowRows() {
 }
 
 function resetRuleShadowFilters() {
-  document.getElementById('ruleShadowComparisonStatus').value = 'all';
-  document.getElementById('ruleShadowChange').value = 'all';
-  document.getElementById('ruleShadowCurrentAction').value = 'all';
-  document.getElementById('ruleShadowCandidateAction').value = 'all';
-  document.getElementById('ruleShadowRuleVersion').value = 'all';
-  document.getElementById('ruleShadowEvaluationStatus').value = 'all';
+  ruleShadowMultiSelectIds.forEach(id => {
+    const root = document.getElementById(id);
+    root?.querySelectorAll('input[type="checkbox"]').forEach(input => { input.checked = false; });
+    if (root) root.open = false;
+    updateRuleShadowMultiSelectLabel(id);
+  });
   renderRuleShadowRows();
 }
 

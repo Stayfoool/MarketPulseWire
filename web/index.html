@@ -496,70 +496,82 @@
       <div id="ruleShadowMetrics" class="metric-grid"></div>
       <div id="ruleShadowWindow" class="event-feedback-summary"></div>
       <div class="toolbar rule-shadow-filters">
-        <label class="rule-shadow-filter-field">
+        <div class="rule-shadow-filter-field">
           <span>对比状态</span>
-          <select id="ruleShadowComparisonStatus" onchange="renderRuleShadowRows()">
-            <option value="all">全部状态</option>
-            <option value="action_compared">已比较 action</option>
-            <option value="both_not_admitted">双方均未准入</option>
-            <option value="admission_difference">准入不一致</option>
-            <option value="model_validation_failed">大模型判断或校验失败</option>
-          </select>
-        </label>
-        <label class="rule-shadow-filter-field">
+          <details id="ruleShadowComparisonStatus" class="rule-shadow-multi-select">
+            <summary data-default-label="全部状态">全部状态</summary>
+            <div class="rule-shadow-multi-select-menu" role="group" aria-label="对比状态">
+              <label><input type="checkbox" value="action_compared" onchange="ruleShadowMultiSelectChanged('ruleShadowComparisonStatus')"> 已比较 action</label>
+              <label><input type="checkbox" value="both_not_admitted" onchange="ruleShadowMultiSelectChanged('ruleShadowComparisonStatus')"> 双方均未准入</label>
+              <label><input type="checkbox" value="admission_difference" onchange="ruleShadowMultiSelectChanged('ruleShadowComparisonStatus')"> 准入不一致</label>
+              <label><input type="checkbox" value="model_validation_failed" onchange="ruleShadowMultiSelectChanged('ruleShadowComparisonStatus')"> 大模型判断或校验失败</label>
+            </div>
+          </details>
+        </div>
+        <div class="rule-shadow-filter-field">
           <span>变化方向</span>
-          <select id="ruleShadowChange" onchange="renderRuleShadowRows()">
-            <option value="all">全部</option>
-            <option value="same">一致</option>
-            <option value="upgrade">对比判断升级</option>
-            <option value="downgrade">对比判断降级</option>
-            <option value="unavailable">不属于 action 对比</option>
-          </select>
-        </label>
-        <label class="rule-shadow-filter-field">
+          <details id="ruleShadowChange" class="rule-shadow-multi-select">
+            <summary data-default-label="全部">全部</summary>
+            <div class="rule-shadow-multi-select-menu" role="group" aria-label="变化方向">
+              <label><input type="checkbox" value="same" onchange="ruleShadowMultiSelectChanged('ruleShadowChange')"> 一致</label>
+              <label><input type="checkbox" value="upgrade" onchange="ruleShadowMultiSelectChanged('ruleShadowChange')"> 对比判断升级</label>
+              <label><input type="checkbox" value="downgrade" onchange="ruleShadowMultiSelectChanged('ruleShadowChange')"> 对比判断降级</label>
+              <label><input type="checkbox" value="unavailable" onchange="ruleShadowMultiSelectChanged('ruleShadowChange')"> 不属于 action 对比</label>
+            </div>
+          </details>
+        </div>
+        <div class="rule-shadow-filter-field">
           <span>现有规则</span>
-          <select id="ruleShadowCurrentAction" onchange="renderRuleShadowRows()">
-            <option value="all">全部 action</option>
-            <option value="push">push</option>
-            <option value="daily">daily</option>
-            <option value="archive">archive</option>
-            <option value="ignore">ignore</option>
-            <option value="none">none</option>
-          </select>
-        </label>
-        <label class="rule-shadow-filter-field">
+          <details id="ruleShadowCurrentAction" class="rule-shadow-multi-select">
+            <summary data-default-label="全部 action">全部 action</summary>
+            <div class="rule-shadow-multi-select-menu" role="group" aria-label="现有规则 action">
+              <label><input type="checkbox" value="push" onchange="ruleShadowMultiSelectChanged('ruleShadowCurrentAction')"> push</label>
+              <label><input type="checkbox" value="daily" onchange="ruleShadowMultiSelectChanged('ruleShadowCurrentAction')"> daily</label>
+              <label><input type="checkbox" value="archive" onchange="ruleShadowMultiSelectChanged('ruleShadowCurrentAction')"> archive</label>
+              <label><input type="checkbox" value="ignore" onchange="ruleShadowMultiSelectChanged('ruleShadowCurrentAction')"> ignore</label>
+              <label><input type="checkbox" value="none" onchange="ruleShadowMultiSelectChanged('ruleShadowCurrentAction')"> none</label>
+            </div>
+          </details>
+        </div>
+        <div class="rule-shadow-filter-field">
           <span>对比判断</span>
-          <select id="ruleShadowCandidateAction" onchange="renderRuleShadowRows()">
-            <option value="all">全部 action</option>
-            <option value="push">push</option>
-            <option value="daily">daily</option>
-            <option value="archive">archive</option>
-            <option value="ignore">ignore</option>
-            <option value="none">none</option>
-          </select>
-        </label>
-        <label class="rule-shadow-filter-field">
+          <details id="ruleShadowCandidateAction" class="rule-shadow-multi-select">
+            <summary data-default-label="全部 action">全部 action</summary>
+            <div class="rule-shadow-multi-select-menu" role="group" aria-label="对比判断 action">
+              <label><input type="checkbox" value="push" onchange="ruleShadowMultiSelectChanged('ruleShadowCandidateAction')"> push</label>
+              <label><input type="checkbox" value="daily" onchange="ruleShadowMultiSelectChanged('ruleShadowCandidateAction')"> daily</label>
+              <label><input type="checkbox" value="archive" onchange="ruleShadowMultiSelectChanged('ruleShadowCandidateAction')"> archive</label>
+              <label><input type="checkbox" value="ignore" onchange="ruleShadowMultiSelectChanged('ruleShadowCandidateAction')"> ignore</label>
+              <label><input type="checkbox" value="none" onchange="ruleShadowMultiSelectChanged('ruleShadowCandidateAction')"> none</label>
+            </div>
+          </details>
+        </div>
+        <div class="rule-shadow-filter-field">
           <span>对比判断版本</span>
-          <select id="ruleShadowRuleVersion" onchange="renderRuleShadowRows()">
-            <option value="all">全部版本</option>
-            <option value="latest">最新版本</option>
-            <option value="earlier">较早或无法确认</option>
-          </select>
-        </label>
-        <label class="rule-shadow-filter-field">
+          <details id="ruleShadowRuleVersion" class="rule-shadow-multi-select">
+            <summary data-default-label="全部版本">全部版本</summary>
+            <div class="rule-shadow-multi-select-menu" role="group" aria-label="对比判断版本">
+              <label><input type="checkbox" value="latest" onchange="ruleShadowMultiSelectChanged('ruleShadowRuleVersion')"> 最新版本</label>
+              <label><input type="checkbox" value="earlier" onchange="ruleShadowMultiSelectChanged('ruleShadowRuleVersion')"> 较早或无法确认</label>
+            </div>
+          </details>
+        </div>
+        <div class="rule-shadow-filter-field">
           <span>执行状态</span>
-          <select id="ruleShadowEvaluationStatus" onchange="renderRuleShadowRows()">
-            <option value="all">全部状态</option>
-            <option value="completed">已完成</option>
-            <option value="not_admitted">未通过范围准入</option>
-            <option value="insufficient_input">正文不足</option>
-            <option value="model_unavailable">大模型不可用</option>
-            <option value="invalid_output">大模型输出无效</option>
-            <option value="evidence_invalid">原文证据校验失败</option>
-            <option value="conflict">判断结果冲突</option>
-            <option value="unknown">其他无法比较</option>
-          </select>
-        </label>
+          <details id="ruleShadowEvaluationStatus" class="rule-shadow-multi-select">
+            <summary data-default-label="全部状态">全部状态</summary>
+            <div class="rule-shadow-multi-select-menu" role="group" aria-label="执行状态">
+              <label><input type="checkbox" value="completed" onchange="ruleShadowMultiSelectChanged('ruleShadowEvaluationStatus')"> 已完成</label>
+              <label><input type="checkbox" value="not_admitted" onchange="ruleShadowMultiSelectChanged('ruleShadowEvaluationStatus')"> 未通过范围准入</label>
+              <label><input type="checkbox" value="insufficient_input" onchange="ruleShadowMultiSelectChanged('ruleShadowEvaluationStatus')"> 正文不足</label>
+              <label><input type="checkbox" value="model_unavailable" onchange="ruleShadowMultiSelectChanged('ruleShadowEvaluationStatus')"> 大模型不可用</label>
+              <label><input type="checkbox" value="invalid_output" onchange="ruleShadowMultiSelectChanged('ruleShadowEvaluationStatus')"> 大模型输出无效</label>
+              <label><input type="checkbox" value="evidence_invalid" onchange="ruleShadowMultiSelectChanged('ruleShadowEvaluationStatus')"> 原文证据校验失败</label>
+              <label><input type="checkbox" value="conflict" onchange="ruleShadowMultiSelectChanged('ruleShadowEvaluationStatus')"> 判断结果冲突</label>
+              <label><input type="checkbox" value="unknown" onchange="ruleShadowMultiSelectChanged('ruleShadowEvaluationStatus')"> 其他无法比较</label>
+            </div>
+          </details>
+        </div>
         <button onclick="resetRuleShadowFilters()">重置筛选</button>
         <span id="ruleShadowFilterSummary" class="summary"></span>
       </div>

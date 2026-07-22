@@ -86,6 +86,13 @@ def test_rule_shadow_report_view_is_read_only_and_path_bounded() -> None:
     assert "ruleShadowRuleVersion" in source
     assert "ruleShadowEvaluationStatus" in source
     assert "ruleShadowComparisonStatus" in source
+    assert 'class="rule-shadow-multi-select"' in source
+    assert "ruleShadowMultiSelectChanged" in source
+    assert "ruleShadowSelectedValues" in source
+    assert "ruleShadowFilterMatches" in source
+    assert '<select id="ruleShadowCurrentAction"' not in source
+    assert '<select id="ruleShadowCandidateAction"' not in source
+    assert "已选 ${checked.length} 项" in source
     assert "双方均未准入" in source
     assert "准入不一致" in source
     assert "大模型判断或校验失败" in source
