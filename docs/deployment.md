@@ -399,12 +399,14 @@ are excluded from rsync deletion, retained across normal deploys and never copie
 back into Git. The model cache is populated on the first approved OCR run.
 
 ValueList browser launches retain bounded Playwright error and profile-lock
-diagnostics without page content, cookies or browser storage. After each
-persistent context closes, the collector waits briefly for a live same-profile
-owner to exit. A shutdown timeout fails that source explicitly rather than
-starting another browser against a profile that is still in use. Dead-owner lock
-artifacts remain recoverable by Chromium; the collector does not blindly delete
-locks or kill unrelated browser processes.
+diagnostics without page content, cookies or browser storage. One timer run uses
+one persistent context to collect every enabled ValueList list page and visible
+first-page preview, then closes that context before starting OCR, admission,
+decision, storage or delivery. The collector waits briefly for a live
+same-profile owner to exit. A launch or shutdown timeout fails the shared browser
+stage rather than starting another browser against a profile that is still in
+use. Dead-owner lock artifacts remain recoverable by Chromium; the collector does
+not blindly delete locks or kill unrelated browser processes.
 
 ## Optional Proxy
 

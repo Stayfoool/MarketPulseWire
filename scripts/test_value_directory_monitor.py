@@ -23,6 +23,7 @@ from value_directory_browser import (
     BrowserShutdownTimeout,
     classify_page_state,
     close_browser_context,
+    collect_sources_with_previews,
     dedupe_entries,
     evaluate_list_payload_with_empty_wait,
     launch_browser_context,
@@ -275,6 +276,103 @@ def test_launch_browser_context_retains_bounded_underlying_error_and_lock_state(
     assert "test-host-999999" in error
     assert '"executable_exists":false' in error
     assert "SingletonCookie" not in error
+
+
+class _BrowserManager:
+    def __init__(self) -> None:
+        self.playwright = types.SimpleNamespace(chromium=object())
+
+    def __enter__(self):
+        return self.playwright
+
+    def __exit__(self, *_args):
+        return False
+
+
+def test_multi_source_collection_uses_one_browser_and_continues_after_detail_failure() -> None:
+    events: list[str] = []
+    context = types.SimpleNamespace(pages=[object()])
+    original_config = value_directory_browser.browser_config
+    original_launch = value_directory_browser.launch_browser_context
+    original_close = value_directory_browser.close_browser_context
+    original_entries = value_directory_browser.collect_entries_from_page
+    original_preview = value_directory_browser.collect_preview_from_page
+    try:
+        value_directory_browser.browser_config = lambda: BrowserConfig(Path("/tmp/profile"), None, True, 45_000)
+        value_directory_browser.launch_browser_context = lambda *_args: events.append("launch") or context
+        value_directory_browser.close_browser_context = lambda *_args: events.append("close")
+
+        def fake_entries(_page, source, **_kwargs):
+            events.append(f"list:{source.source_id}")
+            return [{"id": source.source_id, "url": f"https://www.valuelist.cn/{source.source_id}.html"}]
+
+        def fake_preview(_page, url, **_kwargs):
+            source_id = Path(url).stem
+            events.append(f"preview:{source_id}")
+            if source_id == "value_directory_ib_stocks":
+                raise RuntimeError("detail unavailable")
+            return {"state": "ok", "previewImages": [{"src": "https://img.valuelist.cn/preview.jpg"}]}
+
+        value_directory_browser.collect_entries_from_page = fake_entries
+        value_directory_browser.collect_preview_from_page = fake_preview
+        result = collect_sources_with_previews(
+            ["value_directory_ib_stocks", "value_directory_ib_industry_macro"],
+            limit=10,
+            preview_selector=lambda _source, _item: True,
+            playwright_factory=_BrowserManager,
+            timeout_error=TimeoutError,
+        )
+    finally:
+        value_directory_browser.browser_config = original_config
+        value_directory_browser.launch_browser_context = original_launch
+        value_directory_browser.close_browser_context = original_close
+        value_directory_browser.collect_entries_from_page = original_entries
+        value_directory_browser.collect_preview_from_page = original_preview
+
+    assert events == [
+        "launch",
+        "list:value_directory_ib_stocks",
+        "list:value_directory_ib_industry_macro",
+        "preview:value_directory_ib_stocks",
+        "preview:value_directory_ib_industry_macro",
+        "close",
+    ]
+    assert ("value_directory_ib_stocks", "value_directory_ib_stocks") in result.preview_errors
+    assert ("value_directory_ib_industry_macro", "value_directory_ib_industry_macro") in result.previews
+
+
+def test_multi_source_collection_keeps_list_failure_attributable() -> None:
+    context = types.SimpleNamespace(pages=[object()])
+    original_config = value_directory_browser.browser_config
+    original_launch = value_directory_browser.launch_browser_context
+    original_close = value_directory_browser.close_browser_context
+    original_entries = value_directory_browser.collect_entries_from_page
+    try:
+        value_directory_browser.browser_config = lambda: BrowserConfig(Path("/tmp/profile"), None, True, 45_000)
+        value_directory_browser.launch_browser_context = lambda *_args: context
+        value_directory_browser.close_browser_context = lambda *_args: None
+
+        def fake_entries(_page, source, **_kwargs):
+            if source.source_id == "value_directory_ib_stocks":
+                raise RuntimeError("list unavailable")
+            return [{"id": "macro-1", "url": "https://www.valuelist.cn/macro-1.html"}]
+
+        value_directory_browser.collect_entries_from_page = fake_entries
+        result = collect_sources_with_previews(
+            ["value_directory_ib_stocks", "value_directory_ib_industry_macro"],
+            limit=10,
+            preview_selector=lambda _source, _item: False,
+            playwright_factory=_BrowserManager,
+            timeout_error=TimeoutError,
+        )
+    finally:
+        value_directory_browser.browser_config = original_config
+        value_directory_browser.launch_browser_context = original_launch
+        value_directory_browser.close_browser_context = original_close
+        value_directory_browser.collect_entries_from_page = original_entries
+
+    assert "value_directory_ib_stocks" in result.source_errors
+    assert result.entries_by_source["value_directory_ib_industry_macro"][0]["id"] == "macro-1"
 
 
 def test_dedupe_entries_keeps_first_valid_url() -> None:
@@ -698,6 +796,79 @@ def test_value_directory_monitor_does_not_own_store_dedup_or_delivery() -> None:
     assert "process_market_item(" in source
 
 
+def test_run_finishes_browser_collection_before_source_processing() -> None:
+    events: list[str] = []
+    original_collect = value_directory_monitor.collect_sources_with_previews
+    original_enabled = value_directory_monitor.source_profile_enabled
+    original_process = value_directory_monitor.process_collected_source
+    try:
+        value_directory_monitor.source_profile_enabled = lambda _source_id: True
+
+        def fake_collect(source_ids, **_kwargs):
+            events.extend(["browser_start", "browser_close"])
+            return types.SimpleNamespace(
+                entries_by_source={source_id: [] for source_id in source_ids},
+                source_errors={},
+                previews={},
+                preview_errors={},
+            )
+
+        def fake_process(source, _entries, **kwargs):
+            events.append(f"process:{source.source_id}")
+            return {
+                "ok": True,
+                "mode": "shadow_dry_run",
+                "sent_feishu": False,
+                "source": source.source_id,
+                "counts": {"raw_items": 0},
+                "errors": [],
+            }
+
+        value_directory_monitor.collect_sources_with_previews = fake_collect
+        value_directory_monitor.process_collected_source = fake_process
+        payload = value_directory_monitor.run(
+            production=False,
+            limit=10,
+            notify_baseline=False,
+            source_ids=["value_directory_ib_stocks", "value_directory_ib_industry_macro"],
+        )
+    finally:
+        value_directory_monitor.collect_sources_with_previews = original_collect
+        value_directory_monitor.source_profile_enabled = original_enabled
+        value_directory_monitor.process_collected_source = original_process
+
+    assert payload["ok"] is True
+    assert events == [
+        "browser_start",
+        "browser_close",
+        "process:value_directory_ib_stocks",
+        "process:value_directory_ib_industry_macro",
+    ]
+
+
+def test_collected_preview_does_not_launch_another_browser() -> None:
+    item = {"id": "preview-1", "url": "https://www.valuelist.cn/preview-1.html", "title": "Test report"}
+    preview = {"state": "ok", "previewImages": [{"src": "https://img.valuelist.cn/preview-1.jpg"}]}
+    original_collect = value_directory_monitor.collect_preview
+    original_extract = value_directory_monitor.extract_preview_facts
+    try:
+        value_directory_monitor.collect_preview = lambda _url: (_ for _ in ()).throw(
+            AssertionError("processing phase must not launch a browser")
+        )
+        value_directory_monitor.extract_preview_facts = lambda _item, _preview: {
+            "status": "ok",
+            "core_content": "preview content",
+            "model": "test",
+            "preview_image_url": "https://img.valuelist.cn/preview-1.jpg",
+        }
+        enriched = value_directory_monitor.enrich_item_with_preview(item, preview)
+    finally:
+        value_directory_monitor.collect_preview = original_collect
+        value_directory_monitor.extract_preview_facts = original_extract
+
+    assert enriched["summary"] == "preview content"
+
+
 def test_collect_production_rechecks_current_unpushed_reviews() -> None:
     source = source_config("value_directory_ib_stocks")
     entries = [
@@ -734,7 +905,7 @@ def test_collect_production_rechecks_current_unpushed_reviews() -> None:
                 return {"push_now": False, "pushed_at": "", "importance": "medium"}
             return None
 
-        def fake_review(item, *, source=None, recheck_rules=False):
+        def fake_review(item, *, source=None, recheck_rules=False, **_kwargs):
             calls.append((item["id"], recheck_rules))
             return True
 
@@ -779,6 +950,8 @@ def main() -> int:
     test_wait_for_profile_release_observes_owner_exit()
     test_close_browser_context_reports_live_owner_timeout()
     test_launch_browser_context_retains_bounded_underlying_error_and_lock_state()
+    test_multi_source_collection_uses_one_browser_and_continues_after_detail_failure()
+    test_multi_source_collection_keeps_list_failure_attributable()
     test_dedupe_entries_keeps_first_valid_url()
     test_shadow_payload_marks_seen_and_reviewed_without_delivery()
     test_source_profile_registers_value_directory()
@@ -791,6 +964,8 @@ def main() -> int:
     test_recheck_keeps_existing_review_without_new_rule()
     test_new_item_uses_unified_market_runtime_after_preview_enrichment()
     test_value_directory_monitor_does_not_own_store_dedup_or_delivery()
+    test_run_finishes_browser_collection_before_source_processing()
+    test_collected_preview_does_not_launch_another_browser()
     test_collect_production_rechecks_current_unpushed_reviews()
     print("value directory monitor checks passed")
     return 0
