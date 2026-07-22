@@ -115,7 +115,16 @@ Each ValueList timer run uses one persistent Chromium context for all enabled Va
 
 Domestic finance media now reserve each technically identifiable live discovery in `seen_items` before detail enrichment, then record processability and construct one `NormalizedMarketItem`. The current admission check and the report-only v1 comparison fork from that same normalized item. Current-admitted items continue through the active decision/review/delivery path; current-excluded items may produce only a bounded comparison report and do not invoke the current interpreter, review store or delivery. Rediscovered domestic items whose processability, admission evaluation or processing remains `pending`/`failed_retryable` are eligible for retry without deleting their discovery reservation.
 
-This lifecycle integration is intentionally incomplete across sources. Overseas/industry RSS, TrendForce pages and official-company RSS still apply their existing media-focus filter before `seen_items`; their newly inserted rows therefore remain `legacy_unclassified` until a later reviewed migration. Event-backed sources retain their existing `events` lifecycle fields and adapters.
+The same lifecycle now covers the widened overseas/industry RSS, TrendForce
+page and official-company RSS paths. Their source-specific discovery controls
+(feed/page selection, URL/schema validation and access policy) remain before
+the reservation, but the business media-focus filter no longer blocks
+`seen_items`. Each source group records an `expanded_scope_baseline_at`
+watermark in its source state; rows first exposed by that widened scope are
+baseline-only and cannot be delivered retroactively. Later live rows reuse the
+same processability, admission and processing states, including retryable
+failures. Event-backed sources retain their existing `events` lifecycle fields
+and adapters.
 
 Synchronous HTTP connection pools are isolated per worker thread. A source retry or timeout-key change may close only that thread's client; concurrent collectors cannot close another thread's in-flight TLS connection or leave a stale network writer targeting a reused SQLite file descriptor.
 
@@ -160,7 +169,13 @@ The project keeps the existing physical stores:
 
 `article`, `official` and `event` are storage/audit identities, not decision-pipeline identities. All three arrive through the unified runtime above. `article_reviews` remains the broad media/research review store, `official_news_reviews` remains an active compatibility store for official-news readers and daily output, and `events` / `event_analyses` / `deliveries` retain event identity, repeated analyses and explicit delivery audits. Their schemas originated before runtime unification, but current production readers still use them; removing them requires a separate canonical-schema migration with backfill, dual-read verification and rollback.
 
-`seen_items` keeps discovery identity as its primary responsibility. Additive compatibility columns record `collection_class`, processability, admission and processing status for newly collected domestic finance-media items. Existing rows are migrated as `legacy_unclassified`; no historical baseline/exclusion/failure state is inferred. `DecisionResult.action` and delivery status are not copied into this ledger and remain authoritative in the existing review/delivery paths.
+`seen_items` keeps discovery identity as its primary responsibility. Additive
+compatibility columns record `collection_class`, processability, admission and
+processing status for newly collected domestic finance-media, RSS and
+TrendForce page items. Existing rows are migrated as `legacy_unclassified`; no
+historical baseline/exclusion/failure state is inferred. `DecisionResult.action`
+and delivery status are not copied into this ledger and remain authoritative in
+the existing review/delivery paths.
 
 `push_now`, `should_push_now` and `should_push` remain compatibility columns for historical readers and old rows. New delivery code does not read them as action inputs. `pushed_at` and delivery rows record what happened, not what should be sent.
 
