@@ -467,7 +467,8 @@ def test_wallstreetcn_stale_retry_keeps_processing_but_skips_delivery() -> None:
                     """
                     UPDATE seen_items
                     SET first_seen_at = '2026-07-20T00:00:00+00:00',
-                        processability_status = 'failed_retryable'
+                        processability_status = 'failed_retryable',
+                        title = '', summary = '', published_at = ''
                     WHERE source = ? AND item_id = ?
                     """,
                     (cfm.WALLSTREETCN_SOURCE, item["id"]),
@@ -502,11 +503,34 @@ def test_wallstreetcn_stale_retry_keeps_processing_but_skips_delivery() -> None:
             assert calls == [False]
             with cfm.connect_db() as conn:
                 state = conn.execute(
-                    "SELECT processability_status, admission_status, processing_status "
+                    "SELECT processability_status, admission_status, processing_status, "
+                    "title, summary, published_at "
                     "FROM seen_items WHERE source = ? AND item_id = ?",
                     (cfm.WALLSTREETCN_SOURCE, item["id"]),
                 ).fetchone()
-                assert state == ("succeeded", "admitted", "succeeded")
+                assert state == (
+                    "succeeded",
+                    "admitted",
+                    "succeeded",
+                    "DRAM产能增加",
+                    "DRAM产能增加",
+                    "2026-07-20T00:00:00+00:00",
+                )
+            cfm.backfill_wallstreetcn_seen_metadata(
+                cfm.WALLSTREETCN_SOURCE,
+                item["id"],
+                {"title": "不应覆盖已有标题", "summary": "new", "published_at": "new"},
+            )
+            with cfm.connect_db() as conn:
+                preserved = conn.execute(
+                    "SELECT title, summary, published_at FROM seen_items WHERE source = ? AND item_id = ?",
+                    (cfm.WALLSTREETCN_SOURCE, item["id"]),
+                ).fetchone()
+                assert preserved == (
+                    "DRAM产能增加",
+                    "DRAM产能增加",
+                    "2026-07-20T00:00:00+00:00",
+                )
     finally:
         cfm.DB_PATH = original_db
         cfm.current_admission_result = original_admission
