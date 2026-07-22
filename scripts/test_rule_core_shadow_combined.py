@@ -247,6 +247,8 @@ def test_combined_report_separates_both_excluded_and_admission_difference() -> N
             "wallstreetcn_news": "both_not_admitted",
             "sina_finance_articles": "admission_difference",
         }
+        both_row = next(row for row in combined["items"] if row["source"] == "wallstreetcn_news")
+        assert both_row["evaluation_status"] == "not_admitted"
 
 
 def test_llm_completed_row_preserves_bounded_audit_fields_without_body_or_raw_response() -> None:
