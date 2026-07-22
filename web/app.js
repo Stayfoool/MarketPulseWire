@@ -1457,6 +1457,13 @@ function ruleShadowMultiSelectChanged(id) {
   renderRuleShadowRows();
 }
 
+document.addEventListener('click', event => {
+  const activeFilter = event.target?.closest?.('.rule-shadow-multi-select') || null;
+  document.querySelectorAll('.rule-shadow-multi-select[open]').forEach(filter => {
+    if (filter !== activeFilter) filter.open = false;
+  });
+});
+
 function renderRuleShadowRows() {
   const items = Array.isArray(ruleShadowReportCache.items) ? ruleShadowReportCache.items : [];
   const comparisonStatuses = ruleShadowSelectedValues('ruleShadowComparisonStatus');
