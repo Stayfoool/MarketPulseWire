@@ -8,6 +8,7 @@ import os
 from dataclasses import dataclass
 
 import rss_monitor
+from db_utils import ensure_seen_tables
 from pipeline_health import record_pipeline_failure, record_pipeline_success
 from source_backoff import backoff_state_after_failure, clear_backoff_state, should_skip_by_backoff
 from source_health import format_error, record_source_failure, record_source_success, should_alert_failure, should_alert_recovery
@@ -77,6 +78,62 @@ def test_feed_state_roundtrip() -> None:
     state = rss_monitor.load_source_state(conn, "demo")
     assert state["etag"] == '"abc"'
     assert state["modified"].startswith("Mon")
+
+
+def test_expanded_scope_baseline_and_retry_lifecycle() -> None:
+    conn = sqlite3.connect(":memory:")
+    ensure_seen_tables(conn)
+    item = {
+        "id": "item-1",
+        "url": "https://example.com/item-1",
+        "title": "Item one",
+        "summary": "Summary",
+        "published_at": "2026-07-22T00:00:00+00:00",
+    }
+
+    first = rss_monitor.save_new_items(
+        conn,
+        "semianalysis",
+        [item],
+        expanded_scope_baseline=True,
+    )
+    assert first == []
+    row = conn.execute(
+        """
+        SELECT collection_class, processability_status, admission_status, processing_status
+        FROM seen_items WHERE source = 'semianalysis' AND item_id = 'item-1'
+        """
+    ).fetchone()
+    assert row == ("baseline", "not_required", "not_applicable", "not_applicable")
+
+    live = dict(item, id="item-2")
+    selected = rss_monitor.save_new_items(conn, "semianalysis", [live])
+    assert [row["id"] for row in selected] == ["item-2"]
+    row = conn.execute(
+        """
+        SELECT collection_class, processability_status, admission_status
+        FROM seen_items WHERE source = 'semianalysis' AND item_id = 'item-2'
+        """
+    ).fetchone()
+    assert row == ("live", "pending", "pending")
+
+    conn.execute(
+        """
+        UPDATE seen_items
+        SET processability_status = 'failed_retryable', processing_status = 'not_applicable'
+        WHERE source = 'semianalysis' AND item_id = 'item-2'
+        """
+    )
+    retry = rss_monitor.save_new_items(conn, "semianalysis", [live])
+    assert len(retry) == 1
+    assert retry[0]["_seen_item_retry"] is True
+    row = conn.execute(
+        """
+        SELECT processability_status, admission_status, processing_status
+        FROM seen_items WHERE source = 'semianalysis' AND item_id = 'item-2'
+        """
+    ).fetchone()
+    assert row == ("pending", "pending", "not_applicable")
 
 
 def test_fetch_feed_uses_conditionals_and_skips_304() -> None:
@@ -235,6 +292,7 @@ def test_profile_category_filter_supports_research_cutover() -> None:
 def main() -> int:
     test_feedparser_parses_rss_atom_and_rdf()
     test_feed_state_roundtrip()
+    test_expanded_scope_baseline_and_retry_lifecycle()
     test_fetch_feed_uses_conditionals_and_skips_304()
     test_source_health_failure_and_recovery()
     test_source_health_alert_threshold()
