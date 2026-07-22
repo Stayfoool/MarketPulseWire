@@ -7,7 +7,6 @@ let holdingsOperationId = 0;
 let holdingsBusyMode = '';
 // 拖拽排序时记录被拖动行的原始下标，null 表示当前未拖动。
 let dragIndex = null;
-let codeDefaultKeywords = [];
 let managedRelations = [];
 let editingRelationId = null;
 let signalRowsCache = [];
@@ -1100,47 +1099,28 @@ function keywordListToText(value) {
   return Array.isArray(value) ? value.join('\n') : '';
 }
 
-function sameKeywordList(a, b) {
-  const left = (a || []).map(item => String(item || '').trim()).filter(Boolean);
-  const right = (b || []).map(item => String(item || '').trim()).filter(Boolean);
-  if (left.length !== right.length) return false;
-  return left.every((item, index) => item === right[index]);
-}
-
 async function loadKeywords() {
   try {
     const data = await api('/api/media-keywords');
-    codeDefaultKeywords = data.code_default_keywords || data.default_keywords || [];
-    document.getElementById('baseKeywords').value = keywordListToText(data.base_keywords || data.default_keywords || []);
-    document.getElementById('includeKeywords').value = keywordListToText(data.include_keywords || []);
+    document.getElementById('semiconductorAiKeywords').value = keywordListToText(data.semiconductor_ai_keywords || []);
     document.getElementById('excludeKeywords').value = keywordListToText(data.exclude_keywords || []);
-    document.getElementById('baseOverrideStatus').textContent = data.base_keywords_overridden ? '已自定义' : '使用代码默认';
-    document.getElementById('defaultKeywords').innerHTML = codeDefaultKeywords.map(item => `<span class="badge" style="margin:2px">${escapeHtml(item)}</span>`).join('');
+    document.getElementById('mediaKeywordConfigVersion').textContent = data.config_version || '-';
   } catch (err) {
     showStatus(err.message, 'err');
   }
 }
 
-function resetBaseKeywords() {
-  document.getElementById('baseKeywords').value = keywordListToText(codeDefaultKeywords);
-  showStatus('已把基础关键词恢复为代码默认词，点击保存后生效。');
-}
-
 async function saveKeywords() {
   try {
-    const baseKeywords = keywordTextToList(document.getElementById('baseKeywords').value);
     const payload = {
-      base_keywords: sameKeywordList(baseKeywords, codeDefaultKeywords) ? [] : baseKeywords,
-      include_keywords: keywordTextToList(document.getElementById('includeKeywords').value),
+      semiconductor_ai_keywords: keywordTextToList(document.getElementById('semiconductorAiKeywords').value),
       exclude_keywords: keywordTextToList(document.getElementById('excludeKeywords').value)
     };
     const data = await api('/api/media-keywords', {method: 'POST', body: JSON.stringify(payload)});
-    codeDefaultKeywords = data.code_default_keywords || data.default_keywords || codeDefaultKeywords;
-    document.getElementById('baseKeywords').value = keywordListToText(data.base_keywords || data.default_keywords || []);
-    document.getElementById('includeKeywords').value = keywordListToText(data.include_keywords || []);
+    document.getElementById('semiconductorAiKeywords').value = keywordListToText(data.semiconductor_ai_keywords || []);
     document.getElementById('excludeKeywords').value = keywordListToText(data.exclude_keywords || []);
-    document.getElementById('baseOverrideStatus').textContent = data.base_keywords_overridden ? '已自定义' : '使用代码默认';
-    showStatus(`媒体关键词已保存。基础 ${(data.base_keywords || data.default_keywords || []).length} 个，额外包含 ${(data.include_keywords || []).length} 个，排除 ${(data.exclude_keywords || []).length} 个。`);
+    document.getElementById('mediaKeywordConfigVersion').textContent = data.config_version || '-';
+    showStatus(`媒体关键词已保存。半导体/AI ${(data.semiconductor_ai_keywords || []).length} 个，排除 ${(data.exclude_keywords || []).length} 个。`);
   } catch (err) {
     showStatus(err.message, 'err');
   }

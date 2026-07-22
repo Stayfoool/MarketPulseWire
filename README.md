@@ -52,9 +52,13 @@ python3 -m venv .venv
 pip install -r requirements.txt
 cp .env.example .env
 cp config/portfolio.example.json config/portfolio.json
-cp config/media_keywords.example.json config/media_keywords.json
 python scripts/market_db.py
 ```
+
+Set `RULE_CORE_SHADOW_CONFIG` in the private `.env` to a complete private global
+rule configuration before using media collection or the Web `媒体关键词` page.
+The repository `config/rule_core_v1.test.json` is a test fixture, not a
+production configuration.
 
 Start the Web workbench:
 

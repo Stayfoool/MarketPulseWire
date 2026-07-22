@@ -2154,21 +2154,16 @@ class HoldingsHandler(BaseHTTPRequestHandler):
         try:
             payload = self.read_json()
             if parsed.path == "/api/media-keywords":
-                base_keywords = payload.get("base_keywords")
-                include_keywords = payload.get("include_keywords")
+                semiconductor_ai_keywords = payload.get("semiconductor_ai_keywords")
                 exclude_keywords = payload.get("exclude_keywords")
-                if not isinstance(include_keywords, list) or not isinstance(exclude_keywords, list):
-                    raise HoldingsError("请求缺少 include_keywords / exclude_keywords 数组")
-                if base_keywords is not None and not isinstance(base_keywords, list):
-                    raise HoldingsError("base_keywords 必须是数组")
-                saved = save_media_keyword_config(base_keywords, include_keywords, exclude_keywords)
-                saved.update(
-                    {
-                        "code_default_keywords": media_keyword_payload()["code_default_keywords"],
-                        "default_keywords": saved["base_keywords"] or media_keyword_payload()["code_default_keywords"],
-                        "base_keywords_overridden": bool(saved["base_keywords"]),
-                    }
+                if not isinstance(semiconductor_ai_keywords, list) or not isinstance(exclude_keywords, list):
+                    raise HoldingsError(
+                        "请求缺少 semiconductor_ai_keywords / exclude_keywords 数组"
+                    )
+                saved = save_media_keyword_config(
+                    semiconductor_ai_keywords, exclude_keywords
                 )
+                saved.pop("backup_path", None)
                 saved["ok"] = True
                 self.send_json(saved)
                 return

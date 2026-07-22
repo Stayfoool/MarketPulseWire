@@ -14,67 +14,6 @@ from market_db import DEFAULT_DB_PATH
 from media_keyword_config import keyword_matches_text, media_keyword_match
 
 
-SEMICONDUCTOR_AI_KEYWORDS = (
-    "半导体",
-    "芯片",
-    "晶圆",
-    "先进封装",
-    "封装基板",
-    "玻璃基板",
-    "gpu",
-    "asic",
-    "hbm",
-    "dram",
-    "nand",
-    "nor flash",
-    "ssd",
-    "存储",
-    "内存",
-    "mlcc",
-    "pcb",
-    "cpo",
-    "光模块",
-    "光通信",
-    "硅光",
-    "光互联",
-    "光电",
-    "服务器",
-    "ai服务器",
-    "ai server",
-    "数据中心",
-    "data center",
-    "datacenter",
-    "算力",
-    "大模型",
-    "llm",
-    "人工智能",
-    "英伟达",
-    "nvidia",
-    "blackwell",
-    "rubin",
-    "gb200",
-    "gb300",
-    "nvlink",
-    "kyber",
-    "nvl144",
-    "液冷",
-    "散热",
-    "金刚石",
-    "diamond",
-    "碳化硅",
-    "sic",
-    "氮化镓",
-    "gan",
-    "电子特气",
-    "光刻胶",
-    "半导体设备",
-    "刻蚀",
-    "薄膜",
-    "量测",
-    "测试机",
-    "探针卡",
-)
-
 GENERIC_POWER_KEYWORDS = (
     "电力",
     "电网",
@@ -207,14 +146,6 @@ def investment_universe_match(
             "reason": f"命中媒体排除关键词：{keyword.get('keyword')}",
             "tags": ["media_keyword_excluded"],
         }
-    if keyword.get("bucket") == "include":
-        return {
-            "matched": True,
-            "reason": f"命中用户显式包含关键词：{keyword.get('keyword')}",
-            "tags": ["user_include_keyword"],
-            "keyword": keyword.get("keyword"),
-        }
-
     holding = matched_holding(text, db_path=db_path)
     if holding:
         return {
@@ -224,10 +155,10 @@ def investment_universe_match(
             "holding_keyword": holding,
         }
 
-    if contains_any_keyword(text, SEMICONDUCTOR_AI_KEYWORDS):
+    if keyword.get("matched"):
         return {
             "matched": True,
-            "reason": "命中半导体/AI 基础设施投资宇宙关键词",
+            "reason": f"命中统一半导体/AI关键词：{keyword.get('keyword')}",
             "tags": ["semiconductor_ai"],
             "keyword": keyword.get("keyword") or "",
         }
@@ -247,16 +178,9 @@ def investment_universe_match(
             "keyword": keyword.get("keyword") or "",
         }
 
-    if keyword.get("matched"):
-        return {
-            "matched": False,
-            "reason": f"命中媒体关键词 {keyword.get('keyword')}，但未落入当前半导体/AI/持仓/美国核心宏观投资宇宙",
-            "tags": ["keyword_outside_universe"],
-            "keyword": keyword.get("keyword"),
-        }
     return {
         "matched": False,
-        "reason": "未命中持仓、半导体/AI 主线、用户显式关键词或美国核心宏观变量",
+        "reason": "未命中持仓、统一半导体/AI关键词或美国核心宏观变量",
         "tags": ["outside_universe"],
     }
 

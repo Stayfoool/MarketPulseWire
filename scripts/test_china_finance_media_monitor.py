@@ -656,7 +656,12 @@ def test_jin10_mixed_digest_keeps_only_relevant_lines() -> None:
     original_media = iu.media_keyword_match
     try:
         iu.matched_holding = lambda text, db_path=iu.DEFAULT_DB_PATH: ""
-        iu.media_keyword_match = lambda *parts: {"matched": False, "blocked": False, "keyword": "", "bucket": ""}
+        iu.media_keyword_match = lambda *parts: {
+            "matched": "AI PCB" in " ".join(parts),
+            "blocked": False,
+            "keyword": "PCB" if "AI PCB" in " ".join(parts) else "",
+            "bucket": "semiconductor_ai" if "AI PCB" in " ".join(parts) else "",
+        }
         item = {
             "title": "金十重要事件",
             "summary": "\n".join(

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import sqlite3
 import threading
 from http.server import ThreadingHTTPServer
@@ -68,6 +69,72 @@ def test_page_uses_extracted_assets_and_bounded_placeholders() -> None:
     assert "<script>" not in html
     assert "__WORKBENCH_" not in html
     assert "未配置访问令牌，仅限 SSH 隧道使用" in html
+
+
+def test_media_keywords_use_one_semiconductor_ai_list() -> None:
+    source = frontend_source()
+    assert 'id="semiconductorAiKeywords"' in source
+    assert 'id="excludeKeywords"' in source
+    assert "semiconductor_ai_keywords" in source
+    for retired_name in (
+        "baseKeywords",
+        "includeKeywords",
+        "codeDefaultKeywords",
+        "baseOverrideStatus",
+        "resetBaseKeywords",
+    ):
+        assert retired_name not in source
+
+    with TemporaryDirectory() as tmpdir:
+        rule_path = Path(tmpdir) / "private-rule-config.json"
+        public_path = Path(__file__).resolve().parents[1] / "config" / "rule_core_v1.test.json"
+        rule_path.write_text(public_path.read_text(encoding="utf-8"), encoding="utf-8")
+        previous = os.environ.get("RULE_CORE_SHADOW_CONFIG")
+        os.environ["RULE_CORE_SHADOW_CONFIG"] = str(rule_path)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), HoldingsHandler)
+        server.token = "test-token"
+        server.restart_sina_flash = False
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = http.client.HTTPConnection(*server.server_address, timeout=5)
+            headers = {"X-Holdings-Token": "test-token"}
+            connection.request("GET", "/api/media-keywords", headers=headers)
+            response = connection.getresponse()
+            payload = json.loads(response.read().decode("utf-8"))
+            assert response.status == 200
+            assert set(payload) == {
+                "ok",
+                "semiconductor_ai_keywords",
+                "exclude_keywords",
+                "config_version",
+            }
+
+            body = json.dumps(
+                {
+                    "semiconductor_ai_keywords": ["HBM", "SMIC"],
+                    "exclude_keywords": ["培训广告"],
+                }
+            )
+            headers["Content-Type"] = "application/json"
+            connection.request("POST", "/api/media-keywords", body=body, headers=headers)
+            response = connection.getresponse()
+            saved = json.loads(response.read().decode("utf-8"))
+            assert response.status == 200
+            assert saved["semiconductor_ai_keywords"] == ["HBM", "SMIC"]
+            assert saved["exclude_keywords"] == ["培训广告"]
+            assert "backup_path" not in saved
+            on_disk = json.loads(rule_path.read_text(encoding="utf-8"))
+            assert on_disk["semiconductor_ai_keywords"] == ["HBM", "SMIC"]
+            assert "macro_data" in on_disk
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+            if previous is None:
+                os.environ.pop("RULE_CORE_SHADOW_CONFIG", None)
+            else:
+                os.environ["RULE_CORE_SHADOW_CONFIG"] = previous
 
 
 def test_rule_shadow_report_view_is_read_only_and_path_bounded() -> None:
@@ -1226,6 +1293,7 @@ def test_unit_display_metadata_includes_news_production_collector() -> None:
 def main() -> int:
     test_extracted_script_keeps_newline_escapes()
     test_page_uses_extracted_assets_and_bounded_placeholders()
+    test_media_keywords_use_one_semiconductor_ai_list()
     test_rule_shadow_report_view_is_read_only_and_path_bounded()
     test_static_asset_routes_are_allowlisted()
     test_health_page_exposes_service_action_controls()

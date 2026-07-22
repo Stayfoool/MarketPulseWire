@@ -374,38 +374,24 @@
         <h2>媒体关键词</h2>
         <div>
           <button onclick="loadKeywords()">刷新</button>
-          <button onclick="resetBaseKeywords()">恢复代码默认词</button>
           <button class="primary" onclick="saveKeywords()">保存</button>
         </div>
       </div>
-      <div class="split">
-        <section class="panel">
-          <div class="list">
-            <div class="list-row"><strong>基础关键词</strong></div>
-            <div class="list-row">
-              <textarea id="baseKeywords" style="min-height:260px" placeholder="每行一个基础关键词"></textarea>
-              <div class="hint">实际粗筛使用“基础关键词 + 额外包含关键词 - 排除关键词”。基础关键词可编辑；留空保存时会回到代码默认词。</div>
-            </div>
-            <div class="list-row"><strong>额外包含关键词</strong></div>
-            <div class="list-row">
-              <textarea id="includeKeywords" style="min-height:220px" placeholder="每行一个关键词，例如：金刚石散热"></textarea>
-              <div class="hint">这些词会叠加到基础关键词上；RSS、DIGITIMES、The Elec、日经 xTECH 下一轮轮询会自动生效。</div>
-            </div>
-            <div class="list-row"><strong>排除关键词</strong></div>
-            <div class="list-row">
-              <textarea id="excludeKeywords" style="min-height:120px" placeholder="每行一个排除词"></textarea>
-              <div class="hint">命中排除词的条目会在进入 LLM 门控前被过滤。</div>
-            </div>
+      <section class="panel">
+        <div class="list">
+          <div class="list-row"><strong>半导体/AI关键词</strong></div>
+          <div class="list-row">
+            <textarea id="semiconductorAiKeywords" style="min-height:420px" placeholder="每行一个行业、公司、产品或安全别名"></textarea>
+            <div class="hint">这是跨来源半导体/AI范围准入使用的唯一关键词列表。</div>
           </div>
-        </section>
-        <section class="panel">
-          <div class="list">
-            <div class="list-row"><strong>代码默认关键词</strong></div>
-            <div class="hint">这是代码内置默认词，用于恢复基线；当前是否覆盖：<span id="baseOverrideStatus">-</span></div>
-            <div id="defaultKeywords" class="list-row" style="max-height:560px; overflow:auto"></div>
+          <div class="list-row"><strong>排除关键词</strong></div>
+          <div class="list-row">
+            <textarea id="excludeKeywords" style="min-height:140px" placeholder="每行一个排除词"></textarea>
+            <div class="hint">排除词保持独立，不属于半导体/AI正向关键词。</div>
           </div>
-        </section>
-      </div>
+          <div class="list-row"><span class="hint">当前规则配置版本：<span id="mediaKeywordConfigVersion">-</span></span></div>
+        </div>
+      </section>
     </section>
 
     <section id="view-settings" class="view">
