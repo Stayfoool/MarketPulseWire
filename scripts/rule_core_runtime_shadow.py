@@ -25,7 +25,7 @@ from rule_core_v1 import RULE_CORE_VERSION, SourceAdmissionPolicy, parse_portfol
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORT_DIR = ROOT / "reports"
-CONTRACT_VERSION = "rule-core-runtime-shadow-report-v2"
+CONTRACT_VERSION = "rule-core-runtime-shadow-report-v3"
 CANDIDATE_MODES = {"deterministic", "llm"}
 
 _CONFIG_LOCK = threading.Lock()
@@ -141,6 +141,17 @@ def _item_id(item: NormalizedMarketItem, storage_ref: Mapping[str, Any]) -> str:
     return str(value) if value not in (None, "") else item.dedupe_key
 
 
+def _body_source(item: NormalizedMarketItem) -> str:
+    recorded = " ".join(str(item.raw.get("body_source") or "").split())[:160]
+    if recorded:
+        return recorded
+    if not item.full_text and item.summary:
+        return "标题和摘要（无详情正文）"
+    if not item.full_text:
+        return "仅标题（无详情正文）"
+    return "未记录正文来源"
+
+
 def _report_payload(
     item: NormalizedMarketItem,
     current_decision: DecisionResult | None,
@@ -237,6 +248,7 @@ def _report_payload(
                     "title_chars": len(item.title),
                     "summary_chars": len(item.summary),
                     "full_text_chars": len(item.full_text),
+                    "body_source": _body_source(item),
                 },
                 "comparison": comparison,
             }

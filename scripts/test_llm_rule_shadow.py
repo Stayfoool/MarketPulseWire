@@ -165,6 +165,36 @@ def test_excluded_item_does_not_call_model() -> None:
     assert comparison["candidate"]["action"] is None
 
 
+def test_all_unmatched_response_retries_once_with_ordinary_rule() -> None:
+    calls = []
+    all_unmatched = json.dumps(
+        {
+            "rule_results": [
+                {"rule_id": rule.rule_id, "judgement": "not_matched"}
+                for rule in rules_for_families(("semiconductor_ai",))
+            ]
+        },
+        ensure_ascii=False,
+    )
+    ordinary = _response("semiconductor_ai", "semiconductor_ordinary", "archive")
+
+    def caller(prompt):
+        calls.append(prompt)
+        return _model_response(all_unmatched if len(calls) == 1 else ordinary)
+
+    comparison = _compare(_item(), caller)
+    assert len(calls) == 2
+    assert "validation_feedback" not in calls[0].user_payload
+    assert "validation_feedback" in calls[1].user_payload
+    candidate = comparison["candidate"]
+    assert comparison["comparable"] is True
+    assert candidate["evaluation_status"] == "completed"
+    assert candidate["action"] == "archive"
+    assert candidate["model_calls"] == 2
+    assert candidate["attempts"] == 2
+    assert candidate["usage"]["total_tokens"] == 300
+
+
 def test_company_disclosure_receives_only_holding_rules_and_minimal_matched_context() -> None:
     portfolio = parse_portfolio_config(
         [
@@ -210,6 +240,7 @@ def main() -> int:
     test_completed_comparison_records_usage_and_bounded_evidence_without_body()
     test_invalid_output_model_failure_and_missing_body_behavior()
     test_excluded_item_does_not_call_model()
+    test_all_unmatched_response_retries_once_with_ordinary_rule()
     test_company_disclosure_receives_only_holding_rules_and_minimal_matched_context()
     print("LLM rule shadow checks passed")
     return 0

@@ -241,6 +241,8 @@ def test_prompt_uses_bounded_available_input_without_current_production_decision
     assert "production_action" not in serialized
     assert "prompt_version" not in prompt.user_payload
     assert prompt.user_payload["output_contract"]["policy"].endswith("最终 action。")
+    assert prompt.user_payload["ordinary_rule_ids"] == ["semiconductor_ordinary"]
+    assert "不能把全部规则返回 not_matched" in prompt.system_prompt
     matched_contract = prompt.user_payload["output_contract"]["matched"]
     assert set(matched_contract) == {"rule_id", "judgement", "action", "evidence", "reason"}
     assert '"facts":' not in serialized
@@ -411,7 +413,7 @@ def test_undefined_action_and_duplicate_rule_fail_closed() -> None:
     assert duplicate_result.evaluation_status == "conflict"
     assert duplicate_result.candidate_action is None
 
-def test_evidence_must_be_verbatim_bounded_and_not_copy_complete_body() -> None:
+def test_evidence_must_be_verbatim_and_bounded_while_allowing_complete_short_body() -> None:
     item = _item(full_text=f"前文。\n{QUOTE}\n后文。")
     admission = _admission(("macro_data",))
     response = _response("macro_data", "macro_surprise", "push")
@@ -425,11 +427,11 @@ def test_evidence_must_be_verbatim_bounded_and_not_copy_complete_body() -> None:
     assert paraphrased_result.evaluation_status == "evidence_invalid"
     assert paraphrased_result.candidate_action is None
 
-    long_body = ("完整正文内容。" * 40) + QUOTE
+    long_body = ("完整正文内容。" * 80) + QUOTE
     copied = _response("macro_data", "macro_surprise", "push")
     copied["rule_results"][0]["evidence"][0]["quote"] = long_body
     copied_result = validate_llm_rule_response(copied, _item(full_text=long_body), admission)
-    assert copied_result.evaluation_status == "evidence_invalid"
+    assert copied_result.evaluation_status == "invalid_output"
     assert copied_result.candidate_action is None
 
     short_body = QUOTE
@@ -440,8 +442,8 @@ def test_evidence_must_be_verbatim_bounded_and_not_copy_complete_body() -> None:
         _item(full_text=short_body),
         admission,
     )
-    assert copied_short_result.evaluation_status == "evidence_invalid"
-    assert copied_short_result.candidate_action is None
+    assert copied_short_result.evaluation_status == "completed"
+    assert copied_short_result.candidate_action == "push"
 
     title_response = _response("macro_data", "macro_surprise", "push")
     title_response["rule_results"][0]["evidence"] = [{"field": "title", "quote": "测试新闻"}]
@@ -525,7 +527,7 @@ def main() -> int:
     test_multiple_admitted_families_share_one_response_and_highest_action_wins()
     test_invalid_json_unknown_missing_and_forbidden_fields_fail_closed()
     test_undefined_action_and_duplicate_rule_fail_closed()
-    test_evidence_must_be_verbatim_bounded_and_not_copy_complete_body()
+    test_evidence_must_be_verbatim_and_bounded_while_allowing_complete_short_body()
     test_non_admitted_or_source_inapplicable_inputs_do_not_create_candidate()
     test_pr_a_modules_have_no_transport_runtime_or_storage_imports()
     print("LLM rule decision contract checks passed")

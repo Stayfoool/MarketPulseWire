@@ -14,6 +14,8 @@ from llm_rule_decision import (
     LLMRulePrompt,
     apply_source_admission_boundary,
     build_llm_rule_prompt,
+    build_llm_rule_repair_prompt,
+    needs_ordinary_rule_retry,
     validate_llm_rule_response,
 )
 from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem
@@ -25,7 +27,7 @@ from rule_core_v1 import (
 )
 
 
-CONTRACT_VERSION = "llm-rule-shadow-v1"
+CONTRACT_VERSION = "llm-rule-shadow-v2"
 VALID_CURRENT_ADMISSION_STATUSES = {"admitted", "excluded", "not_applicable", "unknown"}
 VALID_CURRENT_ACTIONS = {"push", "daily", "archive", "ignore"}
 ModelCaller = Callable[[LLMRulePrompt], ChatCompletionResponse]
@@ -188,6 +190,7 @@ def _candidate_base(admission: AdmissionResult) -> dict[str, Any]:
         "model_response_id": "",
         "usage": {},
         "attempts": 0,
+        "model_calls": 0,
         "elapsed_seconds": 0.0,
         "input_text_scope": "",
         "provided_fields": [],
@@ -210,6 +213,7 @@ def _failure_candidate(
     *,
     prompt: LLMRulePrompt | None = None,
     response: ChatCompletionResponse | None = None,
+    model_calls: int = 0,
 ) -> dict[str, Any]:
     candidate = _candidate_base(admission)
     candidate.update(
@@ -233,6 +237,7 @@ def _failure_candidate(
                 "model_response_id": _clean(response.response_id, 200),
                 "usage": dict(response.usage),
                 "attempts": response.attempts,
+                "model_calls": model_calls,
                 "elapsed_seconds": response.elapsed_seconds,
             }
         )
@@ -244,6 +249,8 @@ def _completed_candidate(
     prompt: LLMRulePrompt,
     response: ChatCompletionResponse,
     result: Any,
+    *,
+    model_calls: int = 1,
 ) -> dict[str, Any]:
     decision = result.decision
     if decision is None:
@@ -260,6 +267,7 @@ def _completed_candidate(
             "model_response_id": _clean(response.response_id, 200),
             "usage": dict(response.usage),
             "attempts": response.attempts,
+            "model_calls": model_calls,
             "elapsed_seconds": response.elapsed_seconds,
             "input_text_scope": prompt.input_text_scope,
             "provided_fields": list(prompt.provided_fields),
@@ -271,6 +279,26 @@ def _completed_candidate(
         }
     )
     return candidate
+
+
+def _combined_response(
+    first: ChatCompletionResponse,
+    second: ChatCompletionResponse,
+) -> ChatCompletionResponse:
+    usage = {
+        key: int(first.usage.get(key, 0)) + int(second.usage.get(key, 0))
+        for key in {"prompt_tokens", "completion_tokens", "total_tokens"}
+        if key in first.usage or key in second.usage
+    }
+    return ChatCompletionResponse(
+        content=second.content,
+        model=second.model,
+        provider=second.provider,
+        response_id=second.response_id,
+        usage=usage,
+        attempts=first.attempts + second.attempts,
+        elapsed_seconds=round(first.elapsed_seconds + second.elapsed_seconds, 6),
+    )
 
 
 def compare_llm_rule_candidate(
@@ -338,8 +366,35 @@ def compare_llm_rule_candidate(
                     input_text_scope=prompt.input_text_scope,
                     model=response.model,
                 )
+                model_calls = 1
+                if needs_ordinary_rule_retry(result):
+                    try:
+                        repair_prompt = build_llm_rule_repair_prompt(
+                            prompt,
+                            max_input_chars=max_input_chars,
+                        )
+                        repair_response = model_caller(repair_prompt)
+                    except Exception:  # noqa: BLE001 - retain the validated first-call failure.
+                        pass
+                    else:
+                        response = _combined_response(response, repair_response)
+                        prompt = repair_prompt
+                        model_calls = 2
+                        result = validate_llm_rule_response(
+                            repair_response.content,
+                            item,
+                            admission,
+                            input_text_scope=repair_prompt.input_text_scope,
+                            model=repair_response.model,
+                        )
                 if result.evaluation_status == "completed":
-                    candidate = _completed_candidate(admission, prompt, response, result)
+                    candidate = _completed_candidate(
+                        admission,
+                        prompt,
+                        response,
+                        result,
+                        model_calls=model_calls,
+                    )
                 else:
                     candidate = _failure_candidate(
                         admission,
@@ -347,6 +402,7 @@ def compare_llm_rule_candidate(
                         "; ".join(result.validation_errors),
                         prompt=prompt,
                         response=response,
+                        model_calls=model_calls,
                     )
 
     comparable = candidate.get("evaluation_status") == "completed"

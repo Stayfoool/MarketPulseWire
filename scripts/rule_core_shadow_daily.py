@@ -58,7 +58,11 @@ def review_window(
 
 def needs_review(payload: dict[str, Any]) -> bool:
     counts = payload.get("counts") if isinstance(payload.get("counts"), dict) else {}
-    return int(counts.get("compared") or 0) > 0 or skipped_count(payload) > 0
+    return (
+        int(counts.get("compared") or 0) > 0
+        or int(counts.get("admission_differences") or 0) > 0
+        or skipped_count(payload) > 0
+    )
 
 
 def sort_review_items(payload: dict[str, Any]) -> None:
@@ -68,11 +72,19 @@ def sort_review_items(payload: dict[str, Any]) -> None:
         row = item if isinstance(item, dict) else {}
         current = str(row.get("current_action") or "none")
         candidate = str(row.get("candidate_action") or "none")
-        comparable = bool(row.get("comparable", True))
+        comparison_status = str(row.get("comparison_status") or "action_compared")
         changed = current != candidate
         involves_push = "push" in {current, candidate}
+        if comparison_status == "model_validation_failed":
+            priority = 0 if current == "push" else 3
+        elif comparison_status == "action_compared":
+            priority = 1 if changed and involves_push else 4 if changed else 6
+        elif comparison_status == "admission_difference":
+            priority = 2 if involves_push else 5
+        else:
+            priority = 7
         return (
-            0 if not comparable and current == "push" else 1 if changed and involves_push else 2 if not comparable else 3 if changed else 4,
+            priority,
             0 if candidate == "push" else 1,
             str(row.get("source") or ""),
             str(row.get("title") or ""),
@@ -89,9 +101,11 @@ def build_reminder_card(payload: dict[str, Any]) -> dict[str, Any]:
         f"**审阅日期**：{md_escape(str(payload.get('review_date') or ''))}",
         "**统计区间**：上一日 15:30 至当日 15:30（北京时间）",
         f"**可比较文章**：{int(counts.get('compared') or 0)}",
+        f"**双方均未准入**：{int(counts.get('both_not_admitted') or 0)}",
+        f"**准入不一致**：{int(counts.get('admission_differences') or 0)}",
         f"**新旧 action 不一致**：{int(counts.get('action_changes') or 0)}",
         f"**涉及 push 的差异**：{push_change_count(payload)}",
-        f"**无法比较**：{skipped_count(payload)}",
+        f"**大模型判断或校验失败**：{skipped_count(payload)}",
     ]
     if pair_lines:
         details.extend(["", "**action 变化**：", *pair_lines[:12]])

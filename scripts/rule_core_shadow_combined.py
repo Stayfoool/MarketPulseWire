@@ -18,11 +18,17 @@ from rule_core_v1 import RULE_CORE_VERSION
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORT_DIR = ROOT / "reports"
-CONTRACT_VERSION = "rule-core-shadow-combined-v1"
+CONTRACT_VERSION = "rule-core-shadow-combined-v2"
 # PR #162 is the last rule-changing deployment before explicit rule versions
 # were added to comparison records. The completed workflow time is a
 # conservative compatibility boundary for already-retained reports.
 LEGACY_LATEST_RULE_CORE_SINCE = datetime(2026, 7, 21, 2, 32, 51, tzinfo=timezone.utc)
+COMPARISON_STATUSES = {
+    "action_compared",
+    "both_not_admitted",
+    "admission_difference",
+    "model_validation_failed",
+}
 
 
 def parse_iso(value: object) -> datetime | None:
@@ -162,6 +168,33 @@ def _safe_float(value: object) -> float:
         return 0.0
 
 
+def _comparison_status(comparison: dict[str, Any]) -> str:
+    recorded = str(comparison.get("comparison_status") or "").strip()
+    if recorded in COMPARISON_STATUSES:
+        return recorded
+    current = comparison.get("current") if isinstance(comparison.get("current"), dict) else {}
+    candidate = comparison.get("candidate") if isinstance(comparison.get("candidate"), dict) else {}
+    current_status = str(current.get("admission_status") or "unknown")
+    candidate_status = str(candidate.get("admission_status") or "")
+    evaluation_status = str(candidate.get("evaluation_status") or "")
+    current_has_action = bool(current.get("action"))
+    current_admitted = current_has_action or current_status in {"admitted", "not_applicable"}
+    current_excluded = current_status == "excluded"
+    candidate_admitted = candidate_status == "admitted"
+    candidate_excluded = candidate_status == "excluded" or evaluation_status == "not_admitted"
+    if current_excluded and not current_has_action and candidate_excluded:
+        return "both_not_admitted"
+    if (current_admitted and candidate_excluded) or (
+        candidate_admitted and evaluation_status == "completed" and not current_admitted
+    ):
+        return "admission_difference"
+    if bool(comparison.get("comparable", True)) and evaluation_status in {"", "completed"}:
+        return "action_compared"
+    if candidate_excluded:
+        return "admission_difference"
+    return "model_validation_failed"
+
+
 def build_combined_report(
     *,
     report_dir: Path = REPORT_DIR,
@@ -181,6 +214,7 @@ def build_combined_report(
     latest_candidate_items = 0
     comparable_items = 0
     evaluation_statuses = Counter()
+    comparison_statuses = Counter()
     candidate_engines = Counter()
     usage_totals = Counter()
     total_elapsed_seconds = 0.0
@@ -201,12 +235,15 @@ def build_combined_report(
             comparison = item.get("comparison") if isinstance(item.get("comparison"), dict) else {}
             current = comparison.get("current") if isinstance(comparison.get("current"), dict) else {}
             candidate = comparison.get("candidate") if isinstance(comparison.get("candidate"), dict) else {}
+            input_evidence = item.get("input_evidence") if isinstance(item.get("input_evidence"), dict) else {}
             comparable = bool(comparison.get("comparable", True))
             evaluation_status = str(candidate.get("evaluation_status") or ("completed" if comparable else "unknown"))
+            comparison_status = _comparison_status(comparison)
             usage = candidate.get("usage") if isinstance(candidate.get("usage"), dict) else {}
-            if comparable:
+            if comparison_status == "action_compared":
                 comparable_items += 1
             evaluation_statuses[evaluation_status] += 1
+            comparison_statuses[comparison_status] += 1
             candidate_engines[candidate_engine] += 1
             for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
                 value = usage.get(key)
@@ -222,6 +259,7 @@ def build_combined_report(
                 "title": item.get("title") or "",
                 "url": item.get("url") or "",
                 "current_action": current.get("action"),
+                "current_admission": current.get("admission_status") or "",
                 "current_importance": current.get("importance"),
                 "current_reason": _current_reason(current),
                 "current_rule_ids": current.get("rule_ids") if isinstance(current.get("rule_ids"), list) else [],
@@ -235,6 +273,7 @@ def build_combined_report(
                 "candidate_rule_assessments": candidate.get("rule_assessments") if isinstance(candidate.get("rule_assessments"), list) else [],
                 "current_rule_evidence": current.get("rule_evidence") if isinstance(current.get("rule_evidence"), list) else [],
                 "comparable": comparable,
+                "comparison_status": comparison_status,
                 "evaluation_status": evaluation_status,
                 "failure_reason": candidate.get("failure_reason") or "",
                 "candidate_engine": candidate_engine,
@@ -245,6 +284,7 @@ def build_combined_report(
                 "provider": candidate.get("provider") or "",
                 "usage": usage,
                 "attempts": _safe_int(candidate.get("attempts")),
+                "model_calls": _safe_int(candidate.get("model_calls")),
                 "elapsed_seconds": _safe_float(candidate.get("elapsed_seconds")),
                 "input_text_scope": candidate.get("input_text_scope") or "",
                 "provided_fields": (
@@ -257,6 +297,7 @@ def build_combined_report(
                 "body_provided_chars": _safe_int(candidate.get("body_provided_chars")),
                 "body_truncated": bool(candidate.get("body_truncated")),
                 "prompt_chars": _safe_int(candidate.get("prompt_chars")),
+                "body_source": str(input_evidence.get("body_source") or "")[:160],
                 "comparison_generated_at": report.get("generated_at") or "",
                 "rule_core_version": rule_core_version,
                 "rule_core_version_source": rule_core_version_source,
@@ -268,7 +309,7 @@ def build_combined_report(
             items.append(row)
             if is_latest_candidate_version:
                 latest_candidate_items += 1
-            if comparable and row["current_action"] != row["candidate_action"]:
+            if comparison_status == "action_compared" and row["current_action"] != row["candidate_action"]:
                 action_changes.update([_pair_for(item)])
 
     engine_names = set(candidate_engines)
@@ -302,7 +343,11 @@ def build_combined_report(
             "reports_by_source_group": dict(source_groups),
             "items": len(items),
             "compared": comparable_items,
-            "unable_to_compare": len(items) - comparable_items,
+            "action_compared": comparison_statuses["action_compared"],
+            "both_not_admitted": comparison_statuses["both_not_admitted"],
+            "admission_differences": comparison_statuses["admission_difference"],
+            "model_validation_failures": comparison_statuses["model_validation_failed"],
+            "unable_to_compare": comparison_statuses["model_validation_failed"],
             "action_changes": sum(action_changes.values()),
             "action_changes_by_pair": dict(action_changes),
             "skipped": dict(skipped),
@@ -311,6 +356,7 @@ def build_combined_report(
             "latest_rule_items": latest_candidate_items,
             "earlier_or_unconfirmed_rule_items": len(items) - latest_candidate_items,
             "evaluation_statuses": dict(evaluation_statuses),
+            "comparison_statuses": dict(comparison_statuses),
             "candidate_engines": dict(candidate_engines),
             "usage": dict(usage_totals),
             "total_elapsed_seconds": round(total_elapsed_seconds, 3),
@@ -329,12 +375,15 @@ def markdown_report(payload: dict[str, Any]) -> str:
         f"- Reports scanned: {counts.get('reports', 0)}",
         f"- Items recorded: {counts.get('items', counts.get('compared', 0))}",
         f"- Compared items: {counts.get('compared', 0)}",
-        f"- Unable to compare: {counts.get('unable_to_compare', 0)}",
+        f"- Both not admitted: {counts.get('both_not_admitted', 0)}",
+        f"- Admission differences: {counts.get('admission_differences', 0)}",
+        f"- Model or validation failures: {counts.get('model_validation_failures', counts.get('unable_to_compare', 0))}",
         f"- Action changes: {counts.get('action_changes', 0)}",
         f"- Candidate: {payload.get('candidate_label') or '对比判断'}",
         f"- Latest-version items: {counts.get('latest_candidate_items', counts.get('latest_rule_items', 0))}",
         f"- Token usage: {json.dumps(counts.get('usage', {}), ensure_ascii=False, sort_keys=True)}",
-        f"- Skipped: {json.dumps(counts.get('skipped', {}), ensure_ascii=False, sort_keys=True)}",
+        f"- Comparison statuses: {json.dumps(counts.get('comparison_statuses', {}), ensure_ascii=False, sort_keys=True)}",
+        f"- Legacy source counters: {json.dumps(counts.get('skipped', {}), ensure_ascii=False, sort_keys=True)}",
         "",
     ]
     if payload.get("review_date"):
@@ -358,16 +407,17 @@ def markdown_report(payload: dict[str, Any]) -> str:
         lines.append("No comparable items in this window.")
         return "\n".join(lines).rstrip() + "\n"
 
-    lines.append("| Source Group | Source | Current | Current Reason | Candidate | Status | Candidate Reason | Candidate Rules | Title |")
-    lines.append("|---|---|---|---|---|---|---|---|---|")
+    lines.append("| Source Group | Source | Current | Current Reason | Candidate | Comparison | Status | Candidate Reason | Candidate Rules | Body Source | Title |")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for item in items:
         rules = ",".join(str(rule) for rule in (item.get("candidate_rule_ids") or [])) or "-"
         lines.append(
             f"| {item.get('source_group') or ''} | {item.get('source') or ''} | "
             f"`{item.get('current_action') or 'none'}` | {_md_cell(item.get('current_reason'))} | "
-            f"`{item.get('candidate_action') or 'none'}` | `{item.get('evaluation_status') or '-'}` | "
+            f"`{item.get('candidate_action') or 'none'}` | `{item.get('comparison_status') or '-'}` | "
+            f"`{item.get('evaluation_status') or '-'}` | "
             f"{_md_cell(item.get('candidate_reason'))} | "
-            f"{rules} | {_md_cell(item.get('title'), 160)} |"
+            f"{rules} | {_md_cell(item.get('body_source'))} | {_md_cell(item.get('title'), 160)} |"
         )
     return "\n".join(lines).rstrip() + "\n"
 

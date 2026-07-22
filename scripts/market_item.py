@@ -479,6 +479,8 @@ def item_from_article_mapping(
 ) -> NormalizedMarketItem:
     raw = dict(item.get("raw") or {})
     raw.setdefault("id", item.get("id") or item.get("item_id") or item.get("url") or item.get("title") or "")
+    if item.get("body_source"):
+        raw.setdefault("body_source", str(item.get("body_source")))
     return NormalizedMarketItem(
         source=source,
         source_category=source_category,
@@ -507,6 +509,8 @@ def item_from_event_mapping(
 ) -> NormalizedMarketItem:
     raw = dict(event.get("raw") or {})
     raw.setdefault("source_event_id", event.get("source_event_id") or "")
+    if event.get("body_source"):
+        raw.setdefault("body_source", str(event.get("body_source")))
     return NormalizedMarketItem(
         source=str(event.get("source") or ""),
         source_category=source_category,

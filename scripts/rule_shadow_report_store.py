@@ -15,6 +15,8 @@ DAILY_PREFIX = "rule-core-shadow-daily-"
 
 def skipped_count(payload: dict[str, Any]) -> int:
     counts = payload.get("counts") if isinstance(payload.get("counts"), dict) else {}
+    if "model_validation_failures" in counts:
+        return int(counts.get("model_validation_failures") or 0)
     skipped = counts.get("skipped") if isinstance(counts.get("skipped"), dict) else {}
     return sum(int(value or 0) for value in skipped.values())
 
@@ -65,6 +67,8 @@ def list_daily_reports(report_dir: Path, *, limit: int = 31) -> list[dict[str, A
                 "action_changes": int(counts.get("action_changes") or 0),
                 "push_changes": push_change_count(payload),
                 "skipped": skipped_count(payload),
+                "both_not_admitted": int(counts.get("both_not_admitted") or 0),
+                "admission_differences": int(counts.get("admission_differences") or 0),
                 "notification_status": (payload.get("notification") or {}).get("status")
                 if isinstance(payload.get("notification"), dict)
                 else "",

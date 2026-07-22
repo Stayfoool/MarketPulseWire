@@ -194,6 +194,7 @@ def test_llm_failure_remains_visible_without_becoming_action_downgrade() -> None
         assert combined["counts"]["items"] == 1
         assert combined["counts"]["compared"] == 0
         assert combined["counts"]["unable_to_compare"] == 1
+        assert combined["counts"]["model_validation_failures"] == 1
         assert combined["counts"]["action_changes"] == 0
         assert combined["counts"]["evaluation_statuses"] == {"invalid_output": 1}
         assert combined["counts"]["usage"]["total_tokens"] == 105
@@ -203,6 +204,47 @@ def test_llm_failure_remains_visible_without_becoming_action_downgrade() -> None
         assert row["comparable"] is False
         assert row["is_latest_candidate_version"] is True
         assert "invalid_output" in markdown_report(combined)
+
+
+def test_combined_report_separates_both_excluded_and_admission_difference() -> None:
+    with TemporaryDirectory() as tmpdir:
+        report_dir = Path(tmpdir)
+        both = report_payload("wallstreetcn_news", "archive", "archive")
+        both["generated_at"] = "2026-07-19T11:10:00+00:00"
+        comparison = both["items"][0]["comparison"]
+        comparison["comparable"] = False
+        comparison["current"].update(
+            {"action": None, "admission_status": "excluded", "admission_reason": "investment_universe_no_match"}
+        )
+        comparison["candidate"].update(
+            {"action": None, "admission_status": "excluded", "evaluation_status": "not_admitted"}
+        )
+        difference = report_payload("sina_finance_articles", "daily", "archive")
+        difference["generated_at"] = "2026-07-19T11:11:00+00:00"
+        comparison = difference["items"][0]["comparison"]
+        comparison["comparable"] = False
+        comparison["current"]["admission_status"] = "admitted"
+        comparison["candidate"].update(
+            {"action": None, "admission_status": "excluded", "evaluation_status": "not_admitted"}
+        )
+        for name, payload in (("both", both), ("difference", difference)):
+            (report_dir / f"rule-core-shadow-news-{name}.json").write_text(
+                json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+            )
+        combined = build_combined_report(
+            report_dir=report_dir,
+            hours=24,
+            now=datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc),
+        )
+        assert combined["counts"]["both_not_admitted"] == 1
+        assert combined["counts"]["admission_differences"] == 1
+        assert combined["counts"]["model_validation_failures"] == 0
+        assert combined["counts"]["unable_to_compare"] == 0
+        statuses = {row["source"]: row["comparison_status"] for row in combined["items"]}
+        assert statuses == {
+            "wallstreetcn_news": "both_not_admitted",
+            "sina_finance_articles": "admission_difference",
+        }
 
 
 def test_llm_completed_row_preserves_bounded_audit_fields_without_body_or_raw_response() -> None:
@@ -253,6 +295,7 @@ def test_llm_completed_row_preserves_bounded_audit_fields_without_body_or_raw_re
             "title_chars": 12,
             "summary_chars": 20,
             "full_text_chars": 1800,
+            "body_source": "DIGITIMES RSS description",
         }
         serialized = json.dumps(payload, ensure_ascii=False)
         assert "PRIVATE_COMPLETE_BODY" not in serialized
@@ -280,6 +323,7 @@ def test_llm_completed_row_preserves_bounded_audit_fields_without_body_or_raw_re
         assert row["body_original_chars"] == 4200
         assert row["body_provided_chars"] == 3000
         assert row["body_truncated"] is True
+        assert row["body_source"] == "DIGITIMES RSS description"
         assert row["candidate_rule_evidence"][0]["quote"] == "DRAM价格持续上涨，供应极度紧缺。"
         combined_text = json.dumps(combined, ensure_ascii=False)
         assert "private-response-id" not in combined_text
@@ -291,6 +335,7 @@ def main() -> int:
     test_combined_report_explains_current_admission_exclusion()
     test_combined_report_marks_latest_explicit_and_legacy_records()
     test_llm_failure_remains_visible_without_becoming_action_downgrade()
+    test_combined_report_separates_both_excluded_and_admission_difference()
     test_llm_completed_row_preserves_bounded_audit_fields_without_body_or_raw_response()
     print("rule core shadow combined checks passed")
     return 0

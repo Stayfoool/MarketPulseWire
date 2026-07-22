@@ -497,13 +497,23 @@
       <div id="ruleShadowWindow" class="event-feedback-summary"></div>
       <div class="toolbar rule-shadow-filters">
         <label class="rule-shadow-filter-field">
+          <span>对比状态</span>
+          <select id="ruleShadowComparisonStatus" onchange="renderRuleShadowRows()">
+            <option value="all">全部状态</option>
+            <option value="action_compared">已比较 action</option>
+            <option value="both_not_admitted">双方均未准入</option>
+            <option value="admission_difference">准入不一致</option>
+            <option value="model_validation_failed">大模型判断或校验失败</option>
+          </select>
+        </label>
+        <label class="rule-shadow-filter-field">
           <span>变化方向</span>
           <select id="ruleShadowChange" onchange="renderRuleShadowRows()">
             <option value="all">全部</option>
             <option value="same">一致</option>
             <option value="upgrade">对比判断升级</option>
             <option value="downgrade">对比判断降级</option>
-            <option value="unavailable">无法比较</option>
+            <option value="unavailable">不属于 action 对比</option>
           </select>
         </label>
         <label class="rule-shadow-filter-field">
