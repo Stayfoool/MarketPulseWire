@@ -4,5 +4,5 @@
 # Keep this verified CPU combination pinned. PaddleOCR/PaddlePaddle 3.x currently
 # fails on the production CPU executor, and PaddleOCR 2.x requires NumPy 1.x.
 paddlepaddle==2.6.2
-paddleocr==2.7.3
+paddleocr==3.7.0
 numpy==1.26.4
