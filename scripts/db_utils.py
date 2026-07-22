@@ -6,7 +6,7 @@ import sqlite3
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 
 
 T = TypeVar("T")
@@ -18,6 +18,12 @@ SEEN_ITEM_LIFECYCLE_COLUMNS = {
     "processability_reason": "TEXT",
     "admission_status": "TEXT NOT NULL DEFAULT 'legacy_unclassified'",
     "admission_reason": "TEXT",
+    "admission_matched_families_json": "TEXT NOT NULL DEFAULT '[]'",
+    "admission_evidence_json": "TEXT NOT NULL DEFAULT '[]'",
+    "admission_config_version": "TEXT",
+    "admission_rule_contract_version": "TEXT",
+    "admission_evaluated_at": "TEXT",
+    "result_event_id": "INTEGER",
     "processing_status": "TEXT NOT NULL DEFAULT 'legacy_unclassified'",
     "processing_error": "TEXT",
     "processed_at": "TEXT",
@@ -95,6 +101,12 @@ def ensure_seen_tables(conn: sqlite3.Connection) -> None:
             processability_reason TEXT,
             admission_status TEXT NOT NULL DEFAULT 'legacy_unclassified',
             admission_reason TEXT,
+            admission_matched_families_json TEXT NOT NULL DEFAULT '[]',
+            admission_evidence_json TEXT NOT NULL DEFAULT '[]',
+            admission_config_version TEXT,
+            admission_rule_contract_version TEXT,
+            admission_evaluated_at TEXT,
+            result_event_id INTEGER,
             processing_status TEXT NOT NULL DEFAULT 'legacy_unclassified',
             processing_error TEXT,
             processed_at TEXT,
@@ -126,7 +138,7 @@ def update_seen_item_lifecycle(
     conn: sqlite3.Connection,
     source: str,
     item_id: str,
-    **values: str | None,
+    **values: Any,
 ) -> None:
     unknown = set(values) - set(SEEN_ITEM_LIFECYCLE_COLUMNS)
     if unknown:

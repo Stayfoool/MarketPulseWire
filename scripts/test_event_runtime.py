@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import sqlite3
+from types import SimpleNamespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -115,12 +117,165 @@ def test_sina_flash_uses_news_media_flash_shape() -> None:
     assert item.content_type == "flash"
 
 
+def test_sina_flash_current_admission_reports_macro_and_fed_families() -> None:
+    macro_item = SimpleNamespace(
+        symbols=(),
+        raw={"macro_policy_line": {"matched": True, "tags": ["primary_data"]}},
+    )
+    fed_item = SimpleNamespace(
+        symbols=(),
+        raw={"macro_policy_line": {"matched": True, "tags": ["fed_event", "market_reaction"]}},
+    )
+    mixed_item = SimpleNamespace(
+        symbols=("300308.SZ",),
+        raw={"macro_policy_line": {"matched": True, "tags": ["primary_data", "fed_event"]}},
+    )
+    assert sina_flash.current_admission(macro_item)[2] == ("macro_data",)
+    assert sina_flash.current_admission(fed_item)[2] == ("fed_policy",)
+    assert sina_flash.current_admission(mixed_item)[2] == ("holding", "macro_data", "fed_policy")
+
+
+def test_sina_flash_reserves_all_discoveries_before_current_admission() -> None:
+    rows = [
+        {"id": "old-related", "content": "中际旭创发布经营进展", "create_time": 1784736000},
+        {"id": "old-unrelated", "content": "普通消费活动资讯", "create_time": 1784736001},
+    ]
+    holding = {"symbol": "300308.SZ", "name": "中际旭创", "full_name": "", "aliases": []}
+    original_db = sina_flash.DEFAULT_DB_PATH
+    original_import = sina_flash.import_holdings
+    original_holdings = sina_flash.load_enabled_holdings
+    original_enabled = sina_flash.source_profile_enabled
+    original_fetch = sina_flash.fetch_sina_feed
+    original_process = sina_flash.process_market_item
+    original_compare = sina_flash.record_rule_comparison
+    previous_notify = os.environ.pop("SURVEIL_NOTIFY_BASELINE", None)
+    process_calls: list[dict[str, object]] = []
+    comparison_calls: list[dict[str, object]] = []
+    try:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "sina.sqlite3"
+            init_db(db_path).close()
+            sina_flash.DEFAULT_DB_PATH = db_path
+            sina_flash.import_holdings = lambda *_args, **_kwargs: None
+            sina_flash.load_enabled_holdings = lambda *_args, **_kwargs: [holding]
+            sina_flash.source_profile_enabled = lambda _source: True
+            sina_flash.fetch_sina_feed = lambda **_kwargs: list(rows)
+
+            # The first widened response is discovery baseline only.
+            assert sina_flash.run_once() == 0
+            with sqlite3.connect(db_path) as conn:
+                baseline = conn.execute(
+                    "SELECT item_id, collection_class FROM seen_items WHERE source = ? ORDER BY item_id",
+                    (sina_flash.SOURCE,),
+                ).fetchall()
+                assert baseline == [("old-related", "baseline"), ("old-unrelated", "baseline")]
+                assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+
+            rows.extend(
+                [
+                    {"id": "new-related", "content": "中际旭创签订新订单", "create_time": 1784736002},
+                    {"id": "new-unrelated", "content": "普通消费活动更新", "create_time": 1784736003},
+                ]
+            )
+
+            def fake_process(normalized, raw_item, **kwargs):
+                process_calls.append({"normalized": normalized, "raw_item": raw_item, **kwargs})
+                return SimpleNamespace(
+                    event_id=1,
+                    inserted=True,
+                    payload={"core_content": "test"},
+                    delivery_status="not_requested",
+                )
+
+            def fake_compare(normalized, current_decision, storage_ref, **kwargs):
+                comparison_calls.append(
+                    {
+                        "normalized": normalized,
+                        "current_decision": current_decision,
+                        "storage_ref": storage_ref,
+                        **kwargs,
+                    }
+                )
+
+            sina_flash.process_market_item = fake_process
+            sina_flash.record_rule_comparison = fake_compare
+            assert sina_flash.run_once() == 1
+            assert len(process_calls) == 1
+            assert process_calls[0]["raw_item"]["source_event_id"] == "new-related"
+            assert process_calls[0]["current_admission_status"] == "admitted"
+            assert len(comparison_calls) == 1
+            assert comparison_calls[0]["storage_ref"]["item_id"] == "new-unrelated"
+            assert comparison_calls[0]["current_admission_status"] == "excluded"
+            with sqlite3.connect(db_path) as conn:
+                statuses = dict(
+                    conn.execute(
+                        "SELECT item_id, admission_status FROM seen_items WHERE source = ?",
+                        (sina_flash.SOURCE,),
+                    ).fetchall()
+                )
+                assert statuses["new-related"] == "admitted"
+                assert statuses["new-unrelated"] == "excluded"
+    finally:
+        sina_flash.DEFAULT_DB_PATH = original_db
+        sina_flash.import_holdings = original_import
+        sina_flash.load_enabled_holdings = original_holdings
+        sina_flash.source_profile_enabled = original_enabled
+        sina_flash.fetch_sina_feed = original_fetch
+        sina_flash.process_market_item = original_process
+        sina_flash.record_rule_comparison = original_compare
+        if previous_notify is not None:
+            os.environ["SURVEIL_NOTIFY_BASELINE"] = previous_notify
+
+
+def test_sina_flash_empty_response_does_not_finish_expanded_scope_baseline() -> None:
+    rows: list[dict[str, object]] = []
+    original_db = sina_flash.DEFAULT_DB_PATH
+    original_import = sina_flash.import_holdings
+    original_holdings = sina_flash.load_enabled_holdings
+    original_enabled = sina_flash.source_profile_enabled
+    original_fetch = sina_flash.fetch_sina_feed
+    previous_notify = os.environ.pop("SURVEIL_NOTIFY_BASELINE", None)
+    try:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "sina.sqlite3"
+            init_db(db_path).close()
+            sina_flash.DEFAULT_DB_PATH = db_path
+            sina_flash.import_holdings = lambda *_args, **_kwargs: None
+            sina_flash.load_enabled_holdings = lambda *_args, **_kwargs: []
+            sina_flash.source_profile_enabled = lambda _source: True
+            sina_flash.fetch_sina_feed = lambda **_kwargs: list(rows)
+
+            assert sina_flash.run_once() == 0
+            assert sina_flash.load_state().get(sina_flash.SEEN_FLOW_STATE_KEY) is None
+
+            rows.append({"id": "first-real", "content": "普通消费活动资讯", "create_time": 1784736001})
+            assert sina_flash.run_once() == 0
+            assert sina_flash.load_state()[sina_flash.SEEN_FLOW_STATE_KEY] is True
+            with sqlite3.connect(db_path) as conn:
+                row = conn.execute(
+                    "SELECT collection_class FROM seen_items WHERE source = ? AND item_id = ?",
+                    (sina_flash.SOURCE, "first-real"),
+                ).fetchone()
+                assert row == ("baseline",)
+    finally:
+        sina_flash.DEFAULT_DB_PATH = original_db
+        sina_flash.import_holdings = original_import
+        sina_flash.load_enabled_holdings = original_holdings
+        sina_flash.source_profile_enabled = original_enabled
+        sina_flash.fetch_sina_feed = original_fetch
+        if previous_notify is not None:
+            os.environ["SURVEIL_NOTIFY_BASELINE"] = previous_notify
+
+
 def main() -> int:
     test_runtime_selects_only_unified_adapters()
     test_all_event_collectors_import_runtime_entrypoints()
     test_ifind_batch_only_builds_notice_events()
     test_unified_upsert_preserves_store_contract()
     test_sina_flash_uses_news_media_flash_shape()
+    test_sina_flash_current_admission_reports_macro_and_fed_families()
+    test_sina_flash_reserves_all_discoveries_before_current_admission()
+    test_sina_flash_empty_response_does_not_finish_expanded_scope_baseline()
     print("event runtime checks passed")
     return 0
 

@@ -443,15 +443,21 @@ def _finish_seen_item(source: str, item_id: str, enriched: dict) -> None:
 
 
 def _complete_seen_item(source: str, item_id: str) -> None:
+    evaluated_at = datetime.now(timezone.utc).isoformat()
     set_seen_item_lifecycle(
         source,
         item_id,
         admission_status="admitted",
         admission_reason="current_runtime_processed",
+        admission_matched_families_json="[]",
+        admission_evidence_json="[]",
+        admission_config_version="current-production",
+        admission_rule_contract_version="current-flow-v1",
+        admission_evaluated_at=evaluated_at,
         processing_status="succeeded",
         processing_error="",
-        processed_at=datetime.now(timezone.utc).isoformat(),
-        lifecycle_updated_at=datetime.now(timezone.utc).isoformat(),
+        processed_at=evaluated_at,
+        lifecycle_updated_at=evaluated_at,
     )
 
 
@@ -478,6 +484,8 @@ def notify_item(source: str, item: dict) -> None:
             store_kind="article",
             source_profile_id=source,
             db_path=DB_PATH,
+            current_admission_status="admitted",
+            current_admission_reason="current_flow_no_separate_admission",
         )
         _complete_seen_item(source, item_id)
     except Exception as exc:
@@ -506,6 +514,8 @@ def handle_official_news_item(source: str, item: dict) -> None:
             store_kind="official",
             source_profile_id=source,
             db_path=DB_PATH,
+            current_admission_status="admitted",
+            current_admission_reason="current_flow_no_separate_admission",
         )
         _complete_seen_item(source, item_id)
     except Exception as exc:

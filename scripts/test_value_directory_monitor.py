@@ -683,7 +683,7 @@ class _DummyContext:
         return False
 
 
-def test_recheck_keeps_existing_review_without_new_rule() -> None:
+def test_recheck_uses_enriched_item_without_a_preliminary_decision_gate() -> None:
     item = {
         "id": "862592",
         "url": "https://www.valuelist.cn/862592.html",
@@ -694,21 +694,36 @@ def test_recheck_keeps_existing_review_without_new_rule() -> None:
     existing = {"push_now": False, "pushed_at": "", "importance": "medium"}
     original_connect = value_directory_monitor.connect_db
     original_existing = value_directory_monitor.article_review_exists
-    original_candidate = value_directory_monitor.preview_candidate
     original_process = value_directory_monitor.process_market_item
+    original_lifecycle = value_directory_monitor.set_seen_item_lifecycle_if_present
+    calls: list[dict[str, object]] = []
     try:
         value_directory_monitor.connect_db = lambda: _DummyContext()
         value_directory_monitor.article_review_exists = lambda *_: existing
-        value_directory_monitor.preview_candidate = lambda *_: False
-        value_directory_monitor.process_market_item = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("unmatched recheck must not rewrite the stored review")
-        )
+        value_directory_monitor.set_seen_item_lifecycle_if_present = lambda *_args, **_kwargs: None
+
+        def fake_process(normalized, raw_item, **kwargs):
+            calls.append({"normalized": normalized, "raw_item": raw_item, **kwargs})
+            decision = DecisionResult(action="archive", importance="low", reason="当前规则复核。")
+            return MarketProcessOutcome(
+                flow_result=MarketFlowResult(
+                    item=normalized,
+                    decision=decision,
+                    interpretation=InterpretationResult(),
+                ),
+                inserted=False,
+                storage_ref={"store_kind": "article_reviews", "item_id": raw_item["id"]},
+            )
+
+        value_directory_monitor.process_market_item = fake_process
         assert value_directory_monitor.review_and_maybe_push(item, recheck_rules=True) is False
     finally:
         value_directory_monitor.connect_db = original_connect
         value_directory_monitor.article_review_exists = original_existing
-        value_directory_monitor.preview_candidate = original_candidate
         value_directory_monitor.process_market_item = original_process
+        value_directory_monitor.set_seen_item_lifecycle_if_present = original_lifecycle
+    assert len(calls) == 1
+    assert calls[0]["reprocess_existing"] is True
 
 
 def test_new_item_uses_unified_market_runtime_after_preview_enrichment() -> None:
@@ -724,14 +739,13 @@ def test_new_item_uses_unified_market_runtime_after_preview_enrichment() -> None
     calls: list[dict[str, object]] = []
     original_connect = value_directory_monitor.connect_db
     original_existing = value_directory_monitor.article_review_exists
-    original_candidate = value_directory_monitor.preview_candidate
     original_enrich = value_directory_monitor.enrich_item_with_preview
     original_process = value_directory_monitor.process_market_item
+    original_lifecycle = value_directory_monitor.set_seen_item_lifecycle_if_present
     try:
         value_directory_monitor.connect_db = lambda: _DummyContext()
         value_directory_monitor.article_review_exists = lambda *_: None
-        value_directory_monitor.preview_candidate = lambda *_: True
-
+        value_directory_monitor.set_seen_item_lifecycle_if_present = lambda *_args, **_kwargs: None
         def fake_enrich(raw_item):
             enriched = dict(raw_item)
             enriched["summary"] = "瑞银认为智能体 AI 将继续推动半导体与硬件上行。"
@@ -768,9 +782,9 @@ def test_new_item_uses_unified_market_runtime_after_preview_enrichment() -> None
     finally:
         value_directory_monitor.connect_db = original_connect
         value_directory_monitor.article_review_exists = original_existing
-        value_directory_monitor.preview_candidate = original_candidate
         value_directory_monitor.enrich_item_with_preview = original_enrich
         value_directory_monitor.process_market_item = original_process
+        value_directory_monitor.set_seen_item_lifecycle_if_present = original_lifecycle
 
     assert len(calls) == 1
     call = calls[0]
@@ -782,6 +796,8 @@ def test_new_item_uses_unified_market_runtime_after_preview_enrichment() -> None
     assert call["deliver"] is True
     assert call["use_rule_dedup"] is True
     assert call["reprocess_existing"] is False
+    assert call["current_admission_status"] == "admitted"
+    assert call["current_admission_reason"] == "current_flow_no_separate_admission"
 
 
 def test_value_directory_monitor_does_not_own_store_dedup_or_delivery() -> None:
@@ -961,7 +977,7 @@ def main() -> int:
     test_preview_llm_policy_disables_deepseek_thinking()
     test_preview_ocr_text_path_uses_text_llm_without_vision()
     test_preview_ocr_failure_falls_back_without_blocking()
-    test_recheck_keeps_existing_review_without_new_rule()
+    test_recheck_uses_enriched_item_without_a_preliminary_decision_gate()
     test_new_item_uses_unified_market_runtime_after_preview_enrichment()
     test_value_directory_monitor_does_not_own_store_dedup_or_delivery()
     test_run_finishes_browser_collection_before_source_processing()

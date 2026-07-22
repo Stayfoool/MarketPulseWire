@@ -444,7 +444,7 @@ def test_runtime_comparison_receives_the_exact_item_before_delivery() -> None:
 
 def test_analyzed_event_compares_before_delivery_and_baseline_does_not() -> None:
     original_module = market_runtime._selected_module
-    original_record = market_runtime._record_rule_comparison
+    original_record = market_runtime.record_rule_comparison
     original_prepare = market_runtime.prepare_item_for_decision
     order: list[str] = []
 
@@ -489,12 +489,13 @@ def test_analyzed_event_compares_before_delivery_and_baseline_does_not() -> None
         market_runtime._selected_module = lambda _kind: FakeEventModule
         market_runtime.prepare_item_for_decision = lambda normalized: prepare_calls.append(normalized) or prepared
 
-        def fake_record(normalized, flow_result, _storage_ref):
+        def fake_record(normalized, decision, _storage_ref, **kwargs):
             order.append("comparison")
             assert normalized is prepared
-            assert flow_result.decision.action == "push"
+            assert decision.action == "push"
+            assert kwargs["current_admission_status"] == "admitted"
 
-        market_runtime._record_rule_comparison = fake_record
+        market_runtime.record_rule_comparison = fake_record
         baseline = market_runtime.process_market_item(
             item,
             {"source_event_id": "baseline-1", "title": item.title},
@@ -508,14 +509,72 @@ def test_analyzed_event_compares_before_delivery_and_baseline_does_not() -> None
             item,
             {"source_event_id": "event-1", "title": item.title},
             store_kind="event",
+            current_admission_status="admitted",
+            current_admission_reason="test_current_admission",
         )
     finally:
         market_runtime._selected_module = original_module
-        market_runtime._record_rule_comparison = original_record
+        market_runtime.record_rule_comparison = original_record
         market_runtime.prepare_item_for_decision = original_prepare
     assert prepare_calls == [item]
     assert analyzed.flow_result.item is prepared
     assert order == ["comparison", "delivery"]
+
+
+def test_retry_can_finish_an_existing_event_without_analysis() -> None:
+    original_module = market_runtime._selected_module
+    original_latest = market_runtime.latest_event_analysis
+    original_record = market_runtime.record_rule_comparison
+    calls: list[str] = []
+
+    class FakeEventModule:
+        @staticmethod
+        def upsert_event(*_args, **_kwargs):
+            return 77, False
+
+        @staticmethod
+        def analyze_event(*_args, **_kwargs):
+            calls.append("analyze")
+            return {
+                "analysis": {
+                    "decision_result": DecisionResult(
+                        action="daily",
+                        importance="medium",
+                        reason="retry completed",
+                    ).to_dict()
+                }
+            }
+
+        @staticmethod
+        def maybe_deliver_event(*_args, **_kwargs):
+            calls.append("delivery")
+            return "not_eligible"
+
+    item = NormalizedMarketItem(
+        source="sina_flash",
+        source_category="news_media",
+        title="retry event",
+        raw={"source_event_id": "retry-1"},
+    )
+    try:
+        market_runtime._selected_module = lambda _kind: FakeEventModule
+        market_runtime.latest_event_analysis = lambda *_args, **_kwargs: None
+        market_runtime.record_rule_comparison = lambda *_args, **_kwargs: calls.append("comparison")
+        outcome = market_runtime.process_market_item(
+            item,
+            {"source": "sina_flash", "source_event_id": "retry-1", "title": item.title},
+            store_kind="event",
+            reprocess_existing=True,
+            current_admission_status="admitted",
+            current_admission_reason="sina_flash_holding",
+        )
+    finally:
+        market_runtime._selected_module = original_module
+        market_runtime.latest_event_analysis = original_latest
+        market_runtime.record_rule_comparison = original_record
+    assert outcome.event_id == 77
+    assert outcome.inserted is False
+    assert calls == ["analyze", "comparison", "delivery"]
 
 
 def main() -> int:
@@ -530,6 +589,7 @@ def main() -> int:
     test_existing_legacy_review_without_decision_fails_closed()
     test_runtime_comparison_receives_the_exact_item_before_delivery()
     test_analyzed_event_compares_before_delivery_and_baseline_does_not()
+    test_retry_can_finish_an_existing_event_without_analysis()
     print("market flow checks passed")
     return 0
 

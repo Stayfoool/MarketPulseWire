@@ -11,11 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from decision_engine import decide_market_item
+from db_utils import update_seen_item_lifecycle
 from market_item import NormalizedMarketItem
 from market_review_store import article_item_id, article_review_exists
 from market_runtime import normalize_market_item, process_market_item
-from push_rules import load_enabled_holdings_for_rules
 from rss_monitor import DB_PATH, connect_db, save_new_items_with_retry
 from source_health import record_source_failure, record_source_success
 from source_profiles import source_profile_enabled
@@ -208,13 +207,16 @@ def normalized_value_directory_item(
     )
 
 
-def preview_candidate(item: dict[str, Any], source: ValueDirectorySource) -> bool:
-    normalized = normalized_value_directory_item(item, source)
-    decision = decide_market_item(
-        normalized,
-        holdings=load_enabled_holdings_for_rules(),
-    )
-    return decision.should_push
+def set_seen_item_lifecycle_if_present(source: str, item_id: str, **values: Any) -> None:
+    with connect_db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM seen_items WHERE source = ? AND item_id = ?",
+            (source, item_id),
+        ).fetchone()
+        if not row:
+            return
+        update_seen_item_lifecycle(conn, source, item_id, **values)
+        conn.commit()
 
 
 def review_and_maybe_push(
@@ -233,10 +235,7 @@ def review_and_maybe_push(
     if existing and (existing.get("pushed_at") or not recheck_rules):
         return False
 
-    should_enrich = preview_candidate(item, source)
-    if existing and recheck_rules and not should_enrich:
-        return False
-    if should_enrich and preview_enabled() and not has_preview_record(item):
+    if preview_enabled() and not has_preview_record(item):
         key = preview_key(source, item)
         try:
             if preview_errors and key in preview_errors:
@@ -251,16 +250,59 @@ def review_and_maybe_push(
             item = with_preview_failure(item, exc)
 
     item = with_value_directory_policy(item)
+    raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+    preview = raw.get("value_directory_preview") if isinstance(raw.get("value_directory_preview"), dict) else {}
+    facts = preview.get("facts") if isinstance(preview.get("facts"), dict) else {}
+    preview_failed = str(facts.get("status") or "") == "failed"
+    evaluated_at = utc_now()
+    set_seen_item_lifecycle_if_present(
+        source.source_id,
+        item_id,
+        processability_status=(
+            "fallback" if preview_failed else "succeeded" if preview_enabled() else "not_required"
+        ),
+        processability_reason="preview_or_ocr_fallback" if preview_failed else "",
+        admission_status="admitted",
+        admission_reason="current_flow_no_separate_admission",
+        admission_matched_families_json="[]",
+        admission_evidence_json="[]",
+        admission_config_version="current-production",
+        admission_rule_contract_version="current-flow-v1",
+        admission_evaluated_at=evaluated_at,
+        processing_status="pending",
+        processing_error="",
+    )
     normalized = normalized_value_directory_item(item, source)
-    outcome = process_market_item(
-        normalized,
-        item,
-        store_kind="article",
-        source_profile_id=source.source_id,
-        db_path=DB_PATH,
-        deliver=True,
-        use_rule_dedup=True,
-        reprocess_existing=existing is not None,
+    try:
+        outcome = process_market_item(
+            normalized,
+            item,
+            store_kind="article",
+            source_profile_id=source.source_id,
+            db_path=DB_PATH,
+            deliver=True,
+            use_rule_dedup=True,
+            reprocess_existing=existing is not None,
+            current_admission_status="admitted",
+            current_admission_reason="current_flow_no_separate_admission",
+        )
+    except Exception as exc:
+        set_seen_item_lifecycle_if_present(
+            source.source_id,
+            item_id,
+            processing_status="failed_retryable",
+            processing_error=f"{type(exc).__name__}: {str(exc)[:400]}",
+            processed_at=None,
+            lifecycle_updated_at=utc_now(),
+        )
+        raise
+    set_seen_item_lifecycle_if_present(
+        source.source_id,
+        item_id,
+        processing_status="succeeded",
+        processing_error="",
+        processed_at=utc_now(),
+        lifecycle_updated_at=utc_now(),
     )
     decision = outcome.flow_result.decision
     print(

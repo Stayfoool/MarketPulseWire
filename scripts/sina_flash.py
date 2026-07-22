@@ -15,14 +15,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from db_utils import connect_sqlite
+from db_utils import connect_sqlite, retry_on_locked, update_seen_item_lifecycle
 from env_utils import load_env
 from http_utils import http_get
 from macro_policy import macro_policy_match
 from market_db import DEFAULT_DB_PATH, init_db
-from market_flow import normalize_market_item, process_market_item
+from market_flow import normalize_market_item, process_market_item, record_rule_comparison
 from market_review_store import event_content_hash as content_hash, load_enabled_holdings
 from portfolio_import import import_holdings
+from rss_monitor import save_new_items
 from sina_zy_client import client_from_env, result_data
 from source_health import record_source_failure, record_source_success
 from source_profiles import source_profile_enabled
@@ -33,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG_PATH = ROOT / "config" / "portfolio.json"
 SOURCE = "sina_flash"
 STATE_KEY = "sina_flash"
+SEEN_FLOW_STATE_KEY = "seen_items_flow_initialized"
 SINA_API_URL = "https://app.cj.sina.com.cn/api/news/pc"
 SINA_REFERER = "https://finance.sina.com.cn/7x24/"
 
@@ -193,8 +195,6 @@ def event_from_row(row: dict[str, Any], holdings: list[dict[str, Any]]) -> dict[
     ext_symbols = stock_symbols_from_ext(ext)
     matched = match_holdings(text, ext_symbols, holdings)
     macro_match = macro_policy_match({"title": text, "summary": text, "full_text": text})
-    if not matched and not macro_match.get("matched"):
-        return None
     symbols = [str(holding.get("symbol") or "").upper() for holding in matched if holding.get("symbol")]
     title = text[:80]
     source_id = str(row.get("id") or row.get("docid") or content_hash(text)[:16])
@@ -212,9 +212,91 @@ def event_from_row(row: dict[str, Any], holdings: list[dict[str, Any]]) -> dict[
         "published_at": published_at,
         "symbols": symbols,
         "themes": ["新浪财经快讯", "宏观流动性/美联储政策"] if macro_match.get("matched") else ["新浪财经快讯"],
-        "raw": {**slim_raw(row, ext), "macro_policy_line": macro_match if macro_match.get("matched") else {}},
+        "raw": {
+            **slim_raw(row, ext),
+            "macro_policy_line": macro_match if macro_match.get("matched") else {},
+        },
         "content_hash": content_hash(SOURCE, source_id, text, published_at),
     }
+
+
+def set_seen_item_lifecycle(item_id: str, **values: Any) -> None:
+    with connect_sqlite(DEFAULT_DB_PATH) as conn:
+        update_seen_item_lifecycle(conn, SOURCE, item_id, **values)
+        conn.commit()
+
+
+def backfill_existing_events_to_seen_items() -> int:
+    """Project legacy Sina-flash identities into the shared discovery ledger."""
+    now = utc_now()
+    with connect_sqlite(DEFAULT_DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO seen_sources (source, first_seen_at) VALUES (?, ?)",
+            (SOURCE, now),
+        )
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO seen_items (
+                source, item_id, url, title, summary, published_at, first_seen_at,
+                collection_class, processability_status, processability_reason,
+                admission_status, admission_reason, processing_status,
+                processing_error, processed_at, lifecycle_updated_at, result_event_id
+            )
+            SELECT e.source, e.source_event_id, COALESCE(e.url, ''), e.title,
+                   COALESCE(e.summary, ''), COALESCE(e.published_at, ''), e.first_seen_at,
+                   'legacy_unclassified', 'succeeded', '', 'admitted',
+                   'legacy_event_projection', 'not_applicable', '', e.first_seen_at, ?, e.id
+            FROM events e
+            WHERE e.source = ?
+            """,
+            (now, SOURCE),
+        )
+        conn.commit()
+        return max(0, int(cursor.rowcount or 0))
+
+
+def save_new_seen_items(items: list[dict[str, Any]], *, expanded_scope_baseline: bool) -> list[dict[str, Any]]:
+    def operation() -> list[dict[str, Any]]:
+        with connect_sqlite(DEFAULT_DB_PATH) as conn:
+            return save_new_items(
+                conn,
+                SOURCE,
+                items,
+                notify_baseline=False,
+                source_label="新浪财经 7x24",
+                expanded_scope_baseline=expanded_scope_baseline,
+            )
+
+    return retry_on_locked(operation)
+
+
+def current_admission(item: Any) -> tuple[str, str, tuple[str, ...]]:
+    raw = item.raw if hasattr(item, "raw") and isinstance(item.raw, dict) else {}
+    holding_match = bool(getattr(item, "symbols", ()))
+    macro = raw.get("macro_policy_line") if isinstance(raw.get("macro_policy_line"), dict) else {}
+    macro_match = bool(macro.get("matched"))
+    admitted = holding_match or macro_match
+    macro_tags = {str(tag) for tag in macro.get("tags") or []}
+    macro_families: tuple[str, ...] = (
+        *(("macro_data",) if macro_tags & {"primary_data", "secondary_data"} else ()),
+        *(("fed_policy",) if macro_tags & {"fed_event", "market_reaction"} else ()),
+    )
+    if macro_match and not macro_families:
+        macro_families = ("fed_policy",)
+    reason = (
+        "sina_flash_holding_or_macro_policy"
+        if holding_match and macro_match
+        else "sina_flash_holding"
+        if holding_match
+        else "sina_flash_macro_policy"
+        if macro_match
+        else "sina_flash_no_holding_or_macro_policy"
+    )
+    return (
+        "admitted" if admitted else "excluded",
+        reason,
+        (*(("holding",) if holding_match else ()), *macro_families),
+    )
 
 
 def load_state() -> dict[str, Any]:
@@ -266,6 +348,7 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
     state = load_state()
     notify_baseline = os.getenv("SURVEIL_NOTIFY_BASELINE", "").strip() == "1"
     baseline_only = not state.get("initialized") and not notify_baseline
+    expanded_scope_baseline = not state.get(SEEN_FLOW_STATE_KEY) and not notify_baseline
     verbose = is_verbose()
     size = env_int("SINA_FLASH_PAGE_SIZE", 20, minimum=1)
     events: dict[str, dict[str, Any]] = {}
@@ -303,23 +386,96 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
 
     processed = 0
     new_count = 0
-    for event in reversed(list(events.values())):
+    excluded_count = 0
+    discovered = [{**event, "id": event["source_event_id"]} for event in events.values()]
+    if not dry_run:
+        projected = backfill_existing_events_to_seen_items()
+        if projected and verbose:
+            print(f"Sina flash projected {projected} legacy event ids into seen_items.", flush=True)
+        new_items = save_new_seen_items(
+            discovered,
+            expanded_scope_baseline=bool(baseline_only or expanded_scope_baseline),
+        )
+    else:
+        new_items = discovered
+    for event in reversed(new_items):
         if limit is not None and processed >= limit:
             break
         processed += 1
-        if baseline_only:
-            event["baseline_only"] = True
         if dry_run:
             print(f"[dry-run] {event['source_event_id']} {event['title']} symbols={event.get('symbols')}")
             continue
         normalized = normalize_market_item(SOURCE, event, store_kind="event")
-        outcome = process_market_item(
-            normalized,
-            event,
-            store_kind="event",
-            task="sina_flash_portfolio",
-            db_path=DEFAULT_DB_PATH,
-            baseline_only=baseline_only,
+        admission_status, admission_reason, matched_families = current_admission(normalized)
+        if admission_status == "excluded":
+            excluded_count += 1
+            set_seen_item_lifecycle(
+                str(event["source_event_id"]),
+                processability_status="succeeded",
+                processability_reason="",
+                admission_status="excluded",
+                admission_reason=admission_reason,
+                admission_matched_families_json=json.dumps(list(matched_families)),
+                admission_evidence_json="[]",
+                admission_config_version="current-production",
+                admission_rule_contract_version="current-flow-v1",
+                admission_evaluated_at=utc_now(),
+                processing_status="not_applicable",
+                processing_error="",
+                processed_at=utc_now(),
+                lifecycle_updated_at=utc_now(),
+            )
+            record_rule_comparison(
+                normalized,
+                None,
+                {"store_kind": "seen_items", "source": SOURCE, "item_id": event["source_event_id"]},
+                current_admission_status="excluded",
+                current_admission_reason=admission_reason,
+                current_matched_families=matched_families,
+            )
+            continue
+        set_seen_item_lifecycle(
+            str(event["source_event_id"]),
+            processability_status="succeeded",
+            processability_reason="",
+            admission_status="admitted",
+            admission_reason=admission_reason,
+            admission_matched_families_json=json.dumps(list(matched_families)),
+            admission_evidence_json="[]",
+            admission_config_version="current-production",
+            admission_rule_contract_version="current-flow-v1",
+            admission_evaluated_at=utc_now(),
+            processing_status="pending",
+            processing_error="",
+        )
+        try:
+            outcome = process_market_item(
+                normalized,
+                event,
+                store_kind="event",
+                task="sina_flash_portfolio",
+                db_path=DEFAULT_DB_PATH,
+                reprocess_existing=bool(event.get("_seen_item_retry")),
+                current_admission_status="admitted",
+                current_admission_reason=admission_reason,
+                current_matched_families=matched_families,
+            )
+        except Exception as exc:
+            set_seen_item_lifecycle(
+                str(event["source_event_id"]),
+                processing_status="failed_retryable",
+                processing_error=f"{type(exc).__name__}: {str(exc)[:400]}",
+                processed_at=None,
+                lifecycle_updated_at=utc_now(),
+            )
+            raise
+        set_seen_item_lifecycle(
+            str(event["source_event_id"]),
+            processing_status="succeeded",
+            processing_error="",
+            result_event_id=outcome.event_id,
+            processed_at=utc_now(),
+            lifecycle_updated_at=utc_now(),
         )
         event_id = outcome.event_id
         if not outcome.inserted:
@@ -336,18 +492,20 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
         print(f"delivery #{event_id}: {outcome.delivery_status}", flush=True)
 
     if not dry_run:
-        save_state(
-            {
-                "initialized": True,
-                "last_run_at": utc_now(),
-                "last_event_ids": list(events.keys())[:100],
-                "tags": tags_from_env(),
-            }
-        )
+        next_state = {
+            "initialized": True,
+            "last_run_at": utc_now(),
+            "last_event_ids": list(events.keys())[:100],
+            "tags": tags_from_env(),
+        }
+        if events or state.get(SEEN_FLOW_STATE_KEY):
+            next_state[SEEN_FLOW_STATE_KEY] = True
+        save_state(next_state)
     if dry_run or verbose or new_count or baseline_only:
         print(
-            f"Sina flash finished: matched={len(events)}, processed={processed}, "
-            f"new={new_count}, baseline={baseline_only}",
+            f"Sina flash finished: discovered={len(events)}, processed={processed}, "
+            f"current_excluded={excluded_count}, new_events={new_count}, "
+            f"baseline={bool(baseline_only or expanded_scope_baseline)}",
             flush=True,
         )
     return new_count

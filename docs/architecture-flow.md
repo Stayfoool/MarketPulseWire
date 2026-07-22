@@ -55,7 +55,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 
 | Module | Current responsibility |
 |---|---|
-| `market_runtime.py` | Normalization boundary, one-time pre-decision evidence preparation, store adapter selection, orchestration, fail-closed contract handling |
+| `market_runtime.py` | Normalization boundary, one-time pre-decision evidence preparation, store adapter selection, orchestration, fail-closed contract handling, and explicit current-admission metadata passed to the report-only comparison |
 | `decision_engine.py` | Deterministic `DecisionResult`, including final push action |
 | `rule_core_v1.py` | Side-effect-free candidate admission/decision core used by the public v1 behavior corpus and the optional production report-only comparison; exports an explicit rule-core version that changes only when rule behavior changes; bounded admission evidence includes all matched content-family evidence and global exclusion evidence, trade-policy scope preserves joint-or-two-sided matching, trusted attribution binds canonical ids to aliases/domains, and its result has no storage or delivery authority |
 | `llm_rule_catalog.py` | Versioned catalog of the 22 human-reviewed strength-decision rules across the five existing content rule groups; stores allowed actions, rule text, required facts and exclusions without matching article text, reading private configuration or calling a model |
@@ -68,7 +68,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `rule_core_replay.py` | Inactive no-write comparison of explicit current outcome snapshots against the pure v1 core, including changed fields and source-invariance violations |
 | `rule_core_history_replay.py` | Inactive operator-only reader for an explicit local SQLite snapshot; strict mode requires stored full text and uses `mode=ro`/`query_only`, while optional title/summary proxy screening is explicitly non-comparative; delegates comparison to `rule_core_replay.py` |
 | `rule_core_shadow.py` | Side-effect-free comparison of the active `DecisionResult` with `rule_core_v1` for the same normalized item; records only bounded differences and cannot change review or delivery |
-| `rule_core_runtime_shadow.py` | Optional production report writer called after the current `DecisionResult` exists and before delivery; uses the same prepared production `NormalizedMarketItem` as the active decision. `RULE_COMPARISON_CANDIDATE` selects the deterministic new-rule candidate by default or the reviewed LLM candidate only when privately set to `llm`. It records comparison time, candidate engine/version, private configuration version and deployed code revision, caches explicit private configuration by file identity/mtime/size, and cannot write reviews, reserve delivery keys or send messages |
+| `rule_core_runtime_shadow.py` | Optional production report writer using the same production `NormalizedMarketItem` as the current admission/decision path. It can compare a current-excluded item without inventing a current decision, and gives official-policy/government sources direct candidate `trade_policy` admission. `RULE_COMPARISON_CANDIDATE` selects the deterministic new-rule candidate by default or the reviewed LLM candidate only when privately set to `llm`. It records comparison time, candidate engine/version, private configuration version and deployed code revision, caches explicit private configuration by file identity/mtime/size, and cannot write reviews, reserve delivery keys or send messages |
 | `rule_core_shadow_combined.py` | Report-only combiner for existing comparison reports; separates action comparisons, both-not-admitted items, admission differences and model/validation failures; preserves candidate engine/version, bounded rule evidence, body-source label, model metadata, token usage and elapsed time; and refreshes one latest Markdown/JSON view across research, official and news production batches. Reports never retain article body text, and non-action-comparison rows are not counted as action upgrades or downgrades |
 | `rule_core_shadow_daily.py` | Report-only daily review job; freezes one 15:30-to-15:30 Beijing Markdown/JSON report and sends at most one Feishu reminder when the interval has comparable or unable-to-compare items. Report/reminder labels follow the selected candidate. An explicit historical rebuild only re-aggregates retained comparisons, records that the candidate was not re-evaluated and preserves any prior sent reminder |
 | `rule_shadow_report_store.py` | Bounded read-only loader for dated rule comparison reports used by the authenticated Web workbench; each Web filter accepts multiple selected values, values inside one filter use OR, and candidate-version, execution-status, action-change and current/candidate-action filters combine with AND in memory. The loader cannot evaluate rules or send messages |
@@ -105,8 +105,8 @@ The former direct/compat route switch and these wrapper modules have been remove
 | Research and industry media | `research_collector.py` -> `rss_monitor.py` / `trendforce_page_monitor.py` / `alphabstract_monitor.py` | Unified runtime, article store |
 | Official company feeds | `official_collector.py` -> `rss_monitor.py` | Unified runtime, official-news store |
 | Domestic and overseas news media | `news_collector.py` -> `china_finance_media_monitor.py` / `wallstreetcn_monitor.py` / RSS helpers | Sina, Yicai, CLS, Jin10 and WallstreetCN public article/flash discovery; unified runtime, article store |
-| Official trade policy | `news_collector.py` -> `trade_policy_monitor.py` | Federal Register, USTR, European Commission and MOFCOM public sources; unified runtime, article store |
-| Sina 7x24 flash | `sina_flash.py` | Unified runtime, event store |
+| Official trade policy | `news_collector.py` -> `trade_policy_monitor.py` | Federal Register, USTR, European Commission and MOFCOM public sources; reserve `seen_items` before optional detail enrichment, then unified runtime and article store |
+| Sina 7x24 flash | `sina_flash.py` | Reserve every discovered flash in `seen_items`; current-admitted flashes continue through the unified runtime into the event store |
 | Sina portfolio stock news | `sina_stock_news.py` | Relevance enrichment, then unified runtime and event store |
 | Company disclosures | `company_disclosures.py` -> `cninfo_disclosure_provider.py` | Twice daily CNINFO fulltext/relation discovery and official-PDF enrichment; report-only writes baseline event audits, while live mode enables analysis and delivery |
 | AlphaAbstract research summaries | `alphabstract_monitor.py` through `research_collector.py` | Public sitemap discovery reserves `seen_items` identity before public-summary page enrichment, then unified runtime and article store |
@@ -114,7 +114,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 
 Source-specific login, WAF, API, sitemap discovery, polling, browser profile, OCR and attachment behavior ends before the normalized runtime boundary.
 
-Each ValueList timer run uses one persistent Chromium context for all enabled ValueList sources. It reads both list pages and the visible first-page preview metadata for their bounded entries before closing the context once. Only after profile release succeeds does the monitor run OCR, admission, decision, storage and delivery. A list failure remains attributed to that source while another successfully collected source may continue; a detail-preview failure remains attached to that item and follows the existing preview-failure policy. A browser launch or shutdown failure stops post-browser processing for every source owned by that session, so no later phase can silently relaunch Chromium against the same private profile.
+Each ValueList timer run uses one persistent Chromium context for all enabled ValueList sources. It reads both list pages and the visible first-page preview metadata for their bounded entries before closing the context once. Only after profile release succeeds does the monitor run OCR, normalization, the current decision, storage and delivery. There is no preliminary strength-decision gate before preview/OCR; every production-visible item can contribute its available preview evidence to the one normalized decision. A list failure remains attributed to that source while another successfully collected source may continue; a detail-preview failure remains attached to that item and follows the existing preview-failure policy. A browser launch or shutdown failure stops post-browser processing for every source owned by that session, so no later phase can silently relaunch Chromium against the same private profile.
 
 Domestic finance media now reserve each technically identifiable live discovery in `seen_items` before detail enrichment, then record processability and construct one `NormalizedMarketItem`. The current admission check and the report-only v1 comparison fork from that same normalized item. Current-admitted items continue through the active decision/review/delivery path; current-excluded items may produce only a bounded comparison report and do not invoke the current interpreter, review store or delivery. Rediscovered domestic items whose processability, admission evaluation or processing remains `pending`/`failed_retryable` are eligible for retry without deleting their discovery reservation.
 
@@ -126,8 +126,26 @@ the reservation, but the business media-focus filter no longer blocks
 watermark in its source state; rows first exposed by that widened scope are
 baseline-only and cannot be delivered retroactively. Later live rows reuse the
 same processability, admission and processing states, including retryable
-failures. Event-backed sources retain their existing `events` lifecycle fields
-and adapters.
+failures. AlphaAbstract uses the same ordering around its public-summary page.
+These sources explicitly record that the current production flow has no separate
+range-admission filter, instead of reporting an unknown current result.
+
+Official trade-policy sources also reserve their stable list identity in
+`seen_items` before optional detail enrichment. A detail failure retains the
+official list evidence and records the fallback; the current production path
+continues to its existing decision, while the five-group candidate receives the
+approved direct `trade_policy` admission after normalization.
+
+Sina 7x24 uses `seen_items` for discovery identity, baseline, retry and current
+admission audit. The first non-empty response after this ordering change is an
+expanded-scope baseline and creates no event or delivery. Later rows are
+normalized from the provider's complete flash text. The current holding/macro
+admission is evaluated there: excluded rows can produce only a report-only
+comparison, while admitted rows proceed to `events` / `event_analyses`. Existing
+Sina 7x24 events are projected into `seen_items` as historical identities, and an
+admitted row stores its resulting event id. Event Center suppresses the matching
+`seen_items` projection whenever the event exists, so one flash is displayed
+once. A retry can complete an existing event that has no analysis.
 
 Synchronous HTTP connection pools are isolated per worker thread. A source retry or timeout-key change may close only that thread's client; concurrent collectors cannot close another thread's in-flight TLS connection or leave a stale network writer targeting a reused SQLite file descriptor.
 
@@ -183,11 +201,15 @@ The project keeps the existing physical stores:
 
 `seen_items` keeps discovery identity as its primary responsibility. Additive
 compatibility columns record `collection_class`, processability, admission and
-processing status for newly collected domestic finance-media, RSS, TrendForce
-page and AlphaAbstract items. Existing rows are migrated as `legacy_unclassified`; no
-historical baseline/exclusion/failure state is inferred. `DecisionResult.action`
-and delivery status are not copied into this ledger and remain authoritative in
-the existing review/delivery paths.
+processing status for newly collected domestic finance-media, RSS, TrendForce,
+AlphaAbstract, ValueList, official trade-policy and Sina 7x24 items. Admission
+audit fields retain matched groups, bounded evidence, configuration version,
+rule-contract version and evaluation time; Sina 7x24 may additionally retain the
+resulting event id. Existing rows are migrated as `legacy_unclassified`; no
+historical baseline/exclusion/failure state is inferred, except that existing
+Sina 7x24 event identities are explicitly projected as already admitted legacy
+events. `DecisionResult.action` and delivery status are not copied into this
+ledger and remain authoritative in the existing review/delivery paths.
 
 AlphaAbstract reads its public sitemap into bounded discovery records containing
 the stable summary URL identity and sitemap timestamp, then reserves those
@@ -209,7 +231,31 @@ When Feishu market feedback is explicitly enabled, unified article, official-new
 
 The Web workbench exposes a lightweight authenticated `/api/health/summary` projection for separate Task Health and Information Sources badges. One batched read-only `systemctl show` call pairs each production timer with its execution service; `task_failures` counts current logical-task failures, while `source_failures` counts only failing enabled profiles that are visible in the Information Sources view. Shadow units, cut-over legacy units, the disabled-by-default JYGS path and disabled source profiles do not contribute. The browser refreshes this summary only while visible. The full Task Health view retains detailed systemd rows, raw source-health/X connection diagnostics and bounded log tails even when a raw diagnostic does not map to a source-profile badge count.
 
-The optional comparison remains report-only. With the private switch enabled, `process_market_item` first completes the current decision, then passes that exact production `NormalizedMarketItem` and current `DecisionResult` to the optional comparison writer before delivery. The writer emits one bounded per-item JSON record without a body field and records comparison time, candidate engine/version, private configuration version and deployed code revision; configuration, import, evaluation or write failure is isolated from the active result. The production collector wrapper never re-collects the item and only refreshes `rule-core-shadow-combined-latest` after the normal collector exits successfully. Candidate results do not change the current `DecisionResult`, review storage, dedup reservation or delivery. When the private comparison switch is enabled, `surveil-rule-shadow-daily.timer` runs at 15:30 Beijing time and freezes `rule-core-shadow-daily-YYYY-MM-DD.md/json` for the preceding 24-hour 15:30 boundary. It sends one Feishu reminder only when that interval has comparable or unable-to-compare items, and a successful reminder prevents duplicate sends for the same report date. The authenticated Web workbench reads these dated JSON files through a bounded read-only API. Its candidate-version, execution-status, action-change and current/candidate-action filters are checkbox-based: selected values inside one filter use OR, different filters combine with AND, and an empty selection means all values. The view exposes no rule, decision, configuration or delivery mutation. Comparison before the production `NormalizedMarketItem` boundary is not implemented.
+The optional comparison remains report-only. With the private switch enabled,
+the current admission and five-group candidate admission receive the same
+production `NormalizedMarketItem`. A current-admitted item completes the current
+decision and passes that `DecisionResult` to the comparison writer before
+delivery. A current-excluded item passes an explicit excluded result and no
+invented current decision; it cannot enter interpretation, review or delivery.
+The writer emits one bounded per-item JSON record without a body field and
+records comparison time, candidate engine/version, private configuration version
+and deployed code revision; configuration, import, evaluation or write failure
+is isolated from the active result. The production collector wrapper never
+re-collects the item and only refreshes `rule-core-shadow-combined-latest` after
+the normal collector exits successfully. Candidate results do not change the
+current admission, `DecisionResult`, review storage, dedup reservation or
+delivery. When the private comparison switch is enabled,
+`surveil-rule-shadow-daily.timer` runs at 15:30 Beijing time and freezes
+`rule-core-shadow-daily-YYYY-MM-DD.md/json` for the preceding 24-hour 15:30
+boundary. It sends one Feishu reminder only when that interval has comparable or
+unable-to-compare items, and a successful reminder prevents duplicate sends for
+the same report date. The authenticated Web workbench reads these dated JSON
+files through a bounded read-only API. Its candidate-version, execution-status,
+action-change and current/candidate-action filters are checkbox-based: selected
+values inside one filter use OR, different filters combine with AND, and an empty
+selection means all values. The view exposes no rule, decision, configuration or
+delivery mutation. Comparison before the production `NormalizedMarketItem`
+boundary is not implemented.
 
 The reviewed LLM rule catalog, validation contract and optional report-only runtime are connected behind a private selector. The selector defaults to the deterministic new-rule candidate, so deploying this code does not create model calls. When `RULE_COMPARISON_CANDIDATE=llm` is explicitly approved and configured, each admitted production item is sent to the configured text model after the current production decision already exists and before delivery. A non-empty title is sufficient; available summary is included and available body is code-truncated to its first 3,000 characters. The model is told when truncation occurred and may cite only fields actually provided. The current production action and redundant source/admission audit metadata are not included in the model input. Only the applicable rules are sent, together with the ordinary-strength rule ids for the admitted rule groups. Every applicable rule must return one compact conditional result: unmatched results contain only rule id and judgement; matched results add an allowed action, bounded verbatim evidence and a short reason; uncertain results add bounded counterevidence and a short reason. If the first otherwise valid response contains no matched rule, one correction call requires the model to evaluate the applicable ordinary-strength rule with verbatim evidence. The model selects each matched rule action; code mechanically aggregates `push > daily > archive`. A valid structured result can create only a report candidate; model unavailability, insufficient input, invalid JSON, invalid evidence or conflicting output creates no candidate action and cannot fall back to the deterministic candidate. Reports retain provided fields, original/provided body character counts, truncation state, body-source label, bounded evidence, model name/provider hostname, token usage, model-call/transport-attempt counts and elapsed time, but not the complete article body, provider raw response or response id. The Web workbench separates action comparisons, both-not-admitted items, admission differences and model/validation failures and can inspect these bounded fields. Fixed-response CI covers every action allowed by every catalog rule, source applicability, title/summary/body input handling, body truncation, complete short-body evidence, ordinary-rule correction, unknown/missing/duplicate rules, undefined actions, invalid JSON, verbatim evidence, prompt injection and failure results with no candidate action.
 

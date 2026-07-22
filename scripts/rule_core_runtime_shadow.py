@@ -152,6 +152,13 @@ def _body_source(item: NormalizedMarketItem) -> str:
     return "未记录正文来源"
 
 
+def source_admission_policy(item: NormalizedMarketItem) -> SourceAdmissionPolicy:
+    """Apply only source boundaries already approved for candidate admission."""
+    if item.source_category == "official_policy" or item.publisher_role == "government_official":
+        return SourceAdmissionPolicy(direct_admission_families=("trade_policy",))
+    return SourceAdmissionPolicy()
+
+
 def _report_payload(
     item: NormalizedMarketItem,
     current_decision: DecisionResult | None,
@@ -175,7 +182,7 @@ def _report_payload(
             current_matched_families=current_matched_families,
             rule_config=rule_config,
             portfolio=portfolio,
-            source_policy=SourceAdmissionPolicy(),
+            source_policy=source_admission_policy(item),
             model_caller=llm_caller or _default_llm_caller(env),
             input_text_scope=resolve_input_text_scope(item),
             max_input_chars=_bounded_int(
@@ -198,7 +205,7 @@ def _report_payload(
             current_matched_families=current_matched_families,
             rule_config=rule_config,
             portfolio=portfolio,
-            source_policy=SourceAdmissionPolicy(),
+            source_policy=source_admission_policy(item),
         )
         candidate_engine = "rule_core_v1"
         candidate_version = RULE_CORE_VERSION
