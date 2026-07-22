@@ -188,7 +188,13 @@ def _comparison_status(comparison: dict[str, Any]) -> str:
         candidate_admitted and evaluation_status == "completed" and not current_admitted
     ):
         return "admission_difference"
-    if bool(comparison.get("comparable", True)) and evaluation_status in {"", "completed"}:
+    if evaluation_status in {"", "completed"} and not current_has_action:
+        return "admission_difference"
+    if (
+        bool(comparison.get("comparable", True))
+        and evaluation_status in {"", "completed"}
+        and bool(candidate.get("action"))
+    ):
         return "action_compared"
     if candidate_excluded:
         return "admission_difference"
