@@ -1160,6 +1160,9 @@ def run_once(
                 task="sina_stock_news_portfolio",
                 db_path=DEFAULT_DB_PATH,
                 baseline_only=baseline_only,
+                current_admission_status="admitted",
+                current_admission_reason="current_holding_scoped_source",
+                current_matched_families=("holding",),
             )
             event_id = outcome.event_id
             if not outcome.inserted:

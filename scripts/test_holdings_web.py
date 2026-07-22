@@ -640,6 +640,83 @@ def test_event_center_shows_company_disclosure_baseline_only_when_requested() ->
     assert visible[0]["delivery_status"] == ""
 
 
+def test_event_center_does_not_duplicate_seen_item_projected_to_event() -> None:
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO seen_items (
+                    source, item_id, url, title, summary, published_at, first_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "sina_flash",
+                    "flash-admitted",
+                    "https://example.com/flash-admitted",
+                    "已准入快讯",
+                    "已生成事件记录",
+                    "2026-07-23T01:00:00+00:00",
+                    "2026-07-23T01:00:01+00:00",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO seen_items (
+                    source, item_id, url, title, summary, published_at, first_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "sina_flash",
+                    "flash-excluded",
+                    "https://example.com/flash-excluded",
+                    "未准入快讯",
+                    "只保留发现记录",
+                    "2026-07-23T01:01:00+00:00",
+                    "2026-07-23T01:01:01+00:00",
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO events (
+                    source, source_event_id, event_type, title, summary, full_text, url,
+                    published_at, first_seen_at, symbols_json, themes_json, raw_json,
+                    content_hash, baseline_only
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "sina_flash",
+                    "flash-admitted",
+                    "flash",
+                    "已准入快讯",
+                    "已生成事件记录",
+                    "已生成事件记录",
+                    "https://example.com/flash-admitted",
+                    "2026-07-23T01:00:00+00:00",
+                    "2026-07-23T01:00:01+00:00",
+                    "[]",
+                    '["新浪财经快讯"]',
+                    "{}",
+                    "flash-admitted-hash",
+                    0,
+                ),
+            )
+            conn.commit()
+
+        rows = fetch_events_rows(
+            day="2026-07-23",
+            source="sina_flash",
+            include_baseline=True,
+            db_path=db_path,
+        )
+
+    assert len(rows) == 2
+    assert sum(row["kind"] == "event" and row["title"] == "已准入快讯" for row in rows) == 1
+    assert sum(row["kind"] == "baseline" and row["id"] == "flash-admitted" for row in rows) == 0
+    assert sum(row["kind"] == "baseline" and row["id"] == "flash-excluded" for row in rows) == 1
+
+
 def test_event_center_source_filter_uses_grouped_dropdown() -> None:
     html = frontend_source()
     assert '<select id="eventSource"' in html
@@ -1307,6 +1384,7 @@ def main() -> int:
     test_event_center_feedback_filter_applies_before_article_limit()
     test_event_center_can_show_baselines_and_filter_by_published_time()
     test_event_center_shows_company_disclosure_baseline_only_when_requested()
+    test_event_center_does_not_duplicate_seen_item_projected_to_event()
     test_event_center_source_filter_uses_grouped_dropdown()
     test_source_profiles_group_six_categories()
     test_source_profiles_aggregate_wildcard_health()

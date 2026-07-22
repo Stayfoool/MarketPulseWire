@@ -393,6 +393,9 @@ def run_batch(
                     db_path=DEFAULT_DB_PATH,
                     analyze=analyze and not llm_balance_exhausted,
                     deliver=deliver,
+                    current_admission_status="admitted",
+                    current_admission_reason="current_holding_scoped_source",
+                    current_matched_families=("holding",),
                 )
             except MarketItemProcessingError as exc:
                 outcome = exc.outcome

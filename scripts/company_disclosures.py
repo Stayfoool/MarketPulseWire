@@ -306,6 +306,9 @@ def collect_disclosures(
                 baseline_only=True,
                 analyze=False,
                 deliver=False,
+                current_admission_status="admitted",
+                current_admission_reason="current_holding_scoped_source",
+                current_matched_families=("holding",),
             )
             if identity_known:
                 stats["backfilled"] += 1 if outcome.inserted else 0
@@ -327,6 +330,9 @@ def collect_disclosures(
                 db_path=db_path,
                 analyze=analyze,
                 deliver=deliver,
+                current_admission_status="admitted",
+                current_admission_reason="current_holding_scoped_source",
+                current_matched_families=("holding",),
             )
             stats["processed"] += 1 if outcome.inserted else 0
         if not dry_run and not identity_known:

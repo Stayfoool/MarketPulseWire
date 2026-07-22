@@ -159,25 +159,41 @@ def test_notify_item_uses_unified_process_market_item() -> None:
     item = monitor.parse_ustr_html(USTR_SAMPLE, source)[0]
     calls = []
     original_process = monitor.process_market_item
+    original_connect = monitor.connect_db
+    original_db_path = monitor.DB_PATH
+    original_enrich = monitor.enrich_item
 
     def fake_process(normalized, raw_item, **kwargs):
         calls.append((normalized, raw_item, kwargs))
         decision = SimpleNamespace(importance="high", action="push")
         return SimpleNamespace(flow_result=SimpleNamespace(decision=decision), delivery_status="sent")
 
-    try:
-        monitor.process_market_item = fake_process
-        monitor.notify_item(item, source=source)
-    finally:
-        monitor.process_market_item = original_process
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
+        try:
+            monitor.connect_db = lambda: sqlite3.connect(db_path)
+            monitor.DB_PATH = db_path
+            monitor.enrich_item = lambda value: dict(value)
+            with sqlite3.connect(db_path) as conn:
+                monitor.save_new_items(conn, source.name, [item], notify_baseline=True)
+            monitor.process_market_item = fake_process
+            monitor.notify_item(item, source=source)
+        finally:
+            monitor.process_market_item = original_process
+            monitor.connect_db = original_connect
+            monitor.DB_PATH = original_db_path
+            monitor.enrich_item = original_enrich
 
     assert len(calls) == 1
     normalized, raw_item, kwargs = calls[0]
     assert normalized.source == source.name
-    assert raw_item is item
+    assert raw_item["id"] == item["id"]
     assert kwargs["store_kind"] == "article"
     assert kwargs["source_profile_id"] == source.name
     assert kwargs["use_rule_dedup"] is True
+    assert kwargs["current_admission_status"] == "admitted"
+    assert kwargs["current_matched_families"] == ("trade_policy",)
 
 
 def test_baseline_duplicate_health_and_new_item_processing() -> None:
@@ -199,7 +215,6 @@ def test_baseline_duplicate_health_and_new_item_processing() -> None:
     second = {**first, "id": "second", "url": "https://example.com/second"}
     discovered = [first]
     notified: list[str] = []
-    enrich_calls: list[list[str]] = []
 
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
@@ -207,18 +222,12 @@ def test_baseline_duplicate_health_and_new_item_processing() -> None:
         original_connect = monitor.connect_db
         original_db_path = monitor.DB_PATH
         original_discover = monitor.discover_items
-        original_enrich = monitor.enrich_unseen_items
         original_enabled = monitor.source_profile_enabled
         original_notify = monitor.notify_item
         try:
             monitor.connect_db = lambda: sqlite3.connect(db_path)
             monitor.DB_PATH = db_path
             monitor.discover_items = lambda _source: list(discovered)
-            def fake_enrich(_source, items, enrich_all=False):
-                enrich_calls.append([str(item["id"]) for item in items])
-                return list(items)
-
-            monitor.enrich_unseen_items = fake_enrich
             monitor.source_profile_enabled = lambda _name: True
             monitor.notify_item = lambda item, source: notified.append(str(item["id"]))
 
@@ -242,14 +251,12 @@ def test_baseline_duplicate_health_and_new_item_processing() -> None:
             monitor.connect_db = original_connect
             monitor.DB_PATH = original_db_path
             monitor.discover_items = original_discover
-            monitor.enrich_unseen_items = original_enrich
             monitor.source_profile_enabled = original_enabled
             monitor.notify_item = original_notify
 
     assert seen_count == 2
     assert health[0] == 0
     assert health[1]
-    assert enrich_calls == [["first"], ["first", "second"]]
 
 
 def test_parse_failure_updates_source_health() -> None:

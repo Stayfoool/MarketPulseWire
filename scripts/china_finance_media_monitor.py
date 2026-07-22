@@ -1393,6 +1393,11 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
             item_id,
             admission_status="excluded",
             admission_reason=str(admission["reason"]),
+            admission_matched_families_json=json.dumps(list(admission["matched_families"])),
+            admission_evidence_json="[]",
+            admission_config_version="current-production",
+            admission_rule_contract_version="current-flow-v1",
+            admission_evaluated_at=datetime.now(timezone.utc).isoformat(),
             processing_status="not_applicable",
             processed_at=datetime.now(timezone.utc).isoformat(),
         )
@@ -1416,6 +1421,11 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
         item_id,
         admission_status="admitted",
         admission_reason=str(admission["reason"]),
+        admission_matched_families_json=json.dumps(list(admission["matched_families"])),
+        admission_evidence_json="[]",
+        admission_config_version="current-production",
+        admission_rule_contract_version="current-flow-v1",
+        admission_evaluated_at=datetime.now(timezone.utc).isoformat(),
         processing_status="pending",
     )
     deliver = should_deliver_wallstreetcn_retry(

@@ -794,12 +794,22 @@ def fetch_events_rows(
                         WHERE r.source = s.source AND r.item_id = s.item_id
                     )
                 """
+            event_clause = ""
+            if table_exists(conn, "events"):
+                event_clause = """
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM events e
+                        WHERE e.source = s.source AND e.source_event_id = s.item_id
+                    )
+                """
             for row in conn.execute(
                 f"""
                 SELECT s.source, s.item_id, s.url, s.title, s.summary, s.published_at, s.first_seen_at
                 FROM seen_items s
                 WHERE {where}
                   {reviewed_clause}
+                  {event_clause}
                 ORDER BY s.first_seen_at DESC
                 LIMIT 300
                 """,

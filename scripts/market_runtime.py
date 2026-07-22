@@ -23,7 +23,13 @@ from market_item import (
     item_from_article_mapping,
     item_from_event_mapping,
 )
-from market_review_store import article_item_id, article_review_exists, official_news_item_id, official_review_exists
+from market_review_store import (
+    article_item_id,
+    article_review_exists,
+    latest_event_analysis,
+    official_news_item_id,
+    official_review_exists,
+)
 from source_profiles import runtime_source_profile
 
 
@@ -323,12 +329,23 @@ def _process_event_item(
     baseline_only: bool,
     analyze: bool,
     deliver: bool,
+    reprocess_existing: bool,
+    current_admission_status: str,
+    current_admission_reason: str,
+    current_matched_families: tuple[str, ...],
 ) -> MarketProcessOutcome:
     module = _selected_module("event")
     event_id, inserted = module.upsert_event(raw_item, db_path, normalized_item=item)
     storage_ref = {"store_kind": "event_analyses", "event_id": event_id, "task": task}
     empty_payload: dict[str, Any] = {}
-    if not inserted:
+    if not inserted and not reprocess_existing:
+        return MarketProcessOutcome(
+            flow_result=_flow_result(item, empty_payload, storage_ref, missing_is_contract_error=False),
+            inserted=False,
+            storage_ref=storage_ref,
+            delivery_status="existing",
+        )
+    if not inserted and latest_event_analysis(event_id, task, db_path) is not None:
         return MarketProcessOutcome(
             flow_result=_flow_result(item, empty_payload, storage_ref, missing_is_contract_error=False),
             inserted=False,
@@ -351,7 +368,7 @@ def _process_event_item(
     decision_item = prepare_item_for_decision(item)
     partial = MarketProcessOutcome(
         flow_result=_flow_result(decision_item, empty_payload, storage_ref, missing_is_contract_error=False),
-        inserted=True,
+        inserted=inserted,
         storage_ref=storage_ref,
     )
     try:
@@ -360,11 +377,18 @@ def _process_event_item(
         raise MarketItemProcessingError(str(exc), partial) from exc
     flow_result = _flow_result(decision_item, analysis, storage_ref)
     if not flow_result.decision.audit_json.get("contract_error"):
-        _record_rule_comparison(decision_item, flow_result, storage_ref)
+        record_rule_comparison(
+            decision_item,
+            flow_result.decision,
+            storage_ref,
+            current_admission_status=current_admission_status,
+            current_admission_reason=current_admission_reason,
+            current_matched_families=current_matched_families,
+        )
     status = module.maybe_deliver_event(event_id, analysis, db_path=db_path) if deliver else "not_requested"
     return MarketProcessOutcome(
         flow_result=flow_result,
-        inserted=True,
+        inserted=inserted,
         storage_ref=storage_ref,
         payload=analysis,
         delivery_status=status,
@@ -398,6 +422,10 @@ def process_market_item(
             baseline_only=baseline_only,
             analyze=analyze,
             deliver=deliver,
+            reprocess_existing=reprocess_existing,
+            current_admission_status=current_admission_status,
+            current_admission_reason=current_admission_reason,
+            current_matched_families=current_matched_families,
         )
     return _process_content_item(
         item,

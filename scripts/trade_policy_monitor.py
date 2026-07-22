@@ -10,13 +10,13 @@ import os
 import re
 import urllib.parse
 import xml.etree.ElementTree as ET
-from datetime import timezone
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterable
 
-from db_utils import retry_on_locked
+from db_utils import retry_on_locked, update_seen_item_lifecycle
 from http_utils import http_get
 from decision_engine import decide_market_item
 from market_flow import normalize_market_item, process_market_item
@@ -470,6 +470,12 @@ def save_new_trade_policy_items_with_retry(
     return retry_on_locked(operation)
 
 
+def set_seen_item_lifecycle(source: str, item_id: str, **values: Any) -> None:
+    with connect_db() as conn:
+        update_seen_item_lifecycle(conn, source, item_id, **values)
+        conn.commit()
+
+
 def normalized_trade_policy_item(item: dict[str, Any], source: TradePolicySource):
     prepared = dict(item)
     raw = dict(prepared.get("raw") or {})
@@ -489,14 +495,64 @@ def normalized_trade_policy_item(item: dict[str, Any], source: TradePolicySource
 
 
 def notify_item(item: dict[str, Any], *, source: TradePolicySource) -> None:
-    normalized = normalized_trade_policy_item(item, source)
-    outcome = process_market_item(
-        normalized,
-        item,
-        store_kind="article",
-        source_profile_id=source.name,
-        db_path=DB_PATH,
-        use_rule_dedup=True,
+    item_id = str(item.get("id") or "")
+    enriched = dict(item)
+    detail_status = "not_required"
+    detail_error = ""
+    if source.parser != "federal_register_json":
+        try:
+            enriched = enrich_item(item)
+            detail_status = "succeeded"
+        except Exception as exc:  # noqa: BLE001 - official list evidence remains usable.
+            detail_status = "fallback"
+            detail_error = f"{type(exc).__name__}: {str(exc)[:400]}"
+            raw = dict(enriched.get("raw") or {})
+            raw["detail_enrichment_error"] = detail_error
+            enriched["raw"] = raw
+    set_seen_item_lifecycle(
+        source.name,
+        item_id,
+        processability_status=detail_status,
+        processability_reason="detail_fallback" if detail_status == "fallback" else "",
+        admission_status="admitted",
+        admission_reason="current_official_trade_source",
+        admission_matched_families_json=json.dumps(["trade_policy"]),
+        admission_evidence_json="[]",
+        admission_config_version="current-production",
+        admission_rule_contract_version="current-flow-v1",
+        admission_evaluated_at=datetime.now(timezone.utc).isoformat(),
+        processing_status="pending",
+        processing_error="",
+    )
+    try:
+        normalized = normalized_trade_policy_item(enriched, source)
+        outcome = process_market_item(
+            normalized,
+            enriched,
+            store_kind="article",
+            source_profile_id=source.name,
+            db_path=DB_PATH,
+            use_rule_dedup=True,
+            current_admission_status="admitted",
+            current_admission_reason="current_official_trade_source",
+            current_matched_families=("trade_policy",),
+        )
+    except Exception as exc:
+        set_seen_item_lifecycle(
+            source.name,
+            item_id,
+            processing_status="failed_retryable",
+            processing_error=f"{type(exc).__name__}: {str(exc)[:400]}",
+            processed_at=None,
+        )
+        raise
+    set_seen_item_lifecycle(
+        source.name,
+        item_id,
+        processing_status="succeeded",
+        processing_error="",
+        processed_at=datetime.now(timezone.utc).isoformat(),
+        lifecycle_updated_at=datetime.now(timezone.utc).isoformat(),
     )
     decision = outcome.flow_result.decision
     print(
@@ -515,8 +571,6 @@ def run_once(sources: list[TradePolicySource] | None = None, notify_baseline: bo
             continue
         try:
             items = discover_items(source)
-            if source_has_baseline(source.name) or notify_baseline:
-                items = enrich_unseen_items(source, items, enrich_all=notify_baseline)
             new_items = save_new_trade_policy_items_with_retry(source, items, notify_baseline=notify_baseline)
             with connect_db() as conn:
                 record_source_success(conn, MONITOR, source.name)

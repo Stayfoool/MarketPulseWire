@@ -134,6 +134,40 @@ def test_article_normalization_preserves_body_source_without_body_in_report() ->
     assert runtime_shadow._body_source(item) == "RSS description"
 
 
+def test_official_trade_source_uses_direct_trade_admission_policy() -> None:
+    ordinary = NormalizedMarketItem(
+        source="wallstreetcn_news",
+        source_category="news_media",
+        title="例行工作通报",
+    )
+    official = NormalizedMarketItem(
+        source="mofcom_policy_releases",
+        source_category="official_policy",
+        publisher_role="government_official",
+        content_type="official_policy",
+        title="例行工作通报",
+    )
+    assert runtime_shadow.source_admission_policy(ordinary).direct_admission_families == ()
+    assert runtime_shadow.source_admission_policy(official).direct_admission_families == ("trade_policy",)
+    with TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        config, portfolio = _files(root)
+        result = runtime_shadow.record_runtime_comparison(
+            official,
+            DecisionResult(action="daily", importance="medium", reason="current official policy"),
+            {"store_kind": "article_reviews", "item_id": "official-1"},
+            report_dir=root / "reports",
+            env=_env(config, portfolio),
+            current_admission_status="admitted",
+            current_admission_reason="current_official_trade_source",
+            current_matched_families=("trade_policy",),
+        )
+        payload = json.loads(Path(result["report"]).read_text(encoding="utf-8"))
+        candidate = payload["items"][0]["comparison"]["candidate"]
+        assert candidate["admission_status"] == "admitted"
+        assert candidate["matched_families"] == ["trade_policy"]
+
+
 def test_runtime_report_records_deployed_application_revision() -> None:
     with TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
@@ -299,6 +333,7 @@ def test_config_cache_reloads_only_after_input_changes() -> None:
 def main() -> int:
     test_runtime_item_writes_bounded_comparison_without_body()
     test_article_normalization_preserves_body_source_without_body_in_report()
+    test_official_trade_source_uses_direct_trade_admission_policy()
     test_runtime_report_records_deployed_application_revision()
     test_llm_candidate_mode_writes_one_bounded_report_without_changing_current_decision()
     test_disabled_and_invalid_config_are_fail_safe()
