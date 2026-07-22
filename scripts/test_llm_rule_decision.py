@@ -11,6 +11,8 @@ from pathlib import Path
 from llm_rule_catalog import CATALOG_VERSION, RULE_MATRIX_VERSION, RULES, rules_for_families
 from llm_rule_decision import (
     MAX_BODY_INPUT_CHARS,
+    MAX_QUOTE_CHARS,
+    MAX_QUOTES_PER_LIST,
     LLMRuleCandidateResult,
     LLMRuleInputError,
     apply_source_admission_boundary,
@@ -243,8 +245,13 @@ def test_prompt_uses_bounded_available_input_without_current_production_decision
     assert prompt.user_payload["output_contract"]["policy"].endswith("最终 action。")
     assert prompt.user_payload["ordinary_rule_ids"] == ["semiconductor_ordinary"]
     assert "不能把全部规则返回 not_matched" in prompt.system_prompt
+    assert f"最多{MAX_QUOTES_PER_LIST}条" in prompt.system_prompt
+    assert f"每条最多{MAX_QUOTE_CHARS}字符" in prompt.system_prompt
     matched_contract = prompt.user_payload["output_contract"]["matched"]
     assert set(matched_contract) == {"rule_id", "judgement", "action", "evidence", "reason"}
+    assert f"最多{MAX_QUOTES_PER_LIST}条" in matched_contract["evidence"][0]["quote"]
+    uncertain_contract = prompt.user_payload["output_contract"]["uncertain"]
+    assert f"最多{MAX_QUOTES_PER_LIST}条" in uncertain_contract["counterevidence"][0]["quote"]
     assert '"facts":' not in serialized
     assert "event_status" not in serialized
     assert "time_scope" not in serialized
@@ -420,6 +427,17 @@ def test_evidence_must_be_verbatim_and_bounded_while_allowing_complete_short_bod
     response["rule_results"][0]["evidence"][0]["quote"] = "  测试主体已确认当前变化，\n并说明了明确方向。  "
     whitespace_ok = validate_llm_rule_response(response, item, admission)
     assert whitespace_ok.evaluation_status == "completed"
+
+    too_many = copy.deepcopy(response)
+    too_many["rule_results"][0]["evidence"] = [
+        {"field": "full_text", "quote": QUOTE}
+        for _ in range(MAX_QUOTES_PER_LIST + 1)
+    ]
+    too_many_result = validate_llm_rule_response(too_many, item, admission)
+    assert too_many_result.evaluation_status == "invalid_output"
+    assert too_many_result.validation_errors == (
+        "rule_results[0].evidence contains too many quotes",
+    )
 
     paraphrased = copy.deepcopy(response)
     paraphrased["rule_results"][0]["evidence"][0]["quote"] = "测试主体确认发生明显改变。"
