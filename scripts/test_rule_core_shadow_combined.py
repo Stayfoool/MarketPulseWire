@@ -109,7 +109,9 @@ def test_combined_report_explains_current_admission_exclusion() -> None:
             hours=24,
             now=datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc),
         )
-        assert combined["counts"]["action_changes_by_pair"] == {"none->daily": 1}
+        assert combined["counts"]["action_changes_by_pair"] == {}
+        assert combined["counts"]["admission_differences"] == 1
+        assert combined["items"][0]["comparison_status"] == "admission_difference"
         text = markdown_report(combined)
         assert "`none`" in text
         assert "investment_universe_no_match" in text
