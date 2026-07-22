@@ -991,6 +991,49 @@ def set_seen_item_lifecycle(source: str, item_id: str, **values: str | None) -> 
     retry_on_locked(operation)
 
 
+def backfill_wallstreetcn_seen_metadata(source: str, item_id: str, item: dict[str, Any]) -> None:
+    if source != WALLSTREETCN_SOURCE:
+        return
+    enriched_title = str(item.get("title") or "").strip()
+    enriched_summary = str(item.get("summary") or "").strip()
+    enriched_published_at = str(item.get("published_at") or "").strip()
+
+    def operation() -> None:
+        with connect_db() as conn:
+            ensure_seen_table(conn)
+            existing = conn.execute(
+                "SELECT title, summary, published_at FROM seen_items WHERE source = ? AND item_id = ?",
+                (source, item_id),
+            ).fetchone()
+            if existing is None:
+                return
+            existing_title = str(existing[0] or "").strip()
+            title = (
+                enriched_title
+                if existing_title in {"", "快讯", "华尔街见闻", "快讯 - 华尔街见闻"}
+                else existing_title
+            )
+            summary = str(existing[1] or "").strip() or enriched_summary
+            published_at = str(existing[2] or "").strip() or enriched_published_at
+            if (title, summary, published_at) == (
+                existing_title,
+                str(existing[1] or "").strip(),
+                str(existing[2] or "").strip(),
+            ):
+                return
+            conn.execute(
+                """
+                UPDATE seen_items
+                SET title = ?, summary = ?, published_at = ?
+                WHERE source = ? AND item_id = ?
+                """,
+                (title, summary, published_at, source, item_id),
+            )
+            conn.commit()
+
+    retry_on_locked(operation)
+
+
 def restore_existing_wallstreetcn_empty_details(source: str) -> int:
     if source != WALLSTREETCN_SOURCE:
         return 0
@@ -1301,6 +1344,7 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
             processed_at=None,
         )
         raise
+    backfill_wallstreetcn_seen_metadata(source, item_id, enriched)
     if enriched.get("_skip_decision"):
         set_seen_item_lifecycle(
             source,
