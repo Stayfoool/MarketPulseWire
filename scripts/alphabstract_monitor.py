@@ -8,6 +8,7 @@ import html
 import json
 import os
 import re
+import sqlite3
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -17,10 +18,17 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterable
 
-from db_utils import retry_on_locked
+from collector_runtime import load_source_state, save_source_state
+from db_utils import (
+    connect_sqlite,
+    ensure_seen_tables,
+    ensure_source_state_table,
+    retry_on_locked,
+    update_seen_item_lifecycle,
+)
 from http_utils import http_get
 from market_flow import normalize_market_item, process_market_item
-from rss_monitor import DB_PATH, connect_db, save_new_items, strip_tags
+from rss_monitor import DB_PATH, save_new_items, strip_tags
 from source_health import record_source_failure, record_source_success
 from source_profiles import source_profile_enabled
 from time_utils import parse_datetime_to_utc_iso
@@ -39,6 +47,8 @@ ACCESS_NOTE = (
     "AlphaAbstract robots.txt 允许公开抓取；当前通过 sitemap 和公开 summary 页面读取摘要正文、"
     "Article JSON-LD 与原始来源链接，不绕过登录、付费墙或访问控制。"
 )
+SCOPE_STATE_PREFIX = "alphabstract_scope"
+EXPANDED_SCOPE_BASELINE_STATE_KEY = "expanded_scope_baseline_at"
 
 
 @dataclass(frozen=True)
@@ -61,6 +71,31 @@ DEFAULT_SOURCE = AlphaAbstractSource(
 ALPHAABSTRACT_SOURCES: tuple[AlphaAbstractSource, ...] = (DEFAULT_SOURCE,)
 
 
+def connect_db() -> sqlite3.Connection:
+    conn = connect_sqlite(DB_PATH)
+    ensure_seen_tables(conn)
+    ensure_source_state_table(conn)
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO seen_sources (source, first_seen_at)
+        SELECT source, MIN(first_seen_at)
+        FROM seen_items
+        GROUP BY source
+        """
+    )
+    conn.commit()
+    return conn
+
+
+def load_scope_state(conn: sqlite3.Connection, source: str) -> dict[str, Any]:
+    return load_source_state(conn, source, prefix=SCOPE_STATE_PREFIX)
+
+
+def save_scope_state(conn: sqlite3.Connection, source: str, state: dict[str, Any]) -> None:
+    save_source_state(conn, source, state, prefix=SCOPE_STATE_PREFIX)
+    conn.commit()
+
+
 def normalize_alpha_date(value: Any) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -78,7 +113,12 @@ def canonical_article_id(url: str) -> str:
 
 def is_summary_url(url: str) -> bool:
     parsed = urllib.parse.urlsplit(str(url or ""))
-    return parsed.netloc.endswith("alphabstract.com") and parsed.path.startswith("/summaries/")
+    hostname = str(parsed.hostname or "").lower()
+    return (
+        parsed.scheme in {"http", "https"}
+        and (hostname == "alphabstract.com" or hostname.endswith(".alphabstract.com"))
+        and parsed.path.startswith("/summaries/")
+    )
 
 
 def fetch_text(url: str) -> str:
@@ -322,25 +362,65 @@ def max_pages_per_run() -> int:
         return 40
 
 
-def extract_items(source: AlphaAbstractSource = DEFAULT_SOURCE) -> list[dict[str, Any]]:
+def discover_items(source: AlphaAbstractSource = DEFAULT_SOURCE) -> list[dict[str, Any]]:
     entries = fetch_sitemap_entries(source)
-    limit = max_pages_per_run()
-    if limit:
-        entries = entries[:limit]
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
     for entry in entries:
         url = entry["url"]
-        html_text = fetch_text(url)
-        item = normalize_entry_from_article(url, html_text, source=source, sitemap_lastmod=entry.get("lastmod", ""))
-        if not item:
-            continue
-        item_id = str(item["id"])
-        if item_id in seen:
+        item_id = canonical_article_id(url)
+        if not item_id or item_id in seen:
             continue
         seen.add(item_id)
-        items.append(item)
+        lastmod = entry.get("lastmod", "")
+        items.append(
+            {
+                "id": item_id,
+                "url": url,
+                "title": "",
+                "summary": "",
+                "content": "",
+                "published_at": lastmod,
+                "source_module": source.module,
+                "source_display": source.module,
+                "access_note": source.access_note,
+                "raw": {
+                    "source": source.name,
+                    "sitemap_url": source.sitemap_url,
+                    "sitemap_lastmod": lastmod,
+                    "publisher_role": "third_party_research_summary",
+                },
+            }
+        )
     return items
+
+
+def enrich_item(
+    item: dict[str, Any],
+    source: AlphaAbstractSource = DEFAULT_SOURCE,
+) -> dict[str, Any]:
+    url = str(item.get("url") or "").strip()
+    raw = dict(item.get("raw") or {})
+    enriched = normalize_entry_from_article(
+        url,
+        fetch_text(url),
+        source=source,
+        sitemap_lastmod=str(raw.get("sitemap_lastmod") or item.get("published_at") or ""),
+    )
+    if not enriched:
+        raise ValueError("public summary page did not contain a valid title and body")
+    if str(enriched.get("id") or "") != str(item.get("id") or canonical_article_id(url)):
+        raise ValueError("public summary canonical identity differs from sitemap identity")
+    return enriched
+
+
+def extract_items(source: AlphaAbstractSource = DEFAULT_SOURCE) -> list[dict[str, Any]]:
+    """Return fully enriched items for the read-only collector report."""
+    discoveries = discover_items(source)
+    limit = max_pages_per_run()
+    if limit:
+        discoveries = discoveries[:limit]
+    return [enrich_item(item, source) for item in discoveries]
 
 
 def save_new_alphabstract_items_with_retry(
@@ -348,6 +428,7 @@ def save_new_alphabstract_items_with_retry(
     items: Iterable[dict[str, Any]],
     *,
     notify_baseline: bool = False,
+    expanded_scope_baseline: bool = False,
 ) -> list[dict[str, Any]]:
     def operation() -> list[dict[str, Any]]:
         with connect_db() as conn:
@@ -357,6 +438,7 @@ def save_new_alphabstract_items_with_retry(
                 items,
                 notify_baseline=notify_baseline,
                 source_label=source.module,
+                expanded_scope_baseline=expanded_scope_baseline,
             )
 
     return retry_on_locked(operation)
@@ -382,20 +464,97 @@ def normalized_alphabstract_item(
     )
 
 
+def set_seen_item_lifecycle(source: str, item_id: str, **values: str | None) -> None:
+    with connect_db() as conn:
+        update_seen_item_lifecycle(conn, source, item_id, **values)
+        conn.commit()
+
+
+def set_seen_item_enriched(source: str, item_id: str, item: dict[str, Any]) -> None:
+    """Backfill bounded discovery metadata; the article body stays out of seen_items."""
+    with connect_db() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE seen_items
+            SET url = ?, title = ?, summary = ?, published_at = ?,
+                processability_status = 'succeeded', processability_reason = '',
+                admission_status = 'pending', admission_reason = '',
+                processing_status = 'not_applicable', processing_error = '',
+                lifecycle_updated_at = ?
+            WHERE source = ? AND item_id = ?
+            """,
+            (
+                item.get("url", ""),
+                item.get("title", ""),
+                item.get("summary", ""),
+                item.get("published_at", ""),
+                datetime.now(timezone.utc).isoformat(),
+                source,
+                item_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise LookupError(f"seen item not found: {source}/{item_id}")
+        conn.commit()
+
+
 def notify_item(item: dict[str, Any], *, source: AlphaAbstractSource = DEFAULT_SOURCE) -> None:
-    normalized = normalized_alphabstract_item(item, source)
-    outcome = process_market_item(
-        normalized,
-        item,
-        store_kind="article",
-        source_profile_id=source.name,
-        db_path=DB_PATH,
-        use_rule_dedup=True,
-    )
+    discovery = dict(item)
+    item_id = str(discovery.get("id", "") or "")
+    discovery.pop("_seen_item_retry", None)
+    discovery.pop("_seen_item_retry_first_seen_at", None)
+    try:
+        enriched = enrich_item(discovery, source)
+    except Exception as exc:
+        set_seen_item_lifecycle(
+            source.name,
+            item_id,
+            processability_status="failed_retryable",
+            processability_reason=f"detail_fetch_or_parse_failed:{type(exc).__name__}",
+            admission_status="pending",
+            admission_reason="",
+            processing_status="not_applicable",
+            processing_error="",
+            processed_at=None,
+            lifecycle_updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+        raise
+
+    set_seen_item_enriched(source.name, item_id, enriched)
+    try:
+        normalized = normalized_alphabstract_item(enriched, source)
+        outcome = process_market_item(
+            normalized,
+            enriched,
+            store_kind="article",
+            source_profile_id=source.name,
+            db_path=DB_PATH,
+            use_rule_dedup=True,
+        )
+        set_seen_item_lifecycle(
+            source.name,
+            item_id,
+            admission_status="admitted",
+            admission_reason="current_runtime_processed",
+            processing_status="succeeded",
+            processing_error="",
+            processed_at=datetime.now(timezone.utc).isoformat(),
+            lifecycle_updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except Exception as exc:
+        set_seen_item_lifecycle(
+            source.name,
+            item_id,
+            processing_status="failed_retryable",
+            processing_error=f"{type(exc).__name__}: {str(exc)[:400]}",
+            processed_at=None,
+            lifecycle_updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+        raise
     decision = outcome.flow_result.decision
     print(
         f"{source.name} 统一决策：importance={decision.importance} "
-        f"action={decision.action} delivery={outcome.delivery_status} title={item.get('title', '')}",
+        f"action={decision.action} delivery={outcome.delivery_status} title={enriched.get('title', '')}",
         flush=True,
     )
 
@@ -408,14 +567,25 @@ def run_once(sources: list[AlphaAbstractSource] | None = None, notify_baseline: 
             print(f"source profile: {source.name} 已停用，跳过本轮。", flush=True)
             continue
         try:
-            items = extract_items(source)
+            items = discover_items(source)
             with connect_db() as conn:
                 record_source_success(conn, MONITOR, source.name)
-            new_items = save_new_alphabstract_items_with_retry(
-                source,
-                items,
-                notify_baseline=notify_baseline,
+                scope_state = load_scope_state(conn, source.name)
+            expanded_scope_baseline = not bool(scope_state.get(EXPANDED_SCOPE_BASELINE_STATE_KEY))
+            new_items = (
+                save_new_alphabstract_items_with_retry(
+                    source,
+                    items,
+                    notify_baseline=notify_baseline,
+                    expanded_scope_baseline=expanded_scope_baseline,
+                )
+                if items
+                else []
             )
+            if items and expanded_scope_baseline:
+                scope_state[EXPANDED_SCOPE_BASELINE_STATE_KEY] = datetime.now(timezone.utc).isoformat()
+                with connect_db() as conn:
+                    save_scope_state(conn, source.name, scope_state)
         except Exception as exc:  # noqa: BLE001 - one source failure should be recorded
             with connect_db() as conn:
                 record_source_failure(conn, MONITOR, source.name, exc)
@@ -426,12 +596,22 @@ def run_once(sources: list[AlphaAbstractSource] | None = None, notify_baseline: 
             continue
         total_new += len(new_items)
         print(f"{source.name}: 发现 {len(new_items)} 条新条目。", flush=True)
-        for item in new_items:
+        limit = max_pages_per_run()
+        selected_items = new_items[:limit] if limit else new_items
+        if len(selected_items) < len(new_items):
+            print(
+                f"{source.name}: 本轮处理 {len(selected_items)} 条，其余 pending 条目留待下一自然周期。",
+                flush=True,
+            )
+        for item in selected_items:
             print("=" * 80)
             print(item.get("title", ""))
             print(item.get("url", ""))
             print(item.get("published_at", ""))
-            notify_item(item, source=source)
+            try:
+                notify_item(item, source=source)
+            except Exception as exc:  # noqa: BLE001 - retry state is already persisted
+                print(f"{source.name} 条目处理失败，留待重试：{exc}", flush=True)
     return total_new
 
 
