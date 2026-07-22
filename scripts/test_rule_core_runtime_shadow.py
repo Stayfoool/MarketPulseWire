@@ -11,7 +11,7 @@ import rule_core_runtime_shadow as runtime_shadow
 from llm_analysis import ChatCompletionResponse
 from llm_rule_catalog import CATALOG_VERSION, rules_for_families
 from llm_rule_decision import ENGINE_VERSION as LLM_RULE_ENGINE_VERSION
-from market_item import DecisionResult, NormalizedMarketItem
+from market_item import DecisionResult, NormalizedMarketItem, item_from_article_mapping
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,7 +78,7 @@ def _item() -> NormalizedMarketItem:
         summary="供应继续收紧。",
         full_text="PRIVATE_BODY DRAM价格持续上涨，供应极度紧缺，预计第三季度环比涨幅13%至18%。",
         url="https://example.test/article/1",
-        raw={"id": "article:1"},
+        raw={"id": "article:1", "body_source": "华尔街见闻公开详情页"},
     )
 
 
@@ -112,9 +112,26 @@ def test_runtime_item_writes_bounded_comparison_without_body() -> None:
         assert payload["counts"]["compared"] == 1
         assert payload["items"][0]["item_id"] == "article:1"
         assert payload["items"][0]["input_evidence"]["full_text_chars"] == len(_item().full_text)
+        assert payload["items"][0]["input_evidence"]["body_source"] == "华尔街见闻公开详情页"
         assert payload["items"][0]["comparison"]["current"]["action"] == "daily"
         assert payload["items"][0]["comparison"]["candidate"]["action"] == "archive"
         assert payload["counts"]["action_changes_by_pair"] == {"daily->archive": 1}
+
+
+def test_article_normalization_preserves_body_source_without_body_in_report() -> None:
+    item = item_from_article_mapping(
+        "digitimes",
+        {
+            "id": "rss-1",
+            "title": "HBM update",
+            "summary": "Short RSS description",
+            "full_text": "Short RSS description",
+            "body_source": "RSS description",
+        },
+        source_category="research_industry_media",
+    )
+    assert item.raw["body_source"] == "RSS description"
+    assert runtime_shadow._body_source(item) == "RSS description"
 
 
 def test_runtime_report_records_deployed_application_revision() -> None:
@@ -281,6 +298,7 @@ def test_config_cache_reloads_only_after_input_changes() -> None:
 
 def main() -> int:
     test_runtime_item_writes_bounded_comparison_without_body()
+    test_article_normalization_preserves_body_source_without_body_in_report()
     test_runtime_report_records_deployed_application_revision()
     test_llm_candidate_mode_writes_one_bounded_report_without_changing_current_decision()
     test_disabled_and_invalid_config_are_fail_safe()

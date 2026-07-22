@@ -192,7 +192,7 @@ def test_llm_daily_report_uses_dynamic_label_and_counts_failed_comparisons() -> 
         assert payload["report_title"] == "现有生产规则与大模型候选每日对比报告"
         card_text = json.dumps(cards[0], ensure_ascii=False)
         assert "现有生产规则与大模型候选每日对比报告" in card_text
-        assert "无法比较**：1" in card_text
+        assert "大模型判断或校验失败**：1" in card_text
 
 
 def test_historical_rebuild_fails_when_retained_reports_are_missing() -> None:
