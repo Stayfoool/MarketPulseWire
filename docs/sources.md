@@ -169,7 +169,8 @@ Do not commit these values. If the source changes login, signing, or access rule
 Users can customize:
 
 - Holdings and watchlist: `config/portfolio.json` or the Web workbench
-- Media keywords: `config/media_keywords.json` or the Web workbench
+- Media keywords: the private global rule file selected by
+  `RULE_CORE_SHADOW_CONFIG`, edited through the Web workbench's `媒体关键词` page
 - LLM provider: `.env` `LLM_*`
 - Enabled services: systemd units/timers or local commands
 

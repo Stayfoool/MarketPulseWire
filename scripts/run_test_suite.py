@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -58,6 +59,7 @@ CI_SAFE_TESTS = (
     "test_market_item.py",
     "test_market_review_store.py",
     "test_market_view.py",
+    "test_media_keyword_config.py",
     "test_news_collector.py",
     "test_ocr_runtime.py",
     "test_official_collector.py",
@@ -162,9 +164,16 @@ def main() -> int:
     if args.check or args.list:
         return 0
 
+    test_env = os.environ.copy()
+    test_env["RULE_CORE_SHADOW_CONFIG"] = str(ROOT / "config" / "rule_core_v1.test.json")
     for index, filename in enumerate(CI_SAFE_TESTS, start=1):
         print(f"[{index}/{len(CI_SAFE_TESTS)}] {filename}", flush=True)
-        result = subprocess.run([sys.executable, str(SCRIPTS / filename)], cwd=ROOT, check=False)
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / filename)],
+            cwd=ROOT,
+            env=test_env,
+            check=False,
+        )
         if result.returncode != 0:
             print(f"FAILED: {filename} (exit {result.returncode})", file=sys.stderr)
             return result.returncode

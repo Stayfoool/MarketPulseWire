@@ -29,7 +29,6 @@ python3 -m venv .venv
 pip install -r requirements.txt
 cp .env.example .env
 cp config/portfolio.example.json config/portfolio.json
-cp config/media_keywords.example.json config/media_keywords.json
 # Optional private supply-chain/customer/competitor relation mappings:
 cp config/stock_relations.example.json config/stock_relations.json
 python scripts/market_db.py
@@ -44,6 +43,11 @@ python scripts/holdings_web.py --host 127.0.0.1 --port 8787
 python scripts/rss_monitor.py --interval 300
 python scripts/overseas_media_monitor.py
 ```
+
+`RULE_CORE_SHADOW_CONFIG` must point to a complete private global rule JSON
+before media collection or the Web `媒体关键词` page is used. The repository
+`config/rule_core_v1.test.json` is only a CI fixture and must not be used as the
+production configuration.
 
 The Web process requires the repository `web/` directory alongside `scripts/`.
 `deploy_remote.sh` already synchronizes both directories; do not deploy
@@ -140,6 +144,41 @@ not create comparison records. Each source family keeps its bounded comparison
 JSON for audit, and the wrapper refreshes
 `reports/rule-core-shadow-combined-latest.md` plus `.json` as the daily
 operator view across research, official-company and news batches.
+
+`RULE_CORE_SHADOW_CONFIG` is also the persisted source for the Web workbench's
+`媒体关键词` page. The page edits only `semiconductor_ai_keywords` and
+`exclude_keywords`; the save path validates the complete rule configuration,
+preserves every other rule section, writes atomically with mode `0600`, and
+creates a private backup beside the rule file. There is no runtime precedence
+between code-default, base and include keyword lists.
+
+For an existing installation that still has private
+`config/media_keywords.json`, preview the one-time migration after deploying
+the new code and before using the Web page:
+
+```bash
+sudo -u surveil /opt/surveil/.venv/bin/python \
+  /opt/surveil/scripts/migrate_media_keywords.py \
+  --env-file /opt/surveil/.env
+```
+
+The preview prints counts and hashed term identifiers, not private keyword
+values. Review it, then apply the same migration explicitly:
+
+```bash
+sudo -u surveil /opt/surveil/.venv/bin/python \
+  /opt/surveil/scripts/migrate_media_keywords.py \
+  --env-file /opt/surveil/.env \
+  --apply
+```
+
+The migration starts from the reviewed `semiconductor_ai_keywords`, preserves
+actual user additions and exclusions from the old Web configuration, and adds
+the approved semiconductor company aliases. The five reviewed generic-power
+terms that must remain omitted are reported by hashed identifier and are not
+restored. Keep the generated backup and
+verify the effective count and configuration version through the authenticated
+Web page before restarting or manually running collectors.
 
 When `RULE_CORE_SHADOW_AUTORUN=1`, installation also enables
 `surveil-rule-shadow-daily.timer`. It runs every day at 15:30

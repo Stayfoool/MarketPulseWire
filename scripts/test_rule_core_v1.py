@@ -2095,6 +2095,7 @@ def test_new_core_has_only_the_report_only_production_importer() -> None:
         "macro_policy",
         "re",
         "dataclasses",
+        "rule_config_schema",
         "trade_friction",
         "typing",
         "urllib",

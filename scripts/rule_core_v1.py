@@ -30,11 +30,19 @@ from market_item import (
     RuleEvaluation,
     RuleFamily,
 )
+from rule_config_schema import (
+    CONFIG_SCHEMA_VERSION,
+    RuleConfig,
+    RuleConfigError,
+    clean_value as _clean,
+    mapping as _mapping,
+    parse_rule_config,
+    tuple_strings as _tuple_strings,
+)
 from trade_friction import classify_trade_friction
 
 
 CONTRACT_VERSION = "rule-core-v1"
-CONFIG_SCHEMA_VERSION = "rule-config-v1"
 RULE_CORE_VERSION = "rule-core-v1-20260721-macro-credit-v2"
 FAMILY_ORDER: tuple[RuleFamily, ...] = (
     "holding",
@@ -782,231 +790,6 @@ RESEARCH_CRITICISM_TERMS = (
     "rejected",
     "inaccurate",
 )
-
-
-class RuleConfigError(ValueError):
-    pass
-
-
-def _clean(value: object) -> str:
-    return " ".join(str(value or "").split())
-
-
-def _tuple_strings(value: object, field: str) -> tuple[str, ...]:
-    if not isinstance(value, list):
-        raise RuleConfigError(f"{field} must be a list")
-    result: list[str] = []
-    seen: set[str] = set()
-    for raw in value:
-        text = _clean(raw)
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        result.append(text)
-    return tuple(result)
-
-
-def _mapping(value: object, field: str, expected: set[str]) -> Mapping[str, Any]:
-    if not isinstance(value, dict):
-        raise RuleConfigError(f"{field} must be an object")
-    unknown = set(value) - expected
-    missing = expected - set(value)
-    if unknown or missing:
-        raise RuleConfigError(f"{field} keys invalid: missing={sorted(missing)} unknown={sorted(unknown)}")
-    return value
-
-
-@dataclass(frozen=True)
-class TrustedInstitution:
-    institution_id: str
-    aliases: tuple[str, ...]
-    domains: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class TradeCorridor:
-    corridor_id: str
-    china_terms: tuple[str, ...] = ()
-    counterparty_terms: tuple[str, ...] = ()
-    joint_terms: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        if not self.joint_terms and not (self.china_terms and self.counterparty_terms):
-            raise RuleConfigError(
-                f"trade corridor {self.corridor_id} requires joint terms or both corridor sides"
-            )
-
-
-@dataclass(frozen=True)
-class RuleConfig:
-    config_version: str
-    semiconductor_ai_keywords: tuple[str, ...]
-    major_semiconductor_customers: tuple[str, ...]
-    exclude_keywords: tuple[str, ...]
-    macro_indicators: tuple[str, ...]
-    macro_primary_indicators: tuple[str, ...]
-    macro_secondary_indicators: tuple[str, ...]
-    macro_context_aliases: tuple[str, ...]
-    fed_event_aliases: tuple[str, ...]
-    fed_actor_aliases: tuple[str, ...]
-    fed_path_aliases: tuple[str, ...]
-    trusted_institutions: tuple[TrustedInstitution, ...]
-    trade_corridors: tuple[TradeCorridor, ...]
-    trade_instruments: tuple[str, ...]
-    trade_stages: tuple[str, ...]
-    trade_focus_industries: tuple[str, ...]
-
-
-def _stable_registry_id(value: object, field: str) -> str:
-    text = _clean(value)
-    if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", text):
-        raise RuleConfigError(f"{field} must be a stable lower-snake-case id")
-    return text
-
-
-def _trusted_registry(value: object) -> tuple[TrustedInstitution, ...]:
-    if not isinstance(value, dict) or not value:
-        raise RuleConfigError("trusted_attribution.institutions must be a non-empty object")
-    result: list[TrustedInstitution] = []
-    for raw_id, raw in value.items():
-        institution_id = _stable_registry_id(raw_id, "trusted institution id")
-        definition = _mapping(
-            raw,
-            f"trusted_attribution.institutions.{institution_id}",
-            {"aliases", "domains"},
-        )
-        aliases = _tuple_strings(
-            definition.get("aliases"),
-            f"trusted_attribution.institutions.{institution_id}.aliases",
-        )
-        domains = tuple(
-            domain.casefold()
-            for domain in _tuple_strings(
-                definition.get("domains"),
-                f"trusted_attribution.institutions.{institution_id}.domains",
-            )
-        )
-        if not aliases:
-            raise RuleConfigError(f"trusted institution {institution_id} requires aliases")
-        if any(
-            not re.fullmatch(r"(?:[a-z0-9-]+\.)+[a-z]{2,}", domain)
-            for domain in domains
-        ):
-            raise RuleConfigError(f"trusted institution {institution_id} has an invalid domain")
-        result.append(TrustedInstitution(institution_id, aliases, domains))
-    return tuple(result)
-
-
-def _trade_corridor_registry(value: object) -> tuple[TradeCorridor, ...]:
-    if not isinstance(value, dict) or not value:
-        raise RuleConfigError("trade_policy.corridors must be a non-empty object")
-    result: list[TradeCorridor] = []
-    for raw_id, raw in value.items():
-        corridor_id = _stable_registry_id(raw_id, "trade corridor id")
-        definition = _mapping(
-            raw,
-            f"trade_policy.corridors.{corridor_id}",
-            {"china_terms", "counterparty_terms", "joint_terms"},
-        )
-        result.append(
-            TradeCorridor(
-                corridor_id=corridor_id,
-                china_terms=_tuple_strings(
-                    definition.get("china_terms"),
-                    f"trade_policy.corridors.{corridor_id}.china_terms",
-                ),
-                counterparty_terms=_tuple_strings(
-                    definition.get("counterparty_terms"),
-                    f"trade_policy.corridors.{corridor_id}.counterparty_terms",
-                ),
-                joint_terms=_tuple_strings(
-                    definition.get("joint_terms"),
-                    f"trade_policy.corridors.{corridor_id}.joint_terms",
-                ),
-            )
-        )
-    return tuple(result)
-
-
-def parse_rule_config(payload: Mapping[str, Any]) -> RuleConfig:
-    expected = {
-        "schema_version",
-        "config_version",
-        "semiconductor_ai_keywords",
-        "major_semiconductor_customers",
-        "exclude_keywords",
-        "macro_data",
-        "fed_policy",
-        "trusted_attribution",
-        "trade_policy",
-    }
-    unknown = set(payload) - expected
-    missing = expected - set(payload)
-    if unknown or missing:
-        raise RuleConfigError(f"rule config keys invalid: missing={sorted(missing)} unknown={sorted(unknown)}")
-    if payload.get("schema_version") != CONFIG_SCHEMA_VERSION:
-        raise RuleConfigError(f"unsupported rule config schema: {payload.get('schema_version')}")
-    config_version = _clean(payload.get("config_version"))
-    if not config_version:
-        raise RuleConfigError("config_version is required")
-    macro = _mapping(
-        payload.get("macro_data"),
-        "macro_data",
-        {"indicators", "context_aliases", "tiers"},
-    )
-    tiers = _mapping(macro.get("tiers"), "macro_data.tiers", {"primary", "secondary"})
-    fed = _mapping(
-        payload.get("fed_policy"),
-        "fed_policy",
-        {"event_aliases", "actor_aliases", "path_aliases"},
-    )
-    trusted = _mapping(
-        payload.get("trusted_attribution"),
-        "trusted_attribution",
-        {"institutions"},
-    )
-    trade = _mapping(
-        payload.get("trade_policy"),
-        "trade_policy",
-        {"corridors", "instruments", "stages", "focus_industries"},
-    )
-    primary = _tuple_strings(tiers.get("primary"), "macro_data.tiers.primary")
-    secondary = _tuple_strings(tiers.get("secondary"), "macro_data.tiers.secondary")
-    indicators = _tuple_strings(macro.get("indicators"), "macro_data.indicators")
-    if not set(primary + secondary).issubset(set(indicators)):
-        raise RuleConfigError("macro tiers must reference configured indicators")
-    config = RuleConfig(
-        config_version=config_version,
-        semiconductor_ai_keywords=_tuple_strings(
-            payload.get("semiconductor_ai_keywords"), "semiconductor_ai_keywords"
-        ),
-        major_semiconductor_customers=_tuple_strings(
-            payload.get("major_semiconductor_customers"), "major_semiconductor_customers"
-        ),
-        exclude_keywords=_tuple_strings(payload.get("exclude_keywords"), "exclude_keywords"),
-        macro_indicators=indicators,
-        macro_primary_indicators=primary,
-        macro_secondary_indicators=secondary,
-        macro_context_aliases=_tuple_strings(macro.get("context_aliases"), "macro_data.context_aliases"),
-        fed_event_aliases=_tuple_strings(fed.get("event_aliases"), "fed_policy.event_aliases"),
-        fed_actor_aliases=_tuple_strings(fed.get("actor_aliases"), "fed_policy.actor_aliases"),
-        fed_path_aliases=_tuple_strings(fed.get("path_aliases"), "fed_policy.path_aliases"),
-        trusted_institutions=_trusted_registry(trusted.get("institutions")),
-        trade_corridors=_trade_corridor_registry(trade.get("corridors")),
-        trade_instruments=_tuple_strings(trade.get("instruments"), "trade_policy.instruments"),
-        trade_stages=_tuple_strings(trade.get("stages"), "trade_policy.stages"),
-        trade_focus_industries=_tuple_strings(
-            trade.get("focus_industries"), "trade_policy.focus_industries"
-        ),
-    )
-    if (
-        not config.semiconductor_ai_keywords
-        or not config.major_semiconductor_customers
-        or not config.macro_indicators
-        or not config.trade_corridors
-    ):
-        raise RuleConfigError("required rule lists cannot be empty")
-    return config
 
 
 @dataclass(frozen=True)

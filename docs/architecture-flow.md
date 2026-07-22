@@ -94,6 +94,9 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `company_event_dedup.py` | Generic claim-local company-event fact sets, lifecycle versions and legacy reservation aliases |
 | `market_view.py` | Read-only unified projection across existing stores |
 | `source_profiles.py` | Source catalog, runtime ownership, health keys and editable source settings |
+| `rule_config_schema.py` | Side-effect-free parser shared by the report-only rule core and the production Web/config path; validates the complete private global rule JSON without importing candidate decision behavior into production collectors |
+| `media_keyword_config.py` | Shared loader and atomic Web save path for the private rule configuration's `semiconductor_ai_keywords` and `exclude_keywords`; validates the complete rule file and preserves every unrelated rule section |
+| `migrate_media_keywords.py` | Operator-only preview/apply migration from the retired private base/include media-keyword fields into the reviewed `semiconductor_ai_keywords`; preview redacts values and apply creates a private backup |
 
 ## Production Sources
 
@@ -135,6 +138,15 @@ Company disclosures use the logical source `company_disclosures`. `transport_pro
 CLS telegraph collection preserves bounded official product metadata in the normalized raw audit: numeric `type`, the official bracketed product label, `share_img`/VIP status, and parsed `author_extends` stock names/codes. Article cards display these fields for an observation phase approved by the user. The metadata does not enter deterministic rule matching, importance or `DecisionResult.action`; the existing public `content` remains the decision text.
 
 The `trade_friction_escalation` rule is not tied to the official source group. It runs in `decision_engine.py` for every normalized current or future source. Explicit policy procedures, instruments, retaliation or worsening China-US / China-EU relations can produce `push`; weaker explicit tension can produce `daily`; routine administrative reviews and generic diplomacy do not receive an alert action.
+
+The authenticated Web `媒体关键词` page and every existing media-focus consumer
+read the same `semiconductor_ai_keywords` and `exclude_keywords` fields from the
+private rule file selected by `RULE_CORE_SHADOW_CONFIG`. The Web save path
+validates the complete rule file, changes only those two fields, preserves all
+other rule groups, writes atomically with mode `0600` and creates a private
+backup. Retired code-default, base and extra-include lists have no runtime
+precedence or fallback. Their old private file is read only by the explicit
+one-time migration command documented in `docs/deployment.md`.
 
 The `international_bank_fed_rate_path_revision` rule is also source-neutral. It requires local attributed evidence that an audited major international bank changed its expected Federal Reserve hike/cut direction, count, timing, cumulative basis points or terminal rate. Material revisions produce `push`; a concrete current forecast without a provable revision produces `daily`. WallstreetCN identity and category metadata cannot create eligibility. Same-report reposts use the existing `rule_alert_dedup` reservation, while a later genuine path revision remains eligible.
 
