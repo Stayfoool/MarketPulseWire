@@ -13,7 +13,7 @@ import sqlite3
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -68,6 +68,9 @@ SINA_FINANCE_DEFAULT_LIDS = ("2517",)
 SINA_FINANCE_PENDING_ROLL_STATE: dict[str, Any] = {}
 WALLSTREETCN_SOURCE = wallstreetcn.SOURCE
 WALLSTREETCN_EMPTY_DETAIL_ERROR = "WallstreetCN detail lacks non-empty title/body"
+WALLSTREETCN_RETRY_DELIVERY_MAX_AGE = timedelta(hours=24)
+SEEN_ITEM_RETRY_KEY = "_seen_item_retry"
+SEEN_ITEM_RETRY_FIRST_SEEN_KEY = "_seen_item_retry_first_seen_at"
 
 
 def connect_db() -> sqlite3.Connection:
@@ -951,6 +954,31 @@ def seen_item_id(item: dict[str, Any]) -> str:
     return str(item.get("id") or url or title)
 
 
+def should_deliver_wallstreetcn_retry(
+    source: str,
+    *,
+    is_retry: bool,
+    first_seen_at: str,
+    published_at: str,
+    now: datetime | None = None,
+) -> bool:
+    if source != WALLSTREETCN_SOURCE or not is_retry:
+        return True
+    reference_raw = first_seen_at or published_at
+    normalized = parse_datetime_to_utc_iso(reference_raw)
+    try:
+        reference = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return False
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
+    current = now or datetime.now(timezone.utc)
+    return (
+        current.astimezone(timezone.utc) - reference.astimezone(timezone.utc)
+        <= WALLSTREETCN_RETRY_DELIVERY_MAX_AGE
+    )
+
+
 def set_seen_item_lifecycle(source: str, item_id: str, **values: str | None) -> None:
     values["lifecycle_updated_at"] = datetime.now(timezone.utc).isoformat()
 
@@ -1065,7 +1093,7 @@ def save_new_items(
             continue
         existing = conn.execute(
             """
-            SELECT collection_class, processability_status, admission_status, processing_status
+            SELECT collection_class, processability_status, admission_status, processing_status, first_seen_at
             FROM seen_items WHERE source = ? AND item_id = ?
             """,
             (source, item_id),
@@ -1093,6 +1121,8 @@ def save_new_items(
                     processed_at=None,
                     lifecycle_updated_at=now,
                 )
+                item[SEEN_ITEM_RETRY_KEY] = True
+                item[SEEN_ITEM_RETRY_FIRST_SEEN_KEY] = str(existing[4] or "")
                 selected_ids.add(item_id)
                 new_items.append(item)
             continue
@@ -1256,6 +1286,8 @@ def is_mandatory_yicai_morning_brief(source: str, item: dict[str, Any]) -> bool:
 
 def notify_item(source: str, item: dict[str, Any]) -> None:
     item_id = seen_item_id(item)
+    is_seen_item_retry = bool(item.pop(SEEN_ITEM_RETRY_KEY, False))
+    retry_first_seen_at = str(item.pop(SEEN_ITEM_RETRY_FIRST_SEEN_KEY, "") or "")
     try:
         enriched = enrich_item(source, item)
     except Exception as exc:
@@ -1342,6 +1374,12 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
         admission_reason=str(admission["reason"]),
         processing_status="pending",
     )
+    deliver = should_deliver_wallstreetcn_retry(
+        source,
+        is_retry=is_seen_item_retry,
+        first_seen_at=retry_first_seen_at,
+        published_at=str(enriched.get("published_at") or ""),
+    )
     try:
         outcome = process_market_item(
             normalized,
@@ -1352,6 +1390,7 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
             current_admission_status="admitted",
             current_admission_reason=str(admission["reason"]),
             current_matched_families=tuple(admission["matched_families"]),
+            deliver=deliver,
         )
     except Exception as exc:
         set_seen_item_lifecycle(
@@ -1369,6 +1408,11 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
         processed_at=datetime.now(timezone.utc).isoformat(),
     )
     review = outcome.payload
+    if not deliver:
+        print(
+            f"{source} 历史可重试条目已完成准入、决策和保存，但不再即时推送：title={enriched.get('title', '')}",
+            flush=True,
+        )
     print(
         f"{source} 决策层：importance={review.get('importance')} push={review.get('push_now')} title={enriched.get('title', '')}",
         flush=True,
