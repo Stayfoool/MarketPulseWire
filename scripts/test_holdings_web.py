@@ -712,7 +712,7 @@ def test_event_center_does_not_duplicate_seen_item_projected_to_event() -> None:
         )
 
     assert len(rows) == 2
-    assert sum(row["kind"] == "event" and row["title"] == "已准入快讯" for row in rows) == 1
+    assert sum(row["kind"] == "flash" and row["title"] == "已准入快讯" for row in rows) == 1
     assert sum(row["kind"] == "baseline" and row["id"] == "flash-admitted" for row in rows) == 0
     assert sum(row["kind"] == "baseline" and row["id"] == "flash-excluded" for row in rows) == 1
 
