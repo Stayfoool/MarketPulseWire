@@ -243,7 +243,15 @@ def build_combined_report(
             candidate = comparison.get("candidate") if isinstance(comparison.get("candidate"), dict) else {}
             input_evidence = item.get("input_evidence") if isinstance(item.get("input_evidence"), dict) else {}
             comparable = bool(comparison.get("comparable", True))
-            evaluation_status = str(candidate.get("evaluation_status") or ("completed" if comparable else "unknown"))
+            recorded_evaluation_status = str(candidate.get("evaluation_status") or "").strip()
+            candidate_admission_status = str(candidate.get("admission_status") or "").strip()
+            evaluation_status = recorded_evaluation_status or (
+                "not_admitted"
+                if candidate_admission_status and candidate_admission_status != "admitted"
+                else "completed"
+                if comparable
+                else "unknown"
+            )
             comparison_status = _comparison_status(comparison)
             usage = candidate.get("usage") if isinstance(candidate.get("usage"), dict) else {}
             if comparison_status == "action_compared":
