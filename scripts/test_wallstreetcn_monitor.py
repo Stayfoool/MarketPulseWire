@@ -39,6 +39,19 @@ DETAIL_HTML = """
 </head><body><article><p>美银证券将此前不调整利率的预测改为年内加息三次，累计七十五个基点。</p></article></body></html>
 """
 
+LIVE_DETAIL_HTML = """
+<html><head>
+  <meta property="og:title" content="快讯 - 华尔街见闻" />
+  <meta name="description" content="中际旭创本次H股预计于2026年7月30日在香港联交所挂牌并开始上市交易。" />
+</head><body><article><p>中际旭创本次H股预计于2026年7月30日在香港联交所挂牌并开始上市交易。 风险提示及免责条款 市场有风险，投资需谨慎。</p></article></body></html>
+"""
+
+ARTICLE_MISSING_TITLE_HTML = """
+<html><head>
+  <meta name="description" content="这是一篇有正文但缺少标题的普通文章。" />
+</head><body><article><p>这是一篇有正文但缺少标题的普通文章。</p></article></body></html>
+"""
+
 
 def test_list_parsing_and_canonical_ids() -> None:
     articles = monitor.parse_list_page(ARTICLE_HTML, surface="article", discovery_url="https://wallstreetcn.com/news/global")
@@ -70,6 +83,71 @@ def test_detail_enrichment_uses_public_body() -> None:
     assert enriched["title"] == "美银大幅修正美联储利率路径"
     assert "累计七十五个基点" in enriched["full_text"]
     assert enriched["raw"]["wallstreetcn_detail_status"] == "ok"
+
+
+def test_livenews_empty_discovery_title_uses_public_body() -> None:
+    original = monitor.http_get
+
+    class Response:
+        content = LIVE_DETAIL_HTML.encode()
+        url = "https://wallstreetcn.com/livenews/3137805"
+
+    item = {
+        "id": "livenews:3137805",
+        "url": Response.url,
+        "title": "",
+        "summary": "",
+        "raw": {"wallstreetcn_surface": "livenews", "wallstreetcn_access_tier": "public"},
+    }
+    try:
+        monitor.http_get = lambda *_args, **_kwargs: Response()
+        enriched = monitor.enrich_item(item)
+    finally:
+        monitor.http_get = original
+    assert enriched["title"] == "中际旭创本次H股预计于2026年7月30日在香港联交所挂牌并开始上市交易。"
+    assert enriched["full_text"] == enriched["title"]
+    assert enriched["raw"]["wallstreetcn_detail_status"] == "ok"
+
+
+def test_livenews_keeps_non_generic_discovery_title() -> None:
+    original = monitor.http_get
+
+    class Response:
+        content = LIVE_DETAIL_HTML.encode()
+        url = "https://wallstreetcn.com/livenews/3137805"
+
+    item = {
+        "id": "livenews:3137805",
+        "url": Response.url,
+        "title": "中际旭创H股上市时间确定",
+        "raw": {"wallstreetcn_surface": "livenews", "wallstreetcn_access_tier": "public"},
+    }
+    try:
+        monitor.http_get = lambda *_args, **_kwargs: Response()
+        enriched = monitor.enrich_item(item)
+    finally:
+        monitor.http_get = original
+    assert enriched["title"] == item["title"]
+
+
+def test_article_does_not_use_body_as_missing_title() -> None:
+    original = monitor.http_get
+
+    class Response:
+        content = ARTICLE_MISSING_TITLE_HTML.encode()
+        url = "https://wallstreetcn.com/articles/3777999"
+
+    item = {"id": "article:3777999", "url": Response.url, "title": "", "raw": {"wallstreetcn_surface": "article"}}
+    try:
+        monitor.http_get = lambda *_args, **_kwargs: Response()
+        try:
+            monitor.enrich_item(item)
+        except ValueError as exc:
+            assert str(exc) == "WallstreetCN detail lacks non-empty title/body"
+        else:
+            raise AssertionError("ordinary article must retain the non-empty title requirement")
+    finally:
+        monitor.http_get = original
 
 
 def test_invalid_list_and_sitemap_fail_visibly() -> None:
@@ -149,6 +227,9 @@ def test_month_rollover_reconciles_previous_state_month() -> None:
 if __name__ == "__main__":
     test_list_parsing_and_canonical_ids()
     test_detail_enrichment_uses_public_body()
+    test_livenews_empty_discovery_title_uses_public_body()
+    test_livenews_keeps_non_generic_discovery_title()
+    test_article_does_not_use_body_as_missing_title()
     test_invalid_list_and_sitemap_fail_visibly()
     test_sitemap_preserves_news_title_and_publication_time()
     test_source_profile_is_peer_news_media()

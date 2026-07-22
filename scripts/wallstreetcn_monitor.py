@@ -250,6 +250,12 @@ def _meta(document: Any, *keys: str) -> str:
 def enrich_item(item: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(item)
     raw = dict(enriched.get("raw") or {})
+    item_url = str(enriched.get("url") or "")
+    is_livenews = (
+        raw.get("wallstreetcn_surface") == "livenews"
+        or str(enriched.get("id") or "").startswith("livenews:")
+        or "/livenews/" in item_url
+    )
     if raw.get("wallstreetcn_access_tier") == "member":
         raw["wallstreetcn_detail_status"] = "member_unavailable"
         enriched["raw"] = raw
@@ -270,8 +276,9 @@ def enrich_item(item: dict[str, Any]) -> dict[str, Any]:
         titles = document.xpath("//h1//text() | //title/text()")
         title = re.sub(r"\s+", " ", " ".join(str(value) for value in titles)).strip()
     title = re.sub(r"\s*[-_|]\s*华尔街见闻\s*$", "", title).strip()
-    if raw.get("wallstreetcn_surface") == "livenews" and title in {"快讯", "华尔街见闻"}:
-        title = str(enriched.get("title") or "").strip()
+    if is_livenews and title in {"快讯", "华尔街见闻"}:
+        discovery_title = str(enriched.get("title") or "").strip()
+        title = "" if discovery_title in {"快讯", "华尔街见闻", "快讯 - 华尔街见闻"} else discovery_title
     published_at = _meta(document, "article:published_time", "og:published_time") or str(enriched.get("published_at") or "")
     if not published_at:
         time_values = document.xpath("//time/@datetime")
@@ -289,9 +296,11 @@ def enrich_item(item: dict[str, Any]) -> dict[str, Any]:
         favor_recall=True,
     ) or ""
     body = body.strip()
-    body = re.split(r"\n\s*风险提示及免责条款", body, maxsplit=1)[0].strip()
+    body = re.split(r"\s*风险提示及免责条款", body, maxsplit=1)[0].strip()
     if len(body) < 20:
         body = _meta(document, "description", "og:description").strip()
+    if is_livenews and not title and body:
+        title = re.sub(r"\s+", " ", body).strip()[:120]
     if not title or not body:
         raise ValueError("WallstreetCN detail lacks non-empty title/body")
     enriched.update(
