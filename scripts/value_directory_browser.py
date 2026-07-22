@@ -83,6 +83,14 @@ class ValueDirectorySource:
     categories: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class ValueDirectoryBrowserCollection:
+    entries_by_source: dict[str, list[dict[str, Any]]]
+    source_errors: dict[str, str]
+    previews: dict[tuple[str, str], dict[str, Any]]
+    preview_errors: dict[tuple[str, str], str]
+
+
 VALUE_DIRECTORY_SOURCES: dict[str, ValueDirectorySource] = {
     SOURCE_ID: ValueDirectorySource(
         source_id=SOURCE_ID,
@@ -460,6 +468,35 @@ def evaluate_list_payload_with_empty_wait(
     return evaluate_list_payload(page, safe_limit, timeout_ms)
 
 
+def collect_entries_from_page(
+    page: Any,
+    source: ValueDirectorySource,
+    *,
+    limit: int,
+    timeout_ms: int,
+    timeout_error: type[Exception],
+) -> list[dict[str, Any]]:
+    page.goto(source.list_url, wait_until="domcontentloaded", timeout=timeout_ms)
+    page.wait_for_timeout(int(os.getenv("VALUE_DIRECTORY_WAF_SETTLE_MS", "6000") or "6000"))
+    payload = evaluate_list_payload_with_empty_wait(
+        page,
+        max(1, min(int(limit), 100)),
+        timeout_ms,
+        timeout_error=timeout_error,
+    )
+    state = classify_page_state(
+        f"{payload.get('title', '')}\n{payload.get('bodySample', '')}",
+        article_count=int(payload.get("articleCount") or 0),
+        url=str(payload.get("url") or ""),
+    )
+    if state != "ok":
+        raise AccessBlocked(f"价值目录列表页不可用：state={state}")
+    entries = dedupe_entries(list(payload.get("entries") or []), source)
+    if not entries:
+        raise AccessBlocked("价值目录列表页未解析到研报条目。")
+    return entries
+
+
 def collect_entries(limit: int = 30, url: str | None = None, source_id: str = SOURCE_ID) -> list[dict[str, Any]]:
     """Read visible list-page cards with a persistent server browser profile."""
     source = source_config(source_id)
@@ -476,13 +513,18 @@ def collect_entries(limit: int = 30, url: str | None = None, source_id: str = SO
         context = launch_browser_context(playwright, config)
         try:
             page = context.pages[0] if context.pages else context.new_page()
+            if target_url == source.list_url:
+                return collect_entries_from_page(
+                    page,
+                    source,
+                    limit=safe_limit,
+                    timeout_ms=config.timeout_ms,
+                    timeout_error=PlaywrightTimeoutError,
+                )
             page.goto(target_url, wait_until="domcontentloaded", timeout=config.timeout_ms)
             page.wait_for_timeout(int(os.getenv("VALUE_DIRECTORY_WAF_SETTLE_MS", "6000") or "6000"))
             payload = evaluate_list_payload_with_empty_wait(
-                page,
-                safe_limit,
-                config.timeout_ms,
-                timeout_error=PlaywrightTimeoutError,
+                page, safe_limit, config.timeout_ms, timeout_error=PlaywrightTimeoutError
             )
         finally:
             close_browser_context(context, config)
@@ -515,6 +557,91 @@ def classify_detail_page_state(text: str, *, preview_count: int, url: str = "") 
     return "ok"
 
 
+def collect_preview_from_page(page: Any, url: str, *, timeout_ms: int) -> dict[str, Any]:
+    page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+    page.wait_for_timeout(int(os.getenv("VALUE_DIRECTORY_WAF_SETTLE_MS", "6000") or "6000"))
+    payload = evaluate_detail_payload(page)
+    state = classify_detail_page_state(
+        f"{payload.get('title', '')}\n{payload.get('articleText', '')}",
+        preview_count=len(payload.get("previewImages") or []) + (1 if payload.get("articleText") else 0),
+        url=str(payload.get("url") or ""),
+    )
+    payload["state"] = state
+    if state in {"waf", "login"}:
+        raise AccessBlocked(f"价值目录详情页不可用：state={state}")
+    return payload
+
+
+def collect_sources_with_previews(
+    source_ids: list[str],
+    *,
+    limit: int,
+    preview_selector: Callable[[ValueDirectorySource, dict[str, Any]], bool],
+    playwright_factory: Callable[[], Any] | None = None,
+    timeout_error: type[Exception] | None = None,
+) -> ValueDirectoryBrowserCollection:
+    """Collect enabled source lists and selected previews in one browser session."""
+    if playwright_factory is None or timeout_error is None:
+        try:
+            from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+            from playwright.sync_api import sync_playwright
+        except Exception as exc:  # noqa: BLE001
+            raise BrowserNotConfigured("缺少 Python Playwright 依赖。请先安装 requirements.txt。") from exc
+        playwright_factory = playwright_factory or sync_playwright
+        timeout_error = timeout_error or PlaywrightTimeoutError
+
+    entries_by_source: dict[str, list[dict[str, Any]]] = {}
+    source_errors: dict[str, str] = {}
+    previews: dict[tuple[str, str], dict[str, Any]] = {}
+    preview_errors: dict[tuple[str, str], str] = {}
+    config = browser_config()
+    with playwright_factory() as playwright:
+        context = launch_browser_context(playwright, config)
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            for source_id in source_ids:
+                source = source_config(source_id)
+                try:
+                    entries_by_source[source_id] = collect_entries_from_page(
+                        page,
+                        source,
+                        limit=limit,
+                        timeout_ms=config.timeout_ms,
+                        timeout_error=timeout_error,
+                    )
+                except Exception as exc:  # noqa: BLE001 - retain per-source failure and continue.
+                    source_errors[source_id] = f"{type(exc).__name__}: {compact_browser_error(exc)}"
+
+            for source_id in source_ids:
+                source = source_config(source_id)
+                for item in entries_by_source.get(source_id, []):
+                    key = (source_id, str(item.get("id") or ""))
+                    try:
+                        selected = preview_selector(source, item)
+                    except Exception as exc:  # noqa: BLE001 - preserve per-item selection failure.
+                        preview_errors[key] = f"{type(exc).__name__}: {compact_browser_error(exc)}"
+                        continue
+                    if not selected:
+                        continue
+                    try:
+                        previews[key] = collect_preview_from_page(
+                            page,
+                            str(item.get("url") or ""),
+                            timeout_ms=config.timeout_ms,
+                        )
+                    except Exception as exc:  # noqa: BLE001 - one detail must not block another source.
+                        preview_errors[key] = f"{type(exc).__name__}: {compact_browser_error(exc)}"
+        finally:
+            close_browser_context(context, config)
+
+    return ValueDirectoryBrowserCollection(
+        entries_by_source=entries_by_source,
+        source_errors=source_errors,
+        previews=previews,
+        preview_errors=preview_errors,
+    )
+
+
 def collect_preview(url: str) -> dict[str, Any]:
     """Read visible first-page preview assets from a ValueList detail page.
 
@@ -532,21 +659,9 @@ def collect_preview(url: str) -> dict[str, Any]:
         context = launch_browser_context(playwright, config)
         try:
             page = context.pages[0] if context.pages else context.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=config.timeout_ms)
-            page.wait_for_timeout(int(os.getenv("VALUE_DIRECTORY_WAF_SETTLE_MS", "6000") or "6000"))
-            payload = evaluate_detail_payload(page)
+            return collect_preview_from_page(page, url, timeout_ms=config.timeout_ms)
         finally:
             close_browser_context(context, config)
-
-    state = classify_detail_page_state(
-        f"{payload.get('title', '')}\n{payload.get('articleText', '')}",
-        preview_count=len(payload.get("previewImages") or []) + (1 if payload.get("articleText") else 0),
-        url=str(payload.get("url") or ""),
-    )
-    payload["state"] = state
-    if state in {"waf", "login"}:
-        raise AccessBlocked(f"价值目录详情页不可用：state={state}")
-    return payload
 
 
 def evaluate_detail_payload(page: Any) -> dict[str, Any]:

@@ -24,8 +24,8 @@ from value_directory_browser import (
     SOURCE_ID,
     VALUE_DIRECTORY_SOURCES,
     ValueDirectorySource,
-    collect_entries_for_source,
     collect_preview,
+    collect_sources_with_previews,
     default_source_ids,
     source_config,
 )
@@ -148,12 +148,16 @@ def recheck_unpushed_limit() -> int:
         return 30
 
 
-def enrich_item_with_preview(item: dict[str, Any]) -> dict[str, Any]:
+def enrich_item_with_preview(item: dict[str, Any], preview: dict[str, Any] | None = None) -> dict[str, Any]:
     if not preview_enabled():
         return item
-    preview = collect_preview(str(item.get("url") or ""))
+    preview = preview if preview is not None else collect_preview(str(item.get("url") or ""))
     facts = extract_preview_facts(item, preview)
     return apply_preview_to_item(item, preview, facts)
+
+
+def preview_key(source: ValueDirectorySource, item: dict[str, Any]) -> tuple[str, str]:
+    return source.source_id, article_item_id(item)
 
 
 def has_preview_record(item: dict[str, Any]) -> bool:
@@ -218,6 +222,9 @@ def review_and_maybe_push(
     *,
     source: ValueDirectorySource | None = None,
     recheck_rules: bool = False,
+    collected_previews: dict[tuple[str, str], dict[str, Any]] | None = None,
+    preview_errors: dict[tuple[str, str], str] | None = None,
+    browser_collection_complete: bool = False,
 ) -> bool:
     source = source or source_config()
     item_id = article_item_id(item)
@@ -230,8 +237,16 @@ def review_and_maybe_push(
     if existing and recheck_rules and not should_enrich:
         return False
     if should_enrich and preview_enabled() and not has_preview_record(item):
+        key = preview_key(source, item)
         try:
-            item = enrich_item_with_preview(item)
+            if preview_errors and key in preview_errors:
+                raise RuntimeError(preview_errors[key])
+            if collected_previews is not None and key in collected_previews:
+                item = enrich_item_with_preview(item, collected_previews[key])
+            elif browser_collection_complete:
+                raise RuntimeError("浏览器采集阶段未返回该研报的第一页预览")
+            else:
+                item = enrich_item_with_preview(item)
         except Exception as exc:  # noqa: BLE001
             item = with_preview_failure(item, exc)
 
@@ -263,6 +278,9 @@ def collect_production(
     notify_baseline: bool,
     started_at: str,
     recheck_item_id: str = "",
+    collected_previews: dict[tuple[str, str], dict[str, Any]] | None = None,
+    preview_errors: dict[tuple[str, str], str] | None = None,
+    browser_collection_complete: bool = False,
 ) -> dict[str, Any]:
     source = source or source_config()
     new_items = save_new_items_with_retry(
@@ -275,7 +293,13 @@ def collect_production(
     reviewed = 0
     for item in new_items:
         reviewed += 1
-        if review_and_maybe_push(item, source=source):
+        if review_and_maybe_push(
+            item,
+            source=source,
+            collected_previews=collected_previews,
+            preview_errors=preview_errors,
+            browser_collection_complete=browser_collection_complete,
+        ):
             pushed += 1
     rechecked = 0
     rechecked_item_ids: set[str] = set()
@@ -295,7 +319,14 @@ def collect_production(
             rechecked += 1
             rechecked_item_ids.add(item_id)
             reviewed += 1
-            if review_and_maybe_push(item, source=source, recheck_rules=True):
+            if review_and_maybe_push(
+                item,
+                source=source,
+                recheck_rules=True,
+                collected_previews=collected_previews,
+                preview_errors=preview_errors,
+                browser_collection_complete=browser_collection_complete,
+            ):
                 pushed += 1
     target_id = recheck_item_id.strip()
     if target_id and target_id not in new_item_ids and target_id not in rechecked_item_ids:
@@ -304,7 +335,14 @@ def collect_production(
                 continue
             rechecked += 1
             reviewed += 1
-            if review_and_maybe_push(item, source=source, recheck_rules=True):
+            if review_and_maybe_push(
+                item,
+                source=source,
+                recheck_rules=True,
+                collected_previews=collected_previews,
+                preview_errors=preview_errors,
+                browser_collection_complete=browser_collection_complete,
+            ):
                 pushed += 1
             break
     return {
@@ -372,48 +410,67 @@ def run_source(
     notify_baseline: bool,
     recheck_item_id: str = "",
 ) -> dict[str, Any]:
-    started_at = utc_now()
-    source = source_config(source_id)
-    if not source_profile_enabled(source.source_id):
-        payload = {
-            "ok": True,
-            "mode": "production" if production else "shadow_dry_run",
-            "skipped": True,
-            "reason": "source profile 已停用",
-            "source": source.source_id,
-            "url": source.list_url,
-            "started_at": started_at,
-            "finished_at": utc_now(),
-            "counts": {"raw_items": 0},
-            "errors": [],
-        }
-        return payload
+    return run(
+        production=production,
+        limit=limit,
+        notify_baseline=notify_baseline,
+        recheck_item_id=recheck_item_id,
+        source_ids=[source_id],
+    )["sources"][0]
+
+
+def source_payload_error(
+    source: ValueDirectorySource,
+    *,
+    production: bool,
+    started_at: str,
+    error: Exception | str,
+) -> dict[str, Any]:
+    error_text = f"{type(error).__name__}: {error}" if isinstance(error, Exception) else str(error)
+    with connect_db() as conn:
+        record_source_failure(conn, MONITOR, source.source_id, error_text)
+    return {
+        "ok": False,
+        "mode": "production" if production else "shadow_dry_run",
+        "source": source.source_id,
+        "url": source.list_url,
+        "started_at": started_at,
+        "finished_at": utc_now(),
+        "counts": {"raw_items": 0},
+        "errors": [error_text],
+    }
+
+
+def process_collected_source(
+    source: ValueDirectorySource,
+    entries: list[dict[str, Any]],
+    *,
+    production: bool,
+    notify_baseline: bool,
+    started_at: str,
+    recheck_item_id: str,
+    collected_previews: dict[tuple[str, str], dict[str, Any]],
+    preview_errors: dict[tuple[str, str], str],
+) -> dict[str, Any]:
     try:
-        entries = collect_entries_for_source(source.source_id, limit=limit)
-        with connect_db() as conn:
-            record_source_success(conn, MONITOR, source.source_id)
         if production:
-            return collect_production(
+            payload = collect_production(
                 entries,
                 source=source,
                 notify_baseline=notify_baseline,
                 started_at=started_at,
                 recheck_item_id=recheck_item_id,
+                collected_previews=collected_previews,
+                preview_errors=preview_errors,
+                browser_collection_complete=True,
             )
-        return shadow_payload(entries, started_at=started_at, source=source)
-    except Exception as exc:  # noqa: BLE001 - health state should capture every collector failure
+        else:
+            payload = shadow_payload(entries, started_at=started_at, source=source)
         with connect_db() as conn:
-            record_source_failure(conn, MONITOR, source.source_id, exc)
-        return {
-            "ok": False,
-            "mode": "production" if production else "shadow_dry_run",
-            "source": source.source_id,
-            "url": source.list_url,
-            "started_at": started_at,
-            "finished_at": utc_now(),
-            "counts": {"raw_items": 0},
-            "errors": [f"{type(exc).__name__}: {exc}"],
-        }
+            record_source_success(conn, MONITOR, source.source_id)
+        return payload
+    except Exception as exc:  # noqa: BLE001 - health state should capture every collector failure
+        return source_payload_error(source, production=production, started_at=started_at, error=exc)
 
 
 def run(
@@ -426,16 +483,73 @@ def run(
 ) -> dict[str, Any]:
     started_at = utc_now()
     sources = source_ids or default_source_ids()
-    payloads = [
-        run_source(
-            source_id,
-            production=production,
-            limit=limit,
-            notify_baseline=notify_baseline,
-            recheck_item_id=recheck_item_id,
+    source_configs = {source_id: source_config(source_id) for source_id in sources}
+    enabled_sources = [source_id for source_id in sources if source_profile_enabled(source_id)]
+    collection = None
+    collection_error: Exception | None = None
+    if enabled_sources:
+        try:
+            collection = collect_sources_with_previews(
+                enabled_sources,
+                limit=limit,
+                preview_selector=lambda _source, _item: production and preview_enabled(),
+            )
+        except Exception as exc:  # noqa: BLE001 - one browser session owns all enabled sources.
+            collection_error = exc
+
+    payloads: list[dict[str, Any]] = []
+    for source_id in sources:
+        source = source_configs[source_id]
+        source_started_at = started_at
+        if source_id not in enabled_sources:
+            payloads.append(
+                {
+                    "ok": True,
+                    "mode": "production" if production else "shadow_dry_run",
+                    "skipped": True,
+                    "reason": "source profile 已停用",
+                    "source": source.source_id,
+                    "url": source.list_url,
+                    "started_at": source_started_at,
+                    "finished_at": utc_now(),
+                    "counts": {"raw_items": 0},
+                    "errors": [],
+                }
+            )
+            continue
+        if collection_error is not None:
+            payloads.append(
+                source_payload_error(
+                    source,
+                    production=production,
+                    started_at=source_started_at,
+                    error=collection_error,
+                )
+            )
+            continue
+        assert collection is not None
+        if source_id in collection.source_errors:
+            payloads.append(
+                source_payload_error(
+                    source,
+                    production=production,
+                    started_at=source_started_at,
+                    error=collection.source_errors[source_id],
+                )
+            )
+            continue
+        payloads.append(
+            process_collected_source(
+                source,
+                collection.entries_by_source.get(source_id, []),
+                production=production,
+                notify_baseline=notify_baseline,
+                started_at=source_started_at,
+                recheck_item_id=recheck_item_id,
+                collected_previews=collection.previews,
+                preview_errors=collection.preview_errors,
+            )
         )
-        for source_id in sources
-    ]
     errors = [error for payload in payloads for error in payload.get("errors", [])]
     counts = {
         "raw_items": sum(int(payload.get("counts", {}).get("raw_items") or 0) for payload in payloads),
