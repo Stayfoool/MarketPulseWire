@@ -13,20 +13,26 @@ import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from collector_runtime import filter_enabled_named_for_run
-from db_utils import ensure_trendforce_page_seen_table, retry_on_locked
+from collector_runtime import (
+    filter_enabled_named_for_run,
+    load_source_state as runtime_load_source_state,
+    save_source_state as runtime_save_source_state,
+)
+from db_utils import ensure_trendforce_page_seen_table, retry_on_locked, update_seen_item_lifecycle
 from http_utils import http_get
 from llm_analysis import llm_config
 from market_flow import normalize_market_item, process_market_item
 from rss_monitor import DB_PATH, connect_db, fetch_article_body, parse_date, strip_tags
 from source_health import record_source_failure, record_source_success
-from trendforce_sources import PageSource, TREND_FORCE_PAGE_SOURCES, is_focus_item
+from trendforce_sources import PageSource, TREND_FORCE_PAGE_SOURCES
 from x_check import load_env
 
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 PAGE_SOURCE_KEY = "trendforce_page"
+SCOPE_STATE_PREFIX = "trendforce_page_scope"
+EXPANDED_SCOPE_BASELINE_STATE_KEY = "expanded_scope_baseline_at"
 
 
 def fetch_html(url: str) -> str:
@@ -89,9 +95,6 @@ def item_from_anchor(
     )
     summary = first_match(summary_patterns, anchor_html) or first_match(summary_patterns, context_html)
     published_at = parse_page_date(date_match.group(0) if date_match else "")
-    if not is_focus_item(title, summary, source.module, url):
-        return None
-
     return {
         "id": article_id(url),
         "url": url,
@@ -139,8 +142,6 @@ def extract_prnewswire_semi_items(source: PageSource, html_text: str) -> list[di
         if not title or len(title) < 8:
             continue
         if not re.search(r"\bSEMI\b|/semi[-/]", f"{url} {title}", re.I):
-            continue
-        if not is_focus_item(title, summary, source.module, url):
             continue
         date_match = re.search(r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+\d{1,2},\s+20\d{2}\b", context_text, re.I)
         item_id = article_id(url)
@@ -284,11 +285,20 @@ def source_initialized(conn: sqlite3.Connection, source_name: str) -> bool:
     return row is not None
 
 
+def load_scope_state(conn: sqlite3.Connection, source_name: str) -> dict:
+    return runtime_load_source_state(conn, source_name, prefix=SCOPE_STATE_PREFIX)
+
+
+def save_scope_state(conn: sqlite3.Connection, source_name: str, state: dict) -> None:
+    runtime_save_source_state(conn, source_name, state, prefix=SCOPE_STATE_PREFIX)
+
+
 def save_new_page_items(
     conn: sqlite3.Connection,
     source: PageSource,
     items: list[dict],
     notify_baseline: bool = False,
+    expanded_scope_baseline: bool = False,
 ) -> list[dict]:
     ensure_page_seen_table(conn)
     source_name = source.name
@@ -300,15 +310,55 @@ def save_new_page_items(
             (source_name, now),
         )
 
+    baseline_only = bool((is_baseline and not notify_baseline) or expanded_scope_baseline)
     new_items: list[dict] = []
     for item in sorted(items, key=lambda entry: entry.get("published_at") or ""):
         item_id = str(item["id"])
+        existing = conn.execute(
+            """
+            SELECT collection_class, processability_status, admission_status,
+                   processing_status, first_seen_at
+            FROM seen_items WHERE source = ? AND item_id = ?
+            """,
+            (source_name, item_id),
+        ).fetchone()
+        if existing:
+            retryable = (
+                str(existing[0]) == "live"
+                and (
+                    str(existing[1]) in {"pending", "failed_retryable"}
+                    or str(existing[2]) == "pending"
+                    or str(existing[3]) in {"pending", "failed_retryable"}
+                )
+            )
+            if retryable:
+                update_seen_item_lifecycle(
+                    conn,
+                    source_name,
+                    item_id,
+                    processability_status="pending",
+                    processability_reason="",
+                    admission_status="pending",
+                    admission_reason="",
+                    processing_status="not_applicable",
+                    processing_error="",
+                    processed_at=None,
+                    lifecycle_updated_at=datetime.now(timezone.utc).isoformat(),
+                )
+                item = dict(item)
+                item["_seen_item_retry"] = True
+                item["_seen_item_retry_first_seen_at"] = str(existing[4] or "")
+                new_items.append(item)
+            continue
         try:
             conn.execute(
                 """
                 INSERT INTO seen_items (
-                    source, item_id, url, title, summary, published_at, first_seen_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    source, item_id, url, title, summary, published_at, first_seen_at,
+                    collection_class, processability_status, processability_reason,
+                    admission_status, admission_reason, processing_status,
+                    processing_error, processed_at, lifecycle_updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     source_name,
@@ -317,6 +367,15 @@ def save_new_page_items(
                     item.get("title", ""),
                     item.get("summary", ""),
                     item.get("published_at", ""),
+                    now,
+                    "baseline" if baseline_only else "live",
+                    "not_required" if baseline_only else "pending",
+                    "expanded_scope_baseline" if expanded_scope_baseline else "",
+                    "not_applicable" if baseline_only else "pending",
+                    "expanded_scope_baseline" if expanded_scope_baseline else "",
+                    "not_applicable",
+                    "",
+                    now if baseline_only else None,
                     now,
                 ),
             )
@@ -342,13 +401,13 @@ def save_new_page_items(
         except sqlite3.IntegrityError:
             globally_new = False
 
-        if is_baseline and not notify_baseline:
+        if baseline_only:
             continue
         if globally_new:
             new_items.append(item)
 
     conn.commit()
-    if is_baseline and not notify_baseline:
+    if baseline_only:
         print(f"{source.name}: 首次建立基线 {len(items)} 条，默认不发送旧内容。")
     return new_items
 
@@ -357,10 +416,17 @@ def save_new_page_items_with_retry(
     source: PageSource,
     items: list[dict],
     notify_baseline: bool = False,
+    expanded_scope_baseline: bool = False,
 ) -> list[dict]:
     def operation() -> list[dict]:
         with connect_db() as conn:
-            return save_new_page_items(conn, source, items, notify_baseline=notify_baseline)
+            return save_new_page_items(
+                conn,
+                source,
+                items,
+                notify_baseline=notify_baseline,
+                expanded_scope_baseline=expanded_scope_baseline,
+            )
 
     return retry_on_locked(operation)
 
@@ -370,40 +436,95 @@ def enrich_item(item: dict) -> dict:
     summary = clean_text(enriched.get("summary", ""))
     full_text = summary
     body_source = enriched.get("body_source", "TrendForce 官方列表页摘要")
+    detail_fetch_status = "not_required"
+    detail_fetch_error = ""
 
     if enriched.get("page_source", "").startswith("trendforce_news_"):
+        detail_fetch_status = "pending"
         try:
             body, fetched_source = fetch_article_body(enriched.get("url", ""))
             if body:
                 full_text = body
                 body_source = fetched_source
+                detail_fetch_status = "succeeded"
+            else:
+                detail_fetch_status = "empty"
         except Exception as exc:
+            detail_fetch_status = "failed"
+            detail_fetch_error = f"{type(exc).__name__}: {str(exc)[:400]}"
             print(f"{enriched.get('url')} 正文抓取失败，回退列表摘要：{exc}")
 
     enriched["summary"] = summary
     enriched["full_text"] = full_text or summary
     enriched["body_source"] = body_source
+    enriched["detail_fetch_status"] = detail_fetch_status
+    if detail_fetch_error:
+        enriched["detail_fetch_error"] = detail_fetch_error
     enriched.setdefault("source_display", enriched.get("source_module") or enriched.get("page_source") or "TrendForce 官方页面")
     return enriched
 
 
+def set_seen_item_lifecycle(source: str, item_id: str, **values: str | None) -> None:
+    with connect_db() as conn:
+        update_seen_item_lifecycle(conn, source, item_id, **values)
+        conn.commit()
+
+
 def notify_item(item: dict) -> None:
-    enriched = enrich_item(item)
-    profile_id = str(enriched.get("page_source") or PAGE_SOURCE_KEY)
-    normalized = normalize_market_item(
-        PAGE_SOURCE_KEY,
-        enriched,
-        store_kind="article",
-        source_profile_id=profile_id,
-    )
-    outcome = process_market_item(
-        normalized,
-        enriched,
-        store_kind="article",
-        source_profile_id=profile_id,
-        db_path=DB_PATH,
-        use_rule_dedup=False,
-    )
+    prepared = dict(item)
+    item_id = str(prepared.pop("id", "") or "")
+    prepared.pop("_seen_item_retry", None)
+    prepared.pop("_seen_item_retry_first_seen_at", None)
+    try:
+        enriched = enrich_item(prepared)
+        detail_status = str(enriched.get("detail_fetch_status") or "not_required")
+        fallback = detail_status in {"failed", "empty"}
+        set_seen_item_lifecycle(
+            str(enriched.get("page_source") or PAGE_SOURCE_KEY),
+            item_id,
+            processability_status="fallback" if fallback else "succeeded",
+            processability_reason="detail_fallback" if fallback else "",
+            admission_status="pending",
+            admission_reason="",
+            processing_status="not_applicable",
+            processing_error="",
+        )
+        profile_id = str(enriched.get("page_source") or PAGE_SOURCE_KEY)
+        normalized = normalize_market_item(
+            PAGE_SOURCE_KEY,
+            enriched,
+            store_kind="article",
+            source_profile_id=profile_id,
+        )
+        outcome = process_market_item(
+            normalized,
+            enriched,
+            store_kind="article",
+            source_profile_id=profile_id,
+            db_path=DB_PATH,
+            use_rule_dedup=False,
+        )
+        set_seen_item_lifecycle(
+            profile_id,
+            item_id,
+            admission_status="admitted",
+            admission_reason="current_runtime_processed",
+            processing_status="succeeded",
+            processing_error="",
+            processed_at=datetime.now(timezone.utc).isoformat(),
+            lifecycle_updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+    except Exception as exc:
+        profile_id = str(prepared.get("page_source") or PAGE_SOURCE_KEY)
+        set_seen_item_lifecycle(
+            profile_id,
+            item_id,
+            processing_status="failed_retryable",
+            processing_error=f"{type(exc).__name__}: {str(exc)[:400]}",
+            processed_at=None,
+            lifecycle_updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+        raise
     review = outcome.payload
     print(
         f"{profile_id} 决策层：importance={review.get('importance')} "
@@ -423,7 +544,18 @@ def run_once(sources: list[PageSource], notify_baseline: bool = False) -> int:
             items = extract_items(source)
             with connect_db() as conn:
                 record_source_success(conn, "trendforce_page", source.name)
-            new_items = save_new_page_items_with_retry(source, items, notify_baseline=notify_baseline)
+                scope_state = load_scope_state(conn, source.name)
+            expanded_scope_baseline = not bool(scope_state.get(EXPANDED_SCOPE_BASELINE_STATE_KEY))
+            new_items = save_new_page_items_with_retry(
+                source,
+                items,
+                notify_baseline=notify_baseline,
+                expanded_scope_baseline=expanded_scope_baseline,
+            )
+            if items and expanded_scope_baseline:
+                scope_state[EXPANDED_SCOPE_BASELINE_STATE_KEY] = datetime.now(timezone.utc).isoformat()
+                with connect_db() as conn:
+                    save_scope_state(conn, source.name, scope_state)
         except Exception as exc:
             with connect_db() as conn:
                 record_source_failure(conn, "trendforce_page", source.name, exc)

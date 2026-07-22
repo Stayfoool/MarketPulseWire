@@ -3,7 +3,11 @@
 
 from __future__ import annotations
 
+import sqlite3
+
+from db_utils import ensure_seen_tables
 from trendforce_page_monitor import extract_news_items, extract_prnewswire_semi_items, extract_research_items
+from trendforce_page_monitor import save_new_page_items
 from trendforce_sources import PageSource
 
 
@@ -116,6 +120,33 @@ def main() -> int:
         raise AssertionError("SEMI PR Newswire title extraction failed")
     if "PR Newswire" not in semi_items[0]["body_source"]:
         raise AssertionError("SEMI body source should identify PR Newswire")
+
+    conn = sqlite3.connect(":memory:")
+    ensure_seen_tables(conn)
+    lifecycle_source = PageSource(
+        "test_page_lifecycle",
+        "TrendForce / test lifecycle",
+        "https://example.com/test",
+        "research",
+        "test",
+    )
+    baseline_item = {
+        "id": "https://example.com/item-1",
+        "url": "https://example.com/item-1",
+        "title": "Ordinary market update",
+        "summary": "A summary without a configured keyword.",
+        "published_at": "2026-06-23T00:00:00+08:00",
+    }
+    assert save_new_page_items(conn, lifecycle_source, [baseline_item], expanded_scope_baseline=True) == []
+    row = conn.execute(
+        "SELECT collection_class, processability_status, admission_status FROM seen_items"
+    ).fetchone()
+    if row != ("baseline", "not_required", "not_applicable"):
+        raise AssertionError(f"expanded page baseline lifecycle mismatch: {row}")
+    live_item = dict(baseline_item, id="https://example.com/item-2", url="https://example.com/item-2")
+    selected = save_new_page_items(conn, lifecycle_source, [live_item])
+    if [item["id"] for item in selected] != [live_item["id"]]:
+        raise AssertionError("post-boundary page item should enter live processing")
 
     print("trendforce page extraction checks passed")
     return 0
