@@ -26,7 +26,13 @@ from collector_runtime import (
     source_state_key,
     split_sources_by_backoff,
 )
-from db_utils import connect_sqlite, ensure_seen_tables, ensure_source_state_table, retry_on_locked
+from db_utils import (
+    connect_sqlite,
+    ensure_seen_tables,
+    ensure_source_state_table,
+    retry_on_locked,
+    update_seen_item_lifecycle,
+)
 from http_utils import http_get
 from llm_analysis import llm_config
 from market_flow import is_official_news_source, normalize_market_item, process_market_item
@@ -55,6 +61,11 @@ CORE_COMPANY_FEEDS = {
     "skhynix_newsroom",
     "micron_news_releases",
 }
+
+# Moving business filtering behind seen_items exposes older feed rows.  This
+# marker records the first successful widened-scope response per source so
+# those rows are retained as baseline and cannot be delivered retroactively.
+EXPANDED_SCOPE_BASELINE_STATE_KEY = "expanded_scope_baseline_at"
 
 
 def connect_db() -> sqlite3.Connection:
@@ -255,6 +266,7 @@ def save_new_items(
     items: Iterable[dict],
     notify_baseline: bool = False,
     source_label: str | None = None,
+    expanded_scope_baseline: bool = False,
 ) -> list[dict]:
     items_list = list(items)
     new_items: list[dict] = []
@@ -265,14 +277,54 @@ def save_new_items(
             (source, datetime.now(timezone.utc).isoformat()),
         )
     now = datetime.now(timezone.utc).isoformat()
+    baseline_only = bool((is_baseline and not notify_baseline) or expanded_scope_baseline)
     for item in sorted(items_list, key=lambda entry: entry.get("published_at") or ""):
         item_id = str(item["id"])
+        existing = conn.execute(
+            """
+            SELECT collection_class, processability_status, admission_status,
+                   processing_status, first_seen_at
+            FROM seen_items WHERE source = ? AND item_id = ?
+            """,
+            (source, item_id),
+        ).fetchone()
+        if existing:
+            retryable = (
+                str(existing[0]) == "live"
+                and (
+                    str(existing[1]) in {"pending", "failed_retryable"}
+                    or str(existing[2]) == "pending"
+                    or str(existing[3]) in {"pending", "failed_retryable"}
+                )
+            )
+            if retryable:
+                update_seen_item_lifecycle(
+                    conn,
+                    source,
+                    item_id,
+                    processability_status="pending",
+                    processability_reason="",
+                    admission_status="pending",
+                    admission_reason="",
+                    processing_status="not_applicable",
+                    processing_error="",
+                    processed_at=None,
+                    lifecycle_updated_at=datetime.now(timezone.utc).isoformat(),
+                )
+                item = dict(item)
+                item["_seen_item_retry"] = True
+                item["_seen_item_retry_first_seen_at"] = str(existing[4] or "")
+                new_items.append(item)
+            continue
         try:
             conn.execute(
                 """
                 INSERT INTO seen_items (
-                    source, item_id, url, title, summary, published_at, first_seen_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    source, item_id, url, title, summary, published_at, first_seen_at,
+                    collection_class, processability_status, processability_reason,
+                    admission_status, admission_reason, processing_status,
+                    processing_error, processed_at, lifecycle_updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     source,
@@ -282,11 +334,21 @@ def save_new_items(
                     item.get("summary", ""),
                     item.get("published_at", ""),
                     now,
+                    "baseline" if baseline_only else "live",
+                    "not_required" if baseline_only else "pending",
+                    "expanded_scope_baseline" if expanded_scope_baseline else "",
+                    "not_applicable" if baseline_only else "pending",
+                    "expanded_scope_baseline" if expanded_scope_baseline else "",
+                    "not_applicable",
+                    "",
+                    now if baseline_only else None,
+                    now,
                 ),
             )
         except sqlite3.IntegrityError:
             continue
-        new_items.append(item)
+        if not baseline_only:
+            new_items.append(item)
     conn.commit()
     if is_baseline and not notify_baseline:
         label = source_label or source
@@ -300,6 +362,7 @@ def save_new_items_with_retry(
     items: Iterable[dict],
     notify_baseline: bool = False,
     source_label: str | None = None,
+    expanded_scope_baseline: bool = False,
 ) -> list[dict]:
     def operation() -> list[dict]:
         with connect_db() as conn:
@@ -309,6 +372,7 @@ def save_new_items_with_retry(
                 items,
                 notify_baseline=notify_baseline,
                 source_label=source_label,
+                expanded_scope_baseline=expanded_scope_baseline,
             )
 
     return retry_on_locked(operation)
@@ -317,6 +381,8 @@ def save_new_items_with_retry(
 def enrich_item(source: str, item: dict) -> dict:
     body = ""
     body_source = "RSS"
+    detail_fetch_status = "not_required"
+    detail_fetch_error = ""
     should_fetch_body = True
     if source.startswith("digitimes_") and os.getenv("DIGITIMES_FETCH_BODY", "").strip() != "1":
         should_fetch_body = False
@@ -325,29 +391,99 @@ def enrich_item(source: str, item: dict) -> dict:
         should_fetch_body = False
         body_source = "价值目录列表页"
     if should_fetch_body:
+        detail_fetch_status = "pending"
         try:
             body, body_source = fetch_article_body(item.get("url", ""))
+            detail_fetch_status = "succeeded" if body else "empty"
         except Exception as exc:
+            detail_fetch_status = "failed"
+            detail_fetch_error = f"{type(exc).__name__}: {str(exc)[:400]}"
             print(f"{source} 正文抓取失败，回退 RSS：{exc}")
     item = dict(item)
     item["full_text"] = body or strip_tags(item.get("content") or item.get("summary", ""))
     item["body_source"] = body_source if body else "RSS description"
+    item["detail_fetch_status"] = detail_fetch_status
+    if detail_fetch_error:
+        item["detail_fetch_error"] = detail_fetch_error
     if is_overseas_media_source(source):
         item.setdefault("source_module", overseas_media_module(source))
         item.setdefault("access_note", overseas_media_access_note(source, item["body_source"]))
     return item
 
 
-def notify_item(source: str, item: dict) -> None:
-    item = enrich_item(source, item)
-    normalized = normalize_market_item(source, item, store_kind="article", source_profile_id=source)
-    outcome = process_market_item(
-        normalized,
-        item,
-        store_kind="article",
-        source_profile_id=source,
-        db_path=DB_PATH,
+def set_seen_item_lifecycle(source: str, item_id: str, **values: str | None) -> None:
+    """Persist the retry/process state without making it a second article store."""
+    with connect_db() as conn:
+        update_seen_item_lifecycle(conn, source, item_id, **values)
+        conn.commit()
+
+
+def _prepare_retry_item(item: dict) -> tuple[dict, str]:
+    prepared = dict(item)
+    item_id = str(prepared.pop("id", "") or "")
+    prepared.pop("_seen_item_retry", None)
+    prepared.pop("_seen_item_retry_first_seen_at", None)
+    return prepared, item_id
+
+
+def _finish_seen_item(source: str, item_id: str, enriched: dict) -> None:
+    detail_status = str(enriched.get("detail_fetch_status") or "not_required")
+    processability = "fallback" if detail_status in {"failed", "empty"} else "succeeded"
+    reason = "detail_fallback" if processability == "fallback" else ""
+    set_seen_item_lifecycle(
+        source,
+        item_id,
+        processability_status=processability,
+        processability_reason=reason,
+        admission_status="pending",
+        admission_reason="",
+        processing_status="not_applicable",
+        processing_error="",
     )
+
+
+def _complete_seen_item(source: str, item_id: str) -> None:
+    set_seen_item_lifecycle(
+        source,
+        item_id,
+        admission_status="admitted",
+        admission_reason="current_runtime_processed",
+        processing_status="succeeded",
+        processing_error="",
+        processed_at=datetime.now(timezone.utc).isoformat(),
+        lifecycle_updated_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def _fail_seen_item(source: str, item_id: str, exc: Exception) -> None:
+    set_seen_item_lifecycle(
+        source,
+        item_id,
+        processing_status="failed_retryable",
+        processing_error=f"{type(exc).__name__}: {str(exc)[:400]}",
+        processed_at=None,
+        lifecycle_updated_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def notify_item(source: str, item: dict) -> None:
+    item, item_id = _prepare_retry_item(item)
+    try:
+        enriched = enrich_item(source, item)
+        _finish_seen_item(source, item_id, enriched)
+        normalized = normalize_market_item(source, enriched, store_kind="article", source_profile_id=source)
+        outcome = process_market_item(
+            normalized,
+            enriched,
+            store_kind="article",
+            source_profile_id=source,
+            db_path=DB_PATH,
+        )
+        _complete_seen_item(source, item_id)
+    except Exception as exc:
+        _fail_seen_item(source, item_id, exc)
+        raise
+    item = enriched
     review = outcome.payload
     print(
         f"{source} 决策层：importance={review.get('importance')} "
@@ -359,15 +495,22 @@ def notify_item(source: str, item: dict) -> None:
 
 
 def handle_official_news_item(source: str, item: dict) -> None:
-    enriched = enrich_item(source, item)
-    normalized = normalize_market_item(source, enriched, store_kind="official", source_profile_id=source)
-    outcome = process_market_item(
-        normalized,
-        enriched,
-        store_kind="official",
-        source_profile_id=source,
-        db_path=DB_PATH,
-    )
+    item, item_id = _prepare_retry_item(item)
+    try:
+        enriched = enrich_item(source, item)
+        _finish_seen_item(source, item_id, enriched)
+        normalized = normalize_market_item(source, enriched, store_kind="official", source_profile_id=source)
+        outcome = process_market_item(
+            normalized,
+            enriched,
+            store_kind="official",
+            source_profile_id=source,
+            db_path=DB_PATH,
+        )
+        _complete_seen_item(source, item_id)
+    except Exception as exc:
+        _fail_seen_item(source, item_id, exc)
+        raise
     review = outcome.payload
     print(
         f"{source} 官网新闻分流：importance={review.get('importance')} "
@@ -431,8 +574,22 @@ def run_once(feeds: dict[str, str], notify_baseline: bool = False) -> int:
             if not_modified:
                 print(f"{source}: feed 未变化。", flush=True)
                 continue
-            items = filter_items(source, items)
-            new_items = save_new_items_with_retry(source, items, notify_baseline=notify_baseline)
+            # The first successful widened-scope response establishes a new
+            # no-notify boundary.  Previously invisible rows are retained as
+            # baseline; only later discoveries enter the live path.
+            expanded_scope_baseline = not bool(next_state.get(EXPANDED_SCOPE_BASELINE_STATE_KEY))
+            new_items = save_new_items_with_retry(
+                source,
+                items,
+                notify_baseline=notify_baseline,
+                expanded_scope_baseline=expanded_scope_baseline,
+            )
+            if items and expanded_scope_baseline:
+                next_state[EXPANDED_SCOPE_BASELINE_STATE_KEY] = next_state.get(
+                    "last_checked_at", datetime.now(timezone.utc).isoformat()
+                )
+                with connect_db() as conn:
+                    save_source_state(conn, source, next_state)
         except Exception as exc:
             with connect_db() as conn:
                 record_source_failure(conn, "rss_monitor", source, exc)
