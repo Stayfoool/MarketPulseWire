@@ -106,7 +106,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | Sina 7x24 flash | `sina_flash.py` | Unified runtime, event store |
 | Sina portfolio stock news | `sina_stock_news.py` | Relevance enrichment, then unified runtime and event store |
 | Company disclosures | `company_disclosures.py` -> `cninfo_disclosure_provider.py` | Twice daily CNINFO fulltext/relation discovery and official-PDF enrichment; report-only writes baseline event audits, while live mode enables analysis and delivery |
-| AlphaAbstract research summaries | `alphabstract_monitor.py` through `research_collector.py` | Public sitemap/page enrichment, then unified runtime and article store |
+| AlphaAbstract research summaries | `alphabstract_monitor.py` through `research_collector.py` | Public sitemap discovery reserves `seen_items` identity before public-summary page enrichment, then unified runtime and article store |
 | ValueList research directory | `value_directory_monitor.py` | One private-browser session collects all enabled lists and visible first-page preview metadata, then closes before OCR and unified runtime/article-store processing |
 
 Source-specific login, WAF, API, sitemap discovery, polling, browser profile, OCR and attachment behavior ends before the normalized runtime boundary.
@@ -171,11 +171,25 @@ The project keeps the existing physical stores:
 
 `seen_items` keeps discovery identity as its primary responsibility. Additive
 compatibility columns record `collection_class`, processability, admission and
-processing status for newly collected domestic finance-media, RSS and
-TrendForce page items. Existing rows are migrated as `legacy_unclassified`; no
+processing status for newly collected domestic finance-media, RSS, TrendForce
+page and AlphaAbstract items. Existing rows are migrated as `legacy_unclassified`; no
 historical baseline/exclusion/failure state is inferred. `DecisionResult.action`
 and delivery status are not copied into this ledger and remain authoritative in
 the existing review/delivery paths.
+
+AlphaAbstract reads its public sitemap into bounded discovery records containing
+the stable summary URL identity and sitemap timestamp, then reserves those
+records in `seen_items` before requesting the public summary page. The first
+non-empty sitemap response after this ordering change records a per-source
+`expanded_scope_baseline_at` boundary; already-visible rows are baseline and do
+not enter enrichment, decision, review or delivery. Later live rows fetch and
+parse the public summary page, update only the bounded title/summary/date fields
+in `seen_items`, form `NormalizedMarketItem`, and enter the shared runtime. The
+article body remains outside `seen_items`. Detail/parse failures and downstream
+processing failures remain retryable when the same sitemap identity is observed
+again; completed and baseline rows are not retried. The research collector's
+read-only report path may still perform complete public-page enrichment without
+writing discovery or lifecycle state.
 
 `push_now`, `should_push_now` and `should_push` remain compatibility columns for historical readers and old rows. New delivery code does not read them as action inputs. `pushed_at` and delivery rows record what happened, not what should be sent.
 
