@@ -6,7 +6,9 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import china_finance_media_monitor as cfm
 import investment_universe as iu
@@ -434,6 +436,108 @@ def test_wallstreetcn_processability_retry_waits_for_source_rediscovery() -> Non
     finally:
         cfm.DB_PATH = original_db
         cfm.enrich_item = original_enrich
+
+
+def test_wallstreetcn_stale_retry_keeps_processing_but_skips_delivery() -> None:
+    original_db = cfm.DB_PATH
+    original_admission = cfm.current_admission_result
+    original_enrich = cfm.enrich_item
+    original_match = cfm.investment_universe_match
+    original_process = cfm.process_market_item
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfm.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            with cfm.connect_db() as conn:
+                cfm.ensure_seen_table(conn)
+                conn.execute(
+                    "INSERT INTO seen_sources (source, first_seen_at) VALUES (?, ?)",
+                    (cfm.WALLSTREETCN_SOURCE, "2026-07-01T00:00:00+00:00"),
+                )
+                conn.commit()
+            item = {
+                "id": "livenews:stale-retry",
+                "title": "DRAM产能增加",
+                "summary": "DRAM产能增加",
+                "full_text": "DRAM产能增加",
+                "published_at": "2026-07-20T00:00:00+00:00",
+            }
+            assert cfm.save_new_items_with_retry(cfm.WALLSTREETCN_SOURCE, [item]) == [item]
+            with cfm.connect_db() as conn:
+                conn.execute(
+                    """
+                    UPDATE seen_items
+                    SET first_seen_at = '2026-07-20T00:00:00+00:00',
+                        processability_status = 'failed_retryable'
+                    WHERE source = ? AND item_id = ?
+                    """,
+                    (cfm.WALLSTREETCN_SOURCE, item["id"]),
+                )
+                conn.commit()
+            selected = cfm.save_new_items_with_retry(cfm.WALLSTREETCN_SOURCE, [item])
+            assert selected == [item]
+            assert item[cfm.SEEN_ITEM_RETRY_KEY] is True
+            assert item[cfm.SEEN_ITEM_RETRY_FIRST_SEEN_KEY] == "2026-07-20T00:00:00+00:00"
+
+            cfm.current_admission_result = lambda item, source='', **_kwargs: {
+                "admitted": True,
+                "reason": "media_focus",
+                "matched_families": ("semiconductor_ai",),
+            }
+            cfm.investment_universe_match = lambda source, item: {
+                "matched": True,
+                "tags": ["user_include_keyword"],
+                "reason": "current admission",
+            }
+            cfm.enrich_item = lambda _source, row: dict(row)
+            calls: list[bool] = []
+
+            def capture_process(_normalized, raw_item, **kwargs):
+                calls.append(kwargs["deliver"])
+                assert cfm.SEEN_ITEM_RETRY_KEY not in raw_item
+                assert cfm.SEEN_ITEM_RETRY_FIRST_SEEN_KEY not in raw_item
+                return SimpleNamespace(payload={}, delivery_status="not_requested")
+
+            cfm.process_market_item = capture_process
+            cfm.notify_item(cfm.WALLSTREETCN_SOURCE, item)
+            assert calls == [False]
+            with cfm.connect_db() as conn:
+                state = conn.execute(
+                    "SELECT processability_status, admission_status, processing_status "
+                    "FROM seen_items WHERE source = ? AND item_id = ?",
+                    (cfm.WALLSTREETCN_SOURCE, item["id"]),
+                ).fetchone()
+                assert state == ("succeeded", "admitted", "succeeded")
+    finally:
+        cfm.DB_PATH = original_db
+        cfm.current_admission_result = original_admission
+        cfm.enrich_item = original_enrich
+        cfm.investment_universe_match = original_match
+        cfm.process_market_item = original_process
+
+
+def test_wallstreetcn_fresh_retry_and_new_old_item_can_deliver() -> None:
+    now = datetime(2026, 7, 22, 3, 0, tzinfo=timezone.utc)
+    assert cfm.should_deliver_wallstreetcn_retry(
+        cfm.WALLSTREETCN_SOURCE,
+        is_retry=True,
+        first_seen_at="2026-07-22T02:58:00+00:00",
+        published_at="2026-07-01T00:00:00+00:00",
+        now=now,
+    ) is True
+    assert cfm.should_deliver_wallstreetcn_retry(
+        cfm.WALLSTREETCN_SOURCE,
+        is_retry=False,
+        first_seen_at="",
+        published_at="2026-07-01T00:00:00+00:00",
+        now=now,
+    ) is True
+    assert cfm.should_deliver_wallstreetcn_retry(
+        cfm.WALLSTREETCN_SOURCE,
+        is_retry=True,
+        first_seen_at="",
+        published_at="",
+        now=now,
+    ) is False
 
 
 def test_yicai_morning_brief_is_mandatory_push() -> None:
@@ -956,6 +1060,8 @@ def main() -> int:
     test_excluded_item_uses_one_normalized_item_for_report_only_comparison()
     test_admitted_item_reuses_normalized_item_and_processing_failure_retries()
     test_wallstreetcn_processability_retry_waits_for_source_rediscovery()
+    test_wallstreetcn_stale_retry_keeps_processing_but_skips_delivery()
+    test_wallstreetcn_fresh_retry_and_new_old_item_can_deliver()
     test_yicai_morning_brief_is_mandatory_push()
     test_short_english_keyword_requires_token_boundary()
     test_china_media_focus_filters_generic_power_and_accepts_ai_context()
