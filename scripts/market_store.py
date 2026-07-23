@@ -198,6 +198,29 @@ def begin_market_review(
     return int(cur.lastrowid)
 
 
+def ensure_market_item_alias(
+    conn: sqlite3.Connection,
+    market_item_id: int,
+    *,
+    item_kind: str,
+    source: str,
+    legacy_item_id: str,
+    legacy_store_kind: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO market_item_aliases (
+            market_item_id, item_kind, source, legacy_item_id,
+            legacy_store_kind, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(item_kind, source, legacy_item_id) DO UPDATE SET
+            market_item_id = excluded.market_item_id,
+            legacy_store_kind = excluded.legacy_store_kind
+        """,
+        (market_item_id, item_kind, source, legacy_item_id, legacy_store_kind, utc_now()),
+    )
+
+
 def record_production_admission(
     item: NormalizedMarketItem,
     admission: AdmissionResult,
@@ -247,6 +270,7 @@ def complete_market_review(
     db_path: Path = DEFAULT_DB_PATH,
     legacy_store_kind: str | None = None,
     legacy_store_id: str | None = None,
+    legacy_payload: dict[str, Any] | None = None,
 ) -> None:
     now = utc_now()
     with connect_sqlite(db_path) as conn:
@@ -262,7 +286,7 @@ def complete_market_review(
             """
             UPDATE market_reviews
             SET review_status = 'succeeded', decision_action = ?, importance = ?,
-                decision_json = ?, interpretation_json = ?, completed_at = ?,
+                decision_json = ?, interpretation_json = ?, legacy_payload_json = ?, completed_at = ?,
                 legacy_store_kind = COALESCE(?, legacy_store_kind),
                 legacy_store_id = COALESCE(?, legacy_store_id)
             WHERE id = ?
@@ -272,6 +296,7 @@ def complete_market_review(
                 flow_result.decision.importance,
                 json_dumps(flow_result.decision.to_dict()),
                 json_dumps(flow_result.interpretation.to_dict()),
+                json_dumps(legacy_payload) if legacy_payload is not None else None,
                 now,
                 legacy_store_kind,
                 legacy_store_id,

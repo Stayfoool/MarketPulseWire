@@ -11,6 +11,7 @@ from db_utils import SEEN_ITEM_LIFECYCLE_COLUMNS, connect_sqlite
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = ROOT / "data" / "surveil.sqlite3"
+MARKET_RESULTS_MIGRATION_VERSION = "market-storage-results-v1"
 
 
 SCHEMA = """
@@ -96,6 +97,19 @@ CREATE INDEX IF NOT EXISTS idx_market_items_seen ON market_items(first_seen_at);
 CREATE INDEX IF NOT EXISTS idx_market_items_source ON market_items(source, source_item_id);
 CREATE INDEX IF NOT EXISTS idx_market_items_processing ON market_items(processing_status, updated_at);
 
+CREATE TABLE IF NOT EXISTS market_item_aliases (
+    market_item_id INTEGER NOT NULL,
+    item_kind TEXT NOT NULL,
+    source TEXT NOT NULL,
+    legacy_item_id TEXT NOT NULL,
+    legacy_store_kind TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(item_kind, source, legacy_item_id),
+    FOREIGN KEY(market_item_id) REFERENCES market_items(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_item_aliases_item ON market_item_aliases(market_item_id);
+
 CREATE TABLE IF NOT EXISTS market_reviews (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     market_item_id INTEGER NOT NULL,
@@ -114,6 +128,7 @@ CREATE TABLE IF NOT EXISTS market_reviews (
     importance TEXT,
     decision_json TEXT,
     interpretation_json TEXT,
+    legacy_payload_json TEXT,
     application_revision TEXT,
     legacy_store_kind TEXT,
     legacy_store_id TEXT,
@@ -698,6 +713,7 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     }
     for column, definition in delivery_columns.items():
         add_column_if_missing(conn, "deliveries", column, definition)
+    add_column_if_missing(conn, "market_reviews", "legacy_payload_json", "TEXT")
     add_column_if_missing(conn, "signal_reviews", "target_id", "INTEGER")
     add_column_if_missing(conn, "signal_reviews", "symbol", "TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_seen_items_first_seen ON seen_items(first_seen_at)")
@@ -736,6 +752,10 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_market_items_processing "
         "ON market_items(processing_status, updated_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_market_item_aliases_item "
+        "ON market_item_aliases(market_item_id)"
     )
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_market_reviews_current "

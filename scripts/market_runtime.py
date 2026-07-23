@@ -26,6 +26,7 @@ from market_item import (
 )
 from market_store import (
     complete_market_review,
+    ensure_market_item_alias,
     fail_market_review,
     link_latest_event_delivery,
     record_article_delivery,
@@ -296,13 +297,27 @@ def _process_content_item(
     }
     flow_result = _flow_result(decision_item, payload, storage_ref)
     if market_review_id is not None and not flow_result.decision.audit_json.get("contract_error"):
+        if market_item_id is None:
+            raise RuntimeError("market review exists without its market item identity")
+        item_kind = "official" if store_kind == "official" else "article"
         complete_market_review(
             market_review_id,
             flow_result,
             db_path=db_path,
             legacy_store_kind=storage_ref["store_kind"],
             legacy_store_id=f"{source}:{item_id}",
+            legacy_payload=payload,
         )
+        with connect_sqlite(db_path) as conn:
+            ensure_market_item_alias(
+                conn,
+                market_item_id,
+                item_kind=item_kind,
+                source=source,
+                legacy_item_id=item_id,
+                legacy_store_kind=storage_ref["store_kind"],
+            )
+            conn.commit()
     if inserted and not flow_result.decision.audit_json.get("contract_error"):
         if production_admission is None and (
             current_admission_status == "unknown"
@@ -385,6 +400,17 @@ def _process_event_item(
     module = _selected_module("event")
     event_id, inserted = module.upsert_event(raw_item, db_path, normalized_item=item)
     storage_ref = {"store_kind": "event_analyses", "event_id": event_id, "task": task}
+    if market_item_id is not None:
+        with connect_sqlite(db_path) as conn:
+            ensure_market_item_alias(
+                conn,
+                market_item_id,
+                item_kind="event",
+                source=item.source,
+                legacy_item_id=str(event_id),
+                legacy_store_kind="events",
+            )
+            conn.commit()
     empty_payload: dict[str, Any] = {}
     if not inserted and not reprocess_existing:
         return MarketProcessOutcome(
@@ -431,12 +457,17 @@ def _process_event_item(
         raise MarketItemProcessingError(str(exc), partial) from exc
     flow_result = _flow_result(decision_item, analysis, storage_ref)
     if market_review_id is not None and not flow_result.decision.audit_json.get("contract_error"):
+        if market_item_id is None:
+            raise RuntimeError("market review exists without its market item identity")
+        stored_analysis = latest_event_analysis(event_id, task, db_path)
+        legacy_analysis_id = str(stored_analysis["id"]) if stored_analysis else f"{event_id}:{task}"
         complete_market_review(
             market_review_id,
             flow_result,
             db_path=db_path,
             legacy_store_kind="event_analyses",
-            legacy_store_id=f"{event_id}:{task}",
+            legacy_store_id=legacy_analysis_id,
+            legacy_payload=analysis,
         )
     if not flow_result.decision.audit_json.get("contract_error"):
         record_rule_comparison(

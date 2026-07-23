@@ -13,6 +13,7 @@ from typing import Any
 
 from db_utils import connect_sqlite
 from env_utils import load_env
+from market_canonical_reader import canonical_signal_rows, migration_ready as canonical_migration_ready
 from market_db import DEFAULT_DB_PATH, init_db
 from market_view import article_view_from_row, event_view_from_row, official_view_from_row
 from pipeline_health import record_pipeline_failure, record_pipeline_success
@@ -816,17 +817,33 @@ def extract_signals(*, db_path: Path, days: int, dry_run: bool = False) -> dict[
     with connect_sqlite(db_path) as conn:
         conn.row_factory = sqlite3.Row
         candidates: list[tuple[str, tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]]] = []
-        for row in latest_event_rows(conn, since):
+        canonical_ready = canonical_migration_ready(conn)
+        event_source_rows = (
+            canonical_signal_rows(conn, item_kind="event", since=since)
+            if canonical_ready
+            else latest_event_rows(conn, since)
+        )
+        article_source_rows = (
+            canonical_signal_rows(conn, item_kind="article", since=since)
+            if canonical_ready
+            else article_rows(conn, since)
+        )
+        official_source_rows = (
+            canonical_signal_rows(conn, item_kind="official", since=since)
+            if canonical_ready
+            else official_rows(conn, since)
+        )
+        for row in event_source_rows:
             extracted = event_signal_from_row(conn, row)
             if extracted:
                 counts["events"] += 1
                 candidates.append(("events", extracted))
-        for row in article_rows(conn, since):
+        for row in article_source_rows:
             extracted = article_signal_from_row(conn, row)
             if extracted:
                 counts["article_reviews"] += 1
                 candidates.append(("article_reviews", extracted))
-        for row in official_rows(conn, since):
+        for row in official_source_rows:
             extracted = official_signal_from_row(conn, row)
             if extracted:
                 counts["official_news_reviews"] += 1

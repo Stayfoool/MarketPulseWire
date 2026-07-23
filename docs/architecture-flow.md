@@ -227,18 +227,36 @@ New production items also use the canonical storage contract:
 - `market_reviews` stores a versioned production `AdmissionResult` for every
   normalized live item. An excluded row has no `DecisionResult` or
   `InterpretationResult`. An admitted row is completed with the exact results
-  returned by the unified runtime before delivery.
+  returned by the unified runtime before delivery. It also retains the bounded
+  compatibility payload needed to reproduce existing Web, digest, feedback and
+  signal views; private report-only LLM requests/responses remain outside
+  SQLite.
+- `market_item_aliases` maps the unified item identity to the existing
+  `article`, `official` and numeric `event` identities. Feishu feedback tokens,
+  signal source ids and Web links therefore remain valid during the storage
+  transition.
 - `deliveries` remains an execution audit, independent from decision
   authority. Additive `market_item_id`, `market_review_id`, `decision_action`
   and `attempted_at` columns link article, official-news and event delivery
   outcomes to the same item/review contract.
 
-The first deployment keeps the historical stores below as compatibility
-projections for existing Web, digest, feedback, signal and operator readers.
-It backfills historical `seen_items` identities once, without inventing missing
-body text, admission evidence or decisions. Legacy table removal requires a
-separate observed read cutover; these tables are not a second decision
-authority.
+The first deployment backfills historical `seen_items` identities. The second
+additive migration, run explicitly with `market_storage_migration.py --apply`
+after a preview and SQLite backup, copies historical article/official results,
+every event-analysis version and every event identity into the unified tables.
+Only a valid stored `DecisionResult` is copied as an action; legacy push flags,
+importance and delivery history cannot create an action. Missing body text,
+admission evidence and decisions remain missing and are labelled
+`legacy_unclassified`.
+
+After the second migration marker exists, Web Event Center, article/official
+daily output, feedback lookup/quality metrics and signal extraction read the
+unified tables through `market_canonical_reader.py`. When an event has multiple
+current task results, display and signal readers use the latest result while all
+versions remain stored. Existing external ids are resolved through
+`market_item_aliases`; historical deliveries without a provable originating
+review link only to the item. Legacy writes and tables remain enabled for
+rollback in this stage, but readers do not use them as decision authority.
 
 The project keeps the existing physical stores:
 
@@ -251,7 +269,12 @@ The project keeps the existing physical stores:
 - `source_health`, `x_stream_health`
 - portfolio, relation, evidence and signal tables
 
-`article`, `official` and `event` are storage/audit identities, not decision-pipeline identities. All three arrive through the unified runtime above. `article_reviews` remains the broad media/research review store, `official_news_reviews` remains an active compatibility store for official-news readers and daily output, and `events` / `event_analyses` / `deliveries` retain event identity, repeated analyses and explicit delivery audits. Their schemas originated before runtime unification, but current production readers still use them; removing them requires a separate canonical-schema migration with backfill, dual-read verification and rollback.
+`article`, `official` and `event` are compatibility storage/audit identities,
+not decision-pipeline identities. All three arrive through the unified runtime
+above. `article_reviews`, `official_news_reviews`, and `events` /
+`event_analyses` remain compatibility writes for rollback after the unified
+read switch. Removing those writes or tables requires a separate production
+observation period, explicit approval and another migration.
 
 `seen_items` keeps discovery identity as its primary responsibility. Additive
 compatibility columns record `collection_class`, processability, admission and

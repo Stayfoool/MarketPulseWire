@@ -13,8 +13,9 @@ from zoneinfo import ZoneInfo
 from cards import div_markdown, md_escape, source_module
 from env_utils import load_env
 from feishu import send_card
+from market_db import DEFAULT_DB_PATH as DB_PATH
 from market_review_store import ensure_official_news_table
-from rss_monitor import DB_PATH
+from market_canonical_reader import canonical_digest_rows, migration_ready as canonical_migration_ready
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +35,10 @@ def day_window(day: str) -> tuple[str, str]:
 def fetch_digest_rows(conn: sqlite3.Connection, day: str) -> list[sqlite3.Row]:
     start_utc, end_utc = day_window(day)
     conn.row_factory = sqlite3.Row
+    if canonical_migration_ready(conn):
+        return canonical_digest_rows(
+            conn, item_kind="official", start_utc=start_utc, end_utc=end_utc
+        )  # type: ignore[return-value]
     return list(
         conn.execute(
             """

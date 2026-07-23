@@ -36,6 +36,7 @@ from holdings_store import (
     validate_holdings,
 )
 from market_db import DEFAULT_DB_PATH
+from market_canonical_reader import canonical_event_rows, migration_ready as canonical_migration_ready
 from market_feedback import FEEDBACK_LABELS, feedback_projection_by_item, feedback_quality_payload
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
 from investment_bank_theme_config import config_payload as investment_bank_theme_config_payload
@@ -592,7 +593,29 @@ def fetch_events_rows(
     with connect_sqlite(db_path) as conn:
         conn.row_factory = sqlite3.Row
         feedback_projection = feedback_projection_by_item(conn)
-        if table_exists(conn, "events"):
+        canonical_ready = canonical_migration_ready(conn)
+        if canonical_ready:
+            for item in canonical_event_rows(
+                conn,
+                start_utc=start_utc,
+                end_utc=end_utc,
+                time_basis=time_basis,
+                include_baseline=include_baseline,
+            ):
+                identity = item.pop("feedback_identity", None)
+                item["published_at"] = normalize_time(item.get("published_at"))
+                item["seen_at"] = normalize_time(item.get("seen_at"))
+                if identity:
+                    apply_event_feedback(
+                        item,
+                        item_kind=str(identity["item_kind"]),
+                        source=str(identity["source"]),
+                        item_id=str(identity["item_id"]),
+                        delivered=bool(identity["delivered"]),
+                        projection=feedback_projection,
+                    )
+                rows.append(item)
+        if not canonical_ready and table_exists(conn, "events"):
             where, params = event_center_where_clause(
                 time_field=event_time_field(
                     basis=time_basis,
@@ -670,7 +693,7 @@ def fetch_events_rows(
                     projection=feedback_projection,
                 )
                 rows.append(view)
-        if table_exists(conn, "article_reviews"):
+        if not canonical_ready and table_exists(conn, "article_reviews"):
             article_columns = table_columns(conn, "article_reviews")
             gate_json_expr = "gate_json" if "gate_json" in article_columns else "'{}' AS gate_json"
             affected_targets_expr = (
@@ -722,7 +745,7 @@ def fetch_events_rows(
                     projection=feedback_projection,
                 )
                 rows.append(view)
-        if table_exists(conn, "official_news_reviews"):
+        if not canonical_ready and table_exists(conn, "official_news_reviews"):
             official_columns = table_columns(conn, "official_news_reviews")
             should_push_expr = "should_push_now" if "should_push_now" in official_columns else "0 AS should_push_now"
             analysis_json_expr = "analysis_json" if "analysis_json" in official_columns else "'{}' AS analysis_json"
@@ -771,7 +794,7 @@ def fetch_events_rows(
                     projection=feedback_projection,
                 )
                 rows.append(view)
-        if include_baseline and not feedback_filter and table_exists(conn, "seen_items"):
+        if not canonical_ready and include_baseline and not feedback_filter and table_exists(conn, "seen_items"):
             where, params = event_center_where_clause(
                 time_field=event_time_field(
                     basis=time_basis,
