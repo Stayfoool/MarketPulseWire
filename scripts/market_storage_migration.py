@@ -22,6 +22,7 @@ MIGRATION_VERSION = MARKET_RESULTS_MIGRATION_VERSION
 
 @dataclass
 class MigrationStats:
+    already_applied: bool = False
     items: int = 0
     aliases: int = 0
     reviews: int = 0
@@ -38,6 +39,7 @@ class MigrationStats:
     def to_dict(self) -> dict[str, Any]:
         return {
             "migration_version": MIGRATION_VERSION,
+            "already_applied": self.already_applied,
             "items": self.items,
             "aliases": self.aliases,
             "reviews": self.reviews,
@@ -48,6 +50,27 @@ class MigrationStats:
             "skipped_existing": self.skipped_existing,
             "by_store": dict(sorted(self.by_store.items())),
         }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "MigrationStats":
+        numeric_fields = (
+            "items",
+            "aliases",
+            "reviews",
+            "reviews_with_decision",
+            "reviews_without_decision",
+            "event_deliveries_linked",
+            "reconciled_event_reviews",
+            "skipped_existing",
+        )
+        values = {field: int(payload.get(field) or 0) for field in numeric_fields}
+        by_store = payload.get("by_store")
+        values["by_store"] = (
+            {str(key): int(value) for key, value in by_store.items()}
+            if isinstance(by_store, dict)
+            else {}
+        )
+        return cls(already_applied=True, **values)
 
 
 def _json_dict(value: Any) -> dict[str, Any]:
@@ -551,6 +574,12 @@ def _migrate_legacy_results(conn: sqlite3.Connection, *, apply: bool) -> Migrati
 
 
 def migrate_legacy_results(conn: sqlite3.Connection, *, apply: bool) -> MigrationStats:
+    completed = conn.execute(
+        "SELECT state_json FROM source_state WHERE source=?",
+        (MIGRATION_VERSION,),
+    ).fetchone()
+    if completed:
+        return MigrationStats.from_dict(_json_dict(completed[0]))
     if not apply:
         return _migrate_legacy_results(conn, apply=False)
     conn.execute("BEGIN IMMEDIATE")

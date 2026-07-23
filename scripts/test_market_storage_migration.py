@@ -98,9 +98,17 @@ def test_preview_apply_and_repeat() -> None:
             assert conn.execute("SELECT count(*) FROM market_reviews").fetchone()[0] == 0
             applied = migrate_legacy_results(conn, apply=True)
             assert applied.reviews == 4
+            stored_marker = conn.execute(
+                "SELECT state_json FROM source_state WHERE source=?",
+                (market_storage_migration.MIGRATION_VERSION,),
+            ).fetchone()[0]
             repeated = migrate_legacy_results(conn, apply=True)
-            assert repeated.reviews == 0
-            assert repeated.skipped_existing == 4
+            assert repeated.already_applied is True
+            assert repeated.reviews == applied.reviews
+            assert conn.execute(
+                "SELECT state_json FROM source_state WHERE source=?",
+                (market_storage_migration.MIGRATION_VERSION,),
+            ).fetchone()[0] == stored_marker
             rows = conn.execute(
                 "SELECT legacy_store_kind,legacy_store_id,decision_action,review_status FROM market_reviews ORDER BY id"
             ).fetchall()
