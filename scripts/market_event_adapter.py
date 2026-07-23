@@ -17,7 +17,7 @@ from market_flow_adapters import (
 )
 from market_db import DEFAULT_DB_PATH
 from market_delivery import deliver_event, record_delivery
-from market_item import NormalizedMarketItem, decision_result_from_payload, item_from_event_mapping
+from market_item import DecisionResult, NormalizedMarketItem, decision_result_from_payload, item_from_event_mapping
 from market_review_store import (
     event_content_hash,
     event_row_by_id,
@@ -104,11 +104,12 @@ def analyze_event(
     db_path: Path = DEFAULT_DB_PATH,
     *,
     normalized_item: NormalizedMarketItem | None = None,
+    persist_legacy: bool = True,
 ) -> dict[str, Any]:
     event_row = event_row_by_id(event_id, db_path)
     if not event_row:
         raise RuntimeError(f"事件不存在：{event_id}")
-    existing = latest_event_analysis(event_id, task, db_path)
+    existing = latest_event_analysis(event_id, task, db_path) if persist_legacy else None
     if existing:
         parsed = existing["analysis"]
         updated = apply_event_rules_to_analysis(
@@ -172,18 +173,19 @@ def analyze_event(
         "llm_mode": "thin",
     }
     importance, classification, direction, impact_duration, should_push = analysis_record_fields(parsed)
-    store_event_flow_analysis(
-        event_id,
-        task,
-        interpretation.model,
-        parsed,
-        importance=importance,
-        classification=classification,
-        direction=direction,
-        impact_duration=impact_duration,
-        should_push=should_push,
-        db_path=db_path,
-    )
+    if persist_legacy:
+        store_event_flow_analysis(
+            event_id,
+            task,
+            interpretation.model,
+            parsed,
+            importance=importance,
+            classification=classification,
+            direction=direction,
+            impact_duration=impact_duration,
+            should_push=should_push,
+            db_path=db_path,
+        )
     return parsed
 
 
@@ -328,13 +330,21 @@ def should_push_analysis(parsed: dict[str, Any], importance: str | None = None) 
     return bool(decision and decision.should_push)
 
 
-def maybe_deliver_event(event_id: int, analysis: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> str:
+def maybe_deliver_event(
+    event_id: int,
+    analysis: dict[str, Any],
+    db_path: Path = DEFAULT_DB_PATH,
+    *,
+    decision: DecisionResult | None = None,
+    market_item_id: int | None = None,
+    market_review_id: int | None = None,
+) -> str:
     """Refresh the decision and delegate delivery execution."""
     event_row = event_row_by_id(event_id, db_path)
     if not event_row:
         raise RuntimeError(f"事件不存在：{event_id}")
-    updated = apply_event_rules_to_analysis(event_row, analysis, db_path=db_path)
-    decision = decision_result_from_payload(updated)
+    updated = analysis if decision is not None else apply_event_rules_to_analysis(event_row, analysis, db_path=db_path)
+    decision = decision or decision_result_from_payload(updated)
     if decision is None:
         record_delivery(
             event_id,
@@ -344,4 +354,11 @@ def maybe_deliver_event(event_id: int, analysis: dict[str, Any], db_path: Path =
             db_path=db_path,
         )
         return "missing_decision"
-    return deliver_event(event_id, updated, decision=decision, db_path=db_path)
+    return deliver_event(
+        event_id,
+        updated,
+        decision=decision,
+        market_item_id=market_item_id,
+        market_review_id=market_review_id,
+        db_path=db_path,
+    )

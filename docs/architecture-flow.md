@@ -276,6 +276,25 @@ versions remain stored. Existing external ids are resolved through
 review link only to the item. Legacy writes and tables remain enabled for
 rollback in this stage, but readers do not use them as decision authority.
 
+For newly admitted production items, `market_reviews` is also the processed /
+retry/current-result authority. `market_runtime.py` reuses a completed current
+result without consulting `article_reviews`, `official_news_reviews` or
+`event_analyses`; a retryable result is completed in place, while an explicit
+reprocess creates a new current result version. A retryable result is reused
+only when its stored `AdmissionResult` exactly matches the current one; changed
+admission evidence or configuration creates a new current result and preserves
+the prior version for audit. Decision and interpretation are first written to
+`market_reviews`, then the corresponding legacy result row and alias are
+generated from that exact payload in the same SQLite transaction. A legacy
+copy failure therefore rolls back the unified completion rather than leaving
+two completed results. `deliveries` determines whether the item was already sent and event
+delivery records the unified item/result links at insertion; legacy `pushed_at`
+is only a compatibility projection. After the migration marker, feedback
+lookup and Web overview counts also fail closed on or read the unified records
+instead of recovering eligibility or counts from legacy rows.
+`market_storage_audit.py` compares new unified and compatibility records by
+time range without printing article bodies or private model payloads.
+
 The project keeps the existing physical stores:
 
 - `article_reviews`
@@ -291,8 +310,9 @@ The project keeps the existing physical stores:
 not decision-pipeline identities. All three arrive through the unified runtime
 above. `article_reviews`, `official_news_reviews`, and `events` /
 `event_analyses` remain compatibility writes for rollback after the unified
-read switch. Removing those writes or tables requires a separate production
-observation period, explicit approval and another migration.
+read switch. They are derived copies, not processed-item, current-result or
+delivery-state inputs. Removing those writes or tables requires a separate
+production observation period, explicit approval and another migration.
 
 `seen_items` keeps discovery identity as its primary responsibility. Additive
 compatibility columns record `collection_class`, processability, admission and

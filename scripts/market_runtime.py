@@ -28,17 +28,20 @@ from market_store import (
     complete_market_review,
     ensure_market_item_alias,
     fail_market_review,
-    link_latest_event_delivery,
     record_article_delivery,
     record_baseline_item,
     record_production_admission,
+    market_review_snapshot,
 )
 from market_review_store import (
     article_item_id,
     article_review_exists,
+    insert_event_analysis_in_conn,
     latest_event_analysis,
     official_news_item_id,
     official_review_exists,
+    save_article_review,
+    save_official_review,
 )
 from source_profiles import runtime_source_profile
 
@@ -258,45 +261,84 @@ def _process_content_item(
     source = item.source
     decision_item = item
     item_id = official_news_item_id(raw_item) if store_kind == "official" else article_item_id(raw_item)
-    with connect_sqlite(db_path) as conn:
-        existing = (
-            official_review_exists(conn, source, item_id)
-            if store_kind == "official"
-            else article_review_exists(conn, source, item_id)
-        )
-        if existing is not None and not reprocess_existing:
-            payload = existing
-            inserted = False
-        elif store_kind == "official":
+    snapshot = market_review_snapshot(market_review_id, db_path=db_path) if market_review_id is not None else None
+    canonical_existing = bool(snapshot and snapshot["review_status"] == "succeeded")
+    legacy_existing: dict[str, Any] | None = None
+    if canonical_existing and not reprocess_existing:
+        payload = dict(snapshot["payload"])
+        inserted = False
+    elif market_review_id is not None:
+        with connect_sqlite(db_path) as conn:
             decision_item = prepare_item_for_decision(item)
-            payload = module.process_official_review(
-                conn,
-                source,
-                raw_item,
-                source_profile_id=source_profile_id,
-                normalized_item=decision_item,
+            evaluate = (
+                module.evaluate_official_review
+                if store_kind == "official"
+                else module.evaluate_article_review
             )
-            inserted = existing is None
-        else:
-            decision_item = prepare_item_for_decision(item)
-            payload = module.process_article_review(
-                conn,
-                source,
-                raw_item,
-                source_profile_id=source_profile_id,
-                normalized_item=decision_item,
+            payload = evaluate(
+                conn, source, raw_item, source_profile_id=source_profile_id, normalized_item=decision_item
             )
-            inserted = existing is None
-        if existing is not None and existing.get("pushed_at"):
-            payload = dict(payload)
-            payload["pushed_at"] = existing["pushed_at"]
+        inserted = not canonical_existing
+    else:
+        with connect_sqlite(db_path) as conn:
+            existing = (
+                official_review_exists(conn, source, item_id)
+                if store_kind == "official"
+                else article_review_exists(conn, source, item_id)
+            )
+            if existing is not None and not reprocess_existing:
+                payload = existing
+                inserted = False
+            elif store_kind == "official":
+                decision_item = prepare_item_for_decision(item)
+                payload = module.process_official_review(
+                    conn,
+                    source,
+                    raw_item,
+                    source_profile_id=source_profile_id,
+                    normalized_item=decision_item,
+                )
+                inserted = existing is None
+            else:
+                decision_item = prepare_item_for_decision(item)
+                payload = module.process_article_review(
+                    conn,
+                    source,
+                    raw_item,
+                    source_profile_id=source_profile_id,
+                    normalized_item=decision_item,
+                )
+                inserted = existing is None
+            legacy_existing = existing
+    if snapshot and snapshot["delivered"]:
+        payload = dict(payload)
+        payload["pushed_at"] = "unified_delivery"
+    elif legacy_existing and legacy_existing.get("pushed_at"):
+        payload = dict(payload)
+        payload["pushed_at"] = legacy_existing["pushed_at"]
     storage_ref = {
         "store_kind": "official_news_reviews" if store_kind == "official" else "article_reviews",
         "source": source,
         "item_id": item_id,
     }
     flow_result = _flow_result(decision_item, payload, storage_ref)
-    if market_review_id is not None and not flow_result.decision.audit_json.get("contract_error"):
+
+    def write_compatibility(conn):
+        if store_kind == "official":
+            save_official_review(
+                conn, source, raw_item, payload, decision_item=decision_item, commit=False
+            )
+        else:
+            save_article_review(
+                conn, source, raw_item, payload, decision_item=decision_item, commit=False
+            )
+        return storage_ref["store_kind"], f"{source}:{item_id}"
+
+    if (
+        market_review_id is not None
+        and not flow_result.decision.audit_json.get("contract_error")
+        and (not canonical_existing or reprocess_existing)
+    ):
         if market_item_id is None:
             raise RuntimeError("market review exists without its market item identity")
         item_kind = "official" if store_kind == "official" else "article"
@@ -304,20 +346,10 @@ def _process_content_item(
             market_review_id,
             flow_result,
             db_path=db_path,
-            legacy_store_kind=storage_ref["store_kind"],
-            legacy_store_id=f"{source}:{item_id}",
             legacy_payload=payload,
+            compatibility_writer=write_compatibility,
+            alias=(item_kind, source, item_id, storage_ref["store_kind"]),
         )
-        with connect_sqlite(db_path) as conn:
-            ensure_market_item_alias(
-                conn,
-                market_item_id,
-                item_kind=item_kind,
-                source=source,
-                legacy_item_id=item_id,
-                legacy_store_kind=storage_ref["store_kind"],
-            )
-            conn.commit()
     if inserted and not flow_result.decision.audit_json.get("contract_error"):
         if production_admission is None and (
             current_admission_status == "unknown"
@@ -338,7 +370,10 @@ def _process_content_item(
             )
     status = "not_requested"
     if deliver:
-        if flow_result.decision.audit_json.get("contract_error") == "missing_decision_result":
+        already_sent = bool(snapshot and snapshot["delivered"])
+        if already_sent:
+            status = "existing"
+        elif flow_result.decision.audit_json.get("contract_error") == "missing_decision_result":
             status = "missing_decision"
         elif store_kind == "official":
             status = deliver_official_review(
@@ -347,6 +382,8 @@ def _process_content_item(
                 payload,
                 decision=flow_result.decision,
                 analysis_lines=module.analysis_lines_from_review(payload),
+                already_sent=False,
+                update_compatibility=market_review_id is None,
                 db_path=db_path,
             )
         else:
@@ -358,14 +395,21 @@ def _process_content_item(
                 db_path=db_path,
                 analysis_lines_prefix=module.gate_lines(payload),
                 use_rule_dedup=use_rule_dedup,
+                already_sent=False,
+                update_compatibility=market_review_id is None,
             )
-        if market_item_id is not None and market_review_id is not None:
+        if market_item_id is not None and market_review_id is not None and status != "existing":
             record_article_delivery(
                 market_item_id,
                 market_review_id,
                 status=status,
                 decision_action=flow_result.decision.action,
                 payload={"store_kind": storage_ref["store_kind"], "source": source, "item_id": item_id},
+                compatibility_kind="official" if store_kind == "official" else "article",
+                compatibility_source=source,
+                compatibility_item_id=item_id,
+                legacy_payload=payload,
+                compatibility_writer=write_compatibility,
                 db_path=db_path,
             )
     return MarketProcessOutcome(
@@ -398,7 +442,7 @@ def _process_event_item(
     market_review_id: int | None,
 ) -> MarketProcessOutcome:
     module = _selected_module("event")
-    event_id, inserted = module.upsert_event(raw_item, db_path, normalized_item=item)
+    event_id, legacy_inserted = module.upsert_event(raw_item, db_path, normalized_item=item)
     storage_ref = {"store_kind": "event_analyses", "event_id": event_id, "task": task}
     if market_item_id is not None:
         with connect_sqlite(db_path) as conn:
@@ -411,8 +455,22 @@ def _process_event_item(
                 legacy_store_kind="events",
             )
             conn.commit()
+    snapshot = market_review_snapshot(market_review_id, db_path=db_path) if market_review_id is not None else None
+    canonical_existing = bool(snapshot and snapshot["review_status"] == "succeeded")
+    inserted = not canonical_existing if market_review_id is not None else legacy_inserted
     empty_payload: dict[str, Any] = {}
-    if not inserted and not reprocess_existing:
+    if canonical_existing and not reprocess_existing:
+        payload = dict(snapshot["payload"])
+        return MarketProcessOutcome(
+            flow_result=_flow_result(item, payload, storage_ref),
+            inserted=False,
+            storage_ref=storage_ref,
+            delivery_status="existing",
+            payload=payload,
+            market_item_id=market_item_id,
+            market_review_id=market_review_id,
+        )
+    if market_review_id is None and not inserted and not reprocess_existing:
         return MarketProcessOutcome(
             flow_result=_flow_result(item, empty_payload, storage_ref, missing_is_contract_error=False),
             inserted=False,
@@ -421,7 +479,7 @@ def _process_event_item(
             market_item_id=market_item_id,
             market_review_id=market_review_id,
         )
-    if not inserted and latest_event_analysis(event_id, task, db_path) is not None:
+    if market_review_id is None and not inserted and latest_event_analysis(event_id, task, db_path) is not None:
         return MarketProcessOutcome(
             flow_result=_flow_result(item, empty_payload, storage_ref, missing_is_contract_error=False),
             inserted=False,
@@ -452,22 +510,43 @@ def _process_event_item(
         storage_ref=storage_ref,
     )
     try:
-        analysis = module.analyze_event(event_id, task=task, db_path=db_path, normalized_item=decision_item)
+        analysis = module.analyze_event(
+            event_id,
+            task=task,
+            db_path=db_path,
+            normalized_item=decision_item,
+            persist_legacy=market_review_id is None,
+        )
     except Exception as exc:  # noqa: BLE001 - preserve the inserted event reference for batch recovery
         raise MarketItemProcessingError(str(exc), partial) from exc
     flow_result = _flow_result(decision_item, analysis, storage_ref)
     if market_review_id is not None and not flow_result.decision.audit_json.get("contract_error"):
         if market_item_id is None:
             raise RuntimeError("market review exists without its market item identity")
-        stored_analysis = latest_event_analysis(event_id, task, db_path)
-        legacy_analysis_id = str(stored_analysis["id"]) if stored_analysis else f"{event_id}:{task}"
+        importance, classification, direction, impact_duration, should_push = module.analysis_record_fields(analysis)
+
+        def write_event_compatibility(conn):
+            analysis_id = insert_event_analysis_in_conn(
+                conn,
+                event_id,
+                task,
+                str(analysis.get("_model") or ""),
+                importance=importance,
+                classification=classification,
+                direction=direction,
+                impact_duration=impact_duration,
+                should_push=should_push,
+                analysis=analysis,
+            )
+            return "event_analyses", str(analysis_id)
+
         complete_market_review(
             market_review_id,
             flow_result,
             db_path=db_path,
-            legacy_store_kind="event_analyses",
-            legacy_store_id=legacy_analysis_id,
             legacy_payload=analysis,
+            compatibility_writer=write_event_compatibility,
+            alias=("event", item.source, str(event_id), "events"),
         )
     if not flow_result.decision.audit_json.get("contract_error"):
         record_rule_comparison(
@@ -480,14 +559,18 @@ def _process_event_item(
             production_admission=production_admission,
             production_portfolio=production_portfolio,
         )
-    status = module.maybe_deliver_event(event_id, analysis, db_path=db_path) if deliver else "not_requested"
-    if deliver and market_item_id is not None and market_review_id is not None:
-        link_latest_event_delivery(
+    if not deliver:
+        status = "not_requested"
+    elif snapshot and snapshot["delivered"]:
+        status = "existing"
+    else:
+        status = module.maybe_deliver_event(
             event_id,
-            market_item_id,
-            market_review_id,
-            decision_action=flow_result.decision.action,
+            analysis,
             db_path=db_path,
+            decision=flow_result.decision,
+            market_item_id=market_item_id,
+            market_review_id=market_review_id,
         )
     return MarketProcessOutcome(
         flow_result=flow_result,
@@ -533,6 +616,16 @@ def process_market_item(
             db_path=db_path,
             task=task if store_kind == "event" else "production",
         )
+    elif production_admission is not None and reprocess_existing and market_review_id is not None:
+        previous = market_review_snapshot(market_review_id, db_path=db_path)
+        if previous and previous["review_status"] == "succeeded":
+            market_item_id, market_review_id = record_production_admission(
+                item,
+                production_admission,
+                db_path=db_path,
+                task=task if store_kind == "event" else "production",
+                force_new=True,
+            )
     try:
         if store_kind == "event":
             return _process_event_item(
