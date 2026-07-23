@@ -111,8 +111,8 @@ def _response(
 
 
 def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
-    assert CATALOG_VERSION == "llm-rule-catalog-v2"
-    assert RULE_MATRIX_VERSION.startswith("llm-reviewed-rule-matrix-v1")
+    assert CATALOG_VERSION == "llm-rule-catalog-v3"
+    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v2-20260723"
     assert len(RULES) == 22
     assert len({rule.rule_id for rule in RULES}) == len(RULES)
     assert {rule.rule_id for rule in RULES} == {
@@ -371,6 +371,88 @@ def test_multiple_admitted_families_share_one_response_and_highest_action_wins()
     assert {hit["decision_action"] for hit in result.decision.rule_hits} == {"daily", "push"}
 
 
+def test_semiconductor_expectations_can_push_without_claiming_execution() -> None:
+    rules = {rule.rule_id: rule for rule in rules_for_families(("semiconductor_ai",))}
+    price = rules["semiconductor_price_supply_change"]
+    material = rules["semiconductor_material_change"]
+    assert "预计、计划、正在考虑" in price.action_conditions["push"]
+    assert "价格变化与供需变化可独立成立" in price.action_conditions["push"]
+    assert "不要求已经执行" in price.action_conditions["push"]
+    assert "重量级客户" in material.action_conditions["push"]
+    assert "正在测试、验证、导入评估" in material.action_conditions["push"]
+    assert "不要求已经形成批量订单、收入或交付" in material.action_conditions["push"]
+
+    def expectation_item(source: str, category: str) -> NormalizedMarketItem:
+        return NormalizedMarketItem(
+            source=source,
+            source_category=category,
+            publisher_role="news_media",
+            content_type="article",
+            title="AI機架估500萬美元起，高出競品約4成",
+            summary="傳出廠商正在考慮大幅調升AI機架價格。",
+            full_text="具名重量級客戶已確...",
+            url="https://example.test/ai-rack-pricing",
+            published_at="2026-07-23T10:00:00+08:00",
+        )
+
+    response = _response(
+        "semiconductor_ai",
+        "semiconductor_price_supply_change",
+        "push",
+        overrides={
+            "semiconductor_price_supply_change": {
+                "rule_id": "semiconductor_price_supply_change",
+                "judgement": "matched",
+                "action": "push",
+                "evidence_ids": ["T1", "S1"],
+                "reason": "報道保留考慮中的限定，並提供重大價格方向和可比幅度。",
+            },
+            "semiconductor_material_change": _assessment(
+                "semiconductor_material_change",
+                judgement="uncertain",
+            ),
+        },
+    )
+    admission = _admission(("semiconductor_ai",))
+    sources = (
+        expectation_item("digitimes", "research_industry_media"),
+        expectation_item("finance_media", "news_media"),
+    )
+    results = [validate_llm_rule_response(response, item, admission) for item in sources]
+    assert [result.candidate_action for result in results] == ["push", "push"]
+    for result in results:
+        assert result.evaluation_status == "completed"
+        assert result.decision is not None
+        assert {hit["rule_id"] for hit in result.decision.rule_hits} == {
+            "semiconductor_price_supply_change"
+        }
+        assert [evidence["field"] for evidence in result.decision.rule_hits[0]["evidence"]] == [
+            "title",
+            "summary",
+        ]
+
+    prompt = build_llm_rule_prompt(sources[0], admission)
+    assert "已执行不是push的必要条件" in prompt.system_prompt
+    assert "重大量化计划或考虑" in prompt.system_prompt
+    assert "不得把预期改写为已执行事实" in prompt.system_prompt
+    assert "不得仅因尚未执行而返回uncertain" in prompt.system_prompt
+    assert "AI機架估500萬美元起" in prompt.user_payload["article_segments"][0]["text"]
+    assert len(prompt.system_prompt) < 800
+    rule_text = json.dumps(prompt.user_payload["rules"], ensure_ascii=False)
+    assert all(name not in rule_text for name in ("AMD", "Helios", "微软", "Microsoft"))
+
+    customer_response = _response(
+        "semiconductor_ai",
+        "semiconductor_material_change",
+        "push",
+    )
+    customer_item = expectation_item("digitimes", "research_industry_media")
+    customer_item.full_text = "具名重量級客戶正在測試該AI機架並明確考慮採用，但尚未形成訂單或收入。"
+    customer_result = validate_llm_rule_response(customer_response, customer_item, admission)
+    assert customer_result.evaluation_status == "completed"
+    assert customer_result.candidate_action == "push"
+
+
 def test_invalid_json_unknown_missing_and_forbidden_fields_fail_closed() -> None:
     item = _item()
     admission = _admission(("trade_policy",))
@@ -516,6 +598,7 @@ def main() -> int:
     test_prompt_uses_bounded_available_input_without_current_production_decision()
     test_not_matched_uncertain_and_model_unavailable_cannot_create_action()
     test_multiple_admitted_families_share_one_response_and_highest_action_wins()
+    test_semiconductor_expectations_can_push_without_claiming_execution()
     test_invalid_json_unknown_missing_and_forbidden_fields_fail_closed()
     test_undefined_action_and_duplicate_rule_fail_closed()
     test_evidence_references_are_exact_and_bounded()
