@@ -23,9 +23,9 @@ from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem, R
 from rule_core_v1 import apply_source_admission_boundary, source_allowed_families
 
 
-SCHEMA_VERSION = "llm-rule-match-v4"
-PROMPT_VERSION = "llm-rule-match-prompt-v7"
-ENGINE_VERSION = "llm-rule-decision-v6"
+SCHEMA_VERSION = "llm-rule-match-v5"
+PROMPT_VERSION = "llm-rule-match-prompt-v8"
+ENGINE_VERSION = "llm-rule-decision-v7"
 ACTION_RANK = {"archive": 1, "daily": 2, "push": 3}
 JUDGEMENTS = {"matched", "not_matched", "uncertain"}
 FAILURE_STATUSES = {"insufficient_input", "model_unavailable", "invalid_output", "evidence_invalid", "conflict"}
@@ -238,6 +238,23 @@ def _validated_article(
     )
 
 
+def _evidence_units(text: str) -> tuple[str, ...]:
+    units: list[str] = []
+    start = 0
+    for index, character in enumerate(text):
+        next_character = text[index + 1] if index + 1 < len(text) else ""
+        previous_character = text[index - 1] if index else ""
+        boundary = character in "。！？!?\n"
+        if character == "." and previous_character != "." and next_character != ".":
+            boundary = not next_character or next_character.isspace()
+        if boundary:
+            units.append(text[start : index + 1])
+            start = index + 1
+    if start < len(text):
+        units.append(text[start:])
+    return tuple(unit for unit in units if unit)
+
+
 def _article_segments(article: Mapping[str, str]) -> tuple[dict[str, str], ...]:
     prefixes = {"title": "T", "summary": "S", "full_text": "B"}
     segments: list[dict[str, str]] = []
@@ -246,14 +263,17 @@ def _article_segments(article: Mapping[str, str]) -> tuple[dict[str, str], ...]:
         if not text:
             continue
         prefix = prefixes[field]
-        for index, start in enumerate(range(0, len(text), MAX_EVIDENCE_SEGMENT_CHARS), 1):
-            segments.append(
-                {
-                    "id": f"{prefix}{index}",
-                    "field": field,
-                    "text": text[start : start + MAX_EVIDENCE_SEGMENT_CHARS],
-                }
-            )
+        index = 0
+        for unit in _evidence_units(text):
+            for start in range(0, len(unit), MAX_EVIDENCE_SEGMENT_CHARS):
+                index += 1
+                segments.append(
+                    {
+                        "id": f"{prefix}{index}",
+                        "field": field,
+                        "text": unit[start : start + MAX_EVIDENCE_SEGMENT_CHARS],
+                    }
+                )
     return tuple(segments)
 
 
@@ -312,6 +332,7 @@ def build_llm_rule_prompt(
         "标题、摘要和正文同为原文证据，可以组合判断；必须保留传出、考虑、计划、测试等限定，"
         "不得把预期改写为已执行事实。只有决定action所需的对象、动作、量级或阶段缺失、被截断或"
         "相互冲突时才返回uncertain，不得仅因尚未执行而返回uncertain。"
+        "matched不得引用以省略号结尾的未完整句子。"
         "matched 的证据和 uncertain 的反证必须引用 article_segments 中的原文编号。"
         f"每条规则最多引用{MAX_EVIDENCE_REFS_PER_LIST}个编号，所有规则合计最多引用"
         f"{MAX_TOTAL_EVIDENCE_REFS}个编号；同一规则内不得重复引用同一编号。"
@@ -458,6 +479,8 @@ def _evidence_ref_list(
     segments_by_id: Mapping[str, Mapping[str, str]],
     structure_errors: list[str],
     evidence_errors: list[str],
+    *,
+    reject_incomplete: bool = False,
 ) -> tuple[list[dict[str, str]], int, int]:
     if not isinstance(value, list):
         structure_errors.append(f"{path} must be an array")
@@ -482,6 +505,11 @@ def _evidence_ref_list(
             evidence_errors.append(f"{path}[{index}] references unknown evidence id {evidence_id}")
             continue
         quote = str(segment["text"])
+        incomplete_text = quote.rstrip(" \t\r\n\"'”’）》】")
+        if reject_incomplete and incomplete_text.endswith(("...", "…", "．．．", "&hellip;")):
+            evidence_errors.append(
+                f"{path}[{index}] references incomplete or truncated evidence segment {evidence_id}"
+            )
         total_chars += len(quote)
         total_refs += 1
         result.append(
@@ -541,6 +569,7 @@ def _assessment_payload(
             segments_by_id,
             structure_errors,
             evidence_errors,
+            reject_incomplete=True,
         )
         explanation = _bounded_string(
             payload.get("reason"), f"{path}.reason", structure_errors, allow_empty=False
