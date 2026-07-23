@@ -213,8 +213,10 @@ page to the strength-decision model. The existing report-only
 model calculate `target price / report historical close - 1` and select the
 action from the unrounded result. A result at least 30.0% or at most -30.0% may
 select `push`; 17.6% and 29.9% remain ordinary unless another reviewed
-condition independently matches. A current target price alone is not a new
-long/short, allocation or target-revision action. The evidence must identify
+condition independently matches. A current or newly published report and its
+current rating or target price are not, by themselves, a new long/short,
+allocation, coverage or revision action; article evidence must state that
+action explicitly. The evidence must identify
 the trusted institution, stock, current target price, historical close and
 close date. Ambiguous labels, prior or consensus targets, 52-week ranges,
 external live prices, mismatched currencies or share classes, unclear corporate

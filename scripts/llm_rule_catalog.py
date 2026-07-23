@@ -13,8 +13,8 @@ from typing import Mapping
 from market_item import RuleFamily
 
 
-RULE_MATRIX_VERSION = "llm-reviewed-rule-matrix-v5-20260723"
-CATALOG_VERSION = "llm-rule-catalog-v6"
+RULE_MATRIX_VERSION = "llm-reviewed-rule-matrix-v6-20260723"
+CATALOG_VERSION = "llm-rule-catalog-v7"
 MODEL_ACTIONS = ("push", "daily", "archive")
 
 
@@ -112,7 +112,7 @@ RULES: tuple[LLMRuleDefinition, ...] = (
         ),
         exclusions=(
             "历史转述、未归因观点或只描述市场已有看法",
-            "仅有当前目标价且未给前次目标价或修订动作，不算目标价上调或下调",
+            "研报为当前或新发布、仅给当前评级或目标价，都不算新覆盖或修订；必须有原文明确的新覆盖、上调/下调或改变建议动作",
             "价格标签或收盘价日期不清、前次/共识目标价、52周区间或外部实时价替代历史收盘价时须返回 uncertain",
             "币种或股类不同、拆并股等公司行动口径不清、评级/建议与计算方向明显冲突时须返回 uncertain",
         ),
@@ -220,7 +220,7 @@ RULES: tuple[LLMRuleDefinition, ...] = (
         ),
         exclusions=(
             "描述已有仓位、客户或基金资金流、泛市场评论",
-            "当前目标价本身不算明确做多做空或配置动作",
+            "研报为当前或新发布、给出当前评级或目标价，都不算新建议或配置动作；必须有原文明确的买入/卖出、做多/做空、增配/减配或轮动动作",
             "价格标签或收盘价日期不清、前次/共识目标价、52周区间或外部实时价替代历史收盘价时须返回 uncertain",
             "币种或股类不同、拆并股等公司行动口径不清、评级/建议与计算方向明显冲突时须返回 uncertain",
         ),
