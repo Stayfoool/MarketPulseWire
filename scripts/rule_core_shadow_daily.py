@@ -28,6 +28,55 @@ from rule_shadow_report_store import (
 ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 BEIJING = ZoneInfo("Asia/Shanghai")
+MODEL_AUDIT_RETENTION_DAYS = 30
+
+
+def redact_expired_model_audits(
+    report_dir: Path = REPORT_DIR,
+    *,
+    now: datetime | None = None,
+    retention_days: int = MODEL_AUDIT_RETENTION_DAYS,
+) -> int:
+    """Remove sensitive request/response payloads while retaining comparison metadata."""
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=max(1, retention_days))
+    redacted = 0
+    for path in report_dir.glob("rule-core-shadow-*.json"):
+        if path.name.startswith("rule-core-shadow-daily-") or "combined-latest" in path.name:
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        generated_at = payload.get("generated_at")
+        try:
+            generated = datetime.fromisoformat(str(generated_at).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if generated >= cutoff:
+            continue
+        changed = False
+        for item in payload.get("items") if isinstance(payload.get("items"), list) else []:
+            comparison = item.get("comparison") if isinstance(item, dict) else None
+            candidate = comparison.get("candidate") if isinstance(comparison, dict) else None
+            audit = candidate.get("model_audit") if isinstance(candidate, dict) else None
+            if not isinstance(audit, dict) or not audit.get("calls"):
+                continue
+            candidate["model_audit"] = {
+                "status": "expired",
+                "retention_days": retention_days,
+                "expired_at": (now or datetime.now(timezone.utc)).isoformat(),
+            }
+            candidate["model_response_id"] = ""
+            changed = True
+        if not changed:
+            continue
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.retention.tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.chmod(temporary, 0o600)
+        temporary.replace(path)
+        os.chmod(path, 0o600)
+        redacted += 1
+    return redacted
 
 
 def review_window(
@@ -153,6 +202,7 @@ def run_daily_report(
     force_rebuild: bool = False,
     sender: Callable[[dict[str, Any]], bool] = send_card,
 ) -> dict[str, Any]:
+    redacted_model_audits = redact_expired_model_audits(report_dir, now=now)
     review_date, start, end = review_window(now=now, report_date=report_date)
     previous = load_daily_report(report_dir, review_date) or {}
     previous_notification = (
@@ -171,6 +221,7 @@ def run_daily_report(
             "notification_status": "already_sent",
             "counts": previous.get("counts") or {},
             "output": output,
+            "redacted_model_audits": redacted_model_audits,
         }
 
     payload = build_combined_report(
@@ -242,6 +293,7 @@ def run_daily_report(
         "notification_status": notification_status,
         "counts": payload.get("counts") or {},
         "output": output,
+        "redacted_model_audits": redacted_model_audits,
     }
 
 

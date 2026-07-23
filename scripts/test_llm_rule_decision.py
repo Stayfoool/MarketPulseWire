@@ -11,8 +11,9 @@ from pathlib import Path
 from llm_rule_catalog import CATALOG_VERSION, RULE_MATRIX_VERSION, RULES, rules_for_families
 from llm_rule_decision import (
     MAX_BODY_INPUT_CHARS,
-    MAX_QUOTE_CHARS,
-    MAX_QUOTES_PER_LIST,
+    MAX_EVIDENCE_REFS_PER_LIST,
+    MAX_EVIDENCE_SEGMENT_CHARS,
+    MAX_TOTAL_EVIDENCE_REFS,
     LLMRuleCandidateResult,
     LLMRuleInputError,
     apply_source_admission_boundary,
@@ -74,14 +75,14 @@ def _assessment(rule_id: str, *, judgement: str = "not_matched", action: str | N
             "rule_id": rule_id,
             "judgement": judgement,
             "action": action,
-            "evidence": [{"field": "full_text", "quote": QUOTE}],
+            "evidence_ids": ["B1"],
             "reason": "满足已审定规则。",
         }
     if uncertain:
         return {
             "rule_id": rule_id,
             "judgement": judgement,
-            "counterevidence": [{"field": "full_text", "quote": QUOTE}],
+            "counterevidence_ids": ["B1"],
             "reason": "原文同时存在冲突信息。",
         }
     return {"rule_id": rule_id, "judgement": judgement}
@@ -242,16 +243,16 @@ def test_prompt_uses_bounded_available_input_without_current_production_decision
     assert "current_decision" not in serialized
     assert "production_action" not in serialized
     assert "prompt_version" not in prompt.user_payload
-    assert prompt.user_payload["output_contract"]["policy"].endswith("最终 action。")
+    assert "最终 action。" in prompt.user_payload["output_contract"]["policy"]
     assert prompt.user_payload["ordinary_rule_ids"] == ["semiconductor_ordinary"]
     assert "不能把全部规则返回 not_matched" in prompt.system_prompt
-    assert f"最多{MAX_QUOTES_PER_LIST}条" in prompt.system_prompt
-    assert f"每条最多{MAX_QUOTE_CHARS}字符" in prompt.system_prompt
+    assert f"最多引用{MAX_EVIDENCE_REFS_PER_LIST}个编号" in prompt.system_prompt
+    assert f"{MAX_TOTAL_EVIDENCE_REFS}个编号" in prompt.system_prompt
     matched_contract = prompt.user_payload["output_contract"]["matched"]
-    assert set(matched_contract) == {"rule_id", "judgement", "action", "evidence", "reason"}
-    assert f"最多{MAX_QUOTES_PER_LIST}条" in matched_contract["evidence"][0]["quote"]
+    assert set(matched_contract) == {"rule_id", "judgement", "action", "evidence_ids", "reason"}
+    assert "article_segments" in matched_contract["evidence_ids"][0]
     uncertain_contract = prompt.user_payload["output_contract"]["uncertain"]
-    assert f"最多{MAX_QUOTES_PER_LIST}条" in uncertain_contract["counterevidence"][0]["quote"]
+    assert "article_segments" in uncertain_contract["counterevidence_ids"][0]
     assert '"facts":' not in serialized
     assert "event_status" not in serialized
     assert "time_scope" not in serialized
@@ -275,7 +276,7 @@ def test_prompt_uses_bounded_available_input_without_current_production_decision
     assert resolve_input_text_scope(summary_item) == "title_summary"
     assert summary_prompt.input_text_scope == "title_summary"
     assert summary_prompt.provided_fields == ("title", "summary")
-    assert "full_text" not in summary_prompt.user_payload["article"]
+    assert all(segment["field"] != "full_text" for segment in summary_prompt.user_payload["article_segments"])
 
     title_item = _item(full_text="")
     title_item.summary = ""
@@ -304,7 +305,11 @@ def test_prompt_uses_bounded_available_input_without_current_production_decision
     assert long_prompt.body_original_chars == len(long_item.full_text)
     assert long_prompt.body_provided_chars == MAX_BODY_INPUT_CHARS
     assert long_prompt.body_truncated is True
-    assert len(long_prompt.user_payload["article"]["full_text"]) == MAX_BODY_INPUT_CHARS
+    assert sum(
+        len(segment["text"])
+        for segment in long_prompt.user_payload["article_segments"]
+        if segment["field"] == "full_text"
+    ) == MAX_BODY_INPUT_CHARS
 
     try:
         build_llm_rule_prompt(_item(full_text=QUOTE * 10), _admission(("semiconductor_ai",)), max_input_chars=20)
@@ -420,74 +425,42 @@ def test_undefined_action_and_duplicate_rule_fail_closed() -> None:
     assert duplicate_result.evaluation_status == "conflict"
     assert duplicate_result.candidate_action is None
 
-def test_evidence_must_be_verbatim_and_bounded_while_allowing_complete_short_body() -> None:
+def test_evidence_references_are_exact_and_bounded() -> None:
     item = _item(full_text=f"前文。\n{QUOTE}\n后文。")
     admission = _admission(("macro_data",))
     response = _response("macro_data", "macro_surprise", "push")
-    response["rule_results"][0]["evidence"][0]["quote"] = "  测试主体已确认当前变化，\n并说明了明确方向。  "
-    whitespace_ok = validate_llm_rule_response(response, item, admission)
-    assert whitespace_ok.evaluation_status == "completed"
+    valid = validate_llm_rule_response(response, item, admission)
+    assert valid.evaluation_status == "completed"
+    assert valid.evidence_reference_count == 1
+    assert valid.evidence_character_count == len(item.full_text)
+
+    unknown = copy.deepcopy(response)
+    unknown["rule_results"][0]["evidence_ids"] = ["B99"]
+    unknown_result = validate_llm_rule_response(unknown, item, admission)
+    assert unknown_result.evaluation_status == "invalid_output"
+    assert unknown_result.candidate_action is None
 
     too_many = copy.deepcopy(response)
-    too_many["rule_results"][0]["evidence"] = [
-        {"field": "full_text", "quote": QUOTE}
-        for _ in range(MAX_QUOTES_PER_LIST + 1)
-    ]
+    too_many["rule_results"][0]["evidence_ids"] = ["B1", "B2", "B3", "B4"]
     too_many_result = validate_llm_rule_response(too_many, item, admission)
     assert too_many_result.evaluation_status == "invalid_output"
-    assert too_many_result.validation_errors == (
-        "rule_results[0].evidence contains too many quotes",
-    )
-
-    paraphrased = copy.deepcopy(response)
-    paraphrased["rule_results"][0]["evidence"][0]["quote"] = "测试主体确认发生明显改变。"
-    paraphrased_result = validate_llm_rule_response(paraphrased, item, admission)
-    assert paraphrased_result.evaluation_status == "evidence_invalid"
-    assert paraphrased_result.candidate_action is None
-
-    long_body = ("完整正文内容。" * 80) + QUOTE
-    copied = _response("macro_data", "macro_surprise", "push")
-    copied["rule_results"][0]["evidence"][0]["quote"] = long_body
-    copied_result = validate_llm_rule_response(copied, _item(full_text=long_body), admission)
-    assert copied_result.evaluation_status == "invalid_output"
-    assert copied_result.candidate_action is None
-
-    short_body = QUOTE
-    copied_short = _response("macro_data", "macro_surprise", "push")
-    copied_short["rule_results"][0]["evidence"][0]["quote"] = short_body
-    copied_short_result = validate_llm_rule_response(
-        copied_short,
-        _item(full_text=short_body),
-        admission,
-    )
-    assert copied_short_result.evaluation_status == "completed"
-    assert copied_short_result.candidate_action == "push"
+    assert "too many evidence references" in too_many_result.validation_errors[0]
 
     title_response = _response("macro_data", "macro_surprise", "push")
-    title_response["rule_results"][0]["evidence"] = [{"field": "title", "quote": "测试新闻"}]
+    title_response["rule_results"][0]["evidence_ids"] = ["T1"]
     title_only = _item(full_text="")
     title_only.summary = ""
     title_result = validate_llm_rule_response(title_response, title_only, admission)
     assert title_result.evaluation_status == "completed"
     assert title_result.candidate_action == "push"
 
-    out_of_scope_quote = validate_llm_rule_response(
-        _response("macro_data", "macro_surprise", "push"),
-        _item(),
-        admission,
-        input_text_scope="title_summary",
-    )
-    assert out_of_scope_quote.evaluation_status == "evidence_invalid"
-    assert out_of_scope_quote.candidate_action is None
-
-    beyond_limit_item = _item(full_text=("前" * MAX_BODY_INPUT_CHARS) + QUOTE)
-    beyond_limit_result = validate_llm_rule_response(
-        _response("macro_data", "macro_surprise", "push"),
-        beyond_limit_item,
-        admission,
-    )
-    assert beyond_limit_result.evaluation_status == "evidence_invalid"
-    assert beyond_limit_result.candidate_action is None
+    duplicate = copy.deepcopy(response)
+    duplicate["rule_results"][1]["judgement"] = "uncertain"
+    duplicate["rule_results"][1].pop("evidence_ids", None)
+    duplicate["rule_results"][1]["counterevidence_ids"] = ["B1"]
+    duplicate["rule_results"][1]["reason"] = "存在冲突信息。"
+    duplicate_result = validate_llm_rule_response(duplicate, item, admission)
+    assert duplicate_result.evaluation_status == "completed"
 
 
 def test_non_admitted_or_source_inapplicable_inputs_do_not_create_candidate() -> None:
@@ -545,7 +518,7 @@ def main() -> int:
     test_multiple_admitted_families_share_one_response_and_highest_action_wins()
     test_invalid_json_unknown_missing_and_forbidden_fields_fail_closed()
     test_undefined_action_and_duplicate_rule_fail_closed()
-    test_evidence_must_be_verbatim_and_bounded_while_allowing_complete_short_body()
+    test_evidence_references_are_exact_and_bounded()
     test_non_admitted_or_source_inapplicable_inputs_do_not_create_candidate()
     test_pr_a_modules_have_no_transport_runtime_or_storage_imports()
     print("LLM rule decision contract checks passed")

@@ -227,13 +227,20 @@ RULE_COMPARISON_LLM_THINKING_TYPE=
 
 An admitted item with a non-empty title may enter LLM comparison even when
 `full_text` is empty. Available summary is included. Available body text is
-limited by code to its first 3,000 characters; the report records the original
-and provided body lengths plus whether truncation occurred. Invalid or
-unavailable model output is recorded as unable to compare and never falls back
-to the deterministic candidate. A valid result records bounded original-text
-evidence, model/provider metadata, token usage, attempts and elapsed time. It
-does not store the complete article body, provider raw response or response id
-in the combined/daily reports.
+limited by code to its first 3,000 characters and divided into numbered exact
+source segments. The model returns segment ids instead of copying quotes; code
+resolves those ids to the original text. Invalid or unavailable model output is
+recorded as unable to compare and never falls back to the deterministic
+candidate. A structurally invalid, evidence-invalid or conflicting response may
+receive one bounded correction request containing the validation errors.
+
+Each per-item LLM comparison audit stores the exact requests, raw responses,
+response metadata and validation details for all calls. These files are mode
+`0600`, remain only in the Alibaba service account's private runtime report
+directory and have their sensitive request/response payload removed by the
+15:30 report job after 30 days. The bounded per-item comparison metadata remains
+available after redaction. Combined/daily reports and the Web API never copy the
+complete request, article body, raw provider response or response id.
 
 An operator may explicitly rebuild a historical daily file from its retained
 per-item comparison reports without sending another reminder:
