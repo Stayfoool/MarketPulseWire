@@ -4,13 +4,18 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import sqlite3
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import market_content_adapter
 import market_event_adapter
 import market_flow
 import market_runtime
 from market_flow import evaluate_market_item, finalize_market_flow_result
-from market_item import DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem
+from market_db import init_db
+from market_item import AdmissionEvidence, AdmissionResult, DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem
+from market_store import record_production_admission
 
 
 def canonical_items() -> list[NormalizedMarketItem]:
@@ -577,6 +582,238 @@ def test_retry_can_finish_an_existing_event_without_analysis() -> None:
     assert calls == ["analyze", "comparison", "delivery"]
 
 
+def admitted() -> AdmissionResult:
+    return AdmissionResult(
+        status="admitted",
+        reason_code="semiconductor_ai_match",
+        matched_families=("semiconductor_ai",),
+        evidence=(AdmissionEvidence("semiconductor_ai", "term", "HBM"),),
+        config_version="test-v1",
+    )
+
+
+def test_production_content_runtime_uses_unified_result_for_existing_and_delivery() -> None:
+    original_module = market_runtime._selected_module
+    original_deliver = market_runtime.deliver_article_review
+    original_prepare = market_runtime.prepare_item_for_decision
+    calls = {"evaluate": 0, "deliver": 0}
+    decision = DecisionResult(action="push", importance="high", reason="HBM扩产")
+
+    class FakeModule:
+        @staticmethod
+        def evaluate_article_review(*_args, **_kwargs):
+            calls["evaluate"] += 1
+            return {
+                "importance": "high",
+                "push_now": True,
+                "reason": "HBM扩产",
+                "daily_summary": "HBM扩产",
+                "raw": {"decision_result": decision.to_dict()},
+            }
+
+        @staticmethod
+        def gate_lines(_review):
+            return []
+
+    try:
+        market_runtime._selected_module = lambda _kind: FakeModule
+        market_runtime.prepare_item_for_decision = lambda value: value
+
+        def fake_deliver(*_args, **kwargs):
+            calls["deliver"] += 1
+            assert kwargs["already_sent"] is False
+            assert kwargs["update_compatibility"] is False
+            return "sent"
+
+        market_runtime.deliver_article_review = fake_deliver
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "runtime.sqlite3"
+            init_db(db_path).close()
+            item = NormalizedMarketItem(
+                source="test_news",
+                source_category="news_media",
+                content_type="article",
+                title="HBM扩产",
+                url="https://example.com/hbm",
+                raw={"id": "hbm-1"},
+            )
+            raw_item = {"id": "hbm-1", "title": item.title, "url": item.url}
+            item_id, review_id = record_production_admission(item, admitted(), db_path=db_path)
+            first = market_runtime.process_market_item(
+                item,
+                raw_item,
+                store_kind="article",
+                db_path=db_path,
+                production_admission=admitted(),
+                market_item_id=item_id,
+                market_review_id=review_id,
+            )
+            repeated_ids = record_production_admission(item, admitted(), db_path=db_path)
+            second = market_runtime.process_market_item(
+                item,
+                raw_item,
+                store_kind="article",
+                db_path=db_path,
+                production_admission=admitted(),
+                market_item_id=repeated_ids[0],
+                market_review_id=repeated_ids[1],
+            )
+            with sqlite3.connect(db_path) as conn:
+                assert conn.execute("SELECT COUNT(*) FROM market_reviews").fetchone()[0] == 1
+                assert conn.execute("SELECT COUNT(*) FROM article_reviews").fetchone()[0] == 1
+                assert conn.execute("SELECT COUNT(*) FROM market_item_aliases").fetchone()[0] == 1
+                delivery = conn.execute(
+                    "SELECT market_item_id,market_review_id,status,decision_action FROM deliveries"
+                ).fetchone()
+                pushed_at = conn.execute("SELECT pushed_at FROM article_reviews").fetchone()[0]
+            assert delivery == (item_id, review_id, "sent", "push")
+            assert pushed_at
+            assert first.inserted is True
+            assert second.inserted is False
+            assert second.delivery_status == "existing"
+    finally:
+        market_runtime._selected_module = original_module
+        market_runtime.deliver_article_review = original_deliver
+        market_runtime.prepare_item_for_decision = original_prepare
+    assert calls == {"evaluate": 1, "deliver": 1}
+
+
+def test_production_event_runtime_completes_unified_result_before_legacy_analysis() -> None:
+    original_module = market_runtime._selected_module
+    original_prepare = market_runtime.prepare_item_for_decision
+    calls = {"analyze": 0}
+    decision = DecisionResult(action="daily", importance="medium", reason="公告跟踪")
+
+    class FakeEventModule:
+        upsert_event = staticmethod(market_event_adapter.upsert_event)
+        analysis_record_fields = staticmethod(market_event_adapter.analysis_record_fields)
+
+        @staticmethod
+        def analyze_event(*_args, **kwargs):
+            calls["analyze"] += 1
+            assert kwargs["persist_legacy"] is False
+            return {
+                "core_content": "公告跟踪",
+                "_decision_result": decision.to_dict(),
+                "_interpretation_result": {"core_content": "公告跟踪"},
+            }
+
+    try:
+        market_runtime._selected_module = lambda _kind: FakeEventModule
+        market_runtime.prepare_item_for_decision = lambda value: value
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "event-runtime.sqlite3"
+            init_db(db_path).close()
+            raw_event = {
+                "source": "sina_flash",
+                "source_event_id": "event-unified-1",
+                "event_type": "flash",
+                "title": "公告跟踪",
+                "summary": "公告内容",
+                "raw": {"source_event_id": "event-unified-1"},
+            }
+            item = market_runtime.normalize_market_item("sina_flash", raw_event, store_kind="event")
+            item_id, review_id = record_production_admission(
+                item, admitted(), db_path=db_path, task="portfolio_event"
+            )
+            first = market_runtime.process_market_item(
+                item,
+                raw_event,
+                store_kind="event",
+                db_path=db_path,
+                deliver=False,
+                production_admission=admitted(),
+                market_item_id=item_id,
+                market_review_id=review_id,
+            )
+            second = market_runtime.process_market_item(
+                item,
+                raw_event,
+                store_kind="event",
+                db_path=db_path,
+                deliver=False,
+                production_admission=admitted(),
+                market_item_id=item_id,
+                market_review_id=review_id,
+            )
+            with sqlite3.connect(db_path) as conn:
+                unified = conn.execute(
+                    "SELECT review_status,decision_action,legacy_store_kind FROM market_reviews"
+                ).fetchone()
+                assert conn.execute("SELECT COUNT(*) FROM event_analyses").fetchone()[0] == 1
+                assert conn.execute("SELECT COUNT(*) FROM market_item_aliases").fetchone()[0] == 1
+            assert unified == ("succeeded", "daily", "event_analyses")
+            assert first.inserted is True
+            assert second.inserted is False
+            assert second.delivery_status == "existing"
+    finally:
+        market_runtime._selected_module = original_module
+        market_runtime.prepare_item_for_decision = original_prepare
+    assert calls == {"analyze": 1}
+
+
+def test_production_official_runtime_uses_unified_result_and_compatibility_copy() -> None:
+    original_module = market_runtime._selected_module
+    original_prepare = market_runtime.prepare_item_for_decision
+    decision = DecisionResult(action="archive", importance="low", reason="例行官网更新")
+
+    class FakeOfficialModule:
+        @staticmethod
+        def evaluate_official_review(*_args, **_kwargs):
+            return {
+                "importance": "low",
+                "should_push_now": False,
+                "reason": "例行官网更新",
+                "daily_summary": "例行官网更新",
+                "analysis": {"_decision_result": decision.to_dict()},
+            }
+
+        @staticmethod
+        def analysis_lines_from_review(_review):
+            return []
+
+    try:
+        market_runtime._selected_module = lambda _kind: FakeOfficialModule
+        market_runtime.prepare_item_for_decision = lambda value: value
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "official-runtime.sqlite3"
+            init_db(db_path).close()
+            item = NormalizedMarketItem(
+                source="nvidia_blog",
+                source_category="official_company",
+                content_type="official_news",
+                title="官网例行更新",
+                url="https://example.com/official",
+                raw={"id": "official-1"},
+            )
+            raw_item = {"id": "official-1", "title": item.title, "url": item.url}
+            item_id, review_id = record_production_admission(item, admitted(), db_path=db_path)
+            outcome = market_runtime.process_market_item(
+                item,
+                raw_item,
+                store_kind="official",
+                db_path=db_path,
+                deliver=False,
+                production_admission=admitted(),
+                market_item_id=item_id,
+                market_review_id=review_id,
+            )
+            with sqlite3.connect(db_path) as conn:
+                unified = conn.execute(
+                    "SELECT review_status,decision_action,legacy_store_kind FROM market_reviews"
+                ).fetchone()
+                assert conn.execute("SELECT COUNT(*) FROM official_news_reviews").fetchone()[0] == 1
+                alias = conn.execute(
+                    "SELECT item_kind,source,legacy_item_id FROM market_item_aliases"
+                ).fetchone()
+            assert unified == ("succeeded", "archive", "official_news_reviews")
+            assert alias == ("official", "nvidia_blog", "official-1")
+            assert outcome.inserted is True
+    finally:
+        market_runtime._selected_module = original_module
+        market_runtime.prepare_item_for_decision = original_prepare
+
+
 def main() -> int:
     test_five_content_types_share_one_decision_and_interpretation_contract()
     test_interpretation_failure_preserves_deterministic_action()
@@ -590,6 +827,9 @@ def main() -> int:
     test_runtime_comparison_receives_the_exact_item_before_delivery()
     test_analyzed_event_compares_before_delivery_and_baseline_does_not()
     test_retry_can_finish_an_existing_event_without_analysis()
+    test_production_content_runtime_uses_unified_result_for_existing_and_delivery()
+    test_production_event_runtime_completes_unified_result_before_legacy_analysis()
+    test_production_official_runtime_uses_unified_result_and_compatibility_copy()
     print("market flow checks passed")
     return 0
 

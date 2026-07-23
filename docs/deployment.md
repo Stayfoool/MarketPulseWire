@@ -137,6 +137,22 @@ article/official/event ids, current result selection, daily dry runs, feedback
 resolution, signal dry run, foreign keys and SQLite integrity before treating
 the read switch as complete.
 
+After deploying the unified-write authority change, compare every new unified
+result with its retained compatibility copy. The command is read-only, defaults
+to the migration completion time and prints counts only:
+
+```bash
+sudo -u surveil /opt/surveil/.venv/bin/python \
+  /opt/surveil/scripts/market_storage_audit.py \
+  --db /opt/surveil/data/surveil.sqlite3 --fail-on-difference
+```
+
+Use `--since <UTC ISO timestamp>` and `--until <UTC ISO timestamp>` to audit a
+deployment or observation window. Any missing identity/result, action mismatch,
+delivery without unified item/result, duplicate current result, orphan
+reference, foreign-key error or failed `quick_check` blocks rollout. The old
+tables remain enabled as compatibility copies during this stage.
+
 Use it to verify whether your Mac, GitHub, and server are aligned:
 
 ```bash

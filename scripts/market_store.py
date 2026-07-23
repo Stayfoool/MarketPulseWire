@@ -6,7 +6,9 @@ import hashlib
 import json
 import os
 import sqlite3
+import sys
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,14 @@ def utc_now() -> str:
 
 def json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def json_dict(value: Any) -> dict[str, Any]:
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def application_revision() -> str:
@@ -228,9 +238,45 @@ def record_production_admission(
     db_path: Path = DEFAULT_DB_PATH,
     collection_class: str = "live",
     task: str = "production",
+    force_new: bool = False,
 ) -> tuple[int, int]:
     init_db(db_path).close()
     with connect_sqlite(db_path) as conn:
+        item_source_id = source_item_id(item)
+        existing = conn.execute(
+            """
+            SELECT m.id,r.id,r.review_status,m.processing_status,r.admission_json
+            FROM market_items m
+            JOIN market_reviews r ON r.market_item_id=m.id AND r.task=? AND r.is_current=1
+            WHERE m.source=? AND m.source_item_id=?
+            LIMIT 1
+            """,
+            (task, item.source, item_source_id),
+        ).fetchone()
+        existing_status = str(existing[2]) if existing else ""
+        same_admission = bool(existing and json_dict(existing[4]) == admission.to_dict())
+        if not force_new and existing and (
+            existing_status == "succeeded"
+            or (
+                existing_status
+                in {
+                    "admitted_pending",
+                    "excluded",
+                    "not_applicable",
+                    "failed_retryable",
+                    "failed_terminal",
+                }
+                and same_admission
+            )
+        ):
+            upsert_market_item(
+                conn,
+                item,
+                collection_class=collection_class,
+                processing_status=str(existing[3] or "pending"),
+            )
+            conn.commit()
+            return int(existing[0]), int(existing[1])
         item_id = upsert_market_item(
             conn,
             item,
@@ -240,6 +286,46 @@ def record_production_admission(
         review_id = begin_market_review(conn, item_id, admission, task=task)
         conn.commit()
     return item_id, review_id
+
+
+def market_review_snapshot(
+    market_review_id: int,
+    *,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict[str, Any] | None:
+    with connect_sqlite(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT r.market_item_id,r.review_status,r.admission_status,r.decision_action,
+                   r.importance,r.decision_json,r.interpretation_json,r.legacy_payload_json,
+                   r.legacy_store_kind,r.legacy_store_id,
+                   EXISTS(SELECT 1 FROM deliveries d
+                          WHERE d.market_item_id=r.market_item_id AND d.status='sent')
+            FROM market_reviews r WHERE r.id=?
+            """,
+            (market_review_id,),
+        ).fetchone()
+    if not row:
+        return None
+    payload = json_dict(row[7])
+    decision = json_dict(row[5])
+    interpretation = json_dict(row[6])
+    if decision:
+        payload["decision_result"] = decision
+    if interpretation:
+        payload["_interpretation_result"] = interpretation
+    return {
+        "market_item_id": int(row[0]),
+        "market_review_id": market_review_id,
+        "review_status": str(row[1] or ""),
+        "admission_status": str(row[2] or ""),
+        "decision_action": str(row[3] or ""),
+        "importance": str(row[4] or ""),
+        "payload": payload,
+        "legacy_store_kind": str(row[8] or ""),
+        "legacy_store_id": str(row[9] or ""),
+        "delivered": bool(row[10]),
+    }
 
 
 def record_baseline_item(
@@ -263,6 +349,55 @@ def record_baseline_item(
     return item_id
 
 
+def _complete_market_review_in_conn(
+    conn: sqlite3.Connection,
+    market_review_id: int,
+    flow_result: MarketFlowResult,
+    *,
+    legacy_store_kind: str | None = None,
+    legacy_store_id: str | None = None,
+    legacy_payload: dict[str, Any] | None = None,
+) -> int:
+    now = utc_now()
+    row = conn.execute(
+        "SELECT market_item_id, admission_status FROM market_reviews WHERE id = ?",
+        (market_review_id,),
+    ).fetchone()
+    if not row:
+        raise RuntimeError(f"market review does not exist: {market_review_id}")
+    if str(row[1]) != "admitted":
+        raise ValueError("only an admitted market review can contain DecisionResult")
+    conn.execute(
+        """
+        UPDATE market_reviews
+        SET review_status = 'succeeded', decision_action = ?, importance = ?,
+            decision_json = ?, interpretation_json = ?, legacy_payload_json = ?, completed_at = ?,
+            legacy_store_kind = COALESCE(?, legacy_store_kind),
+            legacy_store_id = COALESCE(?, legacy_store_id)
+        WHERE id = ?
+        """,
+        (
+            flow_result.decision.action,
+            flow_result.decision.importance,
+            json_dumps(flow_result.decision.to_dict()),
+            json_dumps(flow_result.interpretation.to_dict()),
+            json_dumps(legacy_payload) if legacy_payload is not None else None,
+            now,
+            legacy_store_kind,
+            legacy_store_id,
+            market_review_id,
+        ),
+    )
+    conn.execute(
+        "UPDATE market_items SET processing_status = 'succeeded', processing_error = '', updated_at = ? WHERE id = ?",
+        (now, int(row[0])),
+    )
+    return int(row[0])
+
+
+CompatibilityWriter = Callable[[sqlite3.Connection], tuple[str, str] | None]
+
+
 def complete_market_review(
     market_review_id: int,
     flow_result: MarketFlowResult,
@@ -271,42 +406,42 @@ def complete_market_review(
     legacy_store_kind: str | None = None,
     legacy_store_id: str | None = None,
     legacy_payload: dict[str, Any] | None = None,
+    compatibility_writer: CompatibilityWriter | None = None,
+    alias: tuple[str, str, str, str] | None = None,
 ) -> None:
-    now = utc_now()
     with connect_sqlite(db_path) as conn:
-        row = conn.execute(
-            "SELECT market_item_id, admission_status FROM market_reviews WHERE id = ?",
-            (market_review_id,),
-        ).fetchone()
-        if not row:
-            raise RuntimeError(f"market review does not exist: {market_review_id}")
-        if str(row[1]) != "admitted":
-            raise ValueError("only an admitted market review can contain DecisionResult")
-        conn.execute(
-            """
-            UPDATE market_reviews
-            SET review_status = 'succeeded', decision_action = ?, importance = ?,
-                decision_json = ?, interpretation_json = ?, legacy_payload_json = ?, completed_at = ?,
-                legacy_store_kind = COALESCE(?, legacy_store_kind),
-                legacy_store_id = COALESCE(?, legacy_store_id)
-            WHERE id = ?
-            """,
-            (
-                flow_result.decision.action,
-                flow_result.decision.importance,
-                json_dumps(flow_result.decision.to_dict()),
-                json_dumps(flow_result.interpretation.to_dict()),
-                json_dumps(legacy_payload) if legacy_payload is not None else None,
-                now,
-                legacy_store_kind,
-                legacy_store_id,
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            market_item_id = _complete_market_review_in_conn(
+                conn,
                 market_review_id,
-            ),
-        )
-        conn.execute(
-            "UPDATE market_items SET processing_status = 'succeeded', processing_error = '', updated_at = ? WHERE id = ?",
-            (now, int(row[0])),
-        )
+                flow_result,
+                legacy_store_kind=legacy_store_kind,
+                legacy_store_id=legacy_store_id,
+                legacy_payload=legacy_payload,
+            )
+            compatibility_ref = compatibility_writer(conn) if compatibility_writer else None
+            if compatibility_ref:
+                conn.execute(
+                    """
+                    UPDATE market_reviews
+                    SET legacy_store_kind=?, legacy_store_id=?
+                    WHERE id=?
+                    """,
+                    (compatibility_ref[0], compatibility_ref[1], market_review_id),
+                )
+            if alias:
+                ensure_market_item_alias(
+                    conn,
+                    market_item_id,
+                    item_kind=alias[0],
+                    source=alias[1],
+                    legacy_item_id=alias[2],
+                    legacy_store_kind=alias[3],
+                )
+        except BaseException:
+            conn.rollback()
+            raise
         conn.commit()
 
 
@@ -341,6 +476,11 @@ def record_article_delivery(
     decision_action: str,
     payload: dict[str, Any] | None = None,
     error: str = "",
+    compatibility_kind: str = "",
+    compatibility_source: str = "",
+    compatibility_item_id: str = "",
+    legacy_payload: dict[str, Any] | None = None,
+    compatibility_writer: CompatibilityWriter | None = None,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> int:
     now = utc_now()
@@ -363,8 +503,39 @@ def record_article_delivery(
                 json_dumps(payload or {}),
             ),
         )
+        if legacy_payload is not None:
+            conn.execute(
+                "UPDATE market_reviews SET legacy_payload_json=? WHERE id=?",
+                (json_dumps(legacy_payload), market_review_id),
+            )
         conn.commit()
-        return int(cur.lastrowid)
+        delivery_id = int(cur.lastrowid)
+    if compatibility_writer is None and not compatibility_kind:
+        return delivery_id
+    try:
+        with connect_sqlite(db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if compatibility_writer is not None:
+                compatibility_writer(conn)
+            if status == "sent" and compatibility_kind:
+                table = {
+                    "article": "article_reviews",
+                    "official": "official_news_reviews",
+                }.get(compatibility_kind)
+                if not table:
+                    raise ValueError(f"unsupported compatibility delivery kind: {compatibility_kind}")
+                conn.execute(
+                    f"UPDATE {table} SET pushed_at=? WHERE source=? AND item_id=?",
+                    (now, compatibility_source, compatibility_item_id),
+                )
+            conn.commit()
+    except BaseException as exc:
+        message = f"compatibility projection failed: {type(exc).__name__}: {str(exc)[:300]}"
+        with connect_sqlite(db_path) as conn:
+            conn.execute("UPDATE deliveries SET error=? WHERE id=?", (message, delivery_id))
+            conn.commit()
+        print(message, file=sys.stderr, flush=True)
+    return delivery_id
 
 
 def link_latest_event_delivery(

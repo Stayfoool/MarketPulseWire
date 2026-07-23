@@ -267,15 +267,16 @@ def resolve_feedback_snapshot(
         canonical = canonical_feedback_snapshot(
             conn, identity.item_kind, identity.source, identity.item_id
         )
-        if canonical is not None:
-            action, rule_ids, version = _decision_snapshot(canonical["decision"])
-            return {
-                "decision_action": action,
-                "rule_ids": rule_ids,
-                "decision_version": version,
-                "delivery_status": canonical["delivery_status"],
-                "delivery_id": canonical["delivery_id"],
-            }
+        if canonical is None:
+            raise FeedbackError("统一处理结果中未找到对应审计记录")
+        action, rule_ids, version = _decision_snapshot(canonical["decision"])
+        return {
+            "decision_action": action,
+            "rule_ids": rule_ids,
+            "decision_version": version,
+            "delivery_status": canonical["delivery_status"],
+            "delivery_id": canonical["delivery_id"],
+        }
     if identity.item_kind == "article":
         row = conn.execute(
             "SELECT gate_json, pushed_at FROM article_reviews WHERE source = ? AND item_id = ?",
@@ -624,12 +625,12 @@ def _feedback_card_base(conn: sqlite3.Connection, identity: FeedbackIdentity) ->
         canonical = canonical_feedback_snapshot(
             conn, identity.item_kind, identity.source, identity.item_id
         )
-        if canonical is not None:
-            payload = canonical["legacy_payload"]
-            raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else payload
-            card = raw.get("_feedback_card_base")
-            if isinstance(card, dict):
-                return card
+        if canonical is None:
+            return None
+        payload = canonical["legacy_payload"]
+        raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else payload
+        card = raw.get("_feedback_card_base")
+        return card if isinstance(card, dict) else None
     if identity.item_kind == "article":
         row = conn.execute(
             "SELECT gate_json FROM article_reviews WHERE source = ? AND item_id = ?",

@@ -341,7 +341,7 @@ def review_article(source: str, item: dict[str, Any]) -> dict[str, Any]:
     return attach_decision_result_to_article_review(flow_result.decision, review)
 
 
-def process_article_review(
+def evaluate_article_review(
     conn,
     source: str,
     item: dict[str, Any],
@@ -349,7 +349,7 @@ def process_article_review(
     source_profile_id: str | None = None,
     normalized_item: NormalizedMarketItem | None = None,
 ) -> dict[str, Any]:
-    """Run the production article/news spine and persist its compatibility review."""
+    """Run the production article/news spine without choosing a storage table."""
     holdings = load_enabled_holdings_for_rules()
     normalized = normalized_item or normalized_article_item(source, item)
     flow_result = _evaluate_content_item(source, item, normalized, holdings)
@@ -376,7 +376,26 @@ def process_article_review(
         blocked=blocked,
     )
     review = _attach_article_flow_audit(review, flow_result)
-    review = attach_decision_result_to_article_review(flow_result.decision, review)
+    return attach_decision_result_to_article_review(flow_result.decision, review)
+
+
+def process_article_review(
+    conn,
+    source: str,
+    item: dict[str, Any],
+    *,
+    source_profile_id: str | None = None,
+    normalized_item: NormalizedMarketItem | None = None,
+) -> dict[str, Any]:
+    """Compatibility entry that evaluates and stores the historical article row."""
+    normalized = normalized_item or normalized_article_item(source, item)
+    review = evaluate_article_review(
+        conn,
+        source,
+        item,
+        source_profile_id=source_profile_id,
+        normalized_item=normalized,
+    )
     store_article_flow_review(conn, source, item, review, normalized)
     return review
 
@@ -472,7 +491,7 @@ def review_official_news(source: str, item: dict[str, Any]) -> dict[str, Any]:
     return attach_decision_result_to_official_review(flow_result.decision, review)
 
 
-def process_official_review(
+def evaluate_official_review(
     conn,
     source: str,
     item: dict[str, Any],
@@ -480,7 +499,7 @@ def process_official_review(
     source_profile_id: str | None = None,
     normalized_item: NormalizedMarketItem | None = None,
 ) -> dict[str, Any]:
-    """Run the production official-news spine and persist its compatibility review."""
+    """Run the production official-news spine without choosing a storage table."""
     holdings = load_enabled_holdings_for_rules()
     normalized = normalized_item or normalized_official_item(source, item)
     flow_result = _evaluate_content_item(source, item, normalized, holdings, official=True)
@@ -507,7 +526,26 @@ def process_official_review(
         blocked=blocked,
     )
     review = _attach_official_flow_audit(review, flow_result)
-    review = attach_decision_result_to_official_review(flow_result.decision, review)
+    return attach_decision_result_to_official_review(flow_result.decision, review)
+
+
+def process_official_review(
+    conn,
+    source: str,
+    item: dict[str, Any],
+    *,
+    source_profile_id: str | None = None,
+    normalized_item: NormalizedMarketItem | None = None,
+) -> dict[str, Any]:
+    """Compatibility entry that evaluates and stores the historical official row."""
+    normalized = normalized_item or normalized_official_item(source, item)
+    review = evaluate_official_review(
+        conn,
+        source,
+        item,
+        source_profile_id=source_profile_id,
+        normalized_item=normalized,
+    )
     store_official_flow_review(conn, source, item, review, normalized)
     return review
 
