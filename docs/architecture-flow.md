@@ -210,9 +210,11 @@ also exposes an explicitly labeled historical share-price close and its date as
 `reference_price` and `reference_price_date`; it does not expose the full OCR
 page to the strength-decision model. The existing report-only
 `holding_rating_revision` and `investment_bank_allocation_change` rules let the
-model calculate `target price / report historical close - 1`. A result at least
-30% or at most -30% may select `push`; an absolute move below 30% remains
-ordinary unless another reviewed condition matches. The evidence must identify
+model calculate `target price / report historical close - 1` and select the
+action from the unrounded result. A result at least 30.0% or at most -30.0% may
+select `push`; 17.6% and 29.9% remain ordinary unless another reviewed
+condition independently matches. A current target price alone is not a new
+long/short, allocation or target-revision action. The evidence must identify
 the trusted institution, stock, current target price, historical close and
 close date. Ambiguous labels, prior or consensus targets, 52-week ranges,
 external live prices, mismatched currencies or share classes, unclear corporate
