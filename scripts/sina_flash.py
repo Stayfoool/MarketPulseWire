@@ -23,7 +23,7 @@ from market_db import DEFAULT_DB_PATH, init_db
 from market_flow import normalize_market_item, process_market_item
 from market_review_store import event_content_hash as content_hash, load_enabled_holdings
 from portfolio_import import import_holdings
-from production_admission import admission_lifecycle_values, production_admission_context
+from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from rss_monitor import save_new_items
 from sina_zy_client import client_from_env, result_data
 from source_health import record_source_failure, record_source_success
@@ -407,7 +407,7 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
             print(f"[dry-run] {event['source_event_id']} {event['title']} symbols={event.get('symbols')}")
             continue
         normalized = normalize_market_item(SOURCE, event, store_kind="event")
-        admission_context = production_admission_context(normalized, db_path=DEFAULT_DB_PATH)
+        admission_context = persist_production_admission_context(normalized, production_admission_context(normalized, db_path=DEFAULT_DB_PATH), db_path=DEFAULT_DB_PATH)
         admission = admission_context.result
         if admission.status != "admitted":
             excluded_count += 1
@@ -435,6 +435,8 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
                 reprocess_existing=bool(event.get("_seen_item_retry")),
                 production_admission=admission,
                 production_portfolio=admission_context.portfolio,
+                market_item_id=admission_context.market_item_id,
+                market_review_id=admission_context.market_review_id,
             )
         except Exception as exc:
             set_seen_item_lifecycle(

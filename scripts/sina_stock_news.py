@@ -22,7 +22,7 @@ from market_db import DEFAULT_DB_PATH, init_db
 from market_flow import normalize_market_item, process_market_item
 from market_review_store import event_content_hash as content_hash, load_enabled_holdings
 from portfolio_import import import_holdings
-from production_admission import production_admission_context
+from production_admission import persist_production_admission_context, production_admission_context
 from sina_zy_client import client_from_env, result_data
 from source_health import record_source_failure, record_source_success
 from source_profiles import source_profile_enabled
@@ -1155,6 +1155,10 @@ def run_once(
                 continue
             normalized = normalize_market_item(SOURCE, event, store_kind="event")
             admission_context = production_admission_context(normalized, db_path=DEFAULT_DB_PATH)
+            if not baseline_only:
+                admission_context = persist_production_admission_context(
+                    normalized, admission_context, db_path=DEFAULT_DB_PATH
+                )
             admission = admission_context.result
             if not baseline_only and admission.status != "admitted":
                 print(
@@ -1173,6 +1177,8 @@ def run_once(
                 production_portfolio=(
                     admission_context.portfolio if admission.status == "admitted" else None
                 ),
+                market_item_id=admission_context.market_item_id,
+                market_review_id=admission_context.market_review_id,
             )
             event_id = outcome.event_id
             if not outcome.inserted:

@@ -58,6 +58,7 @@ CI_SAFE_TESTS = (
     "test_market_interpreter.py",
     "test_market_item.py",
     "test_market_review_store.py",
+    "test_market_store.py",
     "test_market_view.py",
     "test_media_keyword_config.py",
     "test_news_collector.py",

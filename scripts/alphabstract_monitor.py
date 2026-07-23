@@ -28,7 +28,7 @@ from db_utils import (
 )
 from http_utils import http_get
 from market_flow import normalize_market_item, process_market_item
-from production_admission import admission_lifecycle_values, production_admission_context
+from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from rss_monitor import DB_PATH, save_new_items, strip_tags
 from source_health import record_source_failure, record_source_success
 from source_profiles import source_profile_enabled
@@ -524,7 +524,7 @@ def notify_item(item: dict[str, Any], *, source: AlphaAbstractSource = DEFAULT_S
     set_seen_item_enriched(source.name, item_id, enriched)
     try:
         normalized = normalized_alphabstract_item(enriched, source)
-        admission_context = production_admission_context(normalized, db_path=DB_PATH)
+        admission_context = persist_production_admission_context(normalized, production_admission_context(normalized, db_path=DB_PATH), db_path=DB_PATH)
         admission = admission_context.result
         if admission.status != "admitted":
             set_seen_item_lifecycle(
@@ -548,6 +548,8 @@ def notify_item(item: dict[str, Any], *, source: AlphaAbstractSource = DEFAULT_S
             use_rule_dedup=True,
             production_admission=admission,
             production_portfolio=admission_context.portfolio,
+            market_item_id=admission_context.market_item_id,
+            market_review_id=admission_context.market_review_id,
         )
         set_seen_item_lifecycle(
             source.name,

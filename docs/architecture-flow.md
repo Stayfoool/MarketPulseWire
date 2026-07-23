@@ -217,6 +217,29 @@ The `ai_compute_supply_demand` rule is a source-neutral deterministic `parallel_
 
 ## Storage
 
+New production items also use the canonical storage contract:
+
+- `market_items` owns one `(source, source_item_id)` identity, collected title,
+  summary and available full text, source metadata, baseline/live class and the
+  technical processing lifecycle. `seen_items` inserts and lifecycle updates
+  are projected into this table before normalization; the normalized item then
+  fills the richer content and metadata on the same row.
+- `market_reviews` stores a versioned production `AdmissionResult` for every
+  normalized live item. An excluded row has no `DecisionResult` or
+  `InterpretationResult`. An admitted row is completed with the exact results
+  returned by the unified runtime before delivery.
+- `deliveries` remains an execution audit, independent from decision
+  authority. Additive `market_item_id`, `market_review_id`, `decision_action`
+  and `attempted_at` columns link article, official-news and event delivery
+  outcomes to the same item/review contract.
+
+The first deployment keeps the historical stores below as compatibility
+projections for existing Web, digest, feedback, signal and operator readers.
+It backfills historical `seen_items` identities once, without inventing missing
+body text, admission evidence or decisions. Legacy table removal requires a
+separate observed read cutover; these tables are not a second decision
+authority.
+
 The project keeps the existing physical stores:
 
 - `article_reviews`

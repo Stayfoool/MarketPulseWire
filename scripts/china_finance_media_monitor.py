@@ -44,7 +44,7 @@ from macro_policy import is_macro_event
 from market_flow import normalize_market_item, process_market_item
 from market_item import NormalizedMarketItem
 from media_keyword_config import is_media_focus_item
-from production_admission import admission_lifecycle_values, production_admission_context
+from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from rss_monitor import DB_PATH, fetch_article_body, parse_date, strip_tags
 from source_backoff import backoff_state_after_failure, clear_backoff_state
 from source_health import record_source_failure, record_source_success
@@ -1362,7 +1362,7 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
     )
     try:
         normalized = normalize_market_item(source, enriched, store_kind="article", source_profile_id=source)
-        admission_context = production_admission_context(normalized, db_path=DB_PATH)
+        admission_context = persist_production_admission_context(normalized, production_admission_context(normalized, db_path=DB_PATH), db_path=DB_PATH)
         admission = admission_context.result
     except Exception as exc:
         set_seen_item_lifecycle(
@@ -1401,6 +1401,8 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
             db_path=DB_PATH,
             production_admission=admission,
             production_portfolio=admission_context.portfolio,
+            market_item_id=admission_context.market_item_id,
+            market_review_id=admission_context.market_review_id,
             deliver=deliver,
         )
     except Exception as exc:
