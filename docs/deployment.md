@@ -124,7 +124,9 @@ sudo -u surveil /opt/surveil/.venv/bin/python \
   --db /opt/surveil/data/surveil.sqlite3 --apply
 ```
 
-The apply is idempotent and runs inside one explicit SQLite write transaction;
+The apply is idempotent: when the completion marker already exists it returns
+the retained first-run statistics without scanning or rewriting the database.
+The first apply runs inside one explicit SQLite write transaction;
 any exception rolls back all item, alias, result and delivery-link changes. It
 writes the `market-storage-results-v1` marker only after the transaction
 succeeds. That marker switches Web Event Center,
