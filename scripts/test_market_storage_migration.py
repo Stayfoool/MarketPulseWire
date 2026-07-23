@@ -8,6 +8,7 @@ import sqlite3
 import tempfile
 from pathlib import Path
 
+import market_storage_migration
 from market_db import init_db
 from market_item import item_from_event_mapping
 from market_review_store import ensure_article_reviews_table, insert_event_analysis, upsert_event_record
@@ -190,9 +191,52 @@ def test_first_stage_event_review_is_reconciled_without_duplication() -> None:
             assert event_reviews[0]["is_current"] == 0
 
 
+def test_apply_failure_rolls_back_every_migration_write() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "db.sqlite3"
+        seed(path)
+        with sqlite3.connect(path, isolation_level=None) as conn:
+            conn.row_factory = sqlite3.Row
+            before = {
+                table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in ("market_items", "market_item_aliases", "market_reviews")
+            }
+            original = market_storage_migration._insert_review
+            calls = 0
+
+            def fail_after_first_review(*args, **kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise RuntimeError("forced migration failure")
+                return original(*args, **kwargs)
+
+            market_storage_migration._insert_review = fail_after_first_review
+            try:
+                try:
+                    migrate_legacy_results(conn, apply=True)
+                except RuntimeError as exc:
+                    assert str(exc) == "forced migration failure"
+                else:
+                    raise AssertionError("forced migration failure must propagate")
+            finally:
+                market_storage_migration._insert_review = original
+
+            after = {
+                table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in ("market_items", "market_item_aliases", "market_reviews")
+            }
+            assert after == before
+            assert conn.execute(
+                "SELECT 1 FROM source_state WHERE source=?",
+                (market_storage_migration.MIGRATION_VERSION,),
+            ).fetchone() is None
+
+
 def main() -> int:
     test_preview_apply_and_repeat()
     test_first_stage_event_review_is_reconciled_without_duplication()
+    test_apply_failure_rolls_back_every_migration_write()
     print("market storage migration checks passed")
     return 0
 

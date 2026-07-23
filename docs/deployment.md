@@ -124,8 +124,10 @@ sudo -u surveil /opt/surveil/.venv/bin/python \
   --db /opt/surveil/data/surveil.sqlite3 --apply
 ```
 
-The apply is idempotent and writes the `market-storage-results-v1` marker only
-after the transaction succeeds. That marker switches Web Event Center,
+The apply is idempotent and runs inside one explicit SQLite write transaction;
+any exception rolls back all item, alias, result and delivery-link changes. It
+writes the `market-storage-results-v1` marker only after the transaction
+succeeds. That marker switches Web Event Center,
 article/official daily output, feedback reads and signal extraction to
 `market_items` / `market_reviews`. Do not delete the compatibility tables or
 disable their writes in this stage. Verify old-to-new counts, preserved
