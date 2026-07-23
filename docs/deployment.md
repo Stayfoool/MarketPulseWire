@@ -103,6 +103,36 @@ Back up `data/surveil.sqlite3` before deploying a revision that first contains
 this migration, then verify `PRAGMA quick_check`, canonical row counts and
 foreign-key references under the `surveil` service account.
 
+The historical result/read migration is deliberately not run by
+`surveil-db-init.service`. Deploying its code only adds the schema and leaves
+Web, daily output, feedback and signal readers on the compatibility tables.
+After deployment, first create a mode-`0600` SQLite backup and preview the
+migration under the service account:
+
+```bash
+sudo -u surveil /opt/surveil/.venv/bin/python \
+  /opt/surveil/scripts/market_storage_migration.py \
+  --db /opt/surveil/data/surveil.sqlite3
+```
+
+Compare preview counts with `article_reviews`, `official_news_reviews`,
+`events` and `event_analyses`. After review, apply it explicitly:
+
+```bash
+sudo -u surveil /opt/surveil/.venv/bin/python \
+  /opt/surveil/scripts/market_storage_migration.py \
+  --db /opt/surveil/data/surveil.sqlite3 --apply
+```
+
+The apply is idempotent and writes the `market-storage-results-v1` marker only
+after the transaction succeeds. That marker switches Web Event Center,
+article/official daily output, feedback reads and signal extraction to
+`market_items` / `market_reviews`. Do not delete the compatibility tables or
+disable their writes in this stage. Verify old-to-new counts, preserved
+article/official/event ids, current result selection, daily dry runs, feedback
+resolution, signal dry run, foreign keys and SQLite integrity before treating
+the read switch as complete.
+
 Use it to verify whether your Mac, GitHub, and server are aligned:
 
 ```bash

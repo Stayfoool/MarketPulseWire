@@ -18,6 +18,11 @@ from cards import div_markdown
 
 from db_utils import connect_sqlite
 from market_db import DEFAULT_DB_PATH
+from market_canonical_reader import (
+    canonical_delivered_items,
+    canonical_feedback_snapshot,
+    migration_ready as canonical_migration_ready,
+)
 from market_item import decision_result_from_payload
 
 
@@ -258,6 +263,19 @@ def resolve_feedback_snapshot(
             "delivery_status": "sent",
             "delivery_id": None,
         }
+    if canonical_migration_ready(conn):
+        canonical = canonical_feedback_snapshot(
+            conn, identity.item_kind, identity.source, identity.item_id
+        )
+        if canonical is not None:
+            action, rule_ids, version = _decision_snapshot(canonical["decision"])
+            return {
+                "decision_action": action,
+                "rule_ids": rule_ids,
+                "decision_version": version,
+                "delivery_status": canonical["delivery_status"],
+                "delivery_id": canonical["delivery_id"],
+            }
     if identity.item_kind == "article":
         row = conn.execute(
             "SELECT gate_json, pushed_at FROM article_reviews WHERE source = ? AND item_id = ?",
@@ -602,6 +620,16 @@ def handle_feedback_callback(
 def _feedback_card_base(conn: sqlite3.Connection, identity: FeedbackIdentity) -> dict[str, Any] | None:
     if identity.item_kind == "test":
         return feedback_test_card_base()
+    if canonical_migration_ready(conn):
+        canonical = canonical_feedback_snapshot(
+            conn, identity.item_kind, identity.source, identity.item_id
+        )
+        if canonical is not None:
+            payload = canonical["legacy_payload"]
+            raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else payload
+            card = raw.get("_feedback_card_base")
+            if isinstance(card, dict):
+                return card
     if identity.item_kind == "article":
         row = conn.execute(
             "SELECT gate_json FROM article_reviews WHERE source = ? AND item_id = ?",
@@ -654,6 +682,8 @@ def feedback_card_for_callback(
 
 
 def _delivered_items(conn: sqlite3.Connection, cutoff: str) -> list[dict[str, Any]]:
+    if canonical_migration_ready(conn):
+        return canonical_delivered_items(conn, cutoff)
     items: list[dict[str, Any]] = []
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='article_reviews'").fetchone():
         for row in conn.execute(
