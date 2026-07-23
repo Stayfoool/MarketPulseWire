@@ -192,8 +192,8 @@ def test_notify_item_uses_unified_process_market_item() -> None:
     assert kwargs["store_kind"] == "article"
     assert kwargs["source_profile_id"] == source.name
     assert kwargs["use_rule_dedup"] is True
-    assert kwargs["current_admission_status"] == "admitted"
-    assert kwargs["current_matched_families"] == ("trade_policy",)
+    assert kwargs["production_admission"].status == "admitted"
+    assert kwargs["production_admission"].matched_families == ("trade_policy",)
 
 
 def test_baseline_duplicate_health_and_new_item_processing() -> None:

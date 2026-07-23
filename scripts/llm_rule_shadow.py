@@ -362,6 +362,7 @@ def compare_llm_rule_candidate(
     portfolio: PortfolioRuleConfig,
     source_policy: SourceAdmissionPolicy,
     model_caller: ModelCaller,
+    production_admission: AdmissionResult | None = None,
     input_text_scope: str | None = None,
     max_input_chars: int = 120_000,
 ) -> dict[str, Any]:
@@ -370,7 +371,7 @@ def compare_llm_rule_candidate(
     if current_decision is not None and current_decision.action not in VALID_CURRENT_ACTIONS:
         raise ValueError(f"invalid current decision action: {current_decision.action}")
 
-    admission = apply_source_admission_boundary(
+    admission = production_admission or apply_source_admission_boundary(
         item,
         admit_market_item(
             item,

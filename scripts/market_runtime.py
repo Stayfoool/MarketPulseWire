@@ -15,6 +15,7 @@ from db_utils import connect_sqlite
 from market_db import DEFAULT_DB_PATH
 from market_delivery import deliver_article_review, deliver_official_review
 from market_item import (
+    AdmissionResult,
     DecisionResult,
     InterpretationResult,
     MarketFlowResult,
@@ -72,12 +73,18 @@ def record_rule_comparison(
     current_admission_status: str = "unknown",
     current_admission_reason: str = "current_runtime_does_not_expose_admission",
     current_matched_families: tuple[str, ...] = (),
+    production_admission: AdmissionResult | None = None,
+    production_portfolio: object | None = None,
 ) -> None:
     """Run the optional comparison without making it part of runtime correctness."""
     if str(os.environ.get("RULE_CORE_SHADOW_AUTORUN") or "").strip().lower() not in {"1", "true", "yes", "on"}:
         return
     try:
         module = importlib.import_module("rule_core_runtime_shadow")
+        if production_admission is not None:
+            current_admission_status = production_admission.status
+            current_admission_reason = production_admission.reason_code
+            current_matched_families = production_admission.matched_families
         result = module.record_runtime_comparison(
             item,
             current_decision,
@@ -85,6 +92,8 @@ def record_rule_comparison(
             current_admission_status=current_admission_status,
             current_admission_reason=current_admission_reason,
             current_matched_families=current_matched_families,
+            production_admission=production_admission,
+            production_portfolio=production_portfolio,
         )
         if result.get("status") == "failed":
             print(f"rule core comparison failed: {result.get('reason')}", file=sys.stderr, flush=True)
@@ -229,6 +238,8 @@ def _process_content_item(
     current_admission_status: str,
     current_admission_reason: str,
     current_matched_families: tuple[str, ...],
+    production_admission: AdmissionResult | None,
+    production_portfolio: object | None,
 ) -> MarketProcessOutcome:
     module = _selected_module(store_kind)
     source = item.source
@@ -273,7 +284,7 @@ def _process_content_item(
     }
     flow_result = _flow_result(decision_item, payload, storage_ref)
     if inserted and not flow_result.decision.audit_json.get("contract_error"):
-        if (
+        if production_admission is None and (
             current_admission_status == "unknown"
             and current_admission_reason == "current_runtime_does_not_expose_admission"
             and not current_matched_families
@@ -287,6 +298,8 @@ def _process_content_item(
                 current_admission_status=current_admission_status,
                 current_admission_reason=current_admission_reason,
                 current_matched_families=current_matched_families,
+                production_admission=production_admission,
+                production_portfolio=production_portfolio,
             )
     status = "not_requested"
     if deliver:
@@ -333,6 +346,8 @@ def _process_event_item(
     current_admission_status: str,
     current_admission_reason: str,
     current_matched_families: tuple[str, ...],
+    production_admission: AdmissionResult | None,
+    production_portfolio: object | None,
 ) -> MarketProcessOutcome:
     module = _selected_module("event")
     event_id, inserted = module.upsert_event(raw_item, db_path, normalized_item=item)
@@ -384,6 +399,8 @@ def _process_event_item(
             current_admission_status=current_admission_status,
             current_admission_reason=current_admission_reason,
             current_matched_families=current_matched_families,
+            production_admission=production_admission,
+            production_portfolio=production_portfolio,
         )
     status = module.maybe_deliver_event(event_id, analysis, db_path=db_path) if deliver else "not_requested"
     return MarketProcessOutcome(
@@ -411,8 +428,12 @@ def process_market_item(
     current_admission_status: str = "unknown",
     current_admission_reason: str = "current_runtime_does_not_expose_admission",
     current_matched_families: tuple[str, ...] = (),
+    production_admission: AdmissionResult | None = None,
+    production_portfolio: object | None = None,
 ) -> MarketProcessOutcome:
     """Persist, decide, interpret, and optionally deliver one normalized item."""
+    if production_admission is not None and production_admission.status != "admitted":
+        raise ValueError("process_market_item requires an admitted production AdmissionResult")
     if store_kind == "event":
         return _process_event_item(
             item,
@@ -426,6 +447,8 @@ def process_market_item(
             current_admission_status=current_admission_status,
             current_admission_reason=current_admission_reason,
             current_matched_families=current_matched_families,
+            production_admission=production_admission,
+            production_portfolio=production_portfolio,
         )
     return _process_content_item(
         item,
@@ -439,4 +462,6 @@ def process_market_item(
         current_admission_status=current_admission_status,
         current_admission_reason=current_admission_reason,
         current_matched_families=current_matched_families,
+        production_admission=production_admission,
+        production_portfolio=production_portfolio,
     )

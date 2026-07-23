@@ -11,7 +11,14 @@ import rule_core_runtime_shadow as runtime_shadow
 from llm_analysis import ChatCompletionResponse
 from llm_rule_catalog import CATALOG_VERSION, rules_for_families
 from llm_rule_decision import ENGINE_VERSION as LLM_RULE_ENGINE_VERSION
-from market_item import DecisionResult, NormalizedMarketItem, item_from_article_mapping
+from market_item import (
+    AdmissionEvidence,
+    AdmissionResult,
+    DecisionResult,
+    NormalizedMarketItem,
+    item_from_article_mapping,
+)
+from rule_core_v1 import HoldingRule, PortfolioRuleConfig
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -65,6 +72,31 @@ def _llm_response() -> ChatCompletionResponse:
         usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
         attempts=1,
         elapsed_seconds=0.5,
+    )
+
+
+def _holding_llm_response() -> ChatCompletionResponse:
+    assessments = []
+    for rule in rules_for_families(("holding",)):
+        assessments.append(
+            {
+                "rule_id": rule.rule_id,
+                "judgement": "matched",
+                "action": "daily",
+                "evidence_ids": ["T1"],
+                "reason": "原文明确涉及持仓公司的一般事项。",
+            }
+            if rule.rule_id == "holding_ordinary"
+            else {"rule_id": rule.rule_id, "judgement": "not_matched"}
+        )
+    return ChatCompletionResponse(
+        content=json.dumps({"rule_results": assessments}, ensure_ascii=False),
+        model="fixed-test-model",
+        provider="provider.example",
+        response_id="response-holding",
+        usage={"total_tokens": 100},
+        attempts=1,
+        elapsed_seconds=0.2,
     )
 
 
@@ -229,6 +261,68 @@ def test_llm_candidate_mode_writes_one_bounded_report_without_changing_current_d
         assert comparison["affects_current_decision"] is False
 
 
+def test_llm_candidate_reuses_exact_production_admission_and_portfolio() -> None:
+    with TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        config, shadow_portfolio = _files(root)
+        env = _env(config, shadow_portfolio)
+        env["RULE_COMPARISON_CANDIDATE"] = "llm"
+        item = NormalizedMarketItem(
+            source="wallstreetcn_news",
+            source_category="news_media",
+            title="测试股份发布普通公告",
+            url="https://example.test/holding",
+            raw={"id": "holding-1"},
+        )
+        production_admission = AdmissionResult(
+            status="admitted",
+            reason_code="content_scope_match",
+            matched_families=("holding",),
+            evidence=(
+                AdmissionEvidence(
+                    rule_family="holding",
+                    reason_code="holding_direct_identity",
+                    evidence_quote="测试股份发布普通公告",
+                    matched_subjects=("测试股份",),
+                    matched_term_ids=(),
+                    relation="direct",
+                ),
+            ),
+            config_version="production-config",
+        )
+        production_portfolio = PortfolioRuleConfig(
+            (
+                HoldingRule(
+                    symbol="000001.SZ",
+                    names=("测试股份",),
+                    related_news_keywords=("测试产品",),
+                ),
+            )
+        )
+        calls = []
+        result = runtime_shadow.record_runtime_comparison(
+            item,
+            DecisionResult(action="daily"),
+            {"store_kind": "article_reviews", "item_id": "holding-1"},
+            report_dir=root / "reports",
+            env=env,
+            production_admission=production_admission,
+            production_portfolio=production_portfolio,
+            llm_caller=lambda prompt: calls.append(prompt) or _holding_llm_response(),
+        )
+        assert result["status"] == "completed"
+        assert len(calls) == 1
+        assert {rule["rule_id"] for rule in calls[0].user_payload["rules"]} == {
+            rule.rule_id for rule in rules_for_families(("holding",))
+        }
+        assert calls[0].user_payload["matched_context"]["holding_symbols"] == ["000001.SZ"]
+        payload = json.loads(Path(result["report"]).read_text(encoding="utf-8"))
+        comparison = payload["items"][0]["comparison"]
+        assert comparison["candidate"]["admission_status"] == "admitted"
+        assert comparison["candidate"]["matched_families"] == ["holding"]
+        assert comparison["candidate"]["action"] == "daily"
+
+
 def test_disabled_and_invalid_config_are_fail_safe() -> None:
     with TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
@@ -338,6 +432,7 @@ def main() -> int:
     test_official_trade_source_uses_direct_trade_admission_policy()
     test_runtime_report_records_deployed_application_revision()
     test_llm_candidate_mode_writes_one_bounded_report_without_changing_current_decision()
+    test_llm_candidate_reuses_exact_production_admission_and_portfolio()
     test_disabled_and_invalid_config_are_fail_safe()
     test_runtime_report_keeps_only_trusted_institution_id()
     test_current_admission_exclusion_compares_without_a_current_decision()

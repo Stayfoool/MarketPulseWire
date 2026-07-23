@@ -20,9 +20,10 @@ from env_utils import load_env
 from http_utils import http_get
 from macro_policy import macro_policy_match
 from market_db import DEFAULT_DB_PATH, init_db
-from market_flow import normalize_market_item, process_market_item, record_rule_comparison
+from market_flow import normalize_market_item, process_market_item
 from market_review_store import event_content_hash as content_hash, load_enabled_holdings
 from portfolio_import import import_holdings
+from production_admission import admission_lifecycle_values, production_admission_context
 from rss_monitor import save_new_items
 from sina_zy_client import client_from_env, result_data
 from source_health import record_source_failure, record_source_success
@@ -406,47 +407,23 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
             print(f"[dry-run] {event['source_event_id']} {event['title']} symbols={event.get('symbols')}")
             continue
         normalized = normalize_market_item(SOURCE, event, store_kind="event")
-        admission_status, admission_reason, matched_families = current_admission(normalized)
-        if admission_status == "excluded":
+        admission_context = production_admission_context(normalized, db_path=DEFAULT_DB_PATH)
+        admission = admission_context.result
+        if admission.status != "admitted":
             excluded_count += 1
             set_seen_item_lifecycle(
                 str(event["source_event_id"]),
                 processability_status="succeeded",
                 processability_reason="",
-                admission_status="excluded",
-                admission_reason=admission_reason,
-                admission_matched_families_json=json.dumps(list(matched_families)),
-                admission_evidence_json="[]",
-                admission_config_version="current-production",
-                admission_rule_contract_version="current-flow-v1",
-                admission_evaluated_at=utc_now(),
-                processing_status="not_applicable",
-                processing_error="",
+                **admission_lifecycle_values(admission, processing_status="not_applicable"),
                 processed_at=utc_now(),
-                lifecycle_updated_at=utc_now(),
-            )
-            record_rule_comparison(
-                normalized,
-                None,
-                {"store_kind": "seen_items", "source": SOURCE, "item_id": event["source_event_id"]},
-                current_admission_status="excluded",
-                current_admission_reason=admission_reason,
-                current_matched_families=matched_families,
             )
             continue
         set_seen_item_lifecycle(
             str(event["source_event_id"]),
             processability_status="succeeded",
             processability_reason="",
-            admission_status="admitted",
-            admission_reason=admission_reason,
-            admission_matched_families_json=json.dumps(list(matched_families)),
-            admission_evidence_json="[]",
-            admission_config_version="current-production",
-            admission_rule_contract_version="current-flow-v1",
-            admission_evaluated_at=utc_now(),
-            processing_status="pending",
-            processing_error="",
+            **admission_lifecycle_values(admission, processing_status="pending"),
         )
         try:
             outcome = process_market_item(
@@ -456,9 +433,8 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
                 task="sina_flash_portfolio",
                 db_path=DEFAULT_DB_PATH,
                 reprocess_existing=bool(event.get("_seen_item_retry")),
-                current_admission_status="admitted",
-                current_admission_reason=admission_reason,
-                current_matched_families=matched_families,
+                production_admission=admission,
+                production_portfolio=admission_context.portfolio,
             )
         except Exception as exc:
             set_seen_item_lifecycle(

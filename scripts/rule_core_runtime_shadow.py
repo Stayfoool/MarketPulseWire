@@ -18,9 +18,15 @@ from llm_rule_decision import (
     resolve_input_text_scope,
 )
 from llm_rule_shadow import compare_llm_rule_candidate
-from market_item import DecisionResult, NormalizedMarketItem
+from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem
 from rule_core_shadow import safe_compare_rule_core
-from rule_core_v1 import RULE_CORE_VERSION, SourceAdmissionPolicy, parse_portfolio_config, parse_rule_config
+from rule_core_v1 import (
+    RULE_CORE_VERSION,
+    PortfolioRuleConfig,
+    SourceAdmissionPolicy,
+    parse_portfolio_config,
+    parse_rule_config,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -159,7 +165,7 @@ def _body_source(item: NormalizedMarketItem) -> str:
 
 
 def source_admission_policy(item: NormalizedMarketItem) -> SourceAdmissionPolicy:
-    """Apply only source boundaries already approved for candidate admission."""
+    """Apply the production source boundary to compatibility-only evaluations."""
     if item.source_category == "official_policy" or item.publisher_role == "government_official":
         return SourceAdmissionPolicy(direct_admission_families=("trade_policy",))
     return SourceAdmissionPolicy()
@@ -175,6 +181,8 @@ def _report_payload(
     current_admission_status: str,
     current_admission_reason: str,
     current_matched_families: tuple[str, ...],
+    production_admission: AdmissionResult | None,
+    production_portfolio: PortfolioRuleConfig | None,
     env: Mapping[str, str],
     llm_caller: Any = None,
 ) -> dict[str, Any]:
@@ -187,9 +195,10 @@ def _report_payload(
             current_admission_reason=current_admission_reason,
             current_matched_families=current_matched_families,
             rule_config=rule_config,
-            portfolio=portfolio,
+            portfolio=production_portfolio or portfolio,
             source_policy=source_admission_policy(item),
             model_caller=llm_caller or _default_llm_caller(env),
+            production_admission=production_admission,
             input_text_scope=resolve_input_text_scope(item),
             max_input_chars=_bounded_int(
                 env,
@@ -292,6 +301,8 @@ def record_runtime_comparison(
     current_admission_status: str = "unknown",
     current_admission_reason: str = "current_runtime_does_not_expose_admission",
     current_matched_families: tuple[str, ...] = (),
+    production_admission: AdmissionResult | None = None,
+    production_portfolio: PortfolioRuleConfig | None = None,
     llm_caller: Any = None,
 ) -> dict[str, Any]:
     """Write one bounded comparison without changing the active runtime result."""
@@ -312,6 +323,8 @@ def record_runtime_comparison(
             current_admission_status=current_admission_status,
             current_admission_reason=current_admission_reason,
             current_matched_families=current_matched_families,
+            production_admission=production_admission,
+            production_portfolio=production_portfolio,
             env=effective_env,
             llm_caller=llm_caller,
         )

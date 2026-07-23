@@ -41,9 +41,10 @@ from investment_universe import investment_universe_match, relevant_digest_for_m
 from international_bank_fed import fed_path_candidate
 from llm_analysis import llm_config
 from macro_policy import is_macro_event
-from market_flow import normalize_market_item, process_market_item, record_rule_comparison
+from market_flow import normalize_market_item, process_market_item
 from market_item import NormalizedMarketItem
 from media_keyword_config import is_media_focus_item
+from production_admission import admission_lifecycle_values, production_admission_context
 from rss_monitor import DB_PATH, fetch_article_body, parse_date, strip_tags
 from source_backoff import backoff_state_after_failure, clear_backoff_state
 from source_health import record_source_failure, record_source_success
@@ -1320,13 +1321,6 @@ def should_focus_item(item: dict[str, Any], source: str = "") -> bool:
     return bool(current_admission_result(item, source)["admitted"])
 
 
-def is_mandatory_yicai_morning_brief(source: str, item: dict[str, Any]) -> bool:
-    if source != "yicai_brief":
-        return False
-    text = f"{item.get('title', '')} {item.get('summary', '')} {item.get('full_text', '')}"
-    return "券商晨会观点速递" in strip_tags(str(text))
-
-
 def notify_item(source: str, item: dict[str, Any]) -> None:
     item_id = seen_item_id(item)
     is_seen_item_retry = bool(item.pop(SEEN_ITEM_RETRY_KEY, False))
@@ -1368,16 +1362,8 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
     )
     try:
         normalized = normalize_market_item(source, enriched, store_kind="article", source_profile_id=source)
-        mandatory_morning = is_mandatory_yicai_morning_brief(source, enriched)
-        admission = (
-            {"admitted": True, "reason": "yicai_morning_brief", "matched_families": ("semiconductor_ai",)}
-            if mandatory_morning
-            else current_admission_result(
-                normalized,
-                source,
-                source_module=str(enriched.get("source_module") or ""),
-            )
-        )
+        admission_context = production_admission_context(normalized, db_path=DB_PATH)
+        admission = admission_context.result
     except Exception as exc:
         set_seen_item_lifecycle(
             source,
@@ -1387,46 +1373,18 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
             processing_status="not_applicable",
         )
         raise
-    if not admission["admitted"]:
+    if admission.status != "admitted":
         set_seen_item_lifecycle(
             source,
             item_id,
-            admission_status="excluded",
-            admission_reason=str(admission["reason"]),
-            admission_matched_families_json=json.dumps(list(admission["matched_families"])),
-            admission_evidence_json="[]",
-            admission_config_version="current-production",
-            admission_rule_contract_version="current-flow-v1",
-            admission_evaluated_at=datetime.now(timezone.utc).isoformat(),
-            processing_status="not_applicable",
+            **admission_lifecycle_values(admission, processing_status="not_applicable"),
             processed_at=datetime.now(timezone.utc).isoformat(),
         )
-        record_rule_comparison(
-            normalized,
-            None,
-            {"store_kind": "seen_items", "source": source, "item_id": item_id},
-            current_admission_status="excluded",
-            current_admission_reason=str(admission["reason"]),
-            current_matched_families=tuple(admission["matched_families"]),
-        )
         return
-    universe_match = admission.get("universe_match") or investment_universe_match(source, enriched)
-    enriched["push_reason"] = (
-        "强制推送规则：第一财经券商晨会观点速递为每日固定栏目。"
-        if mandatory_morning
-        else str(universe_match.get("reason") or "")
-    )
     set_seen_item_lifecycle(
         source,
         item_id,
-        admission_status="admitted",
-        admission_reason=str(admission["reason"]),
-        admission_matched_families_json=json.dumps(list(admission["matched_families"])),
-        admission_evidence_json="[]",
-        admission_config_version="current-production",
-        admission_rule_contract_version="current-flow-v1",
-        admission_evaluated_at=datetime.now(timezone.utc).isoformat(),
-        processing_status="pending",
+        **admission_lifecycle_values(admission, processing_status="pending"),
     )
     deliver = should_deliver_wallstreetcn_retry(
         source,
@@ -1441,9 +1399,8 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
             store_kind="article",
             source_profile_id=source,
             db_path=DB_PATH,
-            current_admission_status="admitted",
-            current_admission_reason=str(admission["reason"]),
-            current_matched_families=tuple(admission["matched_families"]),
+            production_admission=admission,
+            production_portfolio=admission_context.portfolio,
             deliver=deliver,
         )
     except Exception as exc:

@@ -89,8 +89,8 @@ def test_media_keywords_use_one_semiconductor_ai_list() -> None:
         rule_path = Path(tmpdir) / "private-rule-config.json"
         public_path = Path(__file__).resolve().parents[1] / "config" / "rule_core_v1.test.json"
         rule_path.write_text(public_path.read_text(encoding="utf-8"), encoding="utf-8")
-        previous = os.environ.get("RULE_CORE_SHADOW_CONFIG")
-        os.environ["RULE_CORE_SHADOW_CONFIG"] = str(rule_path)
+        previous = os.environ.get("RULE_CORE_CONFIG")
+        os.environ["RULE_CORE_CONFIG"] = str(rule_path)
         server = ThreadingHTTPServer(("127.0.0.1", 0), HoldingsHandler)
         server.token = "test-token"
         server.restart_sina_flash = False
@@ -132,9 +132,9 @@ def test_media_keywords_use_one_semiconductor_ai_list() -> None:
             server.server_close()
             thread.join(timeout=5)
             if previous is None:
-                os.environ.pop("RULE_CORE_SHADOW_CONFIG", None)
+                os.environ.pop("RULE_CORE_CONFIG", None)
             else:
-                os.environ["RULE_CORE_SHADOW_CONFIG"] = previous
+                os.environ["RULE_CORE_CONFIG"] = previous
 
 
 def test_rule_shadow_report_view_is_read_only_and_path_bounded() -> None:

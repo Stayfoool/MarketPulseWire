@@ -147,14 +147,22 @@ def test_sina_flash_reserves_all_discoveries_before_current_admission() -> None:
     original_enabled = sina_flash.source_profile_enabled
     original_fetch = sina_flash.fetch_sina_feed
     original_process = sina_flash.process_market_item
-    original_compare = sina_flash.record_rule_comparison
     previous_notify = os.environ.pop("SURVEIL_NOTIFY_BASELINE", None)
     process_calls: list[dict[str, object]] = []
-    comparison_calls: list[dict[str, object]] = []
     try:
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "sina.sqlite3"
             init_db(db_path).close()
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO portfolio_holdings
+                        (symbol, name, full_name, aliases_json, enabled, raw_json, updated_at)
+                    VALUES (?, ?, '', '[]', 1, '{}', ?)
+                    """,
+                    (holding["symbol"], holding["name"], "2026-07-23T00:00:00+00:00"),
+                )
+                conn.commit()
             sina_flash.DEFAULT_DB_PATH = db_path
             sina_flash.import_holdings = lambda *_args, **_kwargs: None
             sina_flash.load_enabled_holdings = lambda *_args, **_kwargs: [holding]
@@ -187,25 +195,12 @@ def test_sina_flash_reserves_all_discoveries_before_current_admission() -> None:
                     delivery_status="not_requested",
                 )
 
-            def fake_compare(normalized, current_decision, storage_ref, **kwargs):
-                comparison_calls.append(
-                    {
-                        "normalized": normalized,
-                        "current_decision": current_decision,
-                        "storage_ref": storage_ref,
-                        **kwargs,
-                    }
-                )
-
             sina_flash.process_market_item = fake_process
-            sina_flash.record_rule_comparison = fake_compare
             assert sina_flash.run_once() == 1
             assert len(process_calls) == 1
             assert process_calls[0]["raw_item"]["source_event_id"] == "new-related"
-            assert process_calls[0]["current_admission_status"] == "admitted"
-            assert len(comparison_calls) == 1
-            assert comparison_calls[0]["storage_ref"]["item_id"] == "new-unrelated"
-            assert comparison_calls[0]["current_admission_status"] == "excluded"
+            assert process_calls[0]["production_admission"].status == "admitted"
+            assert process_calls[0]["production_admission"].matched_families == ("holding",)
             with sqlite3.connect(db_path) as conn:
                 statuses = dict(
                     conn.execute(
@@ -222,7 +217,6 @@ def test_sina_flash_reserves_all_discoveries_before_current_admission() -> None:
         sina_flash.source_profile_enabled = original_enabled
         sina_flash.fetch_sina_feed = original_fetch
         sina_flash.process_market_item = original_process
-        sina_flash.record_rule_comparison = original_compare
         if previous_notify is not None:
             os.environ["SURVEIL_NOTIFY_BASELINE"] = previous_notify
 

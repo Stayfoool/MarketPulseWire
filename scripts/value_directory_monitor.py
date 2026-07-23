@@ -15,6 +15,7 @@ from db_utils import update_seen_item_lifecycle
 from market_item import NormalizedMarketItem
 from market_review_store import article_item_id, article_review_exists
 from market_runtime import normalize_market_item, process_market_item
+from production_admission import admission_lifecycle_values, production_admission_context
 from rss_monitor import DB_PATH, connect_db, save_new_items_with_retry
 from source_health import record_source_failure, record_source_success
 from source_profiles import source_profile_enabled
@@ -262,17 +263,27 @@ def review_and_maybe_push(
             "fallback" if preview_failed else "succeeded" if preview_enabled() else "not_required"
         ),
         processability_reason="preview_or_ocr_fallback" if preview_failed else "",
-        admission_status="admitted",
-        admission_reason="current_flow_no_separate_admission",
-        admission_matched_families_json="[]",
-        admission_evidence_json="[]",
-        admission_config_version="current-production",
-        admission_rule_contract_version="current-flow-v1",
-        admission_evaluated_at=evaluated_at,
-        processing_status="pending",
+        admission_status="pending",
+        admission_reason="",
+        processing_status="not_applicable",
         processing_error="",
     )
     normalized = normalized_value_directory_item(item, source)
+    admission_context = production_admission_context(normalized, db_path=DB_PATH)
+    admission = admission_context.result
+    if admission.status != "admitted":
+        set_seen_item_lifecycle_if_present(
+            source.source_id,
+            item_id,
+            **admission_lifecycle_values(admission, processing_status="not_applicable"),
+            processed_at=utc_now(),
+        )
+        return False
+    set_seen_item_lifecycle_if_present(
+        source.source_id,
+        item_id,
+        **admission_lifecycle_values(admission, processing_status="pending"),
+    )
     try:
         outcome = process_market_item(
             normalized,
@@ -283,8 +294,8 @@ def review_and_maybe_push(
             deliver=True,
             use_rule_dedup=True,
             reprocess_existing=existing is not None,
-            current_admission_status="admitted",
-            current_admission_reason="current_flow_no_separate_admission",
+            production_admission=admission,
+            production_portfolio=admission_context.portfolio,
         )
     except Exception as exc:
         set_seen_item_lifecycle_if_present(

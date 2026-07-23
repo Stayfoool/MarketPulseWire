@@ -258,10 +258,8 @@ def test_seen_item_lifecycle_migration_baseline_and_retry() -> None:
         cfm.DB_PATH = original_db
 
 
-def test_excluded_item_uses_one_normalized_item_for_report_only_comparison() -> None:
+def test_excluded_item_stops_before_decision_runtime() -> None:
     original_db = cfm.DB_PATH
-    original_admission = cfm.current_admission_result
-    original_record = cfm.record_rule_comparison
     original_process = cfm.process_market_item
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -272,25 +270,10 @@ def test_excluded_item_uses_one_normalized_item_for_report_only_comparison() -> 
                 conn.commit()
             item = {"id": "excluded", "title": "ordinary market article", "url": "", "summary": "text"}
             assert cfm.save_new_items_with_retry("test-source", [item]) == [item]
-            captured: list[tuple[object, object, dict, dict]] = []
-            cfm.current_admission_result = lambda item, source='', **_kwargs: {
-                "admitted": False,
-                "reason": "investment_universe_no_match",
-                "matched_families": (),
-            }
-            cfm.record_rule_comparison = lambda normalized, decision, storage, **kwargs: captured.append(
-                (normalized, decision, storage, kwargs)
-            )
             cfm.process_market_item = lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 AssertionError("excluded item must not enter current decision/runtime")
             )
             cfm.notify_item("test-source", item)
-            assert len(captured) == 1
-            normalized, decision, storage, kwargs = captured[0]
-            assert normalized.source == "test-source"
-            assert decision is None
-            assert storage["store_kind"] == "seen_items"
-            assert kwargs["current_admission_status"] == "excluded"
             with cfm.connect_db() as conn:
                 state = conn.execute(
                     "SELECT processability_status, admission_status, processing_status "
@@ -299,15 +282,11 @@ def test_excluded_item_uses_one_normalized_item_for_report_only_comparison() -> 
                 assert state == ("succeeded", "excluded", "not_applicable")
     finally:
         cfm.DB_PATH = original_db
-        cfm.current_admission_result = original_admission
-        cfm.record_rule_comparison = original_record
         cfm.process_market_item = original_process
 
 
 def test_admitted_item_reuses_normalized_item_and_processing_failure_retries() -> None:
     original_db = cfm.DB_PATH
-    original_admission = cfm.current_admission_result
-    original_match = cfm.investment_universe_match
     original_normalize = cfm.normalize_market_item
     original_process = cfm.process_market_item
     try:
@@ -326,21 +305,12 @@ def test_admitted_item_reuses_normalized_item_and_processing_failure_retries() -
                 captured_normalized.append(normalized)
                 return normalized
 
-            cfm.current_admission_result = lambda item, source='', **_kwargs: {
-                "admitted": True,
-                "reason": "media_focus",
-                "matched_families": ("semiconductor_ai",),
-            }
-            cfm.investment_universe_match = lambda source, item: {
-                "matched": True,
-                "tags": ["user_include_keyword"],
-                "reason": "current admission",
-            }
             cfm.normalize_market_item = capture_normalize
 
             def fail_processing(normalized, raw_item, **kwargs):
                 assert normalized is captured_normalized[0]
-                assert kwargs["current_admission_status"] == "admitted"
+                assert kwargs["production_admission"].status == "admitted"
+                assert "semiconductor_ai" in kwargs["production_admission"].matched_families
                 raise RuntimeError("temporary processing failure")
 
             cfm.process_market_item = fail_processing
@@ -360,8 +330,6 @@ def test_admitted_item_reuses_normalized_item_and_processing_failure_retries() -
             assert cfm.save_new_items_with_retry("test-source", [item]) == [item]
     finally:
         cfm.DB_PATH = original_db
-        cfm.current_admission_result = original_admission
-        cfm.investment_universe_match = original_match
         cfm.normalize_market_item = original_normalize
         cfm.process_market_item = original_process
 
@@ -440,9 +408,7 @@ def test_wallstreetcn_processability_retry_waits_for_source_rediscovery() -> Non
 
 def test_wallstreetcn_stale_retry_keeps_processing_but_skips_delivery() -> None:
     original_db = cfm.DB_PATH
-    original_admission = cfm.current_admission_result
     original_enrich = cfm.enrich_item
-    original_match = cfm.investment_universe_match
     original_process = cfm.process_market_item
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -479,16 +445,6 @@ def test_wallstreetcn_stale_retry_keeps_processing_but_skips_delivery() -> None:
             assert item[cfm.SEEN_ITEM_RETRY_KEY] is True
             assert item[cfm.SEEN_ITEM_RETRY_FIRST_SEEN_KEY] == "2026-07-20T00:00:00+00:00"
 
-            cfm.current_admission_result = lambda item, source='', **_kwargs: {
-                "admitted": True,
-                "reason": "media_focus",
-                "matched_families": ("semiconductor_ai",),
-            }
-            cfm.investment_universe_match = lambda source, item: {
-                "matched": True,
-                "tags": ["user_include_keyword"],
-                "reason": "current admission",
-            }
             cfm.enrich_item = lambda _source, row: dict(row)
             calls: list[bool] = []
 
@@ -533,9 +489,7 @@ def test_wallstreetcn_stale_retry_keeps_processing_but_skips_delivery() -> None:
                 )
     finally:
         cfm.DB_PATH = original_db
-        cfm.current_admission_result = original_admission
         cfm.enrich_item = original_enrich
-        cfm.investment_universe_match = original_match
         cfm.process_market_item = original_process
 
 
@@ -562,15 +516,6 @@ def test_wallstreetcn_fresh_retry_and_new_old_item_can_deliver() -> None:
         published_at="",
         now=now,
     ) is False
-
-
-def test_yicai_morning_brief_is_mandatory_push() -> None:
-    item = {
-        "title": "<b>券商晨会观点速递  |</b> ①中信建投：半导体设备全球景气周期持续确认",
-        "summary": "",
-        "full_text": "",
-    }
-    assert cfm.is_mandatory_yicai_morning_brief("yicai_brief", item) is True
 
 
 def test_short_english_keyword_requires_token_boundary() -> None:
@@ -1086,12 +1031,11 @@ def main() -> int:
     test_cls_poll_interval_skips_recent_fetch()
     test_run_once_fetches_sources_independently()
     test_seen_item_lifecycle_migration_baseline_and_retry()
-    test_excluded_item_uses_one_normalized_item_for_report_only_comparison()
+    test_excluded_item_stops_before_decision_runtime()
     test_admitted_item_reuses_normalized_item_and_processing_failure_retries()
     test_wallstreetcn_processability_retry_waits_for_source_rediscovery()
     test_wallstreetcn_stale_retry_keeps_processing_but_skips_delivery()
     test_wallstreetcn_fresh_retry_and_new_old_item_can_deliver()
-    test_yicai_morning_brief_is_mandatory_push()
     test_short_english_keyword_requires_token_boundary()
     test_china_media_focus_filters_generic_power_and_accepts_ai_context()
     test_current_admission_is_equivalent_after_normalization()

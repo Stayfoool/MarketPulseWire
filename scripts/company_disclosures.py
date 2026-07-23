@@ -19,6 +19,7 @@ from market_db import DEFAULT_DB_PATH, init_db
 from market_flow import normalize_market_item, process_market_item
 from market_review_store import event_content_hash, load_enabled_holdings
 from portfolio_import import import_holdings
+from production_admission import production_admission_context
 from source_health import record_source_failure, record_source_success
 from source_profiles import SOURCE_PROFILE_CONFIG_PATH, runtime_source_profile, source_profile_enabled
 
@@ -261,6 +262,7 @@ def collect_disclosures(
         "baseline": 0,
         "backfilled": 0,
         "processed": 0,
+        "excluded": 0,
         "document_failures": 0,
     }
     backfill_seen_at = ""
@@ -306,9 +308,8 @@ def collect_disclosures(
                 baseline_only=True,
                 analyze=False,
                 deliver=False,
-                current_admission_status="admitted",
-                current_admission_reason="current_holding_scoped_source",
-                current_matched_families=("holding",),
+                current_admission_status="not_applicable",
+                current_admission_reason="baseline_only",
             )
             if identity_known:
                 stats["backfilled"] += 1 if outcome.inserted else 0
@@ -322,19 +323,27 @@ def collect_disclosures(
                 print(f"[baseline] {identity} {record.symbol} {record.title} pdf={document_meta.get('status')}", flush=True)
         else:
             normalized = normalize_market_item(SOURCE_ID, event, store_kind="event")
-            outcome = process_market_item(
-                normalized,
-                event,
-                store_kind="event",
-                source_profile_id=SOURCE_ID,
-                db_path=db_path,
-                analyze=analyze,
-                deliver=deliver,
-                current_admission_status="admitted",
-                current_admission_reason="current_holding_scoped_source",
-                current_matched_families=("holding",),
-            )
-            stats["processed"] += 1 if outcome.inserted else 0
+            admission_context = production_admission_context(normalized, db_path=db_path)
+            admission = admission_context.result
+            if admission.status != "admitted":
+                stats["excluded"] += 1
+                print(
+                    f"[excluded] {identity} {record.symbol} {record.title} reason={admission.reason_code}",
+                    flush=True,
+                )
+            else:
+                outcome = process_market_item(
+                    normalized,
+                    event,
+                    store_kind="event",
+                    source_profile_id=SOURCE_ID,
+                    db_path=db_path,
+                    analyze=analyze,
+                    deliver=deliver,
+                    production_admission=admission,
+                    production_portfolio=admission_context.portfolio,
+                )
+                stats["processed"] += 1 if outcome.inserted else 0
         if not dry_run and not identity_known:
             known.add(identity)
             known_order.append(identity)

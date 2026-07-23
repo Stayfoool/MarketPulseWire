@@ -101,8 +101,8 @@ def test_runtime_match_reads_the_same_private_rule_keywords() -> None:
         path = Path(tmpdir) / "private-rule-config.json"
         _config(path)
         save_media_keyword_config(["SMIC", "JCET"], ["培训广告"], path)
-        previous = os.environ.get("RULE_CORE_SHADOW_CONFIG")
-        os.environ["RULE_CORE_SHADOW_CONFIG"] = str(path)
+        previous = os.environ.get("RULE_CORE_CONFIG")
+        os.environ["RULE_CORE_CONFIG"] = str(path)
         try:
             assert media_keyword_match("SMIC advances 7nm") == {
                 "matched": True,
@@ -117,9 +117,9 @@ def test_runtime_match_reads_the_same_private_rule_keywords() -> None:
             assert keyword_matches_text("SMIC", "COSMIC advances") is False
         finally:
             if previous is None:
-                os.environ.pop("RULE_CORE_SHADOW_CONFIG", None)
+                os.environ.pop("RULE_CORE_CONFIG", None)
             else:
-                os.environ["RULE_CORE_SHADOW_CONFIG"] = previous
+                os.environ["RULE_CORE_CONFIG"] = previous
 
 
 def test_new_aliases_are_cross_source_and_holding_only_sources_stay_bounded() -> None:

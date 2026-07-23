@@ -172,14 +172,12 @@ def candidate_from_item(
 ) -> dict[str, Any]:
     item_id = article_item_id(item)
     would_focus = china_media.should_focus_item(dict(item, full_text=item.get("content") or item.get("summary") or ""))
-    mandatory_push = china_media.is_mandatory_yicai_morning_brief(source, item)
     candidate = {
         "source": source,
         "id": item_id,
         "already_seen": (source, item_id) in seen_ids,
         "already_reviewed": (source, item_id) in reviewed_ids,
         "would_focus": would_focus,
-        "mandatory_push": "yicai_morning_brief" if mandatory_push else "",
         "url": str(item.get("url") or ""),
         "title": str(item.get("title") or ""),
         "published_at": str(item.get("published_at") or ""),

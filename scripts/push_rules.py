@@ -1235,48 +1235,12 @@ def macro_policy_event_rule(
     }
 
 
-def yicai_morning_brief_rule(
-    *,
-    source: str,
-    item: dict[str, Any],
-    holdings: list[dict[str, Any]],
-    symbols: set[str] | None = None,
-) -> dict[str, Any] | None:
-    del holdings, symbols
-    if source != "yicai_brief" or not rule_enabled("yicai_morning_brief"):
-        return None
-    text = compact_text(item.get("title"), item.get("summary"), item.get("content"), item.get("full_text"))
-    if "券商晨会观点速递" not in text:
-        return None
-    reason = "强制推送规则：第一财经“券商晨会观点速递”为每日固定必读栏目。"
-    return {
-        "matched": True,
-        "rule_id": "yicai_morning_brief",
-        "importance": "high",
-        "push_now": True,
-        "should_push": True,
-        "reason": reason,
-        "brief_reason": reason,
-        "affected_targets": ["券商晨会观点"],
-        "related_targets": [
-            {
-                "name": "券商晨会观点",
-                "code": "",
-                "relation": "用户指定每日必读栏目",
-                "direction": "uncertain",
-            }
-        ],
-        "source": source,
-    }
-
-
 ORDERED_PUSH_RULE_MATCHERS = (
     ("investment_bank_rating_target_direct_holding", investment_bank_research_rule),
     ("holding_keyword_immediate_alert", holding_keyword_immediate_alert_rule),
     ("investment_bank_portfolio_relation", value_directory_portfolio_relation_rule),
     ("international_bank_theme_strategy", international_bank_theme_strategy_rule),
     ("value_directory_industry_macro_research", value_directory_industry_macro_research_rule),
-    ("yicai_morning_brief", yicai_morning_brief_rule),
     ("direct_holding_hard_variable", direct_holding_hard_variable_rule),
     ("official_company_hard_variable", official_company_hard_variable_rule),
     ("macro_policy_line", macro_policy_event_rule),

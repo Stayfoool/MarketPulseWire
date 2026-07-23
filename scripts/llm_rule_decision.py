@@ -20,6 +20,7 @@ from llm_rule_catalog import (
     rules_for_families,
 )
 from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem, RuleFamily
+from rule_core_v1 import apply_source_admission_boundary, source_allowed_families
 
 
 SCHEMA_VERSION = "llm-rule-match-v4"
@@ -28,8 +29,6 @@ ENGINE_VERSION = "llm-rule-decision-v5"
 ACTION_RANK = {"archive": 1, "daily": 2, "push": 3}
 JUDGEMENTS = {"matched", "not_matched", "uncertain"}
 FAILURE_STATUSES = {"insufficient_input", "model_unavailable", "invalid_output", "evidence_invalid", "conflict"}
-HOLDING_ONLY_SOURCES = {"company_disclosures", "company_disclosure", "ifind_notice", "sina_stock_news"}
-HOLDING_ONLY_SOURCE_CATEGORIES = {"company_disclosures", "company_disclosure", "portfolio_stock_news"}
 MATCHED_CONTEXT_FIELDS = {
     "holding_subjects",
     "holding_symbols",
@@ -177,40 +176,6 @@ class LLMRuleCandidateResult:
 def _item_digest(item: NormalizedMarketItem) -> str:
     payload = "\n".join((item.title, item.summary, item.full_text, item.url, item.published_at))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def source_allowed_families(item: NormalizedMarketItem) -> tuple[RuleFamily, ...]:
-    if (
-        item.source in HOLDING_ONLY_SOURCES
-        or item.source_category in HOLDING_ONLY_SOURCE_CATEGORIES
-    ):
-        return ("holding",)
-    return ("holding", "semiconductor_ai", "macro_data", "fed_policy", "trade_policy")
-
-
-def apply_source_admission_boundary(
-    item: NormalizedMarketItem,
-    admission: AdmissionResult,
-) -> AdmissionResult:
-    if source_allowed_families(item) != ("holding",) or admission.status != "admitted":
-        return admission
-    if "holding" not in admission.matched_families:
-        return AdmissionResult(
-            status="excluded",
-            reason_code="holding_scope_required_for_source",
-            matched_families=(),
-            evidence=(),
-            config_version=admission.config_version,
-            rule_contract_version=admission.rule_contract_version,
-        )
-    return AdmissionResult(
-        status="admitted",
-        reason_code="holding_scope_match",
-        matched_families=("holding",),
-        evidence=tuple(evidence for evidence in admission.evidence if evidence.rule_family == "holding"),
-        config_version=admission.config_version,
-        rule_contract_version=admission.rule_contract_version,
-    )
 
 
 def applicable_rules(

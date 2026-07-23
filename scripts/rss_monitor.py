@@ -38,6 +38,7 @@ from llm_analysis import llm_config
 from market_flow import is_official_news_source, normalize_market_item, process_market_item
 from media_sources import is_overseas_media_source, overseas_media_access_note, overseas_media_module
 from media_keyword_config import is_media_focus_item
+from production_admission import admission_lifecycle_values, production_admission_context
 from trendforce_sources import DEFAULT_RSS_FEEDS
 from x_check import load_env
 from source_backoff import backoff_state_after_failure, clear_backoff_state
@@ -442,22 +443,13 @@ def _finish_seen_item(source: str, item_id: str, enriched: dict) -> None:
     )
 
 
-def _complete_seen_item(source: str, item_id: str) -> None:
+def _complete_seen_item(source: str, item_id: str, admission) -> None:
     evaluated_at = datetime.now(timezone.utc).isoformat()
     set_seen_item_lifecycle(
         source,
         item_id,
-        admission_status="admitted",
-        admission_reason="current_runtime_processed",
-        admission_matched_families_json="[]",
-        admission_evidence_json="[]",
-        admission_config_version="current-production",
-        admission_rule_contract_version="current-flow-v1",
-        admission_evaluated_at=evaluated_at,
-        processing_status="succeeded",
-        processing_error="",
+        **admission_lifecycle_values(admission, processing_status="succeeded"),
         processed_at=evaluated_at,
-        lifecycle_updated_at=evaluated_at,
     )
 
 
@@ -478,16 +470,32 @@ def notify_item(source: str, item: dict) -> None:
         enriched = enrich_item(source, item)
         _finish_seen_item(source, item_id, enriched)
         normalized = normalize_market_item(source, enriched, store_kind="article", source_profile_id=source)
+        admission_context = production_admission_context(normalized, db_path=DB_PATH)
+        admission = admission_context.result
+        if admission.status != "admitted":
+            set_seen_item_lifecycle(
+                source,
+                item_id,
+                **admission_lifecycle_values(admission, processing_status="not_applicable"),
+                processed_at=datetime.now(timezone.utc).isoformat(),
+            )
+            print(f"{source} 五类范围准入排除：title={enriched.get('title', '')}", flush=True)
+            return
+        set_seen_item_lifecycle(
+            source,
+            item_id,
+            **admission_lifecycle_values(admission, processing_status="pending"),
+        )
         outcome = process_market_item(
             normalized,
             enriched,
             store_kind="article",
             source_profile_id=source,
             db_path=DB_PATH,
-            current_admission_status="admitted",
-            current_admission_reason="current_flow_no_separate_admission",
+            production_admission=admission,
+            production_portfolio=admission_context.portfolio,
         )
-        _complete_seen_item(source, item_id)
+        _complete_seen_item(source, item_id, admission)
     except Exception as exc:
         _fail_seen_item(source, item_id, exc)
         raise
@@ -508,16 +516,32 @@ def handle_official_news_item(source: str, item: dict) -> None:
         enriched = enrich_item(source, item)
         _finish_seen_item(source, item_id, enriched)
         normalized = normalize_market_item(source, enriched, store_kind="official", source_profile_id=source)
+        admission_context = production_admission_context(normalized, db_path=DB_PATH)
+        admission = admission_context.result
+        if admission.status != "admitted":
+            set_seen_item_lifecycle(
+                source,
+                item_id,
+                **admission_lifecycle_values(admission, processing_status="not_applicable"),
+                processed_at=datetime.now(timezone.utc).isoformat(),
+            )
+            print(f"{source} 五类范围准入排除：title={enriched.get('title', '')}", flush=True)
+            return
+        set_seen_item_lifecycle(
+            source,
+            item_id,
+            **admission_lifecycle_values(admission, processing_status="pending"),
+        )
         outcome = process_market_item(
             normalized,
             enriched,
             store_kind="official",
             source_profile_id=source,
             db_path=DB_PATH,
-            current_admission_status="admitted",
-            current_admission_reason="current_flow_no_separate_admission",
+            production_admission=admission,
+            production_portfolio=admission_context.portfolio,
         )
-        _complete_seen_item(source, item_id)
+        _complete_seen_item(source, item_id, admission)
     except Exception as exc:
         _fail_seen_item(source, item_id, exc)
         raise

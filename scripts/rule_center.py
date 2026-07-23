@@ -197,20 +197,6 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         ),
     },
     {
-        "id": "yicai_morning_brief",
-        "name": "第一财经券商晨会必发",
-        "group": "新闻媒体",
-        "description": "第一财经“券商晨会观点速递”为用户指定每日必读栏目，固定进入即时薄推送。",
-        "runtime": "push_rules / news media article",
-        "execution_mode": ORDERED_FIRST_MATCH,
-        "hit_markers": ("yicai_morning_brief",),
-        "priority": 85,
-        "fields": (
-            {"key": "enabled", "label": "启用", "type": "bool", "default": True},
-            {"key": "priority", "label": "规则顺序", "type": "int", "default": 85, "min": 1, "max": 999},
-        ),
-    },
-    {
         "id": "direct_holding_hard_variable",
         "name": "直接持仓硬变量",
         "group": "持仓与公司",

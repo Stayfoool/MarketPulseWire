@@ -56,10 +56,22 @@ class FakeProvider:
         return DisclosurePage(records=rows, has_more=False, total=len(rows))
 
 
+def seed_production_holding(db_path: Path) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO portfolio_holdings
+                (symbol, name, full_name, aliases_json, enabled, raw_json, updated_at)
+            VALUES ('301308.SZ', '江波龙', '', '[]', 1, '{}', '2026-07-23T00:00:00+00:00')
+            """
+        )
+
+
 def test_report_only_baselines_then_live_processes_only_new_record() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
+        seed_production_holding(db_path)
         holdings = [{"symbol": "301308.SZ", "name": "江波龙"}]
         provider = FakeProvider([record("1225409631"), record("1225286505", kind="relation")])
         first = collect_disclosures(
@@ -141,6 +153,61 @@ def test_new_provider_is_baselined_before_live_processing() -> None:
             assert conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
     assert rows == [("announcement:1225409631", 1), ("announcement:alternate-only", 1)]
     assert result["baseline"] == 1 and result["processed"] == 0
+
+
+def test_excluded_live_record_advances_source_identity_without_creating_event() -> None:
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
+        provider = FakeProvider([record("excluded")])
+        state = {
+            "schema_version": 1,
+            "known_identities": [],
+            "initialized_providers": [provider.name],
+        }
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO source_state (source, state_json, updated_at) VALUES (?, ?, ?)",
+                (
+                    "collector:company_disclosures",
+                    json.dumps(state),
+                    "2026-07-23T00:00:00+00:00",
+                ),
+            )
+
+        first = collect_disclosures(
+            provider=provider,
+            mode="live",
+            days=2,
+            db_path=db_path,
+            holdings=[{"symbol": "301308.SZ", "name": "江波龙"}],
+            analyze=False,
+            deliver=False,
+            parse_documents=False,
+        )
+        second = collect_disclosures(
+            provider=provider,
+            mode="live",
+            days=2,
+            db_path=db_path,
+            holdings=[{"symbol": "301308.SZ", "name": "江波龙"}],
+            analyze=False,
+            deliver=False,
+            parse_documents=False,
+        )
+        with sqlite3.connect(db_path) as conn:
+            saved = json.loads(
+                conn.execute(
+                    "SELECT state_json FROM source_state WHERE source = ?",
+                    ("collector:company_disclosures",),
+                ).fetchone()[0]
+            )
+            event_count = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+
+    assert first["excluded"] == 1 and first["processed"] == 0
+    assert second["existing"] == 1 and second["excluded"] == 0
+    assert saved["known_identities"] == ["announcement:excluded"]
+    assert event_count == 0
 
 
 def test_known_identity_backfill_is_idempotent_and_never_analyzed_or_delivered() -> None:
@@ -292,6 +359,7 @@ def test_malformed_pdf_is_a_bounded_metadata_failure() -> None:
 def main() -> int:
     test_report_only_baselines_then_live_processes_only_new_record()
     test_new_provider_is_baselined_before_live_processing()
+    test_excluded_live_record_advances_source_identity_without_creating_event()
     test_known_identity_backfill_is_idempotent_and_never_analyzed_or_delivered()
     test_pagination_runs_to_completion_for_each_content_kind()
     test_stale_cached_security_mapping_is_refreshed_once()

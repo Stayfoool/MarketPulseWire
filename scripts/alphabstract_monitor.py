@@ -28,6 +28,7 @@ from db_utils import (
 )
 from http_utils import http_get
 from market_flow import normalize_market_item, process_market_item
+from production_admission import admission_lifecycle_values, production_admission_context
 from rss_monitor import DB_PATH, save_new_items, strip_tags
 from source_health import record_source_failure, record_source_success
 from source_profiles import source_profile_enabled
@@ -523,6 +524,21 @@ def notify_item(item: dict[str, Any], *, source: AlphaAbstractSource = DEFAULT_S
     set_seen_item_enriched(source.name, item_id, enriched)
     try:
         normalized = normalized_alphabstract_item(enriched, source)
+        admission_context = production_admission_context(normalized, db_path=DB_PATH)
+        admission = admission_context.result
+        if admission.status != "admitted":
+            set_seen_item_lifecycle(
+                source.name,
+                item_id,
+                **admission_lifecycle_values(admission, processing_status="not_applicable"),
+                processed_at=datetime.now(timezone.utc).isoformat(),
+            )
+            return
+        set_seen_item_lifecycle(
+            source.name,
+            item_id,
+            **admission_lifecycle_values(admission, processing_status="pending"),
+        )
         outcome = process_market_item(
             normalized,
             enriched,
@@ -530,23 +546,14 @@ def notify_item(item: dict[str, Any], *, source: AlphaAbstractSource = DEFAULT_S
             source_profile_id=source.name,
             db_path=DB_PATH,
             use_rule_dedup=True,
-            current_admission_status="admitted",
-            current_admission_reason="current_flow_no_separate_admission",
+            production_admission=admission,
+            production_portfolio=admission_context.portfolio,
         )
         set_seen_item_lifecycle(
             source.name,
             item_id,
-            admission_status="admitted",
-            admission_reason="current_runtime_processed",
-            admission_matched_families_json="[]",
-            admission_evidence_json="[]",
-            admission_config_version="current-production",
-            admission_rule_contract_version="current-flow-v1",
-            admission_evaluated_at=datetime.now(timezone.utc).isoformat(),
-            processing_status="succeeded",
-            processing_error="",
+            **admission_lifecycle_values(admission, processing_status="succeeded"),
             processed_at=datetime.now(timezone.utc).isoformat(),
-            lifecycle_updated_at=datetime.now(timezone.utc).isoformat(),
         )
     except Exception as exc:
         set_seen_item_lifecycle(

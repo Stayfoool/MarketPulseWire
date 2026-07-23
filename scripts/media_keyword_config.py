@@ -16,7 +16,7 @@ from typing import Iterable, Mapping
 from rule_config_schema import parse_rule_config
 
 
-RULE_CONFIG_ENV = "RULE_CORE_SHADOW_CONFIG"
+RULE_CONFIG_ENV = "RULE_CORE_CONFIG"
 
 
 def normalize_keywords(values: Iterable[object]) -> list[str]:
