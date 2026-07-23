@@ -436,10 +436,28 @@ def test_semiconductor_expectations_can_push_without_claiming_execution() -> Non
     assert "重大量化计划或考虑" in prompt.system_prompt
     assert "不得把预期改写为已执行事实" in prompt.system_prompt
     assert "不得仅因尚未执行而返回uncertain" in prompt.system_prompt
+    assert "matched不得引用以省略号结尾的未完整句子" in prompt.system_prompt
     assert "AI機架估500萬美元起" in prompt.user_payload["article_segments"][0]["text"]
     assert len(prompt.system_prompt) < 800
     rule_text = json.dumps(prompt.user_payload["rules"], ensure_ascii=False)
     assert all(name not in rule_text for name in ("AMD", "Helios", "微软", "Microsoft"))
+
+    truncated_customer_response = _response(
+        "semiconductor_ai",
+        "semiconductor_material_change",
+        "push",
+    )
+    truncated_customer_result = validate_llm_rule_response(
+        truncated_customer_response,
+        sources[0],
+        admission,
+    )
+    assert truncated_customer_result.evaluation_status == "evidence_invalid"
+    assert truncated_customer_result.candidate_action is None
+    assert any(
+        "incomplete or truncated evidence segment B1" in error
+        for error in truncated_customer_result.validation_errors
+    )
 
     customer_response = _response(
         "semiconductor_ai",
@@ -510,11 +528,16 @@ def test_undefined_action_and_duplicate_rule_fail_closed() -> None:
 def test_evidence_references_are_exact_and_bounded() -> None:
     item = _item(full_text=f"前文。\n{QUOTE}\n后文。")
     admission = _admission(("macro_data",))
+    prompt = build_llm_rule_prompt(item, admission)
+    body_segments = [
+        segment for segment in prompt.user_payload["article_segments"] if segment["field"] == "full_text"
+    ]
+    assert "".join(segment["text"] for segment in body_segments) == item.full_text
     response = _response("macro_data", "macro_surprise", "push")
     valid = validate_llm_rule_response(response, item, admission)
     assert valid.evaluation_status == "completed"
     assert valid.evidence_reference_count == 1
-    assert valid.evidence_character_count == len(item.full_text)
+    assert valid.evidence_character_count == len(body_segments[0]["text"])
 
     unknown = copy.deepcopy(response)
     unknown["rule_results"][0]["evidence_ids"] = ["B99"]
