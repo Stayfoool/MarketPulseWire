@@ -22,6 +22,7 @@ from market_db import DEFAULT_DB_PATH, init_db
 from market_flow import normalize_market_item, process_market_item
 from market_review_store import event_content_hash as content_hash, load_enabled_holdings
 from portfolio_import import import_holdings
+from production_admission import production_admission_context
 from sina_zy_client import client_from_env, result_data
 from source_health import record_source_failure, record_source_success
 from source_profiles import source_profile_enabled
@@ -1153,6 +1154,14 @@ def run_once(
                 print(f"seen article event #{existing_event_id}: {event['title']}", flush=True)
                 continue
             normalized = normalize_market_item(SOURCE, event, store_kind="event")
+            admission_context = production_admission_context(normalized, db_path=DEFAULT_DB_PATH)
+            admission = admission_context.result
+            if not baseline_only and admission.status != "admitted":
+                print(
+                    f"新浪个股新闻持仓范围准入排除：{event['title']} reason={admission.reason_code}",
+                    flush=True,
+                )
+                continue
             outcome = process_market_item(
                 normalized,
                 event,
@@ -1160,9 +1169,10 @@ def run_once(
                 task="sina_stock_news_portfolio",
                 db_path=DEFAULT_DB_PATH,
                 baseline_only=baseline_only,
-                current_admission_status="admitted",
-                current_admission_reason="current_holding_scoped_source",
-                current_matched_families=("holding",),
+                production_admission=admission if admission.status == "admitted" else None,
+                production_portfolio=(
+                    admission_context.portfolio if admission.status == "admitted" else None
+                ),
             )
             event_id = outcome.event_id
             if not outcome.inserted:

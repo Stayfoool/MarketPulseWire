@@ -37,6 +37,15 @@ rsync -az -e "$RSYNC_RSH" "$RENDERED_SYSTEMD/" "$REMOTE_USER@$REMOTE_HOST:/tmp/s
 
 echo "==> install units"
 "${SSH[@]}" "set -euo pipefail
+RULE_CORE_CONFIG_PATH=\"\$(sed -n 's/^RULE_CORE_CONFIG=//p' '$REMOTE_DIR/.env' | tail -n 1)\"
+if [ -z \"\$RULE_CORE_CONFIG_PATH\" ] || [ ! -f \"\$RULE_CORE_CONFIG_PATH\" ]; then
+  echo 'RULE_CORE_CONFIG 未配置或文件不存在，停止启动生产采集服务。' >&2
+  exit 1
+fi
+if ! sudo -u '$REMOTE_SERVICE_USER' test -r \"\$RULE_CORE_CONFIG_PATH\"; then
+  echo 'RULE_CORE_CONFIG 对生产服务账号不可读，停止启动生产采集服务。' >&2
+  exit 1
+fi
 cp /tmp/surveil-systemd/*.service /etc/systemd/system/
 cp /tmp/surveil-systemd/*.timer /etc/systemd/system/
 systemctl daemon-reload

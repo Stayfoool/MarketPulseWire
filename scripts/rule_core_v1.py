@@ -1,7 +1,7 @@
 """Side-effect-free v1 admission and materiality rules.
 
-This module is intentionally not wired into production collectors or runtime.
-It consumes validated snapshots and returns passive market-item contracts only.
+Production uses only ``admit_market_item`` through ``production_admission``.
+The deterministic materiality evaluator remains non-authoritative.
 """
 
 from __future__ import annotations
@@ -860,6 +860,58 @@ class SourceAdmissionPolicy:
             raise RuleConfigError(f"unsupported direct-admission families: {sorted(invalid)}")
         if len(set(self.direct_admission_families)) != len(self.direct_admission_families):
             raise RuleConfigError("direct-admission families cannot contain duplicates")
+
+
+HOLDING_ONLY_SOURCES = {
+    "company_disclosures",
+    "company_disclosure",
+    "ifind_notice",
+    "sina_stock_news",
+}
+HOLDING_ONLY_SOURCE_CATEGORIES = {
+    "company_disclosures",
+    "company_disclosure",
+    "portfolio_stock_news",
+}
+
+
+def source_allowed_families(item: NormalizedMarketItem) -> tuple[RuleFamily, ...]:
+    if item.source in HOLDING_ONLY_SOURCES or item.source_category in HOLDING_ONLY_SOURCE_CATEGORIES:
+        return ("holding",)
+    return FAMILY_ORDER
+
+
+def apply_source_admission_boundary(
+    item: NormalizedMarketItem,
+    admission: AdmissionResult,
+) -> AdmissionResult:
+    if source_allowed_families(item) != ("holding",) or admission.status != "admitted":
+        return admission
+    if "holding" not in admission.matched_families:
+        return AdmissionResult(
+            status="excluded",
+            reason_code="holding_scope_required_for_source",
+            matched_families=(),
+            evidence=(),
+            config_version=admission.config_version,
+            rule_contract_version=admission.rule_contract_version,
+        )
+    return AdmissionResult(
+        status="admitted",
+        reason_code="holding_scope_match",
+        matched_families=("holding",),
+        evidence=tuple(
+            evidence for evidence in admission.evidence if evidence.rule_family == "holding"
+        ),
+        config_version=admission.config_version,
+        rule_contract_version=admission.rule_contract_version,
+    )
+
+
+def source_admission_policy(item: NormalizedMarketItem) -> SourceAdmissionPolicy:
+    if item.source_category == "official_policy" or item.publisher_role == "government_official":
+        return SourceAdmissionPolicy(direct_admission_families=("trade_policy",))
+    return SourceAdmissionPolicy()
 
 
 def _contains(text: str, term: str) -> bool:

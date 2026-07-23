@@ -192,6 +192,25 @@ def test_unified_collectors_use_runtime_without_owning_delivery() -> None:
         assert not forbidden, "collector owns store/delivery calls: " + "; ".join(forbidden)
 
 
+def test_live_unified_collector_calls_cannot_omit_production_admission() -> None:
+    for filename in UNIFIED_ITEM_COLLECTORS:
+        tree = parsed_module(filename)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = node.func.id if isinstance(node.func, ast.Name) else ""
+            if name != "process_market_item":
+                continue
+            keywords = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+            baseline = keywords.get("baseline_only")
+            is_literal_baseline = isinstance(baseline, ast.Constant) and baseline.value is True
+            if is_literal_baseline:
+                continue
+            assert "production_admission" in keywords, (
+                f"{filename}:{node.lineno} live process_market_item call omits production_admission"
+            )
+
+
 def test_removed_compatibility_modules_do_not_return() -> None:
     for filename in REMOVED_COMPATIBILITY_MODULES:
         assert not (SCRIPTS / filename).exists(), filename
@@ -253,6 +272,9 @@ def test_deployment_preserves_private_proxy_state_and_disables_shadows() -> None
     assert "--exclude '.git/'" in deploy
     assert "--exclude '.paddleocr/'" in deploy
     assert "--exclude 'reports/'" in deploy
+    assert "RULE_CORE_CONFIG_PATH=" in installer
+    assert "RULE_CORE_CONFIG 未配置或文件不存在" in installer
+    assert "RULE_CORE_CONFIG 对生产服务账号不可读" in installer
     shadow_timers = (
         "surveil-research-collector-shadow.timer",
         "surveil-official-collector-shadow.timer",
@@ -430,7 +452,6 @@ def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importe
         "llm_rule_catalog.py",
         "llm_rule_decision.py",
         "llm_rule_shadow.py",
-        "rule_core_v1.py",
         "rule_core_fixture.py",
         "rule_core_replay.py",
         "rule_core_history_replay.py",
@@ -468,6 +489,10 @@ def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importe
     assert "market_delivery" not in runtime_text
     assert "connect_sqlite" not in runtime_text
     assert '"full_text"' not in runtime_text
+
+    production_admission_text = (SCRIPTS / "production_admission.py").read_text(encoding="utf-8")
+    for forbidden in ("market_delivery", "review_store", "send_card", "event_analyses"):
+        assert forbidden not in production_admission_text
     llm_shadow_text = (SCRIPTS / "llm_rule_shadow.py").read_text(encoding="utf-8")
     assert "market_delivery" not in llm_shadow_text
     assert "connect_sqlite" not in llm_shadow_text
@@ -475,6 +500,7 @@ def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importe
 
 def main() -> int:
     test_unified_collectors_use_runtime_without_owning_delivery()
+    test_live_unified_collector_calls_cannot_omit_production_admission()
     test_removed_compatibility_modules_do_not_return()
     test_independent_routes_are_explicit_and_tested()
     test_direct_urllib_request_usage_is_explicit_and_bounded()

@@ -44,8 +44,9 @@ python scripts/rss_monitor.py --interval 300
 python scripts/overseas_media_monitor.py
 ```
 
-`RULE_CORE_SHADOW_CONFIG` must point to a complete private global rule JSON
-before media collection or the Web `媒体关键词` page is used. The repository
+`RULE_CORE_CONFIG` must point to a complete private global rule JSON before any
+production collector or the Web `媒体关键词` page is used. Production five-group
+range admission fails closed when it is missing or invalid. The repository
 `config/rule_core_v1.test.json` is only a CI fixture and must not be used as the
 production configuration.
 
@@ -128,29 +129,42 @@ production schedule. The three production collector services now enter through
 production command. When the private `.env` sets
 `RULE_CORE_SHADOW_AUTORUN=1` and supplies both
 `RULE_CORE_SHADOW_CONFIG` and `RULE_CORE_SHADOW_PORTFOLIO`, the unified runtime
-compares the current and candidate rules after the current `DecisionResult`
-exists and before delivery, using the exact production `NormalizedMarketItem`.
+compares the existing production `DecisionResult` with the report-only LLM
+strength decision after the production `DecisionResult` exists and before
+delivery. Both use the exact production `NormalizedMarketItem`; the LLM
+comparison also reuses the exact production five-group `AdmissionResult` and
+current production SQLite holdings rather than running range admission again.
 It writes one bounded report without body text. The service wrapper does not
 run a second collector; after the production collector succeeds it only
 refreshes the combined Markdown/JSON view. Configuration, candidate evaluation
-or report failures cannot change the production collector exit status, current
-decision, review storage, dedup reservation or delivery.
+or report failures cannot change the production collector exit status,
+production decision, review storage, dedup reservation or delivery.
 
-The private paths should point to the reviewed v1 rule and portfolio snapshots,
-for example under a service-user-readable private directory. Do not put these
-paths or their contents in Git. The runtime compares newly inserted review
-records and newly analyzed events; baseline, unanalysed and existing items do
-not create comparison records. Each source family keeps its bounded comparison
-JSON for audit, and the wrapper refreshes
+The private comparison paths remain required for compatibility with existing
+report configuration and deterministic operator tools. They should point to
+reviewed private files under a service-user-readable directory and must not be
+put in Git. New production comparisons use `RULE_CORE_CONFIG` plus current
+production SQLite holdings for range admission; `RULE_CORE_SHADOW_PORTFOLIO`
+does not override them. The runtime compares newly inserted review records and
+newly analyzed events; range-excluded, baseline, unanalysed and existing items
+do not create comparison records. Each source family keeps its bounded
+comparison JSON for audit, and the wrapper refreshes
 `reports/rule-core-shadow-combined-latest.md` plus `.json` as the daily
 operator view across research, official-company and news batches.
 
-`RULE_CORE_SHADOW_CONFIG` is also the persisted source for the Web workbench's
-`媒体关键词` page. The page edits only `semiconductor_ai_keywords` and
+`RULE_CORE_CONFIG` is the persisted source for production five-group range
+admission and the Web workbench's `媒体关键词` page. The page edits only
+`semiconductor_ai_keywords` and
 `exclude_keywords`; the save path validates the complete rule configuration,
 preserves every other rule section, writes atomically with mode `0600`, and
 creates a private backup beside the rule file. There is no runtime precedence
 between code-default, base and include keyword lists.
+
+When report-only LLM strength comparison is enabled, set
+`RULE_CORE_SHADOW_CONFIG` to the same private rule file as `RULE_CORE_CONFIG`.
+`RULE_CORE_SHADOW_PORTFOLIO` remains a report compatibility input only;
+production admission and the LLM comparison of newly admitted items use the
+current Web-managed production SQLite holdings.
 
 For an existing installation that still has private
 `config/media_keywords.json`, preview the one-time migration after deploying

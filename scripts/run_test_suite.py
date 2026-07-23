@@ -64,6 +64,7 @@ CI_SAFE_TESTS = (
     "test_ocr_runtime.py",
     "test_official_collector.py",
     "test_portfolio_monitor.py",
+    "test_production_admission.py",
     "test_push_rules.py",
     "test_research_collector.py",
     "test_rss_monitor_fetch.py",
@@ -165,6 +166,7 @@ def main() -> int:
         return 0
 
     test_env = os.environ.copy()
+    test_env["RULE_CORE_CONFIG"] = str(ROOT / "config" / "rule_core_v1.test.json")
     test_env["RULE_CORE_SHADOW_CONFIG"] = str(ROOT / "config" / "rule_core_v1.test.json")
     for index, filename in enumerate(CI_SAFE_TESTS, start=1):
         print(f"[{index}/{len(CI_SAFE_TESTS)}] {filename}", flush=True)

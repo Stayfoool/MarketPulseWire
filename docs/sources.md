@@ -147,7 +147,7 @@ These sources are defined in `scripts/china_media_sources.py` and run through `s
 
 | Source Key | Source | URL / Method | Notes |
 | --- | --- | --- | --- |
-| `yicai_brief` | First Yicai / brief news | `https://www.yicai.com/api/ajax/getbrieflist?type=0&page=1&pagesize=20` | Public JSON endpoint. The daily broker morning brief is treated as a mandatory user-requested push. |
+| `yicai_brief` | First Yicai / brief news | `https://www.yicai.com/api/ajax/getbrieflist?type=0&page=1&pagesize=20` | Public JSON endpoint. No fixed-column admission or mandatory push remains. |
 | `cls_telegraph_api` | CLS / telegraph | `https://api3.cls.cn/v1/roll/get_roll_list` | Public frontend endpoint with low-frequency polling. Star Market Daily items inside CLS telegraph are labeled as `科创板日报 / 财联社电报`. |
 | `star_market_daily_subject` | Star Market Daily / 科创板最新动态 | `https://www.cls.cn/subject/1777` | Public topic page. The monitor reads the page's public Next.js data for title, summary, stocks, subjects, timestamp, and article link. |
 | `jin10_rsshub_important` | Jin10 / important events | RSSHub route | Public RSSHub backup route for important events; it may be rate-limited or temporarily unavailable. |
@@ -170,7 +170,7 @@ Users can customize:
 
 - Holdings and watchlist: `config/portfolio.json` or the Web workbench
 - Media keywords: the private global rule file selected by
-  `RULE_CORE_SHADOW_CONFIG`, edited through the Web workbench's `媒体关键词` page
+  `RULE_CORE_CONFIG`, edited through the Web workbench's `媒体关键词` page
 - LLM provider: `.env` `LLM_*`
 - Enabled services: systemd units/timers or local commands
 

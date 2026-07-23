@@ -20,6 +20,7 @@ from market_db import DEFAULT_DB_PATH, init_db
 from market_flow import MarketItemProcessingError, normalize_market_item, process_market_item
 from market_review_store import event_content_hash as content_hash, load_enabled_holdings
 from portfolio_import import import_holdings
+from production_admission import production_admission_context
 from source_profiles import source_profile_enabled
 
 
@@ -383,6 +384,11 @@ def run_batch(
                 print(f"[dry-run] {event['source']} {event['source_event_id']} {event['title']} text={text_len}{pdf_status}")
                 continue
             normalized = normalize_market_item(str(event.get("source") or ""), event, store_kind="event")
+            admission_context = production_admission_context(normalized, db_path=DEFAULT_DB_PATH)
+            admission = admission_context.result
+            if admission.status != "admitted":
+                print(f"iFinD 公告持仓范围准入排除：{event['title']} reason={admission.reason_code}")
+                continue
             processing_error: Exception | None = None
             try:
                 outcome = process_market_item(
@@ -393,9 +399,8 @@ def run_batch(
                     db_path=DEFAULT_DB_PATH,
                     analyze=analyze and not llm_balance_exhausted,
                     deliver=deliver,
-                    current_admission_status="admitted",
-                    current_admission_reason="current_holding_scoped_source",
-                    current_matched_families=("holding",),
+                    production_admission=admission,
+                    production_portfolio=admission_context.portfolio,
                 )
             except MarketItemProcessingError as exc:
                 outcome = exc.outcome

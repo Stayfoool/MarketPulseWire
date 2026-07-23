@@ -20,6 +20,7 @@ from db_utils import retry_on_locked, update_seen_item_lifecycle
 from http_utils import http_get
 from decision_engine import decide_market_item
 from market_flow import normalize_market_item, process_market_item
+from production_admission import admission_lifecycle_values, production_admission_context
 from rss_monitor import DB_PATH, connect_db, save_new_items, strip_tags
 from source_health import record_source_failure, record_source_success
 from source_profiles import source_profile_enabled
@@ -509,23 +510,23 @@ def notify_item(item: dict[str, Any], *, source: TradePolicySource) -> None:
             raw = dict(enriched.get("raw") or {})
             raw["detail_enrichment_error"] = detail_error
             enriched["raw"] = raw
-    set_seen_item_lifecycle(
-        source.name,
-        item_id,
-        processability_status=detail_status,
-        processability_reason="detail_fallback" if detail_status == "fallback" else "",
-        admission_status="admitted",
-        admission_reason="current_official_trade_source",
-        admission_matched_families_json=json.dumps(["trade_policy"]),
-        admission_evidence_json="[]",
-        admission_config_version="current-production",
-        admission_rule_contract_version="current-flow-v1",
-        admission_evaluated_at=datetime.now(timezone.utc).isoformat(),
-        processing_status="pending",
-        processing_error="",
-    )
     try:
         normalized = normalized_trade_policy_item(enriched, source)
+        admission_context = production_admission_context(normalized, db_path=DB_PATH)
+        admission = admission_context.result
+        set_seen_item_lifecycle(
+            source.name,
+            item_id,
+            processability_status=detail_status,
+            processability_reason="detail_fallback" if detail_status == "fallback" else "",
+            **admission_lifecycle_values(
+                admission,
+                processing_status="pending" if admission.status == "admitted" else "not_applicable",
+            ),
+            processed_at=None if admission.status == "admitted" else datetime.now(timezone.utc).isoformat(),
+        )
+        if admission.status != "admitted":
+            return
         outcome = process_market_item(
             normalized,
             enriched,
@@ -533,9 +534,8 @@ def notify_item(item: dict[str, Any], *, source: TradePolicySource) -> None:
             source_profile_id=source.name,
             db_path=DB_PATH,
             use_rule_dedup=True,
-            current_admission_status="admitted",
-            current_admission_reason="current_official_trade_source",
-            current_matched_families=("trade_policy",),
+            production_admission=admission,
+            production_portfolio=admission_context.portfolio,
         )
     except Exception as exc:
         set_seen_item_lifecycle(

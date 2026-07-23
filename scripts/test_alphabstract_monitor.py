@@ -231,6 +231,7 @@ def test_notify_item_uses_process_market_item() -> None:
     assert kwargs["store_kind"] == "article"
     assert kwargs["source_profile_id"] == "alphabstract_summaries"
     assert kwargs["use_rule_dedup"] is True
+    assert kwargs["production_admission"].status == "admitted"
     assert row is not None
     assert row[0].startswith("Dylan Patel")
     assert row[1].startswith("Source: Dylan Patel")
@@ -301,7 +302,7 @@ def test_expanded_scope_baseline_then_live_item_is_reserved_before_enrichment() 
             assert alphabstract_monitor.run_once() == 1
             assert detail_calls == [new_url]
             assert detail_states == [("live", "pending", "pending")]
-            assert process_states == [("live", "succeeded", "pending")]
+            assert process_states == [("live", "succeeded", "admitted")]
             with alphabstract_monitor.connect_db() as conn:
                 completed = conn.execute(
                     """
@@ -376,7 +377,7 @@ def test_processing_failure_retries_after_successful_enrichment() -> None:
                     alphabstract_monitor.SOURCE_ID,
                     [item],
                 )
-            assert failed == ("succeeded", "pending", "failed_retryable")
+            assert failed == ("succeeded", "admitted", "failed_retryable")
             assert len(retry) == 1
             assert retry[0]["_seen_item_retry"] is True
 

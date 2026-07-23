@@ -14,7 +14,7 @@ from tempfile import TemporaryDirectory
 import value_directory_preview
 import value_directory_browser
 import value_directory_monitor
-from market_item import DecisionResult, InterpretationResult, MarketFlowResult
+from market_item import AdmissionResult, DecisionResult, InterpretationResult, MarketFlowResult
 from market_runtime import MarketProcessOutcome
 from source_profiles import runtime_source_profile
 from value_directory_browser import (
@@ -683,6 +683,17 @@ class _DummyContext:
         return False
 
 
+def admitted_context(*families: str):
+    admission = AdmissionResult(
+        status="admitted",
+        reason_code="content_scope_match",
+        matched_families=tuple(families or ("semiconductor_ai",)),
+        evidence=(),
+        config_version="test-config",
+    )
+    return types.SimpleNamespace(result=admission, portfolio=object())
+
+
 def test_recheck_uses_enriched_item_without_a_preliminary_decision_gate() -> None:
     item = {
         "id": "862592",
@@ -696,11 +707,13 @@ def test_recheck_uses_enriched_item_without_a_preliminary_decision_gate() -> Non
     original_existing = value_directory_monitor.article_review_exists
     original_process = value_directory_monitor.process_market_item
     original_lifecycle = value_directory_monitor.set_seen_item_lifecycle_if_present
+    original_admission = value_directory_monitor.production_admission_context
     calls: list[dict[str, object]] = []
     try:
         value_directory_monitor.connect_db = lambda: _DummyContext()
         value_directory_monitor.article_review_exists = lambda *_: existing
         value_directory_monitor.set_seen_item_lifecycle_if_present = lambda *_args, **_kwargs: None
+        value_directory_monitor.production_admission_context = lambda *_args, **_kwargs: admitted_context()
 
         def fake_process(normalized, raw_item, **kwargs):
             calls.append({"normalized": normalized, "raw_item": raw_item, **kwargs})
@@ -722,6 +735,7 @@ def test_recheck_uses_enriched_item_without_a_preliminary_decision_gate() -> Non
         value_directory_monitor.article_review_exists = original_existing
         value_directory_monitor.process_market_item = original_process
         value_directory_monitor.set_seen_item_lifecycle_if_present = original_lifecycle
+        value_directory_monitor.production_admission_context = original_admission
     assert len(calls) == 1
     assert calls[0]["reprocess_existing"] is True
 
@@ -742,10 +756,12 @@ def test_new_item_uses_unified_market_runtime_after_preview_enrichment() -> None
     original_enrich = value_directory_monitor.enrich_item_with_preview
     original_process = value_directory_monitor.process_market_item
     original_lifecycle = value_directory_monitor.set_seen_item_lifecycle_if_present
+    original_admission = value_directory_monitor.production_admission_context
     try:
         value_directory_monitor.connect_db = lambda: _DummyContext()
         value_directory_monitor.article_review_exists = lambda *_: None
         value_directory_monitor.set_seen_item_lifecycle_if_present = lambda *_args, **_kwargs: None
+        value_directory_monitor.production_admission_context = lambda *_args, **_kwargs: admitted_context()
         def fake_enrich(raw_item):
             enriched = dict(raw_item)
             enriched["summary"] = "瑞银认为智能体 AI 将继续推动半导体与硬件上行。"
@@ -785,6 +801,7 @@ def test_new_item_uses_unified_market_runtime_after_preview_enrichment() -> None
         value_directory_monitor.enrich_item_with_preview = original_enrich
         value_directory_monitor.process_market_item = original_process
         value_directory_monitor.set_seen_item_lifecycle_if_present = original_lifecycle
+        value_directory_monitor.production_admission_context = original_admission
 
     assert len(calls) == 1
     call = calls[0]
@@ -796,8 +813,8 @@ def test_new_item_uses_unified_market_runtime_after_preview_enrichment() -> None
     assert call["deliver"] is True
     assert call["use_rule_dedup"] is True
     assert call["reprocess_existing"] is False
-    assert call["current_admission_status"] == "admitted"
-    assert call["current_admission_reason"] == "current_flow_no_separate_admission"
+    assert call["production_admission"].status == "admitted"
+    assert call["production_admission"].matched_families == ("semiconductor_ai",)
 
 
 def test_value_directory_monitor_does_not_own_store_dedup_or_delivery() -> None:

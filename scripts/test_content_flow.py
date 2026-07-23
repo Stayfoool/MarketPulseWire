@@ -70,7 +70,7 @@ def test_official_flow_uses_same_decision_and_interpretation_contract() -> None:
     assert review["analysis"]["_interpretation_result"]["core_content"] == "统一薄解读核心内容。"
 
 
-def test_yicai_morning_brief_is_auditable_decision_rule() -> None:
+def test_yicai_morning_brief_has_no_special_decision_rule() -> None:
     review = market_content_adapter.rule_first_review(
         "yicai_brief",
         {
@@ -79,38 +79,7 @@ def test_yicai_morning_brief_is_auditable_decision_rule() -> None:
             "summary": "多家券商发布今日行业观点。",
         },
     )
-    assert review is not None
-    assert review["push_now"] is True
-    assert review["raw"]["decision_result"]["rule_hits"][0]["rule_id"] == "yicai_morning_brief"
-
-
-def test_interpretation_failure_does_not_cancel_hard_rule_push() -> None:
-    original_interpreter = market_flow.interpret_market_item
-    original_skeptic = market_content_adapter.apply_skeptic_review
-    conn = sqlite3.connect(":memory:")
-    market_content_adapter.ensure_article_reviews_table(conn)
-    try:
-        market_flow.interpret_market_item = lambda *args, **kwargs: (_ for _ in ()).throw(
-            RuntimeError("test interpreter failure")
-        )
-        market_content_adapter.apply_skeptic_review = lambda conn, **kwargs: kwargs["review"]
-        review = market_content_adapter.process_article_review(
-            conn,
-            "yicai_brief",
-            {
-                "id": "morning-failure-1",
-                "title": "券商晨会观点速递",
-                "summary": "多家券商发布今日行业观点。",
-            },
-        )
-    finally:
-        market_flow.interpret_market_item = original_interpreter
-        market_content_adapter.apply_skeptic_review = original_skeptic
-        conn.close()
-    assert review["push_now"] is True
-    assert review["model"] == "interpretation_failed"
-    assert "强制推送规则" in review["reason"]
-    assert review["raw"]["decision_result"]["action"] == "push"
+    assert review is None
 
 
 def test_skeptic_final_action_is_persisted_in_decision_result() -> None:
@@ -132,14 +101,14 @@ def test_skeptic_final_action_is_persisted_in_decision_result() -> None:
         market_content_adapter.apply_skeptic_review = block_review
         review = market_content_adapter.process_article_review(
             conn,
-            "yicai_brief",
+            "nvidia_blog",
             {
-                "id": "morning-blocked-1",
-                "title": "券商晨会观点速递",
-                "summary": "多家券商发布今日行业观点。",
+                "id": "official-blocked-1",
+                "title": "NVIDIA announces HBM mass production and capacity expansion",
+                "summary": "The company begins volume production for AI data-center systems.",
             },
         )
-        stored = market_content_adapter.article_review_exists(conn, "yicai_brief", "morning-blocked-1")
+        stored = market_content_adapter.article_review_exists(conn, "nvidia_blog", "official-blocked-1")
     finally:
         market_flow.interpret_market_item = original_interpreter
         market_content_adapter.apply_skeptic_review = original_skeptic
@@ -184,8 +153,7 @@ def test_value_directory_uses_unified_runtime_after_private_enrichment() -> None
 def main() -> int:
     test_article_interpretation_cannot_override_decision_action()
     test_official_flow_uses_same_decision_and_interpretation_contract()
-    test_yicai_morning_brief_is_auditable_decision_rule()
-    test_interpretation_failure_does_not_cancel_hard_rule_push()
+    test_yicai_morning_brief_has_no_special_decision_rule()
     test_skeptic_final_action_is_persisted_in_decision_result()
     test_runtime_and_monitor_imports_use_one_unified_path()
     test_value_directory_uses_unified_runtime_after_private_enrichment()
