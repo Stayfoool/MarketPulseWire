@@ -111,8 +111,8 @@ def _response(
 
 
 def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
-    assert CATALOG_VERSION == "llm-rule-catalog-v7"
-    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v6-20260723"
+    assert CATALOG_VERSION == "llm-rule-catalog-v8"
+    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v7-20260723"
     assert len(RULES) == 22
     assert len({rule.rule_id for rule in RULES}) == len(RULES)
     assert {rule.rule_id for rule in RULES} == {
@@ -348,6 +348,65 @@ def test_not_matched_uncertain_and_model_unavailable_cannot_create_action() -> N
     assert unavailable.candidate_action is None
     assert unavailable.decision is None
     assert unavailable.evaluation_status == "model_unavailable"
+
+
+def test_major_fed_balance_sheet_path_is_compact_and_source_independent() -> None:
+    rules = {rule.rule_id: rule for rule in rules_for_families(("fed_policy",))}
+    path_change = rules["fed_path_change"]
+    unchanged = rules["fed_path_unchanged"]
+    push_condition = path_change.action_conditions["push"]
+    serialized_rule = json.dumps(path_change.to_prompt_dict(), ensure_ascii=False)
+
+    assert path_change.title == "美联储重大政策路径变化"
+    assert "明确修订利率路径" in push_condition
+    assert "资产负债表给出重大方向" in push_condition
+    assert "时间、量级或操作机制之一" in push_condition
+    assert "资产负债表判断不要求证明此前预测修订" in push_condition
+    assert "受信投行" not in serialized_rule
+    assert "不得把预测、可能或考虑改写为正式决定" in path_change.exclusions
+    assert "不能覆盖已有充分证据的美联储重大政策路径变化" in unchanged.exclusions[0]
+    assert len(serialized_rule) < 700
+
+    body = (
+        "道明证券（TD Securities）策略师Gennadiy Goldberg和Molly Brooks在一份报告中表示，"
+        "美联储的资产负债表可能要到2027年底才会开始缩减，而且即便如此，央行也有可能选择"
+        "按兵不动，让经济体量‘自然增长’来消化它，而不是恢复直接的量化紧缩（QT）。"
+        "2027年第四季度，美联储停止准备金管理购买，并保持资产负债表规模稳定。"
+    )
+
+    def item(source: str, category: str, role: str) -> NormalizedMarketItem:
+        return NormalizedMarketItem(
+            source=source,
+            source_category=category,
+            publisher_role=role,
+            content_type="article",
+            title="道明证券：美联储资产负债表或在2027年底恢复缩减",
+            summary=body,
+            full_text=body,
+            url="https://example.test/fed-balance-sheet",
+            published_at="2026-07-23T04:34:53+08:00",
+        )
+
+    response = _response("fed_policy", "fed_path_change", "push")
+    admission = _admission(("fed_policy",))
+    variants = (
+        item("wallstreetcn_news", "news_media", "news_media"),
+        item("research_media", "research_industry_media", "research_publisher"),
+    )
+    results = [validate_llm_rule_response(response, value, admission) for value in variants]
+    assert [result.candidate_action for result in results] == ["push", "push"]
+    for result in results:
+        assert result.evaluation_status == "completed"
+        assert result.decision is not None
+        assert result.decision.rule_hits[0]["rule_id"] == "fed_path_change"
+        assert result.decision.rule_hits[0]["evidence"][0]["field"] == "full_text"
+
+    ordinary = _response("fed_policy", "fed_path_unchanged", "daily")
+    ordinary_item = item("finance_media", "news_media", "news_media")
+    ordinary_item.full_text = "某机构分析师认为美联储缩表可能较慢，但没有给出时间或操作机制。"
+    ordinary_result = validate_llm_rule_response(ordinary, ordinary_item, admission)
+    assert ordinary_result.evaluation_status == "completed"
+    assert ordinary_result.candidate_action == "daily"
 
 
 def test_multiple_admitted_families_share_one_response_and_highest_action_wins() -> None:
@@ -882,6 +941,7 @@ def main() -> int:
     test_source_applicability_keeps_company_disclosures_and_sina_stock_news_holding_only()
     test_prompt_uses_bounded_available_input_without_current_production_decision()
     test_not_matched_uncertain_and_model_unavailable_cannot_create_action()
+    test_major_fed_balance_sheet_path_is_compact_and_source_independent()
     test_multiple_admitted_families_share_one_response_and_highest_action_wins()
     test_semiconductor_expectations_can_push_without_claiming_execution()
     test_key_product_production_ramp_is_material_in_both_directions()
