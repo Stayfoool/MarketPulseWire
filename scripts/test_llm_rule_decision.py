@@ -111,8 +111,8 @@ def _response(
 
 
 def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
-    assert CATALOG_VERSION == "llm-rule-catalog-v3"
-    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v2-20260723"
+    assert CATALOG_VERSION == "llm-rule-catalog-v4"
+    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v3-20260723"
     assert len(RULES) == 22
     assert len({rule.rule_id for rule in RULES}) == len(RULES)
     assert {rule.rule_id for rule in RULES} == {
@@ -471,6 +471,134 @@ def test_semiconductor_expectations_can_push_without_claiming_execution() -> Non
     assert customer_result.candidate_action == "push"
 
 
+def test_key_product_production_ramp_is_material_in_both_directions() -> None:
+    material = next(
+        rule
+        for rule in rules_for_families(("semiconductor_ai",))
+        if rule.rule_id == "semiconductor_material_change"
+    )
+    assert "从小规模生产扩大到稳定规模生产" in material.action_conditions["push"]
+    assert "关键量产节点顺利、按计划、提前、超预期" in material.action_conditions["push"]
+    assert "同公司产品中最困难、受阻、延期、下调目标" in material.action_conditions["push"]
+    assert "一般工程困难" in material.action_conditions["daily"]
+    assert "没有新状态的量产计划" in material.exclusions
+
+    def ramp_item(source: str, category: str) -> NormalizedMarketItem:
+        return NormalizedMarketItem(
+            source=source,
+            source_category=category,
+            publisher_role="news_media",
+            content_type="article",
+            title="特斯拉警告称扩大Optimus产量将面临挑战",
+            summary=(
+                "特斯拉首席执行官埃隆·马斯克在与分析师的电话会议上表示，"
+                "在扩大生产规模方面，特斯拉的Optimus机器人可能会被证明是该公司产品中最困难的。"
+            ),
+            url="https://example.test/optimus-production-ramp",
+            published_at="2026-07-23T07:14:25+08:00",
+        )
+
+    holding_response = _response(
+        "holding",
+        "holding_ordinary",
+        "daily",
+        overrides={
+            "holding_ordinary": {
+                "rule_id": "holding_ordinary",
+                "judgement": "matched",
+                "action": "daily",
+                "evidence_ids": ["S1"],
+                "reason": "持仓关联主题存在当前进展。",
+            }
+        },
+    )
+    semiconductor_response = _response(
+        "semiconductor_ai",
+        "semiconductor_material_change",
+        "push",
+        overrides={
+            "semiconductor_material_change": {
+                "rule_id": "semiconductor_material_change",
+                "judgement": "matched",
+                "action": "push",
+                "evidence_ids": ["T1", "S1"],
+                "reason": "最高管理层对标志性产品扩大生产规模给出明确重大风险警告。",
+            }
+        },
+    )
+    response = {
+        "rule_results": holding_response["rule_results"] + semiconductor_response["rule_results"]
+    }
+    admission = _admission(("holding", "semiconductor_ai"))
+    sources = (
+        ramp_item("sina_finance_articles", "news_media"),
+        ramp_item("finance_media", "news_media"),
+    )
+    results = [validate_llm_rule_response(response, item, admission) for item in sources]
+    assert [result.candidate_action for result in results] == ["push", "push"]
+    for result in results:
+        assert result.evaluation_status == "completed"
+        assert result.decision is not None
+        hits = {hit["rule_id"]: hit for hit in result.decision.rule_hits}
+        assert hits["holding_ordinary"]["decision_action"] == "daily"
+        assert hits["semiconductor_material_change"]["decision_action"] == "push"
+
+    positive_item = ramp_item("company_news", "news_media")
+    positive_item.title = "特斯拉称Optimus量产爬坡顺利并提前达到阶段目标"
+    positive_item.summary = "特斯拉首席执行官表示，Optimus扩大生产按计划推进，并提前达到阶段产量目标。"
+    positive_response = _response(
+        "semiconductor_ai",
+        "semiconductor_material_change",
+        "push",
+        overrides={
+            "semiconductor_material_change": {
+                "rule_id": "semiconductor_material_change",
+                "judgement": "matched",
+                "action": "push",
+                "evidence_ids": ["T1", "S1"],
+                "reason": "关键量产节点顺利并提前达到阶段目标。",
+            }
+        },
+    )
+    positive_result = validate_llm_rule_response(
+        positive_response,
+        positive_item,
+        _admission(("semiconductor_ai",)),
+    )
+    assert positive_result.evaluation_status == "completed"
+    assert positive_result.candidate_action == "push"
+
+    boundary_item = ramp_item("finance_media", "news_media")
+    boundary_item.title = "特斯拉计划未来量产Optimus"
+    boundary_item.summary = "公司展示Optimus原型，并表示机器人量产仍有一般工程挑战，未披露当前量产阶段。"
+    boundary_response = _response(
+        "semiconductor_ai",
+        "semiconductor_ordinary",
+        "daily",
+        overrides={
+            "semiconductor_ordinary": {
+                "rule_id": "semiconductor_ordinary",
+                "judgement": "matched",
+                "action": "daily",
+                "evidence_ids": ["S1"],
+                "reason": "只有计划、原型展示和一般工程挑战。",
+            }
+        },
+    )
+    boundary_result = validate_llm_rule_response(
+        boundary_response,
+        boundary_item,
+        _admission(("semiconductor_ai",)),
+    )
+    assert boundary_result.evaluation_status == "completed"
+    assert boundary_result.candidate_action == "daily"
+
+    prompt = build_llm_rule_prompt(sources[0], admission)
+    assert "量产爬坡" not in prompt.system_prompt
+    prompt_rules = json.dumps(prompt.user_payload["rules"], ensure_ascii=False)
+    assert "从小规模生产扩大到稳定规模生产" in prompt_rules
+
+
 def test_invalid_json_unknown_missing_and_forbidden_fields_fail_closed() -> None:
     item = _item()
     admission = _admission(("trade_policy",))
@@ -622,6 +750,7 @@ def main() -> int:
     test_not_matched_uncertain_and_model_unavailable_cannot_create_action()
     test_multiple_admitted_families_share_one_response_and_highest_action_wins()
     test_semiconductor_expectations_can_push_without_claiming_execution()
+    test_key_product_production_ramp_is_material_in_both_directions()
     test_invalid_json_unknown_missing_and_forbidden_fields_fail_closed()
     test_undefined_action_and_duplicate_rule_fail_closed()
     test_evidence_references_are_exact_and_bounded()
