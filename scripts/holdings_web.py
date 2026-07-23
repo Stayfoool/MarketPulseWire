@@ -1223,9 +1223,87 @@ def overview_payload(day: str = "") -> dict[str, Any]:
     start_utc, end_utc, display_day = utc_window_for_day(day)
     with connect_sqlite(DEFAULT_DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
-        deliveries_failed = count_rows(conn, "deliveries", "sent_at >= ? AND sent_at < ? AND status = 'failed'", (start_utc, end_utc))
-        article_failures = 0
-        if table_exists(conn, "article_reviews"):
+        deliveries_failed = count_rows(
+            conn,
+            "deliveries",
+            "COALESCE(NULLIF(attempted_at, ''), sent_at) >= ? "
+            "AND COALESCE(NULLIF(attempted_at, ''), sent_at) < ? AND status = 'failed'",
+            (start_utc, end_utc),
+        )
+        canonical_ready = canonical_migration_ready(conn)
+        if canonical_ready:
+            article_failures = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM market_reviews r
+                    WHERE r.created_at >= ? AND r.created_at < ?
+                      AND r.is_current=1
+                      AND r.review_status IN ('failed_retryable','failed_terminal')
+                      AND EXISTS (
+                          SELECT 1 FROM market_item_aliases a
+                          WHERE a.market_item_id=r.market_item_id AND a.item_kind='article'
+                      )
+                    """,
+                    (start_utc, end_utc),
+                ).fetchone()[0]
+            )
+            event_count = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(DISTINCT m.id)
+                    FROM market_items m
+                    JOIN market_item_aliases a ON a.market_item_id=m.id AND a.item_kind='event'
+                    WHERE m.first_seen_at >= ? AND m.first_seen_at < ?
+                    """,
+                    (start_utc, end_utc),
+                ).fetchone()[0]
+            )
+            article_count = int(
+                conn.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM market_reviews r
+                    WHERE r.created_at >= ? AND r.created_at < ? AND r.is_current=1
+                      AND EXISTS (
+                          SELECT 1 FROM market_item_aliases a
+                          WHERE a.market_item_id=r.market_item_id AND a.item_kind='article'
+                      )
+                    """,
+                    (start_utc, end_utc),
+                ).fetchone()[0]
+            )
+            by_source = [
+                {"key": str(row[0] or "unknown"), "count": int(row[1])}
+                for row in conn.execute(
+                    """
+                    SELECT m.source,COUNT(DISTINCT m.id)
+                    FROM market_items m
+                    JOIN market_item_aliases a ON a.market_item_id=m.id AND a.item_kind='event'
+                    WHERE m.first_seen_at >= ? AND m.first_seen_at < ?
+                    GROUP BY m.source ORDER BY COUNT(DISTINCT m.id) DESC,m.source
+                    """,
+                    (start_utc, end_utc),
+                )
+            ]
+            article_importance = [
+                {"key": str(row[0] or "unknown"), "count": int(row[1])}
+                for row in conn.execute(
+                    """
+                    SELECT COALESCE(r.importance,''),COUNT(*)
+                    FROM market_reviews r
+                    WHERE r.created_at >= ? AND r.created_at < ? AND r.is_current=1
+                      AND EXISTS (
+                          SELECT 1 FROM market_item_aliases a
+                          WHERE a.market_item_id=r.market_item_id AND a.item_kind='article'
+                      )
+                    GROUP BY COALESCE(r.importance,'')
+                    ORDER BY COUNT(*) DESC,COALESCE(r.importance,'')
+                    """,
+                    (start_utc, end_utc),
+                )
+            ]
+        else:
             article_failures = int(
                 conn.execute(
                     """
@@ -1236,15 +1314,17 @@ def overview_payload(day: str = "") -> dict[str, Any]:
                     (start_utc, end_utc),
                 ).fetchone()[0]
             )
+            event_count = count_rows(conn, "events", "first_seen_at >= ? AND first_seen_at < ?", (start_utc, end_utc))
+            article_count = count_rows(conn, "article_reviews", "created_at >= ? AND created_at < ?", (start_utc, end_utc))
+            by_source = grouped_counts(conn, "events", "source", "first_seen_at >= ? AND first_seen_at < ?", (start_utc, end_utc))
+            article_importance = grouped_counts(conn, "article_reviews", "importance", "created_at >= ? AND created_at < ?", (start_utc, end_utc))
         cards = [
-            {"label": "统一事件", "value": count_rows(conn, "events", "first_seen_at >= ? AND first_seen_at < ?", (start_utc, end_utc))},
-            {"label": "来源决策", "value": count_rows(conn, "article_reviews", "created_at >= ? AND created_at < ?", (start_utc, end_utc))},
+            {"label": "统一事件", "value": event_count},
+            {"label": "来源决策", "value": article_count},
             {"label": "X 新帖", "value": count_rows(conn, "seen_posts", "first_seen_at >= ? AND first_seen_at < ?", (start_utc, end_utc))},
             {"label": "韭研异动", "value": count_rows(conn, "jygs_events", "first_seen_at >= ? AND first_seen_at < ?", (start_utc, end_utc))},
             {"label": "飞书失败", "value": deliveries_failed + article_failures},
         ]
-        by_source = grouped_counts(conn, "events", "source", "first_seen_at >= ? AND first_seen_at < ?", (start_utc, end_utc))
-        article_importance = grouped_counts(conn, "article_reviews", "importance", "created_at >= ? AND created_at < ?", (start_utc, end_utc))
         deliveries = grouped_counts(conn, "deliveries", "status", "sent_at >= ? AND sent_at < ?", (start_utc, end_utc))
     return {
         "ok": True,

@@ -13,7 +13,7 @@ from tempfile import TemporaryDirectory
 import market_delivery
 from feishu import FeishuResponse
 from market_db import init_db
-from market_item import DecisionResult, decision_result_from_payload
+from market_item import AdmissionEvidence, AdmissionResult, DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem, decision_result_from_payload
 from market_review_store import (
     article_review_exists,
     official_review_exists,
@@ -21,6 +21,7 @@ from market_review_store import (
     save_official_review,
     upsert_event_record,
 )
+from market_store import complete_market_review, record_production_admission
 
 
 def insert_event(
@@ -148,6 +149,53 @@ def test_archive_and_missing_webhook_are_recorded_without_sending() -> None:
     finally:
         if original_webhook is not None:
             os.environ["FEISHU_WEBHOOK"] = original_webhook
+
+
+def test_event_delivery_records_unified_item_and_result_directly() -> None:
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
+        event_id = insert_event(db_path, "linked-event")
+        normalized = NormalizedMarketItem(
+            source="sina_flash",
+            source_category="news_media",
+            content_type="flash",
+            title="测试事件",
+            raw={"source_event_id": "linked-event"},
+        )
+        admission = AdmissionResult(
+            status="admitted",
+            reason_code="macro_data_match",
+            matched_families=("macro_data",),
+            evidence=(AdmissionEvidence("macro_data", "term", "CPI"),),
+            config_version="test-v1",
+        )
+        market_item_id, market_review_id = record_production_admission(
+            normalized, admission, db_path=db_path, task="portfolio_event"
+        )
+        decision = DecisionResult(action="archive", importance="low", reason="普通跟踪")
+        complete_market_review(
+            market_review_id,
+            MarketFlowResult(
+                item=normalized,
+                decision=decision,
+                interpretation=InterpretationResult(core_content="普通跟踪"),
+            ),
+            db_path=db_path,
+        )
+        assert market_delivery.deliver_event(
+            event_id,
+            decision_analysis("archive"),
+            decision=decision,
+            market_item_id=market_item_id,
+            market_review_id=market_review_id,
+            db_path=db_path,
+        ) == "skipped"
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT event_id,market_item_id,market_review_id,status,decision_action FROM deliveries"
+            ).fetchone()
+        assert row == (event_id, market_item_id, market_review_id, "skipped", "archive")
 
 
 def test_send_failure_releases_reservation_and_records_failure() -> None:
@@ -1150,6 +1198,7 @@ def test_coreweave_hedge_cross_source_article_dedup_preserves_push_decision() ->
 def main() -> int:
     test_simple_event_card_formats_published_time_for_beijing()
     test_archive_and_missing_webhook_are_recorded_without_sending()
+    test_event_delivery_records_unified_item_and_result_directly()
     test_send_failure_releases_reservation_and_records_failure()
     test_success_confirms_rule_dedup_and_duplicate_skips_second_send()
     test_content_delivery_uses_decision_action_and_marks_legacy_rows()

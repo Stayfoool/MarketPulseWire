@@ -130,9 +130,22 @@ def record_delivery(
     payload: dict[str, Any],
     *,
     error: str = "",
+    market_item_id: int | None = None,
+    market_review_id: int | None = None,
+    decision_action: str = "",
     db_path: Path = DEFAULT_DB_PATH,
 ) -> None:
-    record_event_delivery(event_id, channel, status, payload, error=error, db_path=db_path)
+    record_event_delivery(
+        event_id,
+        channel,
+        status,
+        payload,
+        error=error,
+        market_item_id=market_item_id,
+        market_review_id=market_review_id,
+        decision_action=decision_action,
+        db_path=db_path,
+    )
 
 
 def _duplicate_article_review(
@@ -141,6 +154,8 @@ def _duplicate_article_review(
     review: dict[str, Any],
     reservation: dict[str, Any],
     db_path: Path,
+    *,
+    update_compatibility: bool = True,
 ) -> None:
     first = reservation.get("first") or {}
     rule_id = str(reservation.get("rule_id") or "")
@@ -180,8 +195,11 @@ def _duplicate_article_review(
     raw = dict(updated.get("raw") or {})
     raw["rule_alert_dedup"] = reservation
     updated["raw"] = raw
-    with connect_sqlite(db_path) as conn:
-        save_article_review(conn, source, item, updated)
+    review.clear()
+    review.update(updated)
+    if update_compatibility:
+        with connect_sqlite(db_path) as conn:
+            save_article_review(conn, source, item, review)
 
 
 def _duplicate_official_review(
@@ -190,6 +208,8 @@ def _duplicate_official_review(
     review: dict[str, Any],
     reservation: dict[str, Any],
     db_path: Path,
+    *,
+    update_compatibility: bool = True,
 ) -> None:
     first = reservation.get("first") or {}
     rule_id = str(reservation.get("rule_id") or "")
@@ -210,8 +230,11 @@ def _duplicate_official_review(
     analysis = dict(updated.get("analysis") or {})
     analysis["rule_alert_dedup"] = reservation
     updated["analysis"] = analysis
-    with connect_sqlite(db_path) as conn:
-        save_official_review(conn, source, item, updated)
+    review.clear()
+    review.update(updated)
+    if update_compatibility:
+        with connect_sqlite(db_path) as conn:
+            save_official_review(conn, source, item, review)
 
 
 def _reserve_delivery_alert(
@@ -258,9 +281,11 @@ def deliver_article_review(
     db_path: Path = DEFAULT_DB_PATH,
     analysis_lines_prefix: list[str] | None = None,
     use_rule_dedup: bool = True,
+    already_sent: bool = False,
+    update_compatibility: bool = True,
 ) -> str:
     """Deliver a pre-decided article review and update compatibility state."""
-    if not decision.should_push or review.get("pushed_at"):
+    if not decision.should_push or already_sent or (update_compatibility and review.get("pushed_at")):
         return "skipped"
     item_id = article_item_id(item)
     reservation: dict[str, Any] = {}
@@ -274,7 +299,14 @@ def deliver_article_review(
             db_path=db_path,
         )
         if reservation.get("duplicate"):
-            _duplicate_article_review(source, item, review, reservation, db_path)
+            _duplicate_article_review(
+                source,
+                item,
+                review,
+                reservation,
+                db_path,
+                update_compatibility=update_compatibility,
+            )
             return "duplicate"
     prepared = dict(item)
     prepared["article_review"] = review
@@ -294,13 +326,15 @@ def deliver_article_review(
         sent = send_card(card)
     if sent:
         confirm_rule_alert(reservation, db_path=db_path)
-        with connect_sqlite(db_path) as conn:
-            if feedback_enabled():
-                raw = dict(review.get("raw") or {})
-                raw["_feedback_card_base"] = card
-                review["raw"] = raw
-                save_article_review(conn, source, item, review)
-            mark_article_pushed(conn, source, item_id)
+        if feedback_enabled():
+            raw = dict(review.get("raw") or {})
+            raw["_feedback_card_base"] = card
+            review["raw"] = raw
+        if update_compatibility:
+            with connect_sqlite(db_path) as conn:
+                if feedback_enabled():
+                    save_article_review(conn, source, item, review)
+                mark_article_pushed(conn, source, item_id)
         return "sent"
     release_rule_alert(reservation, db_path=db_path)
     return "skipped"
@@ -314,9 +348,11 @@ def deliver_official_review(
     decision: DecisionResult,
     analysis_lines: list[str],
     db_path: Path = DEFAULT_DB_PATH,
+    already_sent: bool = False,
+    update_compatibility: bool = True,
 ) -> str:
     """Deliver a pre-decided official-news review and update compatibility state."""
-    if not decision.should_push or review.get("pushed_at"):
+    if not decision.should_push or already_sent or (update_compatibility and review.get("pushed_at")):
         return "skipped"
     prepared = dict(item)
     prepared["article_review"] = review
@@ -331,7 +367,14 @@ def deliver_official_review(
         db_path=db_path,
     )
     if reservation.get("duplicate"):
-        _duplicate_official_review(source, item, review, reservation, db_path)
+        _duplicate_official_review(
+            source,
+            item,
+            review,
+            reservation,
+            db_path,
+            update_compatibility=update_compatibility,
+        )
         return "duplicate"
     card = build_article_card(source, prepared)
     if feedback_enabled():
@@ -347,13 +390,15 @@ def deliver_official_review(
         release_rule_alert(reservation, db_path=db_path)
         return "skipped"
     confirm_rule_alert(reservation, db_path=db_path)
-    with connect_sqlite(db_path) as conn:
-        if feedback_enabled():
-            analysis = dict(review.get("analysis") or {})
-            analysis["_feedback_card_base"] = card
-            review["analysis"] = analysis
-            save_official_review(conn, source, item, review)
-        mark_official_pushed(conn, source, item_id)
+    if feedback_enabled():
+        analysis = dict(review.get("analysis") or {})
+        analysis["_feedback_card_base"] = card
+        review["analysis"] = analysis
+    if update_compatibility:
+        with connect_sqlite(db_path) as conn:
+            if feedback_enabled():
+                save_official_review(conn, source, item, review)
+            mark_official_pushed(conn, source, item_id)
     return "sent"
 
 
@@ -402,19 +447,31 @@ def deliver_event(
     analysis: dict[str, Any],
     *,
     decision: DecisionResult,
+    market_item_id: int | None = None,
+    market_review_id: int | None = None,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> str:
     """Execute a precomputed event decision and persist its delivery outcome."""
     event_row = event_row_by_id(event_id, db_path)
     if not event_row:
         raise RuntimeError(f"事件不存在：{event_id}")
-    if not decision.should_push:
+    def persist_delivery(status: str, payload: dict[str, Any], *, error: str = "") -> None:
         record_delivery(
             event_id,
             "feishu",
+            status,
+            payload,
+            error=error,
+            market_item_id=market_item_id,
+            market_review_id=market_review_id,
+            decision_action=decision.action,
+            db_path=db_path,
+        )
+
+    if not decision.should_push:
+        persist_delivery(
             "skipped",
             {"reason": "DecisionResult.action 不是 push", "decision_action": decision.action},
-            db_path=db_path,
         )
         return "skipped"
 
@@ -455,9 +512,7 @@ def deliver_event(
         else:
             reason = "同一规则观点跨来源去重"
             dedup_kind = "rule_alert"
-        record_delivery(
-            event_id,
-            "feishu",
+        persist_delivery(
             "duplicate" if duplicate_status else "skipped",
             {
                 "reason": reason,
@@ -468,22 +523,18 @@ def deliver_event(
                 "dedup_keys": reservation.get("dedup_keys") or [reservation.get("dedup_key")],
                 "dedup_kind": dedup_kind,
             },
-            db_path=db_path,
         )
         return "duplicate" if duplicate_status else "skipped"
     if feedback_enabled() and not feishu_app_configured():
         release_rule_alert(reservation, db_path=db_path)
-        record_delivery(
-            event_id,
-            "feishu",
+        persist_delivery(
             "skipped",
             {"reason": "飞书反馈已启用但应用机器人配置不完整"},
-            db_path=db_path,
         )
         return "skipped"
     if not feedback_enabled() and not os.getenv("FEISHU_WEBHOOK", "").strip():
         release_rule_alert(reservation, db_path=db_path)
-        record_delivery(event_id, "feishu", "skipped", {"reason": "FEISHU_WEBHOOK 未配置"}, db_path=db_path)
+        persist_delivery("skipped", {"reason": "FEISHU_WEBHOOK 未配置"})
         return "skipped"
 
     if thin_event_card_enabled():
@@ -501,13 +552,10 @@ def deliver_event(
             response = send_card_with_response(card)
     except Exception as exc:  # noqa: BLE001 - delivery failures must not stop collectors
         release_rule_alert(reservation, db_path=db_path)
-        record_delivery(
-            event_id,
-            "feishu",
+        persist_delivery(
             "failed",
             {"error": str(exc), "webhook_fingerprint": feishu_webhook_fingerprint()},
             error=str(exc),
-            db_path=db_path,
         )
         return "failed"
     status = "sent" if response.ok else "skipped"
@@ -515,9 +563,7 @@ def deliver_event(
         confirm_rule_alert(reservation, db_path=db_path)
     else:
         release_rule_alert(reservation, db_path=db_path)
-    record_delivery(
-        event_id,
-        "feishu",
+    persist_delivery(
         status,
         {
             "title": title,
@@ -528,6 +574,5 @@ def deliver_event(
             "feishu_body": response.body[:1000],
             "_feedback_card_base": card if feedback_enabled() else {},
         },
-        db_path=db_path,
     )
     return status

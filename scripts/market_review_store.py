@@ -76,8 +76,10 @@ def load_enabled_holdings(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any
     return holdings
 
 
-def upsert_event_record(event: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> tuple[int, bool]:
-    init_db(db_path).close()
+def upsert_event_record_in_conn(
+    conn: sqlite3.Connection,
+    event: dict[str, Any],
+) -> tuple[int, bool]:
     now = utc_now()
     source = str(event["source"])
     source_event_id = str(event["source_event_id"])
@@ -104,41 +106,46 @@ def upsert_event_record(event: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) 
         digest,
         1 if event.get("baseline_only") else 0,
     )
-    with connect_sqlite(db_path) as conn:
-        try:
-            cur = conn.execute(
-                """
-                INSERT INTO events (
-                    source, source_event_id, event_type, title, summary, full_text, url,
-                    published_at, first_seen_at, symbols_json, themes_json, raw_json,
-                    content_hash, baseline_only
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                payload,
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO events (
+                source, source_event_id, event_type, title, summary, full_text, url,
+                published_at, first_seen_at, symbols_json, themes_json, raw_json,
+                content_hash, baseline_only
             )
-            conn.commit()
-            return int(cur.lastrowid), True
-        except sqlite3.IntegrityError:
-            row = conn.execute(
-                "SELECT id, full_text FROM events WHERE source = ? AND source_event_id = ?",
-                (source, source_event_id),
-            ).fetchone()
-            if not row:
-                raise
-            event_id = int(row[0])
-            existing_full_text = str(row[1] or "")
-            if full_text and len(full_text) > len(existing_full_text):
-                conn.execute(
-                    """
-                    UPDATE events
-                    SET summary = ?, full_text = ?, raw_json = ?, content_hash = ?
-                    WHERE id = ?
-                    """,
-                    (summary, full_text, json_dumps(event.get("raw") or {}), digest, event_id),
-                )
-                conn.commit()
-            return event_id, False
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            payload,
+        )
+        return int(cur.lastrowid), True
+    except sqlite3.IntegrityError:
+        row = conn.execute(
+            "SELECT id, full_text FROM events WHERE source = ? AND source_event_id = ?",
+            (source, source_event_id),
+        ).fetchone()
+        if not row:
+            raise
+        event_id = int(row[0])
+        existing_full_text = str(row[1] or "")
+        if full_text and len(full_text) > len(existing_full_text):
+            conn.execute(
+                """
+                UPDATE events
+                SET summary = ?, full_text = ?, raw_json = ?, content_hash = ?
+                WHERE id = ?
+                """,
+                (summary, full_text, json_dumps(event.get("raw") or {}), digest, event_id),
+            )
+        return event_id, False
+
+
+def upsert_event_record(event: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> tuple[int, bool]:
+    init_db(db_path).close()
+    with connect_sqlite(db_path) as conn:
+        result = upsert_event_record_in_conn(conn, event)
+        conn.commit()
+        return result
 
 
 def event_row_by_id(event_id: int, db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any] | None:
@@ -217,6 +224,43 @@ def update_event_analysis(
         conn.commit()
 
 
+def insert_event_analysis_in_conn(
+    conn: sqlite3.Connection,
+    event_id: int,
+    task: str,
+    model: str,
+    *,
+    importance: str,
+    classification: str,
+    direction: str,
+    impact_duration: str,
+    should_push: int,
+    analysis: dict[str, Any],
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO event_analyses (
+            event_id, task, model, importance, classification, direction,
+            impact_duration, should_push, analysis_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event_id,
+            task,
+            model,
+            importance,
+            classification,
+            direction,
+            impact_duration,
+            should_push,
+            json_dumps(analysis),
+            utc_now(),
+        ),
+    )
+    return int(cur.lastrowid)
+
+
 def insert_event_analysis(
     event_id: int,
     task: str,
@@ -231,26 +275,17 @@ def insert_event_analysis(
     db_path: Path = DEFAULT_DB_PATH,
 ) -> None:
     with connect_sqlite(db_path) as conn:
-        conn.execute(
-            """
-            INSERT INTO event_analyses (
-                event_id, task, model, importance, classification, direction,
-                impact_duration, should_push, analysis_json, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                event_id,
-                task,
-                model,
-                importance,
-                classification,
-                direction,
-                impact_duration,
-                should_push,
-                json_dumps(analysis),
-                utc_now(),
-            ),
+        insert_event_analysis_in_conn(
+            conn,
+            event_id,
+            task,
+            model,
+            importance=importance,
+            classification=classification,
+            direction=direction,
+            impact_duration=impact_duration,
+            should_push=should_push,
+            analysis=analysis,
         )
         conn.commit()
 
@@ -262,15 +297,32 @@ def record_event_delivery(
     payload: dict[str, Any],
     *,
     error: str = "",
+    market_item_id: int | None = None,
+    market_review_id: int | None = None,
+    decision_action: str = "",
     db_path: Path = DEFAULT_DB_PATH,
 ) -> None:
+    now = utc_now()
     with connect_sqlite(db_path) as conn:
         conn.execute(
             """
-            INSERT INTO deliveries (event_id, channel, status, sent_at, error, payload_json)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO deliveries (
+                event_id, market_item_id, market_review_id, channel, status,
+                decision_action, attempted_at, sent_at, error, payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (event_id, channel, status, utc_now() if status == "sent" else "", error, json_dumps(payload)),
+            (
+                event_id,
+                market_item_id,
+                market_review_id,
+                channel,
+                status,
+                decision_action or None,
+                now,
+                now if status == "sent" else "",
+                error,
+                json_dumps(payload),
+            ),
         )
         conn.commit()
 
@@ -279,7 +331,7 @@ def article_item_id(item: dict[str, Any]) -> str:
     return str(item.get("id") or item.get("url") or item.get("title") or "")
 
 
-def ensure_article_reviews_table(conn: sqlite3.Connection) -> None:
+def ensure_article_reviews_table(conn: sqlite3.Connection, *, commit: bool = True) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS article_reviews (
@@ -312,7 +364,8 @@ def ensure_article_reviews_table(conn: sqlite3.Connection) -> None:
     if "pre_skeptic_importance" not in columns:
         conn.execute("ALTER TABLE article_reviews ADD COLUMN pre_skeptic_importance TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_article_reviews_created ON article_reviews(created_at)")
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def save_article_review(
@@ -322,8 +375,9 @@ def save_article_review(
     review: dict[str, Any],
     *,
     decision_item: NormalizedMarketItem | dict[str, Any] | None = None,
+    commit: bool = True,
 ) -> None:
-    ensure_article_reviews_table(conn)
+    ensure_article_reviews_table(conn, commit=commit)
     review = ensure_article_decision_audit(source, decision_item or item, review, push_key="push_now")
     now = datetime.now(timezone.utc).isoformat()
     item_id = article_item_id(item)
@@ -372,7 +426,8 @@ def save_article_review(
             now,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def article_review_exists(conn: sqlite3.Connection, source: str, item_id: str) -> dict[str, Any] | None:
@@ -437,7 +492,7 @@ def official_news_item_id(item: dict[str, Any]) -> str:
     return str(item.get("id") or item.get("url") or item.get("title") or "")
 
 
-def ensure_official_news_table(conn: sqlite3.Connection) -> None:
+def ensure_official_news_table(conn: sqlite3.Connection, *, commit: bool = True) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS official_news_reviews (
@@ -465,7 +520,8 @@ def ensure_official_news_table(conn: sqlite3.Connection) -> None:
     if "pre_skeptic_importance" not in columns:
         conn.execute("ALTER TABLE official_news_reviews ADD COLUMN pre_skeptic_importance TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_official_news_created ON official_news_reviews(created_at)")
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def official_review_exists(conn: sqlite3.Connection, source: str, item_id: str) -> dict[str, Any] | None:
@@ -511,8 +567,9 @@ def save_official_review(
     review: dict[str, Any],
     *,
     decision_item: NormalizedMarketItem | dict[str, Any] | None = None,
+    commit: bool = True,
 ) -> None:
-    ensure_official_news_table(conn)
+    ensure_official_news_table(conn, commit=commit)
     review = ensure_official_decision_audit(source, decision_item or item, review)
     now = datetime.now(timezone.utc).isoformat()
     analysis_payload = review.get("analysis") if isinstance(review.get("analysis"), dict) else dict(review)
@@ -553,7 +610,8 @@ def save_official_review(
             now,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def mark_official_pushed(conn: sqlite3.Connection, source: str, item_id: str) -> None:
