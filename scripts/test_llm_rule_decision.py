@@ -111,8 +111,8 @@ def _response(
 
 
 def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
-    assert CATALOG_VERSION == "llm-rule-catalog-v4"
-    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v3-20260723"
+    assert CATALOG_VERSION == "llm-rule-catalog-v5"
+    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v4-20260723"
     assert len(RULES) == 22
     assert len({rule.rule_id for rule in RULES}) == len(RULES)
     assert {rule.rule_id for rule in RULES} == {
@@ -599,6 +599,136 @@ def test_key_product_production_ramp_is_material_in_both_directions() -> None:
     assert "从小规模生产扩大到稳定规模生产" in prompt_rules
 
 
+def test_target_price_implied_move_uses_existing_rules_and_model_arithmetic() -> None:
+    holding_rule = next(rule for rule in RULES if rule.rule_id == "holding_rating_revision")
+    industry_rule = next(
+        rule for rule in RULES if rule.rule_id == "investment_bank_allocation_change"
+    )
+    formula = "目标价/历史收盘价-1"
+    for rule in (holding_rule, industry_rule):
+        assert formula in rule.action_conditions["push"]
+        assert "大于等于30%" in rule.action_conditions["push"]
+        assert "小于等于-30%" in rule.action_conditions["push"]
+        assert "绝对值低于30%" in rule.action_conditions["daily"]
+        assert any("52周区间" in exclusion for exclusion in rule.exclusions)
+        assert any("须返回 uncertain" in exclusion for exclusion in rule.exclusions)
+
+    def report_item(
+        target: str,
+        close: str,
+        *,
+        source: str = "value_directory_ib_stocks",
+        category: str = "research_industry_media",
+        labels: str = "目标价",
+    ) -> NormalizedMarketItem:
+        return NormalizedMarketItem(
+            source=source,
+            source_category=category,
+            publisher_role="research_provider",
+            content_type="research_report",
+            title="受信投行对测试公司的当前研报",
+            summary=f"机构给出{labels} {target}。",
+            full_text=f"报告明确标注历史收盘价 {close}，收盘日期 2026-07-20。",
+            url="https://example.test/target-price-report",
+            published_at="2026-07-21T10:00:00+08:00",
+        )
+
+    cases = (
+        ("$180.00", "$153.10", "semiconductor_ordinary", "daily"),
+        ("$129.90", "$100.00", "semiconductor_ordinary", "daily"),
+        ("$130.00", "$100.00", "investment_bank_allocation_change", "push"),
+        ("$200.00", "$150.00", "investment_bank_allocation_change", "push"),
+        ("$70.00", "$100.00", "investment_bank_allocation_change", "push"),
+    )
+    admission = _admission(("semiconductor_ai",))
+    for target, close, matched_rule, action in cases:
+        result = validate_llm_rule_response(
+            _response("semiconductor_ai", matched_rule, action),
+            report_item(target, close),
+            admission,
+        )
+        assert result.evaluation_status == "completed", (target, close, result.validation_errors)
+        assert result.candidate_action == action
+
+    corning = report_item("$180.00", "$153.10")
+    corning.title = "Morgan Stanley - Corning (GLW)"
+    corning.summary = "Equal-weight；目标价 $180.00。"
+    corning.full_text = "历史收盘价 $153.10，收盘日期 2026-07-20。"
+    corning_result = validate_llm_rule_response(
+        _response("semiconductor_ai", "semiconductor_ordinary", "daily"),
+        corning,
+        admission,
+    )
+    assert corning_result.evaluation_status == "completed"
+    assert corning_result.candidate_action == "daily"
+
+    ambiguous_response = _response(
+        "semiconductor_ai",
+        "semiconductor_ordinary",
+        "daily",
+        overrides={
+            "investment_bank_allocation_change": _assessment(
+                "investment_bank_allocation_change", judgement="uncertain"
+            )
+        },
+    )
+    ambiguous_items = (
+        report_item("$140.00", "$100.00", labels="前次目标价"),
+        report_item("$140.00", "$100.00", labels="52周高点"),
+        report_item("USD 140.00", "EUR 100.00"),
+    )
+    for item in ambiguous_items:
+        result = validate_llm_rule_response(ambiguous_response, item, admission)
+        assert result.evaluation_status == "completed"
+        assert result.candidate_action == "daily"
+        assessment = next(
+            value
+            for value in result.rule_assessments
+            if value["rule_id"] == "investment_bank_allocation_change"
+        )
+        assert assessment["judgement"] == "uncertain"
+        assert assessment["selected_action"] is None
+
+    exact_threshold = report_item("$130.00", "$100.00")
+    source_variants = (
+        exact_threshold,
+        report_item(
+            "$130.00",
+            "$100.00",
+            source="finance_media",
+            category="news_media",
+        ),
+    )
+    industry_response = _response(
+        "semiconductor_ai", "investment_bank_allocation_change", "push"
+    )
+    assert [
+        validate_llm_rule_response(industry_response, item, admission).candidate_action
+        for item in source_variants
+    ] == ["push", "push"]
+
+    holding_result = validate_llm_rule_response(
+        _response("holding", "holding_rating_revision", "push"),
+        exact_threshold,
+        _admission(("holding",)),
+    )
+    industry_result = validate_llm_rule_response(
+        industry_response,
+        exact_threshold,
+        admission,
+    )
+    assert holding_result.candidate_action == industry_result.candidate_action == "push"
+
+    prompt = build_llm_rule_prompt(exact_threshold, _admission(("holding", "semiconductor_ai")))
+    assert formula not in prompt.system_prompt
+    rules_by_id = {rule["rule_id"]: rule for rule in prompt.user_payload["rules"]}
+    assert formula in json.dumps(rules_by_id["holding_rating_revision"], ensure_ascii=False)
+    assert formula in json.dumps(rules_by_id["investment_bank_allocation_change"], ensure_ascii=False)
+    for rule_id, payload in rules_by_id.items():
+        if rule_id not in {"holding_rating_revision", "investment_bank_allocation_change"}:
+            assert formula not in json.dumps(payload, ensure_ascii=False)
+
+
 def test_invalid_json_unknown_missing_and_forbidden_fields_fail_closed() -> None:
     item = _item()
     admission = _admission(("trade_policy",))
@@ -751,6 +881,7 @@ def main() -> int:
     test_multiple_admitted_families_share_one_response_and_highest_action_wins()
     test_semiconductor_expectations_can_push_without_claiming_execution()
     test_key_product_production_ramp_is_material_in_both_directions()
+    test_target_price_implied_move_uses_existing_rules_and_model_arithmetic()
     test_invalid_json_unknown_missing_and_forbidden_fields_fail_closed()
     test_undefined_action_and_duplicate_rule_fail_closed()
     test_evidence_references_are_exact_and_bounded()
