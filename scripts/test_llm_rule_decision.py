@@ -111,8 +111,8 @@ def _response(
 
 
 def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
-    assert CATALOG_VERSION == "llm-rule-catalog-v5"
-    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v4-20260723"
+    assert CATALOG_VERSION == "llm-rule-catalog-v6"
+    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v5-20260723"
     assert len(RULES) == 22
     assert len({rule.rule_id for rule in RULES}) == len(RULES)
     assert {rule.rule_id for rule in RULES} == {
@@ -607,11 +607,15 @@ def test_target_price_implied_move_uses_existing_rules_and_model_arithmetic() ->
     formula = "目标价/历史收盘价-1"
     for rule in (holding_rule, industry_rule):
         assert formula in rule.action_conditions["push"]
-        assert "大于等于30%" in rule.action_conditions["push"]
-        assert "小于等于-30%" in rule.action_conditions["push"]
-        assert "绝对值低于30%" in rule.action_conditions["daily"]
+        assert "未四舍五入的计算结果并据此选择 action" in rule.action_conditions["push"]
+        assert "大于等于30.0%" in rule.action_conditions["push"]
+        assert "小于等于-30.0%" in rule.action_conditions["push"]
+        assert "绝对值低于30.0%" in rule.action_conditions["daily"]
+        assert "17.6%和29.9%均低于30.0%" in rule.action_conditions["daily"]
         assert any("52周区间" in exclusion for exclusion in rule.exclusions)
         assert any("须返回 uncertain" in exclusion for exclusion in rule.exclusions)
+    assert any("不算目标价上调或下调" in value for value in holding_rule.exclusions)
+    assert any("当前目标价本身不算" in value for value in industry_rule.exclusions)
 
     def report_item(
         target: str,
