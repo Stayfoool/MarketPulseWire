@@ -293,6 +293,16 @@ def test_llm_completed_row_preserves_bounded_audit_fields_without_body_or_raw_re
                         "explanation": "价格与供应变化达到 push。",
                     }
                 ],
+                "model_audit": {
+                    "retention_days": 30,
+                    "calls": [
+                        {
+                            "request": {"messages": [{"role": "user", "content": "PRIVATE_COMPLETE_BODY"}]},
+                            "response": {"content": "PRIVATE_RAW_RESPONSE"},
+                            "validation": {"evaluation_status": "completed"},
+                        }
+                    ],
+                },
             }
         )
         payload["items"][0]["input_evidence"] = {
@@ -302,7 +312,7 @@ def test_llm_completed_row_preserves_bounded_audit_fields_without_body_or_raw_re
             "body_source": "DIGITIMES RSS description",
         }
         serialized = json.dumps(payload, ensure_ascii=False)
-        assert "PRIVATE_COMPLETE_BODY" not in serialized
+        assert "PRIVATE_COMPLETE_BODY" in serialized
         (report_dir / "rule-core-shadow-research-llm-completed.json").write_text(
             serialized, encoding="utf-8"
         )
@@ -332,6 +342,8 @@ def test_llm_completed_row_preserves_bounded_audit_fields_without_body_or_raw_re
         combined_text = json.dumps(combined, ensure_ascii=False)
         assert "private-response-id" not in combined_text
         assert "PRIVATE_COMPLETE_BODY" not in combined_text
+        assert "PRIVATE_RAW_RESPONSE" not in combined_text
+        assert "model_audit" not in combined_text
 
 
 def main() -> int:

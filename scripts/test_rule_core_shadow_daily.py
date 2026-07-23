@@ -14,6 +14,7 @@ from rule_core_shadow_daily import (
     build_reminder_card,
     list_daily_reports,
     load_daily_report,
+    redact_expired_model_audits,
     review_window,
     run_daily_report,
 )
@@ -242,12 +243,43 @@ def test_systemd_timer_and_installer_use_beijing_1530() -> None:
         raise AssertionError("invalid calendar dates must be rejected")
 
 
+def test_model_audit_retention_removes_sensitive_payload_only_after_30_days() -> None:
+    with TemporaryDirectory() as tmpdir:
+        report_dir = Path(tmpdir)
+        old_path = report_dir / "rule-core-shadow-news-old.json"
+        recent_path = report_dir / "rule-core-shadow-news-recent.json"
+        for path, generated_at, marker in (
+            (old_path, "2026-06-01T00:00:00+00:00", "PRIVATE_OLD"),
+            (recent_path, "2026-07-20T00:00:00+00:00", "PRIVATE_RECENT"),
+        ):
+            payload = comparison_report(generated_at, path.stem)
+            payload["items"][0]["comparison"]["candidate"]["model_audit"] = {
+                "retention_days": 30,
+                "calls": [{"request": {"messages": [marker]}, "response": {"content": marker}}],
+            }
+            payload["items"][0]["comparison"]["candidate"]["model_response_id"] = marker
+            path.write_text(json.dumps(payload), encoding="utf-8")
+        redacted = redact_expired_model_audits(
+            report_dir,
+            now=datetime(2026, 7, 23, tzinfo=timezone.utc),
+        )
+        assert redacted == 1
+        old_text = old_path.read_text(encoding="utf-8")
+        recent_text = recent_path.read_text(encoding="utf-8")
+        assert "PRIVATE_OLD" not in old_text
+        assert '"status": "expired"' in old_text
+        assert '"model_response_id": ""' in old_text
+        assert "PRIVATE_RECENT" in recent_text
+        assert (old_path.stat().st_mode & 0o777) == 0o600
+
+
 def main() -> None:
     test_review_window_uses_consecutive_beijing_1530_boundaries()
     test_daily_report_is_bounded_dated_and_notified_once()
     test_empty_daily_report_writes_files_without_notification()
     test_llm_daily_report_uses_dynamic_label_and_counts_failed_comparisons()
     test_historical_rebuild_fails_when_retained_reports_are_missing()
+    test_model_audit_retention_removes_sensitive_payload_only_after_30_days()
     test_systemd_timer_and_installer_use_beijing_1530()
     print("rule core shadow daily checks passed")
 

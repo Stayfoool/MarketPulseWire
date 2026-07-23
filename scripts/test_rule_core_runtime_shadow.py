@@ -45,7 +45,7 @@ def _llm_response() -> ChatCompletionResponse:
                     "rule_id": rule.rule_id,
                     "judgement": "matched",
                     "action": "push",
-                    "evidence": [{"field": "full_text", "quote": quote}],
+                    "evidence_ids": ["T1"],
                     "reason": "原文显示价格持续上涨和供应紧缺。",
                 }
                 if matched
@@ -209,7 +209,7 @@ def test_llm_candidate_mode_writes_one_bounded_report_without_changing_current_d
         assert result["status"] == "completed"
         assert len(calls) == 1
         text = Path(result["report"]).read_text(encoding="utf-8")
-        assert "PRIVATE_BODY" not in text
+        assert "PRIVATE_BODY" in text
         payload = json.loads(text)
         assert payload["candidate_mode"] == "llm"
         assert payload["candidate_engine"] == LLM_RULE_ENGINE_VERSION
@@ -224,6 +224,8 @@ def test_llm_candidate_mode_writes_one_bounded_report_without_changing_current_d
         assert comparison["candidate"]["body_original_chars"] == len(item.full_text)
         assert comparison["candidate"]["body_provided_chars"] == 3000
         assert comparison["candidate"]["body_truncated"] is True
+        assert "PRIVATE_BODY" in json.dumps(comparison["candidate"]["model_audit"], ensure_ascii=False)
+        assert (Path(result["report"]).stat().st_mode & 0o777) == 0o600
         assert comparison["affects_current_decision"] is False
 
 

@@ -73,6 +73,12 @@ def _default_llm_caller(env: Mapping[str, str]):
             temperature_override=0,
         )
 
+    call.audit_options = {  # type: ignore[attr-defined]
+        "temperature": 0,
+        "max_output_tokens": max_tokens,
+        "thinking_type": thinking or "",
+        "truncate_user_prompt": False,
+    }
     return call
 
 
@@ -270,7 +276,9 @@ def _write_report(payload: dict[str, Any], item: NormalizedMarketItem, report_di
     path = report_dir / name
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600)
     temporary.replace(path)
+    os.chmod(path, 0o600)
     return path
 
 

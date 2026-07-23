@@ -27,7 +27,7 @@ def _assessment(rule_id: str, *, matched: bool, action: str | None = None) -> di
         "rule_id": rule_id,
         "judgement": "matched",
         "action": action,
-        "evidence": [{"field": "full_text", "quote": QUOTE}],
+        "evidence_ids": ["T1"],
         "reason": "原文证明产能扩张已进入执行。",
     }
 
@@ -90,7 +90,7 @@ def _compare(item: NormalizedMarketItem, caller, *, portfolio=None):
     )
 
 
-def test_completed_comparison_records_usage_and_bounded_evidence_without_body() -> None:
+def test_completed_comparison_records_usage_and_private_model_audit() -> None:
     captured = {}
 
     def caller(prompt):
@@ -120,26 +120,36 @@ def test_completed_comparison_records_usage_and_bounded_evidence_without_body() 
     assert candidate["rule_ids"] == ["semiconductor_material_change"]
     assert "source_metadata" not in captured["prompt"].user_payload
     assert "current_decision" not in json.dumps(captured["prompt"].user_payload, ensure_ascii=False)
-    serialized = json.dumps(comparison, ensure_ascii=False)
-    assert "PRIVATE_BODY_START" not in serialized
+    audit = comparison["candidate"]["model_audit"]
+    assert "PRIVATE_BODY_START" in json.dumps(audit, ensure_ascii=False)
+    assert "PRIVATE_BODY_START" not in json.dumps(comparison["candidate"]["rule_evidence"], ensure_ascii=False)
 
 
 def test_invalid_output_model_failure_and_missing_body_behavior() -> None:
-    invalid = _compare(_item(), lambda _prompt: _model_response("not-json"))
+    invalid_calls = []
+    invalid = _compare(
+        _item(),
+        lambda prompt: invalid_calls.append(prompt) or _model_response("not-json"),
+    )
+    assert len(invalid_calls) == 2
     assert invalid["comparable"] is False
     assert invalid["candidate"]["evaluation_status"] == "invalid_output"
     assert invalid["candidate"]["action"] is None
     assert invalid["current"]["action"] == "daily"
+    assert len(invalid["candidate"]["model_audit"]["calls"]) == 2
+    assert invalid["candidate"]["model_audit"]["calls"][0]["response"]["content"] == "not-json"
+    assert invalid["candidate"]["model_audit"]["calls"][0]["validation"]["validation_errors"]
 
     unavailable = _compare(_item(), lambda _prompt: (_ for _ in ()).throw(RuntimeError("provider down")))
     assert unavailable["candidate"]["evaluation_status"] == "model_unavailable"
     assert unavailable["candidate"]["failure_reason"] == "request_failed"
     assert unavailable["candidate"]["action"] is None
+    assert unavailable["candidate"]["model_audit"]["calls"][0]["response"] is None
 
     calls = []
     response = json.loads(_response("semiconductor_ai", "semiconductor_material_change", "push"))
     matched = next(result for result in response["rule_results"] if result["judgement"] == "matched")
-    matched["evidence"] = [{"field": "title", "quote": "HBM产能扩张"}]
+    matched["evidence_ids"] = ["T1"]
 
     def title_summary_caller(prompt):
         calls.append(prompt)
@@ -237,7 +247,7 @@ def test_company_disclosure_receives_only_holding_rules_and_minimal_matched_cont
 
 
 def main() -> int:
-    test_completed_comparison_records_usage_and_bounded_evidence_without_body()
+    test_completed_comparison_records_usage_and_private_model_audit()
     test_invalid_output_model_failure_and_missing_body_behavior()
     test_excluded_item_does_not_call_model()
     test_all_unmatched_response_retries_once_with_ordinary_rule()
