@@ -38,7 +38,7 @@ from llm_analysis import llm_config
 from market_flow import is_official_news_source, normalize_market_item, process_market_item
 from media_sources import is_overseas_media_source, overseas_media_access_note, overseas_media_module
 from media_keyword_config import is_media_focus_item
-from production_admission import admission_lifecycle_values, production_admission_context
+from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from trendforce_sources import DEFAULT_RSS_FEEDS
 from x_check import load_env
 from source_backoff import backoff_state_after_failure, clear_backoff_state
@@ -470,7 +470,7 @@ def notify_item(source: str, item: dict) -> None:
         enriched = enrich_item(source, item)
         _finish_seen_item(source, item_id, enriched)
         normalized = normalize_market_item(source, enriched, store_kind="article", source_profile_id=source)
-        admission_context = production_admission_context(normalized, db_path=DB_PATH)
+        admission_context = persist_production_admission_context(normalized, production_admission_context(normalized, db_path=DB_PATH), db_path=DB_PATH)
         admission = admission_context.result
         if admission.status != "admitted":
             set_seen_item_lifecycle(
@@ -494,6 +494,8 @@ def notify_item(source: str, item: dict) -> None:
             db_path=DB_PATH,
             production_admission=admission,
             production_portfolio=admission_context.portfolio,
+            market_item_id=admission_context.market_item_id,
+            market_review_id=admission_context.market_review_id,
         )
         _complete_seen_item(source, item_id, admission)
     except Exception as exc:
@@ -516,7 +518,7 @@ def handle_official_news_item(source: str, item: dict) -> None:
         enriched = enrich_item(source, item)
         _finish_seen_item(source, item_id, enriched)
         normalized = normalize_market_item(source, enriched, store_kind="official", source_profile_id=source)
-        admission_context = production_admission_context(normalized, db_path=DB_PATH)
+        admission_context = persist_production_admission_context(normalized, production_admission_context(normalized, db_path=DB_PATH), db_path=DB_PATH)
         admission = admission_context.result
         if admission.status != "admitted":
             set_seen_item_lifecycle(
@@ -540,6 +542,8 @@ def handle_official_news_item(source: str, item: dict) -> None:
             db_path=DB_PATH,
             production_admission=admission,
             production_portfolio=admission_context.portfolio,
+            market_item_id=admission_context.market_item_id,
+            market_review_id=admission_context.market_review_id,
         )
         _complete_seen_item(source, item_id, admission)
     except Exception as exc:

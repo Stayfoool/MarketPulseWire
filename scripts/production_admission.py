@@ -33,6 +33,8 @@ _CONFIG_CACHE: tuple[tuple[object, ...], RuleConfig] | None = None
 class ProductionAdmissionContext:
     result: AdmissionResult
     portfolio: PortfolioRuleConfig
+    market_item_id: int | None = None
+    market_review_id: int | None = None
 
 
 def _rule_config_path(env: Mapping[str, str]) -> Path:
@@ -148,6 +150,30 @@ def production_admission_context(
             ),
         ),
         portfolio=current_portfolio,
+    )
+
+
+def persist_production_admission_context(
+    item: NormalizedMarketItem,
+    context: ProductionAdmissionContext,
+    *,
+    db_path: Path,
+) -> ProductionAdmissionContext:
+    """Persist a real production AdmissionResult while tolerating test doubles."""
+    if not isinstance(context.result, AdmissionResult):
+        return context
+    from market_store import record_production_admission
+
+    market_item_id, market_review_id = record_production_admission(
+        item,
+        context.result,
+        db_path=db_path,
+    )
+    return ProductionAdmissionContext(
+        result=context.result,
+        portfolio=context.portfolio,
+        market_item_id=market_item_id,
+        market_review_id=market_review_id,
     )
 
 

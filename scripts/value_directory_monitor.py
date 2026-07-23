@@ -15,7 +15,7 @@ from db_utils import update_seen_item_lifecycle
 from market_item import NormalizedMarketItem
 from market_review_store import article_item_id, article_review_exists
 from market_runtime import normalize_market_item, process_market_item
-from production_admission import admission_lifecycle_values, production_admission_context
+from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from rss_monitor import DB_PATH, connect_db, save_new_items_with_retry
 from source_health import record_source_failure, record_source_success
 from source_profiles import source_profile_enabled
@@ -269,7 +269,7 @@ def review_and_maybe_push(
         processing_error="",
     )
     normalized = normalized_value_directory_item(item, source)
-    admission_context = production_admission_context(normalized, db_path=DB_PATH)
+    admission_context = persist_production_admission_context(normalized, production_admission_context(normalized, db_path=DB_PATH), db_path=DB_PATH)
     admission = admission_context.result
     if admission.status != "admitted":
         set_seen_item_lifecycle_if_present(
@@ -296,6 +296,8 @@ def review_and_maybe_push(
             reprocess_existing=existing is not None,
             production_admission=admission,
             production_portfolio=admission_context.portfolio,
+            market_item_id=admission_context.market_item_id,
+            market_review_id=admission_context.market_review_id,
         )
     except Exception as exc:
         set_seen_item_lifecycle_if_present(

@@ -22,7 +22,7 @@ from db_utils import ensure_trendforce_page_seen_table, retry_on_locked, update_
 from http_utils import http_get
 from llm_analysis import llm_config
 from market_flow import normalize_market_item, process_market_item
-from production_admission import admission_lifecycle_values, production_admission_context
+from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from rss_monitor import DB_PATH, connect_db, fetch_article_body, parse_date, strip_tags
 from source_health import record_source_failure, record_source_success
 from trendforce_sources import PageSource, TREND_FORCE_PAGE_SOURCES
@@ -497,7 +497,7 @@ def notify_item(item: dict) -> None:
             store_kind="article",
             source_profile_id=profile_id,
         )
-        admission_context = production_admission_context(normalized, db_path=DB_PATH)
+        admission_context = persist_production_admission_context(normalized, production_admission_context(normalized, db_path=DB_PATH), db_path=DB_PATH)
         admission = admission_context.result
         if admission.status != "admitted":
             set_seen_item_lifecycle(
@@ -521,6 +521,8 @@ def notify_item(item: dict) -> None:
             use_rule_dedup=False,
             production_admission=admission,
             production_portfolio=admission_context.portfolio,
+            market_item_id=admission_context.market_item_id,
+            market_review_id=admission_context.market_review_id,
         )
         set_seen_item_lifecycle(
             profile_id,

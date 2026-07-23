@@ -19,7 +19,7 @@ from market_db import DEFAULT_DB_PATH, init_db
 from market_flow import normalize_market_item, process_market_item
 from market_review_store import event_content_hash, load_enabled_holdings
 from portfolio_import import import_holdings
-from production_admission import production_admission_context
+from production_admission import persist_production_admission_context, production_admission_context
 from source_health import record_source_failure, record_source_success
 from source_profiles import SOURCE_PROFILE_CONFIG_PATH, runtime_source_profile, source_profile_enabled
 
@@ -323,7 +323,7 @@ def collect_disclosures(
                 print(f"[baseline] {identity} {record.symbol} {record.title} pdf={document_meta.get('status')}", flush=True)
         else:
             normalized = normalize_market_item(SOURCE_ID, event, store_kind="event")
-            admission_context = production_admission_context(normalized, db_path=db_path)
+            admission_context = persist_production_admission_context(normalized, production_admission_context(normalized, db_path=db_path), db_path=db_path)
             admission = admission_context.result
             if admission.status != "admitted":
                 stats["excluded"] += 1
@@ -342,6 +342,8 @@ def collect_disclosures(
                     deliver=deliver,
                     production_admission=admission,
                     production_portfolio=admission_context.portfolio,
+                    market_item_id=admission_context.market_item_id,
+                    market_review_id=admission_context.market_review_id,
                 )
                 stats["processed"] += 1 if outcome.inserted else 0
         if not dry_run and not identity_known:

@@ -24,6 +24,14 @@ from market_item import (
     item_from_article_mapping,
     item_from_event_mapping,
 )
+from market_store import (
+    complete_market_review,
+    fail_market_review,
+    link_latest_event_delivery,
+    record_article_delivery,
+    record_baseline_item,
+    record_production_admission,
+)
 from market_review_store import (
     article_item_id,
     article_review_exists,
@@ -52,6 +60,8 @@ class MarketProcessOutcome:
     storage_ref: dict[str, Any]
     payload: dict[str, Any] = field(default_factory=dict)
     delivery_status: str = "not_requested"
+    market_item_id: int | None = None
+    market_review_id: int | None = None
 
     @property
     def event_id(self) -> int | None:
@@ -240,6 +250,8 @@ def _process_content_item(
     current_matched_families: tuple[str, ...],
     production_admission: AdmissionResult | None,
     production_portfolio: object | None,
+    market_item_id: int | None,
+    market_review_id: int | None,
 ) -> MarketProcessOutcome:
     module = _selected_module(store_kind)
     source = item.source
@@ -283,6 +295,14 @@ def _process_content_item(
         "item_id": item_id,
     }
     flow_result = _flow_result(decision_item, payload, storage_ref)
+    if market_review_id is not None and not flow_result.decision.audit_json.get("contract_error"):
+        complete_market_review(
+            market_review_id,
+            flow_result,
+            db_path=db_path,
+            legacy_store_kind=storage_ref["store_kind"],
+            legacy_store_id=f"{source}:{item_id}",
+        )
     if inserted and not flow_result.decision.audit_json.get("contract_error"):
         if production_admission is None and (
             current_admission_status == "unknown"
@@ -324,12 +344,23 @@ def _process_content_item(
                 analysis_lines_prefix=module.gate_lines(payload),
                 use_rule_dedup=use_rule_dedup,
             )
+        if market_item_id is not None and market_review_id is not None:
+            record_article_delivery(
+                market_item_id,
+                market_review_id,
+                status=status,
+                decision_action=flow_result.decision.action,
+                payload={"store_kind": storage_ref["store_kind"], "source": source, "item_id": item_id},
+                db_path=db_path,
+            )
     return MarketProcessOutcome(
         flow_result=flow_result,
         inserted=inserted,
         storage_ref=storage_ref,
         payload=payload,
         delivery_status=status,
+        market_item_id=market_item_id,
+        market_review_id=market_review_id,
     )
 
 
@@ -348,6 +379,8 @@ def _process_event_item(
     current_matched_families: tuple[str, ...],
     production_admission: AdmissionResult | None,
     production_portfolio: object | None,
+    market_item_id: int | None,
+    market_review_id: int | None,
 ) -> MarketProcessOutcome:
     module = _selected_module("event")
     event_id, inserted = module.upsert_event(raw_item, db_path, normalized_item=item)
@@ -359,6 +392,8 @@ def _process_event_item(
             inserted=False,
             storage_ref=storage_ref,
             delivery_status="existing",
+            market_item_id=market_item_id,
+            market_review_id=market_review_id,
         )
     if not inserted and latest_event_analysis(event_id, task, db_path) is not None:
         return MarketProcessOutcome(
@@ -366,6 +401,8 @@ def _process_event_item(
             inserted=False,
             storage_ref=storage_ref,
             delivery_status="existing",
+            market_item_id=market_item_id,
+            market_review_id=market_review_id,
         )
     if baseline_only or not analyze:
         return MarketProcessOutcome(
@@ -379,6 +416,8 @@ def _process_event_item(
             inserted=True,
             storage_ref=storage_ref,
             delivery_status="baseline" if baseline_only else "not_analyzed",
+            market_item_id=market_item_id,
+            market_review_id=market_review_id,
         )
     decision_item = prepare_item_for_decision(item)
     partial = MarketProcessOutcome(
@@ -391,6 +430,14 @@ def _process_event_item(
     except Exception as exc:  # noqa: BLE001 - preserve the inserted event reference for batch recovery
         raise MarketItemProcessingError(str(exc), partial) from exc
     flow_result = _flow_result(decision_item, analysis, storage_ref)
+    if market_review_id is not None and not flow_result.decision.audit_json.get("contract_error"):
+        complete_market_review(
+            market_review_id,
+            flow_result,
+            db_path=db_path,
+            legacy_store_kind="event_analyses",
+            legacy_store_id=f"{event_id}:{task}",
+        )
     if not flow_result.decision.audit_json.get("contract_error"):
         record_rule_comparison(
             decision_item,
@@ -403,12 +450,22 @@ def _process_event_item(
             production_portfolio=production_portfolio,
         )
     status = module.maybe_deliver_event(event_id, analysis, db_path=db_path) if deliver else "not_requested"
+    if deliver and market_item_id is not None and market_review_id is not None:
+        link_latest_event_delivery(
+            event_id,
+            market_item_id,
+            market_review_id,
+            decision_action=flow_result.decision.action,
+            db_path=db_path,
+        )
     return MarketProcessOutcome(
         flow_result=flow_result,
         inserted=inserted,
         storage_ref=storage_ref,
         payload=analysis,
         delivery_status=status,
+        market_item_id=market_item_id,
+        market_review_id=market_review_id,
     )
 
 
@@ -430,38 +487,58 @@ def process_market_item(
     current_matched_families: tuple[str, ...] = (),
     production_admission: AdmissionResult | None = None,
     production_portfolio: object | None = None,
+    market_item_id: int | None = None,
+    market_review_id: int | None = None,
 ) -> MarketProcessOutcome:
     """Persist, decide, interpret, and optionally deliver one normalized item."""
     if production_admission is not None and production_admission.status != "admitted":
         raise ValueError("process_market_item requires an admitted production AdmissionResult")
-    if store_kind == "event":
-        return _process_event_item(
+    if baseline_only and market_item_id is None:
+        market_item_id = record_baseline_item(item, db_path=db_path)
+    if production_admission is not None and (market_item_id is None or market_review_id is None):
+        market_item_id, market_review_id = record_production_admission(
+            item,
+            production_admission,
+            db_path=db_path,
+            task=task if store_kind == "event" else "production",
+        )
+    try:
+        if store_kind == "event":
+            return _process_event_item(
+                item,
+                raw_item,
+                task=task,
+                db_path=db_path,
+                baseline_only=baseline_only,
+                analyze=analyze,
+                deliver=deliver,
+                reprocess_existing=reprocess_existing,
+                current_admission_status=current_admission_status,
+                current_admission_reason=current_admission_reason,
+                current_matched_families=current_matched_families,
+                production_admission=production_admission,
+                production_portfolio=production_portfolio,
+                market_item_id=market_item_id,
+                market_review_id=market_review_id,
+            )
+        return _process_content_item(
             item,
             raw_item,
-            task=task,
+            store_kind=store_kind,
+            source_profile_id=source_profile_id,
             db_path=db_path,
-            baseline_only=baseline_only,
-            analyze=analyze,
             deliver=deliver,
+            use_rule_dedup=use_rule_dedup,
             reprocess_existing=reprocess_existing,
             current_admission_status=current_admission_status,
             current_admission_reason=current_admission_reason,
             current_matched_families=current_matched_families,
             production_admission=production_admission,
             production_portfolio=production_portfolio,
+            market_item_id=market_item_id,
+            market_review_id=market_review_id,
         )
-    return _process_content_item(
-        item,
-        raw_item,
-        store_kind=store_kind,
-        source_profile_id=source_profile_id,
-        db_path=db_path,
-        deliver=deliver,
-        use_rule_dedup=use_rule_dedup,
-        reprocess_existing=reprocess_existing,
-        current_admission_status=current_admission_status,
-        current_admission_reason=current_admission_reason,
-        current_matched_families=current_matched_families,
-        production_admission=production_admission,
-        production_portfolio=production_portfolio,
-    )
+    except Exception as exc:
+        if market_review_id is not None:
+            fail_market_review(market_review_id, exc, db_path=db_path)
+        raise

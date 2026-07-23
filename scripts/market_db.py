@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from db_utils import SEEN_ITEM_LIFECYCLE_COLUMNS, connect_sqlite
@@ -58,6 +59,121 @@ CREATE TABLE IF NOT EXISTS seen_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_seen_items_first_seen ON seen_items(first_seen_at);
+
+CREATE TABLE IF NOT EXISTS market_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    source_item_id TEXT NOT NULL,
+    dedupe_key TEXT NOT NULL,
+    source_category TEXT,
+    publisher_role TEXT,
+    collector TEXT,
+    content_type TEXT NOT NULL DEFAULT 'unknown',
+    title TEXT NOT NULL DEFAULT '',
+    summary TEXT,
+    full_text TEXT,
+    url TEXT,
+    published_at TEXT,
+    first_seen_at TEXT NOT NULL,
+    symbols_json TEXT NOT NULL DEFAULT '[]',
+    themes_json TEXT NOT NULL DEFAULT '[]',
+    raw_json TEXT NOT NULL DEFAULT '{}',
+    access_note TEXT,
+    content_hash TEXT NOT NULL,
+    collection_class TEXT NOT NULL DEFAULT 'live',
+    processability_status TEXT NOT NULL DEFAULT 'pending',
+    processability_reason TEXT,
+    processing_status TEXT NOT NULL DEFAULT 'pending',
+    processing_error TEXT,
+    legacy_store_kind TEXT,
+    legacy_store_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(source, source_item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_market_items_seen ON market_items(first_seen_at);
+CREATE INDEX IF NOT EXISTS idx_market_items_source ON market_items(source, source_item_id);
+CREATE INDEX IF NOT EXISTS idx_market_items_processing ON market_items(processing_status, updated_at);
+
+CREATE TABLE IF NOT EXISTS market_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    market_item_id INTEGER NOT NULL,
+    task TEXT NOT NULL DEFAULT 'production',
+    run_key TEXT NOT NULL UNIQUE,
+    is_current INTEGER NOT NULL DEFAULT 1,
+    review_status TEXT NOT NULL,
+    admission_status TEXT NOT NULL,
+    admission_reason TEXT,
+    admission_matched_families_json TEXT NOT NULL DEFAULT '[]',
+    admission_evidence_json TEXT NOT NULL DEFAULT '[]',
+    admission_config_version TEXT,
+    admission_rule_contract_version TEXT,
+    admission_json TEXT NOT NULL DEFAULT '{}',
+    decision_action TEXT,
+    importance TEXT,
+    decision_json TEXT,
+    interpretation_json TEXT,
+    application_revision TEXT,
+    legacy_store_kind TEXT,
+    legacy_store_id TEXT,
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    FOREIGN KEY(market_item_id) REFERENCES market_items(id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_market_reviews_current
+    ON market_reviews(market_item_id, task) WHERE is_current = 1;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_market_reviews_legacy
+    ON market_reviews(legacy_store_kind, legacy_store_id)
+    WHERE legacy_store_kind IS NOT NULL AND legacy_store_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_market_reviews_created ON market_reviews(created_at);
+CREATE INDEX IF NOT EXISTS idx_market_reviews_admission ON market_reviews(admission_status, created_at);
+CREATE INDEX IF NOT EXISTS idx_market_reviews_action ON market_reviews(decision_action, created_at);
+
+CREATE TRIGGER IF NOT EXISTS trg_seen_items_market_insert
+AFTER INSERT ON seen_items
+BEGIN
+    INSERT INTO market_items (
+        source, source_item_id, dedupe_key, content_type, title, summary, full_text,
+        url, published_at, first_seen_at, content_hash, collection_class,
+        processability_status, processability_reason, processing_status,
+        processing_error, legacy_store_kind, legacy_store_id, created_at, updated_at
+    ) VALUES (
+        NEW.source, NEW.item_id, NEW.source || ':' || NEW.item_id, 'unknown',
+        NEW.title, NEW.summary, '', NEW.url, NEW.published_at, NEW.first_seen_at,
+        'seen:' || NEW.source || ':' || NEW.item_id, NEW.collection_class,
+        NEW.processability_status, NEW.processability_reason, NEW.processing_status,
+        NEW.processing_error, 'seen_items', NEW.source || ':' || NEW.item_id,
+        NEW.first_seen_at, COALESCE(NEW.lifecycle_updated_at, NEW.first_seen_at)
+    )
+    ON CONFLICT(source, source_item_id) DO UPDATE SET
+        title = excluded.title, summary = excluded.summary, url = excluded.url,
+        published_at = excluded.published_at,
+        collection_class = excluded.collection_class,
+        processability_status = excluded.processability_status,
+        processability_reason = excluded.processability_reason,
+        processing_status = excluded.processing_status,
+        processing_error = excluded.processing_error,
+        updated_at = excluded.updated_at;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_seen_items_market_update
+AFTER UPDATE ON seen_items
+BEGIN
+    UPDATE market_items SET
+        title = NEW.title,
+        summary = NEW.summary,
+        url = NEW.url,
+        published_at = NEW.published_at,
+        collection_class = NEW.collection_class,
+        processability_status = NEW.processability_status,
+        processability_reason = NEW.processability_reason,
+        processing_status = NEW.processing_status,
+        processing_error = NEW.processing_error,
+        updated_at = COALESCE(NEW.lifecycle_updated_at, NEW.first_seen_at)
+    WHERE source = NEW.source AND source_item_id = NEW.item_id;
+END;
 
 CREATE TABLE IF NOT EXISTS seen_sources (
     source TEXT PRIMARY KEY,
@@ -132,12 +248,18 @@ CREATE TABLE IF NOT EXISTS event_analyses (
 CREATE TABLE IF NOT EXISTS deliveries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id INTEGER,
+    market_item_id INTEGER,
+    market_review_id INTEGER,
     channel TEXT NOT NULL,
     status TEXT NOT NULL,
+    decision_action TEXT,
+    attempted_at TEXT,
     sent_at TEXT,
     error TEXT,
     payload_json TEXT,
-    FOREIGN KEY(event_id) REFERENCES events(id)
+    FOREIGN KEY(event_id) REFERENCES events(id),
+    FOREIGN KEY(market_item_id) REFERENCES market_items(id),
+    FOREIGN KEY(market_review_id) REFERENCES market_reviews(id)
 );
 
 CREATE TABLE IF NOT EXISTS market_feedback (
@@ -568,6 +690,14 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     if db_table_exists(conn, "official_news_reviews"):
         for column, definition in official_review_columns.items():
             add_column_if_missing(conn, "official_news_reviews", column, definition)
+    delivery_columns = {
+        "market_item_id": "INTEGER",
+        "market_review_id": "INTEGER",
+        "decision_action": "TEXT",
+        "attempted_at": "TEXT",
+    }
+    for column, definition in delivery_columns.items():
+        add_column_if_missing(conn, "deliveries", column, definition)
     add_column_if_missing(conn, "signal_reviews", "target_id", "INTEGER")
     add_column_if_missing(conn, "signal_reviews", "symbol", "TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_seen_items_first_seen ON seen_items(first_seen_at)")
@@ -601,6 +731,65 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_market_feedback_received ON market_feedback(received_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_market_feedback_label ON market_feedback(label, received_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_market_items_seen ON market_items(first_seen_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_market_items_source ON market_items(source, source_item_id)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_market_items_processing "
+        "ON market_items(processing_status, updated_at)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_market_reviews_current "
+        "ON market_reviews(market_item_id, task) WHERE is_current = 1"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_market_reviews_legacy "
+        "ON market_reviews(legacy_store_kind, legacy_store_id) "
+        "WHERE legacy_store_kind IS NOT NULL AND legacy_store_id IS NOT NULL"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_market_reviews_created ON market_reviews(created_at)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_market_reviews_admission "
+        "ON market_reviews(admission_status, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_market_reviews_action "
+        "ON market_reviews(decision_action, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_deliveries_market_item "
+        "ON deliveries(market_item_id, attempted_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_deliveries_market_review "
+        "ON deliveries(market_review_id, attempted_at)"
+    )
+    marker = conn.execute(
+        "SELECT 1 FROM source_state WHERE source = 'market_storage_backfill_v1' LIMIT 1"
+    ).fetchone()
+    if marker is None:
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO market_items (
+                source, source_item_id, dedupe_key, content_type, title, summary,
+                full_text, url, published_at, first_seen_at, content_hash,
+                collection_class, processability_status, processability_reason,
+                processing_status, processing_error, legacy_store_kind,
+                legacy_store_id, created_at, updated_at
+            )
+            SELECT source, item_id, source || ':' || item_id, 'unknown', title,
+                   summary, '', url, published_at, first_seen_at,
+                   'seen:' || source || ':' || item_id, collection_class,
+                   processability_status, processability_reason, processing_status,
+                   processing_error, 'seen_items', source || ':' || item_id,
+                   first_seen_at, COALESCE(lifecycle_updated_at, first_seen_at)
+            FROM seen_items
+            """
+        )
+        conn.execute(
+            "INSERT INTO source_state(source, state_json, updated_at) VALUES (?, ?, ?)",
+            ("market_storage_backfill_v1", '{"status":"completed"}', now),
+        )
 
 
 def init_db(path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:

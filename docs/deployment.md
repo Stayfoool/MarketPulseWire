@@ -94,6 +94,15 @@ deployed_at=<UTC timestamp>
 deployed_by=deploy_remote.sh
 ```
 
+`surveil-db-init.service` applies additive canonical-storage migrations before
+collectors start. The first migration creates `market_items` and
+`market_reviews`, extends `deliveries`, and copies existing `seen_items`
+identities once. It does not delete or rewrite legacy review/event tables and
+does not infer missing historical full text, admission evidence or decisions.
+Back up `data/surveil.sqlite3` before deploying a revision that first contains
+this migration, then verify `PRAGMA quick_check`, canonical row counts and
+foreign-key references under the `surveil` service account.
+
 Use it to verify whether your Mac, GitHub, and server are aligned:
 
 ```bash
