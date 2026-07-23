@@ -35,7 +35,7 @@ SYSTEM_PROMPT = """你是投资研报第一页预览的信息抽取器。
 输出必须简短，重点提取：
 - 主要观点 / thesis
 - 看多、看空、中性或混合
-- 目标价、评级、上调/下调、报告日期、机构、涉及公司/行业/环节
+- 目标价、历史收盘价及其日期、评级、上调/下调、报告日期、机构、涉及公司/行业/环节
 - 如果图片不可读或信息不足，明确写 unknown / 信息不足。
 
 只输出 JSON，不要 Markdown。"""
@@ -52,6 +52,8 @@ USER_PROMPT = """请提取这份价值目录研报可见第一页预览中的关
   "report_date": "YYYY-MM-DD 或 unknown",
   "rating": "评级或 unknown",
   "target_price": "目标价或 unknown",
+  "reference_price": "报告明确标注的历史收盘价或 unknown",
+  "reference_price_date": "上述历史收盘价的 YYYY-MM-DD 日期或 unknown",
   "targets": ["公司/股票/行业/环节，最多5个"],
   "key_points": ["第一页可见要点1", "第一页可见要点2", "第一页可见要点3"],
   "preview_basis": "visible_first_page_only",
@@ -523,6 +525,8 @@ def normalize_facts(
         "report_date": str(parsed.get("report_date") or meta.get("report_date") or "unknown"),
         "rating": str(parsed.get("rating") or "unknown"),
         "target_price": str(parsed.get("target_price") or meta.get("target_price") or "unknown"),
+        "reference_price": str(parsed.get("reference_price") or "unknown"),
+        "reference_price_date": str(parsed.get("reference_price_date") or "unknown"),
         "targets": [compact(target, 80) for target in targets if compact(target, 80)][:5],
         "key_points": [compact(point, 140) for point in key_points if compact(point, 140)][:3],
         "preview_basis": str(parsed.get("preview_basis") or "visible_first_page_only"),
@@ -553,6 +557,8 @@ def fallback_facts(
         "report_date": meta.get("report_date") or "unknown",
         "rating": "unknown",
         "target_price": meta.get("target_price") or "unknown",
+        "reference_price": "unknown",
+        "reference_price_date": "unknown",
         "targets": [],
         "key_points": [],
         "preview_basis": "visible_first_page_only",
@@ -590,7 +596,16 @@ def preview_lines(facts: dict[str, Any]) -> list[str]:
     elif status:
         lines.append(f"第一页提取：失败/不可用（{facts.get('error') or status}）")
     meta_parts = []
-    for label, key in (("机构", "institution"), ("日期", "report_date"), ("方向", "stance"), ("研报动作", "research_action"), ("评级", "rating"), ("目标价", "target_price")):
+    for label, key in (
+        ("机构", "institution"),
+        ("日期", "report_date"),
+        ("方向", "stance"),
+        ("研报动作", "research_action"),
+        ("评级", "rating"),
+        ("目标价", "target_price"),
+        ("历史收盘价", "reference_price"),
+        ("收盘价日期", "reference_price_date"),
+    ):
         value = str(facts.get(key) or "").strip()
         if value and value.lower() != "unknown":
             meta_parts.append(f"{label}：{value}")

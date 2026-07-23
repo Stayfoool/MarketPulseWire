@@ -583,8 +583,12 @@ def test_preview_ocr_text_path_uses_text_llm_without_vision() -> None:
         value_directory_preview.extract_ocr_text = lambda _url: {
             "engine": "paddleocr",
             "status": "ok",
-            "text": "Action: Maintain Buy; raise TP to CNY 1,325, implying 20.6% upside\nRating Buy\nTarget price CNY 1,325.00",
-            "line_count": 3,
+            "text": (
+                "Action: Maintain Buy; raise TP to CNY 1,325, implying 20.6% upside\n"
+                "Rating Buy\nTarget price CNY 1,325.00\n"
+                "Historical share-price close CNY 1,098.67 on 2026-07-03"
+            ),
+            "line_count": 4,
         }
 
         def fake_text_llm(_item, _preview, *, ocr_text=""):
@@ -598,6 +602,8 @@ def test_preview_ocr_text_path_uses_text_llm_without_vision() -> None:
                     "report_date": "2026-07-06",
                     "rating": "Buy",
                     "target_price": "CNY 1,325.00",
+                    "reference_price": "CNY 1,098.67",
+                    "reference_price_date": "2026-07-03",
                     "targets": ["中际旭创", "2.4T/3.2T 光模块", "NPO/CPO"],
                     "key_points": ["维持 Buy", "目标价上调至 CNY 1,325", "隐含 20.6% 上行空间"],
                     "preview_basis": "visible_first_page_ocr",
@@ -627,10 +633,16 @@ def test_preview_ocr_text_path_uses_text_llm_without_vision() -> None:
     assert facts["status"] == "ok"
     assert facts["model"] == "deepseek-v4-pro"
     assert facts["target_price"] == "CNY 1,325.00"
+    assert facts["reference_price"] == "CNY 1,098.67"
+    assert facts["reference_price_date"] == "2026-07-03"
     assert facts["research_action"] == "buy"
     assert "action" not in facts
     assert facts["ocr"]["engine"] == "paddleocr"
     assert facts["preview_basis"] == "visible_first_page_ocr"
+    enriched = apply_preview_to_item(item, preview, facts)
+    assert "目标价：CNY 1,325.00" in enriched["full_text"]
+    assert "历史收盘价：CNY 1,098.67" in enriched["full_text"]
+    assert "收盘价日期：2026-07-03" in enriched["full_text"]
 
 
 def test_preview_ocr_failure_falls_back_without_blocking() -> None:
@@ -671,6 +683,8 @@ def test_preview_ocr_failure_falls_back_without_blocking() -> None:
 
     assert facts["status"] == "failed"
     assert facts["model"] == "preview_failed"
+    assert facts["reference_price"] == "unknown"
+    assert facts["reference_price_date"] == "unknown"
     assert facts["ocr"]["status"] == "too_short"
     assert "OCR 文字过短" in facts["error"]
 

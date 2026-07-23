@@ -205,6 +205,22 @@ The ordered `investment_bank_rating_target_direct_holding` rule requires one loc
 
 The report-only new rule core applies trusted-institution rating, target-price and coverage changes only to the holding rule family. It applies explicit buy/sell/long/short/add/reduce/overweight/underweight allocation changes and complete two-sided rotations only to the holding and semiconductor/AI rule families. Macro-data releases, international-bank Fed-path forecasts/revisions and trade-policy changes continue through their dedicated content rules; an allocation verb plus a macro/Fed/trade term cannot promote those families or replace their evidence requirements.
 
+For a Value Directory first-page preview, the existing bounded extraction now
+also exposes an explicitly labeled historical share-price close and its date as
+`reference_price` and `reference_price_date`; it does not expose the full OCR
+page to the strength-decision model. The existing report-only
+`holding_rating_revision` and `investment_bank_allocation_change` rules let the
+model calculate `target price / report historical close - 1`. A result at least
+30% or at most -30% may select `push`; an absolute move below 30% remains
+ordinary unless another reviewed condition matches. The evidence must identify
+the trusted institution, stock, current target price, historical close and
+close date. Ambiguous labels, prior or consensus targets, 52-week ranges,
+external live prices, mismatched currencies or share classes, unclear corporate
+actions, and a material rating/direction conflict require `uncertain`. The
+shared LLM system prompt is unchanged, no deterministic target-gap calculator
+is added, and this result remains a report-only candidate without production
+delivery authority.
+
 Within the same report-only `fed_policy` decision group, a separately reported material view from a configured trusted international bank's explicitly identified chief executive or chair can use the existing `fed_policy_material_exception`. It requires local leader attribution and at least two independently supported signals across an explicit stocks/long-Treasuries stance, a directional or quantified rate/yield view, and a material cross-asset risk judgment. A bank name, analyst comment, generic leadership interview or single-asset valuation view cannot create `push`; the active production international-bank/Fed wrappers are unchanged.
 
 The Rule Center exposes execution semantics from the runtime registry. Rules inside `first_matching_push_rule()` use `ordered_first_match` and retain an editable priority. Fed-path, trade-friction, attributed-research, industry-hardline and AI credit-risk rules are evaluated independently in `decision_engine`, use `parallel_merge`, and expose no priority setting; multiple push-eligible hits are combined rather than suppressing one another.
