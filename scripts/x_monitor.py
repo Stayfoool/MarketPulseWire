@@ -16,6 +16,7 @@ from db_utils import connect_sqlite, retry_on_locked
 from feishu import send_card
 from link_enrichment import enrich_post_links
 from x_check import configured_x_username, load_env, post_text, request_with_available_tokens
+from xquik_export import load_xquik_export_posts
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -187,6 +188,10 @@ def connect_db() -> sqlite3.Connection:
 
 
 def fetch_recent_posts(username: str, max_results: int) -> list[dict]:
+    export_path = os.getenv("XQUIK_EXPORT_PATH", "").strip()
+    if export_path:
+        return load_xquik_export_posts(Path(export_path), username=username, limit=max_results)
+
     user = request_with_available_tokens(
         f"/users/by/username/{username}",
         {"user.fields": "id,name,username,verified"},
