@@ -265,7 +265,7 @@ def _event_review_placeholders(conn: sqlite3.Connection, *, apply: bool) -> dict
     return mapped
 
 
-def migrate_legacy_results(conn: sqlite3.Connection, *, apply: bool) -> MigrationStats:
+def _migrate_legacy_results(conn: sqlite3.Connection, *, apply: bool) -> MigrationStats:
     conn.row_factory = sqlite3.Row
     stats = MigrationStats()
     placeholder_reviews = _event_review_placeholders(conn, apply=apply)
@@ -547,7 +547,19 @@ def migrate_legacy_results(conn: sqlite3.Connection, *, apply: bool) -> Migratio
             """,
             (MIGRATION_VERSION, json_dumps(stats.to_dict()), utc_now()),
         )
-        conn.commit()
+    return stats
+
+
+def migrate_legacy_results(conn: sqlite3.Connection, *, apply: bool) -> MigrationStats:
+    if not apply:
+        return _migrate_legacy_results(conn, apply=False)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        stats = _migrate_legacy_results(conn, apply=True)
+    except BaseException:
+        conn.rollback()
+        raise
+    conn.commit()
     return stats
 
 
