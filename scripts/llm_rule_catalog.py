@@ -13,8 +13,8 @@ from typing import Mapping
 from market_item import RuleFamily
 
 
-RULE_MATRIX_VERSION = "llm-reviewed-rule-matrix-v6-20260723"
-CATALOG_VERSION = "llm-rule-catalog-v7"
+RULE_MATRIX_VERSION = "llm-reviewed-rule-matrix-v7-20260723"
+CATALOG_VERSION = "llm-rule-catalog-v8"
 MODEL_ACTIONS = ("push", "daily", "archive")
 
 
@@ -266,12 +266,26 @@ RULES: tuple[LLMRuleDefinition, ...] = (
     _rule(
         "fed_path_change",
         "fed_policy",
-        "Fed 利率路径变化",
-        push="正式决议、点阵图、官员或受信投行相对既有路径明确改变方向、次数、时点、累计基点或终端利率，或者出现意外政策决定。",
-        daily="只有当前路径预测、无法证明相对上次修订，或者决议符合预期。",
-        archive="只是历史路径回顾。",
-        required=("Fed 正式主体或受信投行", "利率路径对象", "当前路径或相对上次变化", "时间"),
-        exclusions=("历史回顾", "其他央行路径", "没有路径证据"),
+        "美联储重大政策路径变化",
+        push=(
+            "美联储正式作出重大政策决定或改变利率、QE/QT、资产负债表或操作框架；"
+            "或者二次报道把具名专业机构和具名专业人士局部绑定到当前判断，且明确修订利率路径，"
+            "或对资产负债表给出重大方向并提供时间、量级或操作机制之一。"
+            "机构自身可识别的原始报告可用发布主体替代个人姓名；资产负债表判断不要求证明此前预测修订。"
+        ),
+        daily="其他当前预测、方向性观点、普通政策评论或符合预期的决定。",
+        archive="历史回顾、泛政策传导或没有具体政策事实的内容。",
+        required=(
+            "美联储政策对象",
+            "正式主体，或具名机构与具名专业人士/可识别原始报告",
+            "利率路径修订，或资产负债表重大方向",
+            "时间、量级或操作机制",
+        ),
+        exclusions=(
+            "不得把预测、可能或考虑改写为正式决定",
+            "仅有具名主体但没有重大政策事实",
+            "其他央行、历史回顾或没有政策路径证据",
+        ),
     ),
     _rule(
         "fed_official_stance_change",
@@ -300,7 +314,7 @@ RULES: tuple[LLMRuleDefinition, ...] = (
         daily="路径、立场或决议没有变化，或者只有当前预测。",
         archive="泛政策传导、行情模板和没有路径证据的二次综述。",
         required=("Fed 政策对象", "当前内容", "是否发生路径或立场变化"),
-        exclusions=("不能覆盖已有充分证据的路径或立场变化规则",),
+        exclusions=("不能覆盖已有充分证据的美联储重大政策路径变化或立场变化规则",),
     ),
     _rule(
         "trade_escalation",
