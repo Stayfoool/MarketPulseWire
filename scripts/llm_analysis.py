@@ -390,7 +390,9 @@ def call_chat_completion_raw_with_prompts_hard_deadline(
     async def run() -> tuple[dict[str, Any], int]:
         attempts = retry_count() + 1
         last_error: Exception | None = None
-        async with httpx.AsyncClient(timeout=None) as client:
+        # Collector proxy variables belong to source fetching. The configured
+        # LLM provider is reached directly, matching the existing LLM client.
+        async with httpx.AsyncClient(timeout=None, trust_env=False) as client:
             for attempt in range(attempts):
                 remaining = deadline_monotonic - time.monotonic()
                 if remaining <= 0:
