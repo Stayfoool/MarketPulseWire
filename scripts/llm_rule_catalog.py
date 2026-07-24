@@ -13,8 +13,8 @@ from typing import Mapping
 from market_item import RuleFamily
 
 
-RULE_MATRIX_VERSION = "llm-reviewed-rule-matrix-v7-20260723"
-CATALOG_VERSION = "llm-rule-catalog-v8"
+RULE_MATRIX_VERSION = "llm-reviewed-rule-matrix-v8-20260724"
+CATALOG_VERSION = "llm-rule-catalog-v9"
 MODEL_ACTIONS = ("push", "daily", "archive")
 
 
@@ -128,15 +128,6 @@ RULES: tuple[LLMRuleDefinition, ...] = (
         exclusions=("程序性或例行信息", "无约束意向", "历史事实", "未经确认的供应关系"),
     ),
     _rule(
-        "holding_ordinary",
-        "holding",
-        "持仓普通相关内容",
-        daily="直接持仓普通相关新闻，或者已准入且有实际新进展但未达到其他持仓 push 规则。",
-        archive="关联内容没有实质变化，或者只是例行公告、行情模板、未来财报日期和泛观点。",
-        required=("持仓或已配置关联主体", "是否存在当前新进展"),
-        exclusions=("不能覆盖已有充分证据的更高 action 规则",),
-    ),
-    _rule(
         "semiconductor_price_supply_change",
         "semiconductor_ai",
         "半导体或 AI 产业价格和供需变化",
@@ -226,15 +217,6 @@ RULES: tuple[LLMRuleDefinition, ...] = (
         ),
     ),
     _rule(
-        "semiconductor_ordinary",
-        "semiconductor_ai",
-        "半导体或 AI 普通相关内容",
-        daily="有实际新进展但未达到相应 push 规则，或者是其他新的市场规模和增长路径预测。",
-        archive="泛行业观点、教程、宣传、行情模板、没有实质变化或纯历史回顾。",
-        required=("半导体或 AI 产业对象", "是否存在当前新进展"),
-        exclusions=("不能覆盖已有充分证据的更高 action 规则",),
-    ),
-    _rule(
         "macro_surprise",
         "macro_data",
         "美国核心宏观数据相对预期偏离",
@@ -253,15 +235,6 @@ RULES: tuple[LLMRuleDefinition, ...] = (
         archive="行情无法归因于该数据，或者只是一般综述。",
         required=("美国次级指标", "当前发布和预期偏离", "政策含义或可归因市场反应"),
         exclusions=("无法归因行情", "一般综述", "没有当前发布"),
-    ),
-    _rule(
-        "macro_release_expected",
-        "macro_data",
-        "宏观数据符合预期或尚未发布",
-        daily="数据符合预期、尚未发布，或者证据不足以证明偏离。",
-        archive="二次综述、行情模板，或者只顺带提及数据。",
-        required=("美国宏观指标", "发布状态", "是否存在当前新信息"),
-        exclusions=("不能覆盖已有充分证据的宏观 surprise 或 reaction 规则",),
     ),
     _rule(
         "fed_path_change",
@@ -308,15 +281,6 @@ RULES: tuple[LLMRuleDefinition, ...] = (
         exclusions=("单一资产观点", "泛泛风险表述", "无法验证归因"),
     ),
     _rule(
-        "fed_path_unchanged",
-        "fed_policy",
-        "Fed 路径或立场未发生变化",
-        daily="路径、立场或决议没有变化，或者只有当前预测。",
-        archive="泛政策传导、行情模板和没有路径证据的二次综述。",
-        required=("Fed 政策对象", "当前内容", "是否发生路径或立场变化"),
-        exclusions=("不能覆盖已有充分证据的美联储重大政策路径变化或立场变化规则",),
-    ),
-    _rule(
         "trade_escalation",
         "trade_policy",
         "官方贸易政策升级",
@@ -334,15 +298,6 @@ RULES: tuple[LLMRuleDefinition, ...] = (
         archive="只有外交表态，没有实质政策变化。",
         required=("目标贸易参与方", "政策工具", "缓和或撤销动作", "当前状态"),
         exclusions=("纯外交表态", "历史回顾", "无法证明目标贸易范围"),
-    ),
-    _rule(
-        "trade_distant_or_unproven",
-        "trade_policy",
-        "贸易政策产业距离或证据不足",
-        daily="与关注产业有关，但证据尚不足以证明正式升级。",
-        archive="与关注产业距离较远、无法证明目标范围、历史回顾或者无关官方内容。",
-        required=("贸易政策对象", "与关注产业的关系", "当前证据充分性"),
-        exclusions=("不能覆盖已有充分证据的贸易升级规则",),
     ),
 )
 

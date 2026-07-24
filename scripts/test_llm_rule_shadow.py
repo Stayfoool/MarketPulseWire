@@ -175,7 +175,7 @@ def test_excluded_item_does_not_call_model() -> None:
     assert comparison["candidate"]["action"] is None
 
 
-def test_all_unmatched_response_retries_once_with_ordinary_rule() -> None:
+def test_all_unmatched_response_completes_as_archive_without_retry() -> None:
     calls = []
     all_unmatched = json.dumps(
         {
@@ -186,23 +186,55 @@ def test_all_unmatched_response_retries_once_with_ordinary_rule() -> None:
         },
         ensure_ascii=False,
     )
-    ordinary = _response("semiconductor_ai", "semiconductor_ordinary", "archive")
-
     def caller(prompt):
         calls.append(prompt)
-        return _model_response(all_unmatched if len(calls) == 1 else ordinary)
+        return _model_response(all_unmatched)
 
     comparison = _compare(_item(), caller)
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert "validation_feedback" not in calls[0].user_payload
-    assert "validation_feedback" in calls[1].user_payload
     candidate = comparison["candidate"]
     assert comparison["comparable"] is True
     assert candidate["evaluation_status"] == "completed"
     assert candidate["action"] == "archive"
-    assert candidate["model_calls"] == 2
-    assert candidate["attempts"] == 2
-    assert candidate["usage"]["total_tokens"] == 300
+    assert candidate["model_calls"] == 1
+    assert candidate["attempts"] == 1
+    assert candidate["usage"]["total_tokens"] == 150
+
+
+def test_no_match_with_uncertain_does_not_retry_or_create_candidate() -> None:
+    calls = []
+    rules = rules_for_families(("semiconductor_ai",))
+    response = json.dumps(
+        {
+            "rule_results": [
+                (
+                    {
+                        "rule_id": rule.rule_id,
+                        "judgement": "uncertain",
+                        "counterevidence_ids": ["B1"],
+                        "reason": "决定 action 所需事实仍有冲突。",
+                    }
+                    if rule.rule_id == "semiconductor_material_change"
+                    else {"rule_id": rule.rule_id, "judgement": "not_matched"}
+                )
+                for rule in rules
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+    def caller(prompt):
+        calls.append(prompt)
+        return _model_response(response)
+
+    comparison = _compare(_item(), caller)
+    assert len(calls) == 1
+    assert comparison["comparable"] is False
+    candidate = comparison["candidate"]
+    assert candidate["evaluation_status"] == "uncertain"
+    assert candidate["action"] is None
+    assert candidate["model_calls"] == 1
 
 
 def test_company_disclosure_receives_only_holding_rules_and_minimal_matched_context() -> None:
@@ -221,7 +253,7 @@ def test_company_disclosure_receives_only_holding_rules_and_minimal_matched_cont
 
     def caller(prompt):
         captured["prompt"] = prompt
-        return _model_response(_response("holding", "holding_ordinary", "daily"))
+        return _model_response(_response("holding", "holding_material_event", "daily"))
 
     comparison = _compare(
         _item(
@@ -250,7 +282,8 @@ def main() -> int:
     test_completed_comparison_records_usage_and_private_model_audit()
     test_invalid_output_model_failure_and_missing_body_behavior()
     test_excluded_item_does_not_call_model()
-    test_all_unmatched_response_retries_once_with_ordinary_rule()
+    test_all_unmatched_response_completes_as_archive_without_retry()
+    test_no_match_with_uncertain_does_not_retry_or_create_candidate()
     test_company_disclosure_receives_only_holding_rules_and_minimal_matched_context()
     print("LLM rule shadow checks passed")
     return 0

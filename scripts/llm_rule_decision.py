@@ -23,12 +23,19 @@ from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem, R
 from rule_core_v1 import apply_source_admission_boundary, source_allowed_families
 
 
-SCHEMA_VERSION = "llm-rule-match-v5"
-PROMPT_VERSION = "llm-rule-match-prompt-v8"
-ENGINE_VERSION = "llm-rule-decision-v7"
+SCHEMA_VERSION = "llm-rule-match-v6"
+PROMPT_VERSION = "llm-rule-match-prompt-v9"
+ENGINE_VERSION = "llm-rule-decision-v8"
 ACTION_RANK = {"archive": 1, "daily": 2, "push": 3}
 JUDGEMENTS = {"matched", "not_matched", "uncertain"}
-FAILURE_STATUSES = {"insufficient_input", "model_unavailable", "invalid_output", "evidence_invalid", "conflict"}
+FAILURE_STATUSES = {
+    "insufficient_input",
+    "model_unavailable",
+    "invalid_output",
+    "evidence_invalid",
+    "conflict",
+    "uncertain",
+}
 MATCHED_CONTEXT_FIELDS = {
     "holding_subjects",
     "holding_symbols",
@@ -40,19 +47,9 @@ MATCHED_CONTEXT_FIELDS = {
 MAX_INPUT_CHARS = 120_000
 MAX_RULE_ASSESSMENTS = 64
 MAX_EVIDENCE_REFS_PER_LIST = 3
-MAX_TOTAL_EVIDENCE_REFS = 8
 MAX_EVIDENCE_SEGMENT_CHARS = 300
-MAX_TOTAL_EVIDENCE_CHARS = MAX_TOTAL_EVIDENCE_REFS * MAX_EVIDENCE_SEGMENT_CHARS
 MAX_SHORT_TEXT_CHARS = 800
 MAX_BODY_INPUT_CHARS = 3_000
-NO_MATCHED_RULE_ERROR = "at least one applicable rule must be matched"
-ORDINARY_RULE_IDS = {
-    "holding": "holding_ordinary",
-    "semiconductor_ai": "semiconductor_ordinary",
-    "macro_data": "macro_release_expected",
-    "fed_policy": "fed_path_unchanged",
-    "trade_policy": "trade_distant_or_unproven",
-}
 
 TOP_LEVEL_FIELDS = {"rule_results"}
 COMMON_RESULT_FIELDS = {"rule_id", "judgement"}
@@ -332,21 +329,13 @@ def build_llm_rule_prompt(
         "标题、摘要和正文同为原文证据，可以组合判断；必须保留传出、考虑、计划、测试等限定，"
         "不得把预期改写为已执行事实。只有决定action所需的对象、动作、量级或阶段缺失、被截断或"
         "相互冲突时才返回uncertain，不得仅因尚未执行而返回uncertain。"
-        "matched不得引用以省略号结尾的未完整句子。"
         "matched 的证据和 uncertain 的反证必须引用 article_segments 中的原文编号。"
-        f"每条规则最多引用{MAX_EVIDENCE_REFS_PER_LIST}个编号，所有规则合计最多引用"
-        f"{MAX_TOTAL_EVIDENCE_REFS}个编号；同一规则内不得重复引用同一编号。"
-        "文章已经通过范围准入；若没有更高程度规则命中，必须用对应规则组的普通程度规则"
-        "依据原文选择 daily 或 archive，不能把全部规则返回 not_matched。"
+        f"每条规则最多引用{MAX_EVIDENCE_REFS_PER_LIST}个编号，同一规则内不得重复引用同一编号。"
+        "文章已经通过范围准入；只匹配具体程度规则。所有规则均为not_matched时，代码将候选action"
+        "归为archive；没有matched但存在uncertain时不生成候选action。"
     )
-    ordinary_rule_ids = [
-        ORDINARY_RULE_IDS[family]
-        for family in dict.fromkeys(rule.family for rule in rules)
-        if ORDINARY_RULE_IDS.get(family) in {rule.rule_id for rule in rules}
-    ]
     payload = {
         "rules": [rule.to_prompt_dict() for rule in rules],
-        "ordinary_rule_ids": ordinary_rule_ids,
         "matched_context": context_payload,
         "article_input": {
             "published_at": item.published_at,
@@ -381,9 +370,8 @@ def build_llm_rule_prompt(
                 "reason": "简短说明",
             },
             "policy": (
-                "至少一条 matched；没有更高程度规则命中时，必须用 ordinary_rule_ids 中对应规则"
-                "依据原文选择 daily 或 archive；代码按 push > daily > archive 汇总最终 action。"
-                f"所有 evidence_ids 和 counterevidence_ids 合计不得超过{MAX_TOTAL_EVIDENCE_REFS}个。"
+                "有matched时代码按 push > daily > archive 汇总最终action；全部not_matched时代码"
+                "使用archive；没有matched但存在uncertain时不生成候选action。"
             ),
         },
     }
@@ -423,7 +411,7 @@ def build_llm_rule_repair_prompt(
     payload["validation_feedback"] = list(validation_errors)
     payload["correction_instruction"] = (
         "只修正上述结构或原文编号错误，不得改变提供的规则、文章内容和准入范围。"
-        "每个 rule_id 仍须恰好返回一次；没有更高程度规则命中时，必须匹配普通程度规则。"
+        "每个 rule_id 仍须恰好返回一次。"
     )
     system_prompt = (
         f"{prompt.system_prompt} 这是唯一一次格式和原文编号修正。"
@@ -479,8 +467,6 @@ def _evidence_ref_list(
     segments_by_id: Mapping[str, Mapping[str, str]],
     structure_errors: list[str],
     evidence_errors: list[str],
-    *,
-    reject_incomplete: bool = False,
 ) -> tuple[list[dict[str, str]], int, int]:
     if not isinstance(value, list):
         structure_errors.append(f"{path} must be an array")
@@ -505,11 +491,6 @@ def _evidence_ref_list(
             evidence_errors.append(f"{path}[{index}] references unknown evidence id {evidence_id}")
             continue
         quote = str(segment["text"])
-        incomplete_text = quote.rstrip(" \t\r\n\"'”’）》】")
-        if reject_incomplete and incomplete_text.endswith(("...", "…", "．．．", "&hellip;")):
-            evidence_errors.append(
-                f"{path}[{index}] references incomplete or truncated evidence segment {evidence_id}"
-            )
         total_chars += len(quote)
         total_refs += 1
         result.append(
@@ -569,7 +550,6 @@ def _assessment_payload(
             segments_by_id,
             structure_errors,
             evidence_errors,
-            reject_incomplete=True,
         )
         explanation = _bounded_string(
             payload.get("reason"), f"{path}.reason", structure_errors, allow_empty=False
@@ -636,6 +616,8 @@ def _candidate_decision(
     matched = [assessment for assessment in assessments if assessment["judgement"] == "matched"]
     winners = [assessment for assessment in matched if assessment["selected_action"] == action]
     reason = " ".join(str(assessment["explanation"]) for assessment in winners)
+    if not matched and action == "archive":
+        reason = "未命中具体程度规则，候选 action 按审定汇总策略归为 archive。"
 
     def rule_hit(assessment: Mapping[str, Any]) -> dict[str, Any]:
         rule = rules_by_id[str(assessment["rule_id"])]
@@ -667,7 +649,8 @@ def _candidate_decision(
             "input_text_scope": input_text_scope,
             "admission": admission.to_dict(),
             "matched_rule_ids": [assessment["rule_id"] for assessment in matched],
-            "semantic_action_selected_by_model": True,
+            "semantic_action_selected_by_model": bool(matched),
+            "default_archive_no_match": not matched and action == "archive",
             "production_authority": False,
         },
     )
@@ -748,15 +731,6 @@ def validate_llm_rule_response(
             assessments.append(assessment)
             evidence_chars += used_chars
             evidence_refs += used_refs
-    if evidence_refs > MAX_TOTAL_EVIDENCE_REFS:
-        structure_errors.append(
-            f"total evidence references exceed {MAX_TOTAL_EVIDENCE_REFS}: {evidence_refs}"
-        )
-    if evidence_chars > MAX_TOTAL_EVIDENCE_CHARS:
-        structure_errors.append(
-            f"resolved evidence exceeds {MAX_TOTAL_EVIDENCE_CHARS} characters: {evidence_chars}"
-        )
-
     returned_ids = [assessment["rule_id"] for assessment in assessments]
     duplicate_ids = sorted({rule_id for rule_id in returned_ids if returned_ids.count(rule_id) > 1})
     if duplicate_ids:
@@ -773,9 +747,8 @@ def validate_llm_rule_response(
         for assessment in assessments
         if assessment["judgement"] == "matched" and assessment["selected_action"] in MODEL_ACTIONS
     ]
-    if not matched_actions:
-        structure_errors.append(NO_MATCHED_RULE_ERROR)
-    final_action = max(matched_actions, key=ACTION_RANK.__getitem__) if matched_actions else None
+    has_uncertain = any(assessment["judgement"] == "uncertain" for assessment in assessments)
+    final_action = max(matched_actions, key=ACTION_RANK.__getitem__) if matched_actions else "archive"
 
     if structure_errors:
         return LLMRuleCandidateResult.failure(
@@ -805,6 +778,19 @@ def validate_llm_rule_response(
         return LLMRuleCandidateResult.failure(
             "conflict",
             conflict_errors,
+            item_digest=digest,
+            input_text_scope=input_text_scope,
+            applicable_families=families,
+            model=model,
+            rule_config_version=admission.config_version,
+            evidence_reference_count=evidence_refs,
+            evidence_character_count=evidence_chars,
+        )
+
+    if not matched_actions and has_uncertain:
+        return LLMRuleCandidateResult.failure(
+            "uncertain",
+            ["no specific rule matched and at least one rule remains uncertain"],
             item_digest=digest,
             input_text_scope=input_text_scope,
             applicable_families=families,

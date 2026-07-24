@@ -1320,7 +1320,8 @@ function ruleShadowEvaluationStatusLabel(status) {
     model_unavailable: '大模型不可用',
     invalid_output: '大模型输出无效',
     evidence_invalid: '原文证据校验失败',
-    conflict: '判断结果冲突'
+    conflict: '判断结果冲突',
+    uncertain: '判断不确定'
   }[status] || '其他无法比较';
 }
 
@@ -1463,7 +1464,7 @@ function renderRuleShadowRows() {
     ) &&
     ruleShadowFilterMatches(
       evaluationStatuses,
-      ['completed', 'not_admitted', 'insufficient_input', 'model_unavailable', 'invalid_output', 'evidence_invalid', 'conflict'].includes(item.evaluation_status || 'unknown')
+      ['completed', 'not_admitted', 'insufficient_input', 'model_unavailable', 'invalid_output', 'evidence_invalid', 'conflict', 'uncertain'].includes(item.evaluation_status || 'unknown')
         ? (item.evaluation_status || 'unknown')
         : 'unknown'
     )
