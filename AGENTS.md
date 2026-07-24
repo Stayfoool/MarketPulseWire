@@ -1,6 +1,7 @@
 ## 文档职责
 
 - `AGENTS.md` 是长期工程规范的唯一文档真源，只保存稳定、可执行的项目红线。
+- `AGENTS.md` 不记录可调整的生产业务口径，包括具体范围准入项、程度决策项、关键词或名单、规则组合关系和阈值；这些内容以生产私有配置、Web 面板、代码和测试为真源。用户要求写入的内容若与文档职责冲突，必须先指出冲突并在确认后写入正确载体，不得机械写入 `AGENTS.md`。
 - `docs/architecture-flow.md` 只描述当前代码和生产结构，不制定原则。若文档与代码/CI 冲突，以代码和生产只读审计为事实，并在同一 PR 修正文档。
 - `docs/monitoring-plan.md` 是本机 living plan，只保存当前目标、实施状态、下一步、风险和验证缺口；不保存长期原则或完整历史。该文件可能包含个人生产计划，因此不进入 Git。
 - `docs/deployment.md` 保存部署和运维步骤；服务器 Web 面板和服务器私有 `.env` 是生产配置真源。
@@ -33,6 +34,7 @@
 
 - `scripts/test_architecture_invariants.py` 执行统一 collector、禁止调用、兼容模块、来源 profile 和显式例外检查；新增来源不得绕过该测试。
 - `scripts/run_test_suite.py` 是 CI-safe 回归测试清单的唯一真源，GitHub CI 和 `Justfile` 只能调用该入口，不得各自维护测试列表。所有 `scripts/test_*.py` 必须且只能分类为 CI-safe 或带真实外部副作用的 operator smoke；未分类、重复或过期条目必须关闭式失败。operator smoke 不进入普通 CI，不得在无明确批准时发送消息、上传媒体或调用生产凭据。
+- 优化单个范围准入或程度决策规则前，必须从当前代码、生产私有配置和测试核对其与其他独立规则或准入路径的既有“与/或”关系；除非用户明确批准对应架构变更，不得把独立路径改成共同前置条件，也不得改变既有组合关系。
 - 新增或实质修改生产 collector/provider 的普通有界 HTTP request/response 时，必须复用 `http_utils` 的线程隔离 client、代理、超时和重试语义；既有未迁移路径作为显式技术债登记，不得继续扩散。流式限长下载、长连接、官方 SDK 和独立运维工具可保留专用传输，但必须在架构不变量中登记具体边界和原因；不得为了形式统一而把流式安全边界改成整包内存缓冲。
 - 新增或调整通用规则时，至少提供两个不同来源元数据的同文回归样例，并验证 `DecisionResult.action` 一致。
 - 新增或调整由 LLM 输出 action 的规则判断时，必须使用固定假响应覆盖每个允许 action、未命中、不确定、模型不可用、无效 JSON、未知/遗漏/重复规则、未定义 action、原文证据回验失败、最终 action 不一致和提示词注入；普通 CI 不得调用真实 LLM。Report-only 失败不得改变当前生产 `DecisionResult`、review、delivery 或 dedup，也不得回退到另一套候选规则恢复 `push`。
