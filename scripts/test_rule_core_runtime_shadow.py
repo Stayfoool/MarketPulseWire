@@ -86,7 +86,7 @@ def _holding_llm_response() -> ChatCompletionResponse:
                 "evidence_ids": ["T1"],
                 "reason": "原文明确涉及持仓公司的一般事项。",
             }
-            if rule.rule_id == "holding_ordinary"
+            if rule.rule_id == "holding_material_event"
             else {"rule_id": rule.rule_id, "judgement": "not_matched"}
         )
     return ChatCompletionResponse(

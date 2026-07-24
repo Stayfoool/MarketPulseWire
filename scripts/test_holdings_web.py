@@ -166,6 +166,7 @@ def test_rule_shadow_report_view_is_read_only_and_path_bounded() -> None:
     assert "双方均未准入" in source
     assert "准入不一致" in source
     assert "大模型判断或校验失败" in source
+    assert "判断不确定" in source
     assert "正文来源" in source
     assert "最新版本文章" in source
     assert "较早或无法确认" in source

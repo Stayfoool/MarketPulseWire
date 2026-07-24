@@ -302,8 +302,13 @@ An admitted item with a non-empty title may enter LLM comparison even when
 `full_text` is empty. Available summary is included. Available body text is
 limited by code to its first 3,000 characters and divided into numbered exact
 source segments. The model returns segment ids instead of copying quotes; code
-resolves those ids to the original text. Invalid or unavailable model output is
-recorded as unable to compare and never falls back to the deterministic
+resolves those ids to the original text. Each rule may cite at most three exact
+segments; response-wide evidence totals remain audit metrics rather than
+validity limits, and ellipsis punctuation does not invalidate a segment. The
+catalog contains only specific strength-decision rules. All `not_matched`
+results produce a report-only `archive` candidate; no match plus any
+`uncertain` result produces no candidate. Invalid or unavailable model output
+is recorded as unable to compare and never falls back to the deterministic
 candidate. A structurally invalid, evidence-invalid or conflicting response may
 receive one bounded correction request containing the validation errors.
 

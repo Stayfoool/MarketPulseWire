@@ -13,7 +13,6 @@ from llm_rule_decision import (
     MAX_BODY_INPUT_CHARS,
     MAX_EVIDENCE_REFS_PER_LIST,
     MAX_EVIDENCE_SEGMENT_CHARS,
-    MAX_TOTAL_EVIDENCE_REFS,
     LLMRuleCandidateResult,
     LLMRuleInputError,
     apply_source_admission_boundary,
@@ -111,15 +110,14 @@ def _response(
 
 
 def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
-    assert CATALOG_VERSION == "llm-rule-catalog-v8"
-    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v7-20260723"
-    assert len(RULES) == 22
+    assert CATALOG_VERSION == "llm-rule-catalog-v9"
+    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v8-20260724"
+    assert len(RULES) == 17
     assert len({rule.rule_id for rule in RULES}) == len(RULES)
     assert {rule.rule_id for rule in RULES} == {
         "holding_immediate_alert",
         "holding_rating_revision",
         "holding_material_event",
-        "holding_ordinary",
         "semiconductor_price_supply_change",
         "semiconductor_material_change",
         "semiconductor_performance_change",
@@ -127,17 +125,13 @@ def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
         "ai_compute_constraint",
         "ai_credit_constraint",
         "investment_bank_allocation_change",
-        "semiconductor_ordinary",
         "macro_surprise",
         "macro_secondary_reaction",
-        "macro_release_expected",
         "fed_path_change",
         "fed_official_stance_change",
         "fed_policy_material_exception",
-        "fed_path_unchanged",
         "trade_escalation",
         "trade_deescalation",
-        "trade_distant_or_unproven",
     }
     assert {rule.family for rule in RULES} == {
         "holding",
@@ -243,11 +237,11 @@ def test_prompt_uses_bounded_available_input_without_current_production_decision
     assert "current_decision" not in serialized
     assert "production_action" not in serialized
     assert "prompt_version" not in prompt.user_payload
-    assert "最终 action。" in prompt.user_payload["output_contract"]["policy"]
-    assert prompt.user_payload["ordinary_rule_ids"] == ["semiconductor_ordinary"]
-    assert "不能把全部规则返回 not_matched" in prompt.system_prompt
+    assert "汇总最终action" in prompt.user_payload["output_contract"]["policy"]
+    assert "ordinary_rule_ids" not in prompt.user_payload
+    assert "所有规则均为not_matched" in prompt.system_prompt
     assert f"最多引用{MAX_EVIDENCE_REFS_PER_LIST}个编号" in prompt.system_prompt
-    assert f"{MAX_TOTAL_EVIDENCE_REFS}个编号" in prompt.system_prompt
+    assert "所有规则合计" not in prompt.system_prompt
     matched_contract = prompt.user_payload["output_contract"]["matched"]
     assert set(matched_contract) == {"rule_id", "judgement", "action", "evidence_ids", "reason"}
     assert "article_segments" in matched_contract["evidence_ids"][0]
@@ -339,6 +333,24 @@ def test_not_matched_uncertain_and_model_unavailable_cannot_create_action() -> N
     )
     assert uncertain_result["selected_action"] is None
 
+    no_match_uncertain = {
+        "rule_results": [
+            _assessment(
+                rule.rule_id,
+                judgement="uncertain" if rule.rule_id == uncertain.rule_id else "not_matched",
+            )
+            for rule in rules
+        ]
+    }
+    unresolved = validate_llm_rule_response(
+        no_match_uncertain,
+        _item(),
+        _admission((family,)),
+    )
+    assert unresolved.evaluation_status == "uncertain"
+    assert unresolved.candidate_action is None
+    assert unresolved.decision is None
+
     unavailable = LLMRuleCandidateResult.failure(
         "model_unavailable",
         ["fixed provider timeout"],
@@ -353,7 +365,6 @@ def test_not_matched_uncertain_and_model_unavailable_cannot_create_action() -> N
 def test_major_fed_balance_sheet_path_is_compact_and_source_independent() -> None:
     rules = {rule.rule_id: rule for rule in rules_for_families(("fed_policy",))}
     path_change = rules["fed_path_change"]
-    unchanged = rules["fed_path_unchanged"]
     push_condition = path_change.action_conditions["push"]
     serialized_rule = json.dumps(path_change.to_prompt_dict(), ensure_ascii=False)
 
@@ -364,7 +375,6 @@ def test_major_fed_balance_sheet_path_is_compact_and_source_independent() -> Non
     assert "资产负债表判断不要求证明此前预测修订" in push_condition
     assert "受信投行" not in serialized_rule
     assert "不得把预测、可能或考虑改写为正式决定" in path_change.exclusions
-    assert "不能覆盖已有充分证据的美联储重大政策路径变化" in unchanged.exclusions[0]
     assert len(serialized_rule) < 700
 
     body = (
@@ -401,16 +411,24 @@ def test_major_fed_balance_sheet_path_is_compact_and_source_independent() -> Non
         assert result.decision.rule_hits[0]["rule_id"] == "fed_path_change"
         assert result.decision.rule_hits[0]["evidence"][0]["field"] == "full_text"
 
-    ordinary = _response("fed_policy", "fed_path_unchanged", "daily")
-    ordinary_item = item("finance_media", "news_media", "news_media")
-    ordinary_item.full_text = "某机构分析师认为美联储缩表可能较慢，但没有给出时间或操作机制。"
-    ordinary_result = validate_llm_rule_response(ordinary, ordinary_item, admission)
-    assert ordinary_result.evaluation_status == "completed"
-    assert ordinary_result.candidate_action == "daily"
+    all_not_matched = {
+        "rule_results": [
+            _assessment(rule.rule_id) for rule in rules_for_families(("fed_policy",))
+        ]
+    }
+    no_match_item = item("finance_media", "news_media", "news_media")
+    no_match_item.full_text = "某机构分析师评论美联储，但没有命中具体程度规则。"
+    no_match_result = validate_llm_rule_response(all_not_matched, no_match_item, admission)
+    assert no_match_result.evaluation_status == "completed"
+    assert no_match_result.candidate_action == "archive"
+    assert no_match_result.decision is not None
+    assert no_match_result.decision.rule_hits == []
+    assert no_match_result.decision.audit_json["semantic_action_selected_by_model"] is False
+    assert no_match_result.decision.audit_json["default_archive_no_match"] is True
 
 
 def test_multiple_admitted_families_share_one_response_and_highest_action_wins() -> None:
-    holding = _response("holding", "holding_ordinary", "daily")
+    holding = _response("holding", "holding_material_event", "daily")
     semiconductor = _response(
         "semiconductor_ai",
         "semiconductor_material_change",
@@ -495,7 +513,7 @@ def test_semiconductor_expectations_can_push_without_claiming_execution() -> Non
     assert "重大量化计划或考虑" in prompt.system_prompt
     assert "不得把预期改写为已执行事实" in prompt.system_prompt
     assert "不得仅因尚未执行而返回uncertain" in prompt.system_prompt
-    assert "matched不得引用以省略号结尾的未完整句子" in prompt.system_prompt
+    assert "省略号" not in prompt.system_prompt
     assert "AI機架估500萬美元起" in prompt.user_payload["article_segments"][0]["text"]
     assert len(prompt.system_prompt) < 800
     rule_text = json.dumps(prompt.user_payload["rules"], ensure_ascii=False)
@@ -511,12 +529,8 @@ def test_semiconductor_expectations_can_push_without_claiming_execution() -> Non
         sources[0],
         admission,
     )
-    assert truncated_customer_result.evaluation_status == "evidence_invalid"
-    assert truncated_customer_result.candidate_action is None
-    assert any(
-        "incomplete or truncated evidence segment B1" in error
-        for error in truncated_customer_result.validation_errors
-    )
+    assert truncated_customer_result.evaluation_status == "completed"
+    assert truncated_customer_result.candidate_action == "push"
 
     customer_response = _response(
         "semiconductor_ai",
@@ -559,11 +573,11 @@ def test_key_product_production_ramp_is_material_in_both_directions() -> None:
 
     holding_response = _response(
         "holding",
-        "holding_ordinary",
+        "holding_material_event",
         "daily",
         overrides={
-            "holding_ordinary": {
-                "rule_id": "holding_ordinary",
+            "holding_material_event": {
+                "rule_id": "holding_material_event",
                 "judgement": "matched",
                 "action": "daily",
                 "evidence_ids": ["S1"],
@@ -599,7 +613,7 @@ def test_key_product_production_ramp_is_material_in_both_directions() -> None:
         assert result.evaluation_status == "completed"
         assert result.decision is not None
         hits = {hit["rule_id"]: hit for hit in result.decision.rule_hits}
-        assert hits["holding_ordinary"]["decision_action"] == "daily"
+        assert hits["holding_material_event"]["decision_action"] == "daily"
         assert hits["semiconductor_material_change"]["decision_action"] == "push"
 
     positive_item = ramp_item("company_news", "news_media")
@@ -632,11 +646,11 @@ def test_key_product_production_ramp_is_material_in_both_directions() -> None:
     boundary_item.summary = "公司展示Optimus原型，并表示机器人量产仍有一般工程挑战，未披露当前量产阶段。"
     boundary_response = _response(
         "semiconductor_ai",
-        "semiconductor_ordinary",
+        "semiconductor_material_change",
         "daily",
         overrides={
-            "semiconductor_ordinary": {
-                "rule_id": "semiconductor_ordinary",
+            "semiconductor_material_change": {
+                "rule_id": "semiconductor_material_change",
                 "judgement": "matched",
                 "action": "daily",
                 "evidence_ids": ["S1"],
@@ -697,8 +711,8 @@ def test_target_price_implied_move_uses_existing_rules_and_model_arithmetic() ->
         )
 
     cases = (
-        ("$180.00", "$153.10", "semiconductor_ordinary", "daily"),
-        ("$129.90", "$100.00", "semiconductor_ordinary", "daily"),
+        ("$180.00", "$153.10", "investment_bank_allocation_change", "daily"),
+        ("$129.90", "$100.00", "investment_bank_allocation_change", "daily"),
         ("$130.00", "$100.00", "investment_bank_allocation_change", "push"),
         ("$200.00", "$150.00", "investment_bank_allocation_change", "push"),
         ("$70.00", "$100.00", "investment_bank_allocation_change", "push"),
@@ -718,7 +732,7 @@ def test_target_price_implied_move_uses_existing_rules_and_model_arithmetic() ->
     corning.summary = "Equal-weight；目标价 $180.00。"
     corning.full_text = "历史收盘价 $153.10，收盘日期 2026-07-20。"
     corning_result = validate_llm_rule_response(
-        _response("semiconductor_ai", "semiconductor_ordinary", "daily"),
+        _response("semiconductor_ai", "investment_bank_allocation_change", "daily"),
         corning,
         admission,
     )
@@ -727,8 +741,8 @@ def test_target_price_implied_move_uses_existing_rules_and_model_arithmetic() ->
 
     ambiguous_response = _response(
         "semiconductor_ai",
-        "semiconductor_ordinary",
-        "daily",
+        "no_matched_rule",
+        "archive",
         overrides={
             "investment_bank_allocation_change": _assessment(
                 "investment_bank_allocation_change", judgement="uncertain"
@@ -742,15 +756,8 @@ def test_target_price_implied_move_uses_existing_rules_and_model_arithmetic() ->
     )
     for item in ambiguous_items:
         result = validate_llm_rule_response(ambiguous_response, item, admission)
-        assert result.evaluation_status == "completed"
-        assert result.candidate_action == "daily"
-        assessment = next(
-            value
-            for value in result.rule_assessments
-            if value["rule_id"] == "investment_bank_allocation_change"
-        )
-        assert assessment["judgement"] == "uncertain"
-        assert assessment["selected_action"] is None
+        assert result.evaluation_status == "uncertain"
+        assert result.candidate_action is None
 
     exact_threshold = report_item("$130.00", "$100.00")
     source_variants = (
@@ -832,13 +839,14 @@ def test_invalid_json_unknown_missing_and_forbidden_fields_fail_closed() -> None
 
 def test_undefined_action_and_duplicate_rule_fail_closed() -> None:
     item = _item()
-    admission = _admission(("semiconductor_ai",))
-    archive_only_rule = next(rule for rule in RULES if rule.rule_id == "semiconductor_ordinary")
-    undefined = _response("semiconductor_ai", archive_only_rule.rule_id, "push")
+    archive_only_rule = next(rule for rule in RULES if rule.rule_id == "trade_deescalation")
+    admission = _admission(("trade_policy",))
+    undefined = _response("trade_policy", archive_only_rule.rule_id, "push")
     undefined_result = validate_llm_rule_response(undefined, item, admission)
     assert undefined_result.evaluation_status == "invalid_output"
     assert undefined_result.candidate_action is None
 
+    admission = _admission(("semiconductor_ai",))
     base = _response("semiconductor_ai", "semiconductor_price_supply_change", "push")
     duplicate = copy.deepcopy(base)
     duplicate["rule_results"].append(copy.deepcopy(duplicate["rule_results"][0]))
@@ -887,6 +895,24 @@ def test_evidence_references_are_exact_and_bounded() -> None:
     duplicate["rule_results"][1]["reason"] = "存在冲突信息。"
     duplicate_result = validate_llm_rule_response(duplicate, item, admission)
     assert duplicate_result.evaluation_status == "completed"
+
+
+def test_response_wide_evidence_totals_are_metrics_not_validity_limits() -> None:
+    families: tuple[RuleFamily, ...] = ("holding", "semiconductor_ai")
+    rules = rules_for_families(families)
+    item = _item(full_text=("证" * 299) + "。")
+    response = {
+        "rule_results": [
+            _assessment(rule.rule_id, judgement="matched", action=rule.allowed_actions[0])
+            for rule in rules
+        ]
+    }
+    result = validate_llm_rule_response(response, item, _admission(families))
+    assert result.evaluation_status == "completed"
+    assert result.evidence_reference_count == len(rules)
+    assert result.evidence_reference_count > 8
+    assert result.evidence_character_count > 2_400
+    assert result.candidate_action == "push"
 
 
 def test_non_admitted_or_source_inapplicable_inputs_do_not_create_candidate() -> None:
@@ -949,6 +975,7 @@ def main() -> int:
     test_invalid_json_unknown_missing_and_forbidden_fields_fail_closed()
     test_undefined_action_and_duplicate_rule_fail_closed()
     test_evidence_references_are_exact_and_bounded()
+    test_response_wide_evidence_totals_are_metrics_not_validity_limits()
     test_non_admitted_or_source_inapplicable_inputs_do_not_create_candidate()
     test_pr_a_modules_have_no_transport_runtime_or_storage_imports()
     print("LLM rule decision contract checks passed")

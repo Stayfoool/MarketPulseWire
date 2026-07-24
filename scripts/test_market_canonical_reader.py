@@ -182,6 +182,14 @@ def seed(path: Path) -> dict[str, int]:
     )
     with sqlite3.connect(path) as conn:
         conn.execute(
+            "UPDATE events SET first_seen_at = ? WHERE id = ?",
+            ("2026-07-23T01:07:30+00:00", event_id),
+        )
+        conn.execute(
+            "UPDATE events SET first_seen_at = ? WHERE id = ?",
+            ("2026-07-23T01:09:00+00:00", pending_id),
+        )
+        conn.execute(
             "INSERT INTO deliveries(event_id,channel,status,sent_at,payload_json) VALUES (?, 'feishu', 'sent', ?, '{}')",
             (event_id, "2026-07-23T01:10:00+00:00"),
         )
