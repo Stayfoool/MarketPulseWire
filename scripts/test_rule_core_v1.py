@@ -589,6 +589,158 @@ def test_approved_corporate_material_changes_are_source_neutral() -> None:
     assert {hit["rule_id"] for hit in pending_meeting_notice.rule_hits} == {"holding_ordinary"}
 
 
+def test_holding_share_transactions_are_material_and_source_neutral() -> None:
+    _, config, portfolios = loaded_contracts()
+    portfolio = portfolios["holding_test"]
+    source_variants = (
+        ("company_disclosure", "company_disclosure", "company_official", "company_disclosure"),
+        ("finance_media", "news_media", "news_media", "article"),
+    )
+    cases = (
+        (
+            "甲公司收到控股股东及实际控制人回购股份提议",
+            "甲公司收到控股股东及实际控制人正式提议，由公司回购本公司股份。",
+            "提议",
+        ),
+        (
+            "甲公司董事会审议通过股份回购方案",
+            "甲公司董事会审议通过以集中竞价方式回购本公司股份的方案。",
+            "审议通过",
+        ),
+        (
+            "甲公司披露回购股份进展",
+            "甲公司已实施回购股份，并披露本月回购进展。",
+            "实施或进展",
+        ),
+        (
+            "甲公司完成股份回购",
+            "甲公司公告本次回购本公司股份已经完成。",
+            "完成",
+        ),
+        (
+            "甲公司终止股份回购事项",
+            "甲公司公告终止回购本公司股份事项。",
+            "终止或取消",
+        ),
+        (
+            "甲公司控股股东拟减持公司股份",
+            "甲公司控股股东公告减持甲公司股份的计划。",
+            "计划",
+        ),
+        (
+            "甲公司实际控制人及一致行动人完成减持",
+            "甲公司实际控制人及一致行动人已减持甲公司股份并披露实施进展。",
+            "完成",
+        ),
+        (
+            "甲公司董事及高级管理人员拟出售公司股份",
+            "甲公司董事及高级管理人员公告出售本公司股份的计划。",
+            "计划",
+        ),
+        (
+            "甲公司拟出售已回购股份",
+            "甲公司公告出售已回购股份的计划。",
+            "计划",
+        ),
+    )
+    for title, full_text, stage in cases:
+        decisions = [
+            evaluate_market_item(
+                NormalizedMarketItem(
+                    source=source,
+                    source_category=category,
+                    publisher_role=role,
+                    content_type=content_type,
+                    title=title,
+                    full_text=full_text,
+                    symbols=["TEST1.SZ"],
+                ),
+                rule_config=config,
+                portfolio=portfolio,
+                source_policy=SourceAdmissionPolicy(),
+            ).decision
+            for source, category, role, content_type in source_variants
+        ]
+        assert all(decision is not None for decision in decisions), title
+        assert {decision.action for decision in decisions if decision} == {"push"}, title
+        assert {
+            hit["rule_id"]
+            for decision in decisions
+            if decision
+            for hit in decision.rule_hits
+        } == {"holding_material_event"}, title
+        assert all(
+            stage in hit["reason"]
+            for decision in decisions
+            if decision
+            for hit in decision.rule_hits
+        ), title
+
+    counterexamples = (
+        (
+            "甲公司回购注销部分限制性股票",
+            "甲公司因激励对象离职且考核未达标，例行回购注销其限制性股票。",
+        ),
+        (
+            "甲公司拟出售持有的乙公司股份",
+            "甲公司公告拟出售其持有的乙公司股份。",
+        ),
+        (
+            "甲公司控股股东拟减持持有的乙公司股份",
+            "甲公司控股股东公告减持其持有的乙公司股份的计划。",
+        ),
+        (
+            "甲公司控股股东回顾历史减持",
+            "历史资料显示，甲公司控股股东2025年已完成减持甲公司股份。",
+        ),
+        (
+            "分析师讨论甲公司是否可能回购股份",
+            "分析师提问：甲公司未来是否可能回购本公司股份？公司没有回应。",
+        ),
+        (
+            "分析师建议甲公司回购股份",
+            "分析师建议甲公司回购本公司股份，但公司未公告回购计划。",
+        ),
+    )
+    for title, full_text in counterexamples:
+        decision = evaluate_market_item(
+            NormalizedMarketItem(
+                source="finance_media",
+                source_category="news_media",
+                publisher_role="news_media",
+                content_type="article",
+                title=title,
+                full_text=full_text,
+                symbols=["TEST1.SZ"],
+            ),
+            rule_config=config,
+            portfolio=portfolio,
+            source_policy=SourceAdmissionPolicy(),
+        ).decision
+        assert decision is not None, title
+        assert "holding_material_event" not in {
+            hit["rule_id"] for hit in decision.rule_hits
+        }, title
+
+    semiconductor_only = evaluate_market_item(
+        NormalizedMarketItem(
+            source="finance_media",
+            source_category="news_media",
+            publisher_role="news_media",
+            content_type="article",
+            title="HBM公司董事会审议通过股份回购方案",
+            full_text="HBM公司董事会审议通过回购本公司股份的方案。",
+        ),
+        rule_config=config,
+        portfolio=portfolios["empty"],
+        source_policy=SourceAdmissionPolicy(),
+    ).decision
+    assert semiconductor_only is not None
+    assert "semiconductor_material_change" not in {
+        hit["rule_id"] for hit in semiconductor_only.rule_hits
+    }
+
+
 def test_migrated_holding_corporate_events_are_source_neutral() -> None:
     _, config, portfolios = loaded_contracts()
     portfolio = parse_portfolio_config(
@@ -2242,6 +2394,7 @@ def main() -> int:
     test_source_identity_and_llm_availability_cannot_change_core_result()
     test_holding_capital_change_uses_document_title_to_resolve_routine_attachments()
     test_approved_corporate_material_changes_are_source_neutral()
+    test_holding_share_transactions_are_material_and_source_neutral()
     test_migrated_holding_corporate_events_are_source_neutral()
     test_unexecuted_holding_corporate_events_remain_daily_across_sources()
     test_migrated_semiconductor_hard_variables_are_source_neutral()

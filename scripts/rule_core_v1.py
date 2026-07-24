@@ -630,6 +630,104 @@ CORPORATE_CONFIRMED_STAGE_TERMS = (
     "entered into",
 )
 
+HOLDING_SHARE_REPURCHASE_TERMS = (
+    "回购股份",
+    "回购公司股份",
+    "回购本公司股份",
+    "回购a股股份",
+    "股份回购",
+    "share repurchase",
+    "repurchase shares",
+    "repurchase its shares",
+    "stock repurchase",
+    "buyback",
+    "buy back shares",
+)
+HOLDING_SHARE_SALE_TERMS = (
+    "减持",
+    "出售股份",
+    "出售公司股份",
+    "出售本公司股份",
+    "出售股票",
+    "卖出股份",
+    "卖出股票",
+    "sell shares",
+    "sell company shares",
+    "sale of shares",
+    "share sale",
+    "reduce holdings",
+    "reduction in holdings",
+)
+HOLDING_TREASURY_SHARE_SALE_TERMS = (
+    "出售已回购股份",
+    "出售库存股",
+    "处置库存股",
+    "sell treasury shares",
+    "sale of treasury shares",
+)
+HOLDING_SHAREHOLDER_ACTOR_TERMS = (
+    "控股股东",
+    "实际控制人",
+    "一致行动人",
+    "董事",
+    "监事",
+    "高级管理人员",
+    "高管",
+    "重要股东",
+    "大股东",
+    "持股5%以上股东",
+    "持股百分之五以上股东",
+    "controlling shareholder",
+    "actual controller",
+    "person acting in concert",
+    "persons acting in concert",
+    "director",
+    "supervisor",
+    "senior management",
+    "executive",
+    "major shareholder",
+    "significant shareholder",
+    "insider",
+)
+HOLDING_SHARE_CURRENT_STAGE_TERMS = (
+    "公告",
+    "披露",
+    "提议",
+    "建议",
+    "拟",
+    "计划",
+    "方案",
+    "审议通过",
+    "表决通过",
+    "批准",
+    "实施",
+    "进展",
+    "已回购",
+    "已减持",
+    "已出售",
+    "完成",
+    "期限届满",
+    "调整",
+    "变更",
+    "终止",
+    "取消",
+    "announced",
+    "disclosed",
+    "proposed",
+    "proposal",
+    "plans to",
+    "plan",
+    "approved",
+    "implemented",
+    "executed",
+    "completed",
+    "adjusted",
+    "changed",
+    "terminated",
+    "cancelled",
+    "canceled",
+)
+
 SEMICONDUCTOR_PERFORMANCE_TERMS = (
     "revenue",
     "profit",
@@ -1871,6 +1969,103 @@ def _routine_corporate_attachment(title: str) -> bool:
     return _has(title, "审计报告", "审计附件", "资产评估报告", "估值报告", "valuation report")
 
 
+def _share_action_targets_other_issuer(
+    sentence: str,
+    subject_terms: tuple[str, ...],
+) -> bool:
+    for match in re.finditer(r"(?:回购|减持|出售|卖出)(?:其)?(?:持有的)?([^，。；;]{1,30}?)股份", sentence):
+        target = match.group(1).strip()
+        if not target or _matches(target, subject_terms):
+            continue
+        if target in {"本公司", "公司", "该公司", "部分", "全部", "a股", "A股"}:
+            continue
+        if _has(target, "已回购", "库存"):
+            continue
+        if target.endswith("公司"):
+            return True
+    return False
+
+
+def _holding_share_transaction(
+    item: NormalizedMarketItem,
+    text: str,
+    *,
+    subject_terms: tuple[str, ...],
+) -> tuple[str, str] | None:
+    if not subject_terms:
+        return None
+    for sentence in _sentences(text)[:16]:
+        is_title = _clean(sentence) == _clean(item.title)
+        if not (is_title or _matches(sentence, subject_terms)):
+            continue
+        if _question_without_answer(sentence) or _references_earlier_year(item, sentence):
+            continue
+        if _has(sentence, *CORPORATE_HISTORICAL_TERMS):
+            continue
+        if _share_action_targets_other_issuer(sentence, subject_terms):
+            continue
+
+        current_stage = _has(sentence, *HOLDING_SHARE_CURRENT_STAGE_TERMS)
+        if not current_stage:
+            continue
+        treasury_sale = _has(sentence, *HOLDING_TREASURY_SHARE_SALE_TERMS)
+        repurchase = _has(sentence, *HOLDING_SHARE_REPURCHASE_TERMS)
+        routine_restricted_share_cancellation = _all_groups(
+            sentence,
+            ("回购注销", "repurchase and cancel"),
+            ("限制性股票", "restricted shares", "restricted stock"),
+            (
+                "离职",
+                "考核不达标",
+                "考核未达标",
+                "未达到考核",
+                "未满足归属",
+                "激励对象",
+                "failed performance conditions",
+                "employee departure",
+                "vesting conditions were not met",
+            ),
+        )
+        if repurchase and not treasury_sale and not routine_restricted_share_cancellation:
+            proposal = _has(sentence, "提议", "建议", "proposal")
+            proposal_actor = _has(sentence, *HOLDING_SHAREHOLDER_ACTOR_TERMS)
+            if proposal and not proposal_actor:
+                continue
+            if _has(sentence, "终止", "取消", "terminated", "cancelled", "canceled"):
+                reason = "持仓公司当前正式终止或取消本公司股份回购事项。"
+            elif _has(sentence, "调整", "变更", "adjusted", "changed"):
+                reason = "持仓公司当前正式调整或变更本公司股份回购事项。"
+            elif _has(sentence, "完成", "completed"):
+                reason = "持仓公司当前正式披露本公司股份回购已经完成。"
+            elif _has(sentence, "实施", "进展", "已回购", "implemented", "executed"):
+                reason = "持仓公司当前正式披露本公司股份回购实施或进展。"
+            elif _has(sentence, "审议通过", "表决通过", "批准", "approved"):
+                reason = "持仓公司当前正式审议通过本公司股份回购事项。"
+            elif proposal:
+                reason = "相关主体当前正式提议由持仓公司回购本公司股份。"
+            else:
+                reason = "持仓公司当前正式披露拟回购或计划回购本公司股份。"
+            return sentence, reason
+
+        shareholder_sale = _has(sentence, *HOLDING_SHARE_SALE_TERMS) and _has(
+            sentence, *HOLDING_SHAREHOLDER_ACTOR_TERMS
+        )
+        if treasury_sale or shareholder_sale:
+            if _has(sentence, "终止", "取消", "terminated", "cancelled", "canceled"):
+                stage = "终止或取消"
+            elif _has(sentence, "调整", "变更", "adjusted", "changed"):
+                stage = "调整或变更"
+            elif _has(sentence, "完成", "期限届满", "completed"):
+                stage = "完成"
+            elif _has(sentence, "实施", "进展", "已减持", "已出售", "implemented", "executed"):
+                stage = "实施或进展"
+            else:
+                stage = "计划"
+            actor = "持仓公司" if treasury_sale else "重要股东或董监高"
+            return sentence, f"{actor}当前正式披露出售或减持持仓公司股份的{stage}。"
+    return None
+
+
 def _current_corporate_event(
     item: NormalizedMarketItem,
     text: str,
@@ -1941,6 +2136,9 @@ def _corporate_material_change(
     title = item.title
     if _routine_corporate_attachment(title):
         return None
+    share_transaction = _holding_share_transaction(item, text, subject_terms=subject_terms)
+    if share_transaction:
+        return share_transaction
     if _has(title, "增资", "减资", "capital increase", "capital reduction"):
         return title, "公司发生实质增资或减资。"
 
