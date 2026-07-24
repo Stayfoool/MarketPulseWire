@@ -13,7 +13,7 @@ from typing import Mapping
 from market_item import RuleFamily
 
 
-LLM_DECISION_RULE_VERSION = "llm-decision-rules-v13-20260724"
+LLM_DECISION_RULE_VERSION = "llm-decision-rules-v14-20260724"
 # Historical comparison writers/readers still import these exact version names.
 # New production decisions record only LLM_DECISION_RULE_VERSION.
 RULE_MATRIX_VERSION = "llm-reviewed-rule-matrix-v12-20260724"
@@ -203,10 +203,10 @@ RULES: tuple[LLMRuleDefinition, ...] = (
         "ai_credit_constraint",
         "semiconductor_ai",
         "AI 基础设施信用和融资约束",
-        push="AI 基础设施相关主体出现评级下调、信用显著恶化、保证金担保信用证要求、融资成本或融资限制，并与采购、订单、资本开支或项目执行压力局部绑定。",
-        daily="一般融资担忧、估值压力或信用评论，尚无采购、资本开支或项目执行后果。",
+        push="AI 基础设施相关主体出现以下任一重大结果：债券价格首次跌破面值90%或明显跌破发行价、信用利差创高或明确走阔、融资收益率或成本较前次交易明显上升、融资失败或延期、评级下调或流动性硬结果；或者上述信用压力与采购、订单、资本开支或项目执行压力局部绑定。多个具名超大规模云厂商或 AI 基础设施主体同向出现可验证的债券、利差或融资成本恶化，也属于重大结果。",
+        daily="只有一般融资担忧、估值压力或单一未量化信用评论，没有重大债券价格、信用利差、收益率、融资执行或流动性结果，也没有采购、订单、资本开支或项目执行绑定。",
         archive="普通公司债务、股价下跌，或者与 AI 基础设施没有局部关系。",
-        required=("AI 基础设施主体", "信用或融资变化", "采购、订单、资本开支或项目后果"),
+        required=("AI 基础设施主体", "信用或融资变化", "重大市场结果或采购、订单、资本开支、项目执行绑定"),
         exclusions=("普通债务", "股价或估值压力", "没有 AI 基础设施关系"),
     ),
     _rule(

@@ -110,7 +110,7 @@ def _response(
 
 
 def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
-    assert LLM_DECISION_RULE_VERSION == "llm-decision-rules-v13-20260724"
+    assert LLM_DECISION_RULE_VERSION == "llm-decision-rules-v14-20260724"
     assert len(RULES) == 16
     assert len({rule.rule_id for rule in RULES}) == len(RULES)
     assert {rule.rule_id for rule in RULES} == {
@@ -853,6 +853,74 @@ def test_ai_infrastructure_capex_and_hyperscaler_free_cash_flow_are_material() -
     )
 
 
+def test_ai_credit_market_hard_results_can_push_without_project_execution() -> None:
+    rule = next(rule for rule in RULES if rule.rule_id == "ai_credit_constraint")
+    assert "债券价格首次跌破面值90%" in rule.action_conditions["push"]
+    assert "信用利差创高或明确走阔" in rule.action_conditions["push"]
+    assert "融资收益率或成本较前次交易明显上升" in rule.action_conditions["push"]
+    assert "多个具名超大规模云厂商" in rule.action_conditions["push"]
+    assert "单一未量化信用评论" in rule.action_conditions["daily"]
+    assert "重大市场结果或采购、订单、资本开支、项目执行绑定" in rule.required_facts
+
+    def item(source: str, title: str, summary: str) -> NormalizedMarketItem:
+        return NormalizedMarketItem(
+            source=source,
+            source_category="news_media",
+            publisher_role="news_media",
+            content_type="article",
+            title=title,
+            summary=summary,
+            full_text=f"正文：{summary}",
+            url="https://example.test/ai-credit-hard-result",
+            published_at="2026-07-24T10:00:00+08:00",
+        )
+
+    admission = _admission(("semiconductor_ai",))
+    alphabet = (
+        item(
+            "sina_finance_articles",
+            "Alphabet百年债首次跌破面值九成，超大规模云服务商债券信用利差走阔",
+            "Alphabet百年英镑债跌至面值90%以下，Alphabet、亚马逊信用利差走阔，市场归因于AI发债和资本开支压力。",
+        ),
+        item(
+            "wallstreetcn_news",
+            "Alphabet百年债首次跌破面值九成，超大规模云服务商债券信用利差走阔",
+            "Alphabet百年英镑债跌至面值90%以下，Alphabet、亚马逊信用利差走阔，市场归因于AI发债和资本开支压力。",
+        ),
+    )
+    response = _response("semiconductor_ai", "ai_credit_constraint", "push")
+    results = [validate_llm_rule_response(response, market_item, admission) for market_item in alphabet]
+    assert [result.candidate_action for result in results] == ["push", "push"]
+    assert all(result.evaluation_status == "completed" and result.decision is not None for result in results)
+
+    meta = item(
+        "sina_finance_articles",
+        "Meta在最新120亿美元数据中心融资中面临更高借贷成本",
+        "Meta支持的120亿美元数据中心债券融资收益率超过7%，较去年交易高约40个基点。",
+    )
+    meta_result = validate_llm_rule_response(response, meta, admission)
+    assert meta_result.evaluation_status == "completed"
+    assert meta_result.candidate_action == "push"
+
+    ordinary = item(
+        "finance_media",
+        "云厂商债务压力引发市场讨论",
+        "分析人士担忧AI投资可能增加债务负担，但没有债券价格、利差、收益率、融资执行或项目后果。",
+    )
+    ordinary_result = validate_llm_rule_response(
+        _response("semiconductor_ai", "ai_credit_constraint", "daily"),
+        ordinary,
+        admission,
+    )
+    assert ordinary_result.evaluation_status == "completed"
+    assert ordinary_result.candidate_action == "daily"
+
+    prompt = build_llm_rule_prompt(alphabet[0], admission)
+    prompt_rules = json.dumps(prompt.user_payload["rules"], ensure_ascii=False)
+    assert "债券价格首次跌破面值90%" in prompt_rules
+    assert all(name not in prompt_rules for name in ("Alphabet", "Google", "亚马逊", "Meta"))
+
+
 def test_target_price_implied_move_uses_existing_rules_and_model_arithmetic() -> None:
     holding_rule = next(rule for rule in RULES if rule.rule_id == "holding_rating_revision")
     industry_rule = next(
@@ -1156,6 +1224,7 @@ def main() -> int:
     test_semiconductor_expectations_can_push_without_claiming_execution()
     test_key_product_production_ramp_is_material_in_both_directions()
     test_ai_infrastructure_capex_and_hyperscaler_free_cash_flow_are_material()
+    test_ai_credit_market_hard_results_can_push_without_project_execution()
     test_target_price_implied_move_uses_existing_rules_and_model_arithmetic()
     test_invalid_json_unknown_missing_and_forbidden_fields_fail_closed()
     test_undefined_action_and_duplicate_rule_fail_closed()
