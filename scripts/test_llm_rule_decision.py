@@ -110,8 +110,8 @@ def _response(
 
 
 def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
-    assert CATALOG_VERSION == "llm-rule-catalog-v12"
-    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v11-20260724"
+    assert CATALOG_VERSION == "llm-rule-catalog-v13"
+    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v12-20260724"
     assert len(RULES) == 16
     assert len({rule.rule_id for rule in RULES}) == len(RULES)
     assert {rule.rule_id for rule in RULES} == {
@@ -156,9 +156,11 @@ def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
 def test_holding_share_transactions_are_explicit_push_conditions() -> None:
     rule = next(rule for rule in RULES if rule.rule_id == "holding_material_event")
     push = rule.action_conditions["push"]
-    assert "正式提出的本公司股份回购提议" in push
-    assert "出售或减持计划本身即为push" in push
-    assert "不要求达到金额或比例阈值" in push
+    assert "拟、计划、审议通过、实施、完成、调整、终止或取消回购本公司股份（包括A股股份）" in push
+    assert "正式提议由持仓公司回购本公司股份" in push
+    assert "计划、实施、完成、调整、终止或取消出售或减持该持仓公司股份" in push
+    assert "不设金额或比例阈值" in push
+    assert "用于维护公司价值或股东权益不构成程序性排除" in push
     assert any(
         "不得仅因股份回购、出售或减持仍处于正式提议或计划阶段而排除" in exclusion
         for exclusion in rule.exclusions
