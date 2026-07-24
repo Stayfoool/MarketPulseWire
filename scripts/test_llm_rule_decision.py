@@ -110,8 +110,8 @@ def _response(
 
 
 def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
-    assert CATALOG_VERSION == "llm-rule-catalog-v11"
-    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v10-20260724"
+    assert CATALOG_VERSION == "llm-rule-catalog-v12"
+    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v11-20260724"
     assert len(RULES) == 16
     assert len({rule.rule_id for rule in RULES}) == len(RULES)
     assert {rule.rule_id for rule in RULES} == {
@@ -151,6 +151,66 @@ def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
             "required_facts",
             "exclusions",
         }
+
+
+def test_holding_share_transactions_are_explicit_push_conditions() -> None:
+    rule = next(rule for rule in RULES if rule.rule_id == "holding_material_event")
+    push = rule.action_conditions["push"]
+    assert "正式提出的本公司股份回购提议" in push
+    assert "出售或减持计划本身即为push" in push
+    assert "不要求达到金额或比例阈值" in push
+    assert any(
+        "不得仅因股份回购、出售或减持仍处于正式提议或计划阶段而排除" in exclusion
+        for exclusion in rule.exclusions
+    )
+
+    cases = (
+        (
+            "甲公司收到控股股东回购股份提议",
+            "甲公司收到控股股东正式提议，由公司回购本公司股份。",
+            "正式回购提议本身满足规则。",
+        ),
+        (
+            "甲公司高级管理人员拟减持公司股份",
+            "甲公司高级管理人员公告拟减持甲公司股份。",
+            "高级管理人员的正式减持计划本身满足规则。",
+        ),
+    )
+    sources = (
+        ("company_disclosures", "company_disclosures", "announcement"),
+        ("finance_media", "news_media", "article"),
+    )
+    admission = _admission(("holding",))
+    for title, body, reason in cases:
+        response = _response(
+            "holding",
+            "holding_material_event",
+            "push",
+            overrides={
+                "holding_material_event": {
+                    "rule_id": "holding_material_event",
+                    "judgement": "matched",
+                    "action": "push",
+                    "evidence_ids": ["B1"],
+                    "reason": reason,
+                }
+            },
+        )
+        for source, source_category, content_type in sources:
+            item = _item(
+                source=source,
+                source_category=source_category,
+                content_type=content_type,
+                full_text=body,
+            )
+            item.title = title
+            result = validate_llm_rule_response(response, item, admission)
+            assert result.evaluation_status == "completed", result.validation_errors
+            assert result.candidate_action == "push"
+            assert result.decision is not None
+            assert result.decision.rule_hits[0]["rule_id"] == "holding_material_event"
+            assert result.decision.rule_hits[0]["evidence"][0]["field"] == "full_text"
+            assert result.decision.audit_json["production_authority"] is False
 
 
 def test_every_allowed_action_projects_to_decision_result_with_fixed_responses() -> None:
@@ -1085,6 +1145,7 @@ def test_pr_a_modules_have_no_transport_runtime_or_storage_imports() -> None:
 
 def main() -> int:
     test_catalog_is_versioned_complete_and_has_only_reviewed_actions()
+    test_holding_share_transactions_are_explicit_push_conditions()
     test_every_allowed_action_projects_to_decision_result_with_fixed_responses()
     test_source_applicability_keeps_company_disclosures_and_sina_stock_news_holding_only()
     test_prompt_uses_bounded_available_input_without_current_production_decision()
