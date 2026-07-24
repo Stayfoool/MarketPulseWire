@@ -46,23 +46,11 @@ def test_generic_fed_bank_view_is_not_macro_policy_line() -> None:
     assert macro_policy_match(item)["matched"] is False
 
 
-def test_secondary_data_requires_surprise_or_market_reaction() -> None:
-    assert macro_policy_match({"title": "美国ADP就业人数今晚公布"})["matched"] is False
-    match = macro_policy_match({"title": "美国ADP就业人数大幅不及预期，2年期美债收益率大跌8个基点"})
-    assert match["matched"] is True
-    assert match["tier"] == "secondary_major"
+def test_secondary_data_is_not_macro_policy_line() -> None:
+    assert macro_policy_match({"title": "美国ADP就业人数大幅不及预期，2年期美债收益率大跌8个基点"})["matched"] is False
 
 
-def test_shared_macro_classification_keeps_local_release_and_reaction_evidence() -> None:
-    reaction = classify_macro_policy_content(
-        {
-            "title": "美国ADP就业人数不及预期。",
-            "summary": "数据公布后，2年期美债收益率大跌8个基点。",
-        }
-    )
-    assert reaction["secondary"] is True
-    assert reaction["direct_release"] is True
-    assert reaction["attributable_market_reaction"] is True
+def test_macro_classification_uses_only_core_indicators() -> None:
     preview = classify_macro_policy_content({"title": "美国非农就业报告将于明晚公布"})
     assert preview["primary"] is True
     assert preview["preview"] is True
@@ -112,8 +100,8 @@ def main() -> int:
     test_nonfarm_cpi_pce_are_primary()
     test_non_us_cpi_is_not_macro_policy_line()
     test_generic_fed_bank_view_is_not_macro_policy_line()
-    test_secondary_data_requires_surprise_or_market_reaction()
-    test_shared_macro_classification_keeps_local_release_and_reaction_evidence()
+    test_secondary_data_is_not_macro_policy_line()
+    test_macro_classification_uses_only_core_indicators()
     test_retail_sales_is_ignored()
     test_macro_review_override_pushes_primary_events()
     test_china_media_focus_accepts_macro_items()

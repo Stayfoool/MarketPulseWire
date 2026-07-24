@@ -48,8 +48,7 @@
     "macro_policy_line": {
       "enabled": true,
       "priority": 60,
-      "extra_primary_keywords": [],
-      "extra_secondary_keywords": []
+      "extra_primary_keywords": []
     },
     "trade_friction_escalation": {
       "enabled": true

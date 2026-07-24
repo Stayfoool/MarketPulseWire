@@ -90,19 +90,6 @@ FED_OFFICIAL_EVENT_KEYWORDS = (
     "dot plot",
 )
 
-SECONDARY_DATA_KEYWORDS = (
-    "adp",
-    "jolts",
-    "职位空缺",
-    "初请",
-    "续请",
-    "ppi",
-    "生产者价格指数",
-    "ism",
-    "制造业pmi",
-    "服务业pmi",
-)
-
 IGNORED_DATA_KEYWORDS = (
     "零售销售",
     "retail sales",
@@ -348,7 +335,6 @@ def classify_macro_policy_content(
     *,
     primary_keywords: tuple[str, ...] = PRIMARY_DATA_KEYWORDS,
     us_scoped_primary_keywords: tuple[str, ...] = US_SCOPED_PRIMARY_DATA_KEYWORDS,
-    secondary_keywords: tuple[str, ...] = SECONDARY_DATA_KEYWORDS,
     us_context_keywords: tuple[str, ...] = US_CONTEXT_KEYWORDS,
 ) -> dict[str, Any]:
     """Extract source-neutral macro/Fed evidence without reading runtime configuration."""
@@ -356,8 +342,7 @@ def classify_macro_policy_content(
     context = contains_any(f"{text} ", us_context_keywords)
     primary_terms = _matched_terms(text, primary_keywords)
     scoped_primary_terms = _matched_terms(text, us_scoped_primary_keywords) if context else ()
-    secondary_terms = _matched_terms(text, secondary_keywords)
-    indicator_terms = tuple(dict.fromkeys((*primary_terms, *scoped_primary_terms, *secondary_terms)))
+    indicator_terms = tuple(dict.fromkeys((*primary_terms, *scoped_primary_terms)))
     surprise_evidence = _first_macro_window(text, indicator_terms, require_surprise=True) if indicator_terms else ""
     expected_evidence = _first_macro_window(text, indicator_terms, require_expected=True) if indicator_terms else ""
     market_reaction = contains_any(text, MARKET_REACTION_KEYWORDS)
@@ -388,9 +373,7 @@ def classify_macro_policy_content(
     return {
         "text": text,
         "primary": bool(primary_terms or scoped_primary_terms),
-        "secondary": bool(secondary_terms),
         "primary_terms": list((*primary_terms, *scoped_primary_terms)),
-        "secondary_terms": list(secondary_terms),
         "us_context": context,
         "market_reaction": market_reaction,
         "large_move": large_move,
@@ -502,12 +485,8 @@ def macro_policy_match(item: dict[str, Any]) -> dict[str, Any]:
         us_scoped_primary_keywords=effective_list(
             "macro_policy_line", "extra_primary_keywords", US_SCOPED_PRIMARY_DATA_KEYWORDS
         ),
-        secondary_keywords=effective_list(
-            "macro_policy_line", "extra_secondary_keywords", SECONDARY_DATA_KEYWORDS
-        ),
     )
     primary = bool(classification["primary"])
-    secondary = bool(classification["secondary"])
     market_reaction = bool(classification["market_reaction"])
     large_move = bool(classification["large_move"])
     surprise = bool(classification["surprise"])
@@ -530,31 +509,6 @@ def macro_policy_match(item: dict[str, Any]) -> dict[str, Any]:
                 )
                 if ok
             ],
-        }
-    if secondary and (large_move or surprise or market_reaction):
-        return {
-            "matched": True,
-            "tier": "secondary_major",
-            "push_bias": "conditional",
-            "reason": "命中 ADP/JOLTS/初请/PPI/ISM 等次重点数据，且伴随重大偏离或市场反应。",
-            "tags": [
-                tag
-                for tag, ok in (
-                    ("secondary_data", secondary),
-                    ("market_reaction", market_reaction),
-                    ("large_move", large_move),
-                    ("surprise", surprise),
-                )
-                if ok
-            ],
-        }
-    if market_reaction and large_move:
-        return {
-            "matched": True,
-            "tier": "market_reaction",
-            "push_bias": "conditional",
-            "reason": "美债收益率、美元或主要风险资产出现明显波动，可能影响 A 股风险偏好。",
-            "tags": ["market_reaction", "large_move"],
         }
     return {"matched": False, "tier": "", "reason": ""}
 
@@ -587,8 +541,8 @@ def apply_macro_review_override(review: dict[str, Any], item: dict[str, Any]) ->
             targets.append(target)
     updated["affected_targets"] = targets[:5]
     note = (
-        "宏观政策线覆盖：该条涉及美联储/FOMC/主席沃什、前主席鲍威尔、非农/CPI/PCE，"
-        "或次重点数据的重大偏离/市场反应；按对 A 股风险偏好和成长股估值的影响优先处理。"
+        "宏观政策线覆盖：该条涉及美联储/FOMC/主席沃什、前主席鲍威尔或非农/CPI/PCE；"
+        "按对 A 股风险偏好和成长股估值的影响优先处理。"
     )
     reason = str(updated.get("reason") or "").strip()
     if note not in reason:

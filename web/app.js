@@ -1103,6 +1103,7 @@ async function loadKeywords() {
   try {
     const data = await api('/api/media-keywords');
     document.getElementById('semiconductorAiKeywords').value = keywordListToText(data.semiconductor_ai_keywords || []);
+    document.getElementById('semiconductorAiTitleKeywords').value = keywordListToText(data.semiconductor_ai_title_keywords || []);
     document.getElementById('excludeKeywords').value = keywordListToText(data.exclude_keywords || []);
     document.getElementById('mediaKeywordConfigVersion').textContent = data.config_version || '-';
   } catch (err) {
@@ -1114,13 +1115,15 @@ async function saveKeywords() {
   try {
     const payload = {
       semiconductor_ai_keywords: keywordTextToList(document.getElementById('semiconductorAiKeywords').value),
+      semiconductor_ai_title_keywords: keywordTextToList(document.getElementById('semiconductorAiTitleKeywords').value),
       exclude_keywords: keywordTextToList(document.getElementById('excludeKeywords').value)
     };
     const data = await api('/api/media-keywords', {method: 'POST', body: JSON.stringify(payload)});
     document.getElementById('semiconductorAiKeywords').value = keywordListToText(data.semiconductor_ai_keywords || []);
+    document.getElementById('semiconductorAiTitleKeywords').value = keywordListToText(data.semiconductor_ai_title_keywords || []);
     document.getElementById('excludeKeywords').value = keywordListToText(data.exclude_keywords || []);
     document.getElementById('mediaKeywordConfigVersion').textContent = data.config_version || '-';
-    showStatus(`媒体关键词已保存。半导体/AI ${(data.semiconductor_ai_keywords || []).length} 个，排除 ${(data.exclude_keywords || []).length} 个。`);
+    showStatus(`媒体关键词已保存。主关键词 ${(data.semiconductor_ai_keywords || []).length} 个，标题限定 ${(data.semiconductor_ai_title_keywords || []).length} 个，排除 ${(data.exclude_keywords || []).length} 个。`);
   } catch (err) {
     showStatus(err.message, 'err');
   }

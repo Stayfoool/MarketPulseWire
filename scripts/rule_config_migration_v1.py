@@ -84,12 +84,11 @@ def preview_rule_config_migration(
         "origin_counts": {name: len(values) for name, values in origin_terms.items()},
         "validated_target_section_counts": {
             "semiconductor_ai_keywords": len(target.semiconductor_ai_keywords),
+            "semiconductor_ai_title_keywords": len(target.semiconductor_ai_title_keywords),
             "major_semiconductor_customers": len(target.major_semiconductor_customers),
             "exclude_keywords": len(target.exclude_keywords),
             "macro_indicators": len(target.macro_indicators),
             "macro_context_aliases": len(target.macro_context_aliases),
-            "macro_primary_indicators": len(target.macro_primary_indicators),
-            "macro_secondary_indicators": len(target.macro_secondary_indicators),
             "fed_event_aliases": len(target.fed_event_aliases),
             "fed_actor_aliases": len(target.fed_actor_aliases),
             "fed_path_aliases": len(target.fed_path_aliases),

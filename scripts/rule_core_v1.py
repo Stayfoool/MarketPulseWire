@@ -928,6 +928,20 @@ def _matches(text: str, terms: Iterable[str]) -> tuple[str, ...]:
     return tuple(term for term in terms if _contains(text, term))
 
 
+def _semiconductor_scope_matches(item: NormalizedMarketItem, config: RuleConfig) -> tuple[str, ...]:
+    title_terms = _matches(item.title, config.semiconductor_ai_title_keywords)
+    title_only_keys = {value.casefold() for value in config.semiconductor_ai_title_keywords}
+    full_text_terms = _matches(
+        item.text_for_rules,
+        (
+            term
+            for term in config.semiconductor_ai_keywords
+            if term.casefold() not in title_only_keys
+        ),
+    )
+    return tuple(dict.fromkeys((*title_terms, *full_text_terms)))
+
+
 def _sentences(text: str) -> list[str]:
     return [part.strip() for part in re.split(r"(?<=[。！？!?；;])|(?<=\.)\s+|\n+", text) if part.strip()]
 
@@ -1020,7 +1034,7 @@ def admit_market_item(
     direct_holding = any(item.reason_code == "holding_direct_identity" for item in evidence)
     excluded_terms = _matches(text, rule_config.exclude_keywords)
 
-    semi = _matches(text, rule_config.semiconductor_ai_keywords)
+    semi = _semiconductor_scope_matches(item, rule_config)
     if semi:
         evidence.append(_evidence("semiconductor_ai", "semiconductor_ai_scope", text, semi))
 
@@ -2738,8 +2752,7 @@ def _macro_candidate(item: NormalizedMarketItem, text: str, config: RuleConfig) 
     classification = classify_macro_policy_content(
         _classification_item(item),
         primary_keywords=(),
-        us_scoped_primary_keywords=config.macro_primary_indicators,
-        secondary_keywords=config.macro_secondary_indicators,
+        us_scoped_primary_keywords=config.macro_indicators,
         us_context_keywords=config.macro_context_aliases,
     )
     expected_evidence = str(classification.get("expected_evidence") or "")
@@ -2750,19 +2763,6 @@ def _macro_candidate(item: NormalizedMarketItem, text: str, config: RuleConfig) 
         return _candidate("macro_data", "macro_release_preview", "daily", text, "数据尚未发布。")
     if classification.get("primary") and classification.get("direct_release") and surprise_evidence:
         return _candidate("macro_data", "macro_surprise", "push", surprise_evidence, "核心数据出现明确偏离。")
-    if (
-        classification.get("secondary")
-        and classification.get("direct_release")
-        and surprise_evidence
-        and classification.get("attributable_market_reaction")
-    ):
-        return _candidate(
-            "macro_data",
-            "macro_secondary_reaction",
-            "push",
-            surprise_evidence,
-            "次重点数据偏离并伴随可归因的大幅市场反应。",
-        )
     return _candidate("macro_data", "macro_release_expected", "daily", text, "数据相关但未形成可推送偏离。")
 
 

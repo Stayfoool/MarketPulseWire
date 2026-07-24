@@ -2268,13 +2268,20 @@ class HoldingsHandler(BaseHTTPRequestHandler):
             payload = self.read_json()
             if parsed.path == "/api/media-keywords":
                 semiconductor_ai_keywords = payload.get("semiconductor_ai_keywords")
+                semiconductor_ai_title_keywords = payload.get("semiconductor_ai_title_keywords")
                 exclude_keywords = payload.get("exclude_keywords")
-                if not isinstance(semiconductor_ai_keywords, list) or not isinstance(exclude_keywords, list):
+                if (
+                    not isinstance(semiconductor_ai_keywords, list)
+                    or not isinstance(semiconductor_ai_title_keywords, list)
+                    or not isinstance(exclude_keywords, list)
+                ):
                     raise HoldingsError(
-                        "请求缺少 semiconductor_ai_keywords / exclude_keywords 数组"
+                        "请求缺少 semiconductor_ai_keywords / semiconductor_ai_title_keywords / exclude_keywords 数组"
                     )
                 saved = save_media_keyword_config(
-                    semiconductor_ai_keywords, exclude_keywords
+                    semiconductor_ai_keywords,
+                    exclude_keywords,
+                    semiconductor_ai_title_keywords=semiconductor_ai_title_keywords,
                 )
                 saved.pop("backup_path", None)
                 saved["ok"] = True

@@ -71,14 +71,23 @@ def load_media_keyword_config(
     _validate_rule_payload(raw)
     return {
         "semiconductor_ai_keywords": normalize_keywords(raw.get("semiconductor_ai_keywords") or []),
+        "semiconductor_ai_title_keywords": normalize_keywords(
+            raw.get("semiconductor_ai_title_keywords") or []
+        ),
         "exclude_keywords": normalize_keywords(raw.get("exclude_keywords") or []),
         "config_version": str(raw.get("config_version") or "").strip(),
     }
 
 
-def _config_version(keywords: list[str], excludes: list[str]) -> str:
+def _config_version(
+    keywords: list[str], title_keywords: list[str], excludes: list[str]
+) -> str:
     digest_input = json.dumps(
-        {"semiconductor_ai_keywords": keywords, "exclude_keywords": excludes},
+        {
+            "semiconductor_ai_keywords": keywords,
+            "semiconductor_ai_title_keywords": title_keywords,
+            "exclude_keywords": excludes,
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -93,6 +102,7 @@ def save_media_keyword_config(
     exclude_keywords: Iterable[object],
     path: Path | None = None,
     *,
+    semiconductor_ai_title_keywords: Iterable[object] | None = None,
     env: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
     resolved = rule_config_path(path, env=env)
@@ -106,10 +116,31 @@ def save_media_keyword_config(
         if not keywords:
             raise ValueError("半导体/AI关键词不能为空")
         current_keywords = normalize_keywords(raw.get("semiconductor_ai_keywords") or [])
+        current_title_keywords = normalize_keywords(
+            raw.get("semiconductor_ai_title_keywords") or []
+        )
+        title_keywords = normalize_keywords(
+            semiconductor_ai_title_keywords
+            if semiconductor_ai_title_keywords is not None
+            else [
+                value
+                for value in current_title_keywords
+                if value.casefold() in {item.casefold() for item in keywords}
+            ]
+        )
+        if not set(value.casefold() for value in title_keywords).issubset(
+            {value.casefold() for value in keywords}
+        ):
+            raise ValueError("标题限定关键词必须是半导体/AI关键词的子集")
         current_excludes = normalize_keywords(raw.get("exclude_keywords") or [])
-        if keywords == current_keywords and excludes == current_excludes:
+        if (
+            keywords == current_keywords
+            and title_keywords == current_title_keywords
+            and excludes == current_excludes
+        ):
             return {
                 "semiconductor_ai_keywords": keywords,
+                "semiconductor_ai_title_keywords": title_keywords,
                 "exclude_keywords": excludes,
                 "config_version": str(raw.get("config_version") or "").strip(),
                 "changed": False,
@@ -118,8 +149,9 @@ def save_media_keyword_config(
 
         updated = dict(raw)
         updated["semiconductor_ai_keywords"] = keywords
+        updated["semiconductor_ai_title_keywords"] = title_keywords
         updated["exclude_keywords"] = excludes
-        updated["config_version"] = _config_version(keywords, excludes)
+        updated["config_version"] = _config_version(keywords, title_keywords, excludes)
         _validate_rule_payload(updated)
 
         backup_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -143,6 +175,7 @@ def save_media_keyword_config(
                 os.unlink(tmp_name)
         return {
             "semiconductor_ai_keywords": keywords,
+            "semiconductor_ai_title_keywords": title_keywords,
             "exclude_keywords": excludes,
             "config_version": updated["config_version"],
             "changed": True,
@@ -170,13 +203,23 @@ def keyword_matches_text(keyword: str, text: str) -> bool:
 
 
 def media_keyword_match(*parts: str) -> dict[str, str | bool]:
+    title = parts[0] if parts else ""
     text = " ".join(part for part in parts if part)
     config = load_media_keyword_config()
     for keyword in config["exclude_keywords"]:
         if keyword_matches_text(str(keyword), text):
             return {"matched": False, "blocked": True, "keyword": keyword, "bucket": "exclude"}
+    title_only = {
+        str(value).casefold() for value in config["semiconductor_ai_title_keywords"]
+    }
     for keyword in config["semiconductor_ai_keywords"]:
-        if keyword_matches_text(str(keyword), text):
+        keyword_text = str(keyword)
+        matched = (
+            keyword_matches_text(keyword_text, title)
+            if keyword_text.casefold() in title_only
+            else keyword_matches_text(keyword_text, text)
+        )
+        if matched:
             return {
                 "matched": True,
                 "blocked": False,

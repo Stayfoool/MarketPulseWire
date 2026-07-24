@@ -16,6 +16,7 @@
     "机器人",
     "激光雷达"
   ],
+  "semiconductor_ai_title_keywords": [],
   "major_semiconductor_customers": [
     "NVIDIA", "英伟达",
     "Micron", "美光",
@@ -30,12 +31,8 @@
     "加拿大央行"
   ],
   "macro_data": {
-    "indicators": ["CPI", "PCE", "非农", "ADP", "JOLTS", "PPI", "ISM", "进口物价"],
-    "context_aliases": ["美国", "US", "U.S."],
-    "tiers": {
-      "primary": ["CPI", "PCE", "非农"],
-      "secondary": ["ADP", "JOLTS", "PPI", "ISM", "进口物价"]
-    }
+    "indicators": ["CPI", "PCE", "非农"],
+    "context_aliases": ["美国", "US", "U.S."]
   },
   "fed_policy": {
     "event_aliases": ["美联储", "FOMC", "Fed"],

@@ -237,7 +237,7 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "id": "macro_policy_line",
         "name": "美国宏观/Fed 政策线",
         "group": "宏观流动性",
-        "description": "非农、CPI、PCE、FOMC/主席讲话及伴随大幅市场反应的次重点数据即时提醒。",
+        "description": "非农、CPI、PCE、FOMC/主席讲话等核心宏观事件即时提醒。",
         "runtime": "macro_policy + push_rules / article + event",
         "execution_mode": ORDERED_FIRST_MATCH,
         "hit_markers": ("macro_policy_line",),
@@ -246,7 +246,6 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
             {"key": "enabled", "label": "启用", "type": "bool", "default": True},
             {"key": "priority", "label": "规则顺序", "type": "int", "default": 60, "min": 1, "max": 999},
             {"key": "extra_primary_keywords", "label": "额外核心宏观关键词", "type": "list", "default": []},
-            {"key": "extra_secondary_keywords", "label": "额外次重点数据关键词", "type": "list", "default": []},
         ),
     },
     {

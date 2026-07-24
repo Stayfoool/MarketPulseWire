@@ -71,7 +71,7 @@ def test_page_uses_extracted_assets_and_bounded_placeholders() -> None:
     assert "未配置访问令牌，仅限 SSH 隧道使用" in html
 
 
-def test_media_keywords_use_one_semiconductor_ai_list() -> None:
+def test_media_keywords_use_one_master_list_and_a_title_only_subset() -> None:
     source = frontend_source()
     assert 'id="semiconductorAiKeywords"' in source
     assert 'id="excludeKeywords"' in source
@@ -106,6 +106,7 @@ def test_media_keywords_use_one_semiconductor_ai_list() -> None:
             assert set(payload) == {
                 "ok",
                 "semiconductor_ai_keywords",
+                "semiconductor_ai_title_keywords",
                 "exclude_keywords",
                 "config_version",
             }
@@ -113,6 +114,7 @@ def test_media_keywords_use_one_semiconductor_ai_list() -> None:
             body = json.dumps(
                 {
                     "semiconductor_ai_keywords": ["HBM", "SMIC"],
+                    "semiconductor_ai_title_keywords": ["SMIC"],
                     "exclude_keywords": ["培训广告"],
                 }
             )
@@ -122,6 +124,7 @@ def test_media_keywords_use_one_semiconductor_ai_list() -> None:
             saved = json.loads(response.read().decode("utf-8"))
             assert response.status == 200
             assert saved["semiconductor_ai_keywords"] == ["HBM", "SMIC"]
+            assert saved["semiconductor_ai_title_keywords"] == ["SMIC"]
             assert saved["exclude_keywords"] == ["培训广告"]
             assert "backup_path" not in saved
             on_disk = json.loads(rule_path.read_text(encoding="utf-8"))
@@ -1371,7 +1374,7 @@ def test_unit_display_metadata_includes_news_production_collector() -> None:
 def main() -> int:
     test_extracted_script_keeps_newline_escapes()
     test_page_uses_extracted_assets_and_bounded_placeholders()
-    test_media_keywords_use_one_semiconductor_ai_list()
+    test_media_keywords_use_one_master_list_and_a_title_only_subset()
     test_rule_shadow_report_view_is_read_only_and_path_bounded()
     test_static_asset_routes_are_allowlisted()
     test_health_page_exposes_service_action_controls()
