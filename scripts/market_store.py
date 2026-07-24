@@ -354,8 +354,6 @@ def _complete_market_review_in_conn(
     market_review_id: int,
     flow_result: MarketFlowResult,
     *,
-    legacy_store_kind: str | None = None,
-    legacy_store_id: str | None = None,
     legacy_payload: dict[str, Any] | None = None,
 ) -> int:
     now = utc_now()
@@ -371,9 +369,7 @@ def _complete_market_review_in_conn(
         """
         UPDATE market_reviews
         SET review_status = 'succeeded', decision_action = ?, importance = ?,
-            decision_json = ?, interpretation_json = ?, legacy_payload_json = ?, completed_at = ?,
-            legacy_store_kind = COALESCE(?, legacy_store_kind),
-            legacy_store_id = COALESCE(?, legacy_store_id)
+            decision_json = ?, interpretation_json = ?, legacy_payload_json = ?, completed_at = ?
         WHERE id = ?
         """,
         (
@@ -383,8 +379,6 @@ def _complete_market_review_in_conn(
             json_dumps(flow_result.interpretation.to_dict()),
             json_dumps(legacy_payload) if legacy_payload is not None else None,
             now,
-            legacy_store_kind,
-            legacy_store_id,
             market_review_id,
         ),
     )
@@ -398,6 +392,44 @@ def _complete_market_review_in_conn(
 CompatibilityWriter = Callable[[sqlite3.Connection], tuple[str, str] | None]
 
 
+def _assign_compatibility_reference(
+    conn: sqlite3.Connection,
+    market_review_id: int,
+    compatibility_ref: tuple[str, str],
+) -> None:
+    store_kind, store_id = (str(value or "").strip() for value in compatibility_ref)
+    if not store_kind or not store_id:
+        raise ValueError("compatibility reference requires store kind and store id")
+    target = conn.execute(
+        "SELECT market_item_id,task,is_current FROM market_reviews WHERE id=?",
+        (market_review_id,),
+    ).fetchone()
+    if not target:
+        raise RuntimeError(f"market review does not exist: {market_review_id}")
+    owner = conn.execute(
+        """
+        SELECT id,market_item_id,task,is_current
+        FROM market_reviews
+        WHERE legacy_store_kind=? AND legacy_store_id=?
+        """,
+        (store_kind, store_id),
+    ).fetchone()
+    if owner and int(owner[0]) != market_review_id:
+        same_item_and_task = int(owner[1]) == int(target[0]) and str(owner[2]) == str(target[1])
+        if not same_item_and_task or int(owner[3]) != 0 or int(target[2]) != 1:
+            raise RuntimeError(
+                "compatibility reference is owned by another current result, item, or task"
+            )
+        conn.execute(
+            "UPDATE market_reviews SET legacy_store_kind=NULL,legacy_store_id=NULL WHERE id=?",
+            (int(owner[0]),),
+        )
+    conn.execute(
+        "UPDATE market_reviews SET legacy_store_kind=?,legacy_store_id=? WHERE id=?",
+        (store_kind, store_id, market_review_id),
+    )
+
+
 def complete_market_review(
     market_review_id: int,
     flow_result: MarketFlowResult,
@@ -409,6 +441,11 @@ def complete_market_review(
     compatibility_writer: CompatibilityWriter | None = None,
     alias: tuple[str, str, str, str] | None = None,
 ) -> None:
+    direct_ref = None
+    if legacy_store_kind is not None or legacy_store_id is not None:
+        if not legacy_store_kind or not legacy_store_id:
+            raise ValueError("legacy compatibility reference requires both kind and id")
+        direct_ref = (legacy_store_kind, legacy_store_id)
     with connect_sqlite(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -416,20 +453,14 @@ def complete_market_review(
                 conn,
                 market_review_id,
                 flow_result,
-                legacy_store_kind=legacy_store_kind,
-                legacy_store_id=legacy_store_id,
                 legacy_payload=legacy_payload,
             )
-            compatibility_ref = compatibility_writer(conn) if compatibility_writer else None
+            writer_ref = compatibility_writer(conn) if compatibility_writer else None
+            if writer_ref and direct_ref and tuple(writer_ref) != direct_ref:
+                raise RuntimeError("compatibility writer returned a conflicting reference")
+            compatibility_ref = writer_ref or direct_ref
             if compatibility_ref:
-                conn.execute(
-                    """
-                    UPDATE market_reviews
-                    SET legacy_store_kind=?, legacy_store_id=?
-                    WHERE id=?
-                    """,
-                    (compatibility_ref[0], compatibility_ref[1], market_review_id),
-                )
+                _assign_compatibility_reference(conn, market_review_id, compatibility_ref)
             if alias:
                 ensure_market_item_alias(
                     conn,

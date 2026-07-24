@@ -300,13 +300,22 @@ the prior version for audit. Decision and interpretation are first written to
 `market_reviews`, then the corresponding legacy result row and alias are
 generated from that exact payload in the same SQLite transaction. A legacy
 copy failure therefore rolls back the unified completion rather than leaving
-two completed results. `deliveries` determines whether the item was already sent and event
+two completed results. The compatibility reference belongs to the current
+result version. When a new current version rewrites the same compatibility
+row, the same transaction clears the reference from the prior non-current
+version and assigns it to the new version, while preserving the prior decision,
+interpretation and bounded compatibility payload. A reference owned by another
+item, task or current version fails closed and rolls back the compatibility copy
+and unified completion. `deliveries` determines whether the item was already sent and event
 delivery records the unified item/result links at insertion; legacy `pushed_at`
 is only a compatibility projection. After the migration marker, feedback
 lookup and Web overview counts also fail closed on or read the unified records
 instead of recovering eligibility or counts from legacy rows.
 `market_storage_audit.py` compares new unified and compatibility records by
-time range without printing article bodies or private model payloads.
+time range without printing article bodies or private model payloads. It also
+fails when a current result is stuck on the compatibility-reference unique
+constraint; ordinary retryable processing failures remain counts rather than
+storage differences.
 
 The project keeps the existing physical stores:
 

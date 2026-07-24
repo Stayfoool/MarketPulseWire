@@ -146,8 +146,23 @@ def audit_storage(conn: sqlite3.Connection, *, since: str, until: str) -> dict[s
             """
             SELECT COUNT(*) FROM market_reviews
             WHERE created_at>=? AND created_at<? AND admission_status='admitted'
-              AND review_status='succeeded'
+              AND review_status='succeeded' AND is_current=1
               AND (legacy_store_kind IS NULL OR legacy_store_id IS NULL)
+            """,
+            article_params,
+        ),
+        "current_compatibility_reference_conflict": _scalar(
+            conn,
+            """
+            SELECT COUNT(*)
+            FROM market_reviews r
+            JOIN market_items m ON m.id=r.market_item_id
+            WHERE r.created_at>=? AND r.created_at<? AND r.is_current=1
+              AND r.review_status IN ('failed_retryable','failed_terminal')
+              AND instr(
+                    COALESCE(m.processing_error,''),
+                    'UNIQUE constraint failed: market_reviews.legacy_store_kind, market_reviews.legacy_store_id'
+                  )>0
             """,
             article_params,
         ),
@@ -267,6 +282,24 @@ def audit_storage(conn: sqlite3.Connection, *, since: str, until: str) -> dict[s
         ),
         "unified_results": _scalar(
             conn, "SELECT COUNT(*) FROM market_reviews WHERE created_at>=? AND created_at<?", article_params
+        ),
+        "current_retryable_failures": _scalar(
+            conn,
+            """
+            SELECT COUNT(*) FROM market_reviews
+            WHERE created_at>=? AND created_at<? AND is_current=1
+              AND review_status='failed_retryable'
+            """,
+            article_params,
+        ),
+        "current_terminal_failures": _scalar(
+            conn,
+            """
+            SELECT COUNT(*) FROM market_reviews
+            WHERE created_at>=? AND created_at<? AND is_current=1
+              AND review_status='failed_terminal'
+            """,
+            article_params,
         ),
         "deliveries": _scalar(
             conn,

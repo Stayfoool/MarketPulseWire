@@ -150,8 +150,12 @@ sudo -u surveil /opt/surveil/.venv/bin/python \
 Use `--since <UTC ISO timestamp>` and `--until <UTC ISO timestamp>` to audit a
 deployment or observation window. Any missing identity/result, action mismatch,
 delivery without unified item/result, duplicate current result, orphan
-reference, foreign-key error or failed `quick_check` blocks rollout. The old
-tables remain enabled as compatibility copies during this stage.
+reference, current result blocked by the compatibility-reference unique
+constraint, foreign-key error or failed `quick_check` blocks rollout. Current
+retryable and terminal failures are reported as counts; failures unrelated to
+the compatibility-reference constraint do not by themselves make this storage
+comparison fail. The old tables remain enabled as compatibility copies during
+this stage.
 
 Use it to verify whether your Mac, GitHub, and server are aligned:
 
