@@ -186,8 +186,9 @@ def test_hard_deadline_cancels_inflight_http_request() -> None:
             return {}
 
     class SlowClient:
-        def __init__(self, **_kwargs):
-            pass
+        def __init__(self, **kwargs):
+            assert kwargs["timeout"] is None
+            assert kwargs["trust_env"] is False
 
         async def __aenter__(self):
             return self

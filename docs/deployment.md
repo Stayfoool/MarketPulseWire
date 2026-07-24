@@ -279,6 +279,10 @@ produce `archive`; no match plus any `uncertain` result produces no decision.
 A structurally invalid, evidence-invalid or conflicting response may receive
 one correction request containing the validation errors. Network retries and
 that correction share one hard 120-second total wall-clock budget.
+The production LLM HTTP client connects to `LLM_BASE_URL` directly and does not
+inherit collector `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` variables. Source
+fetching continues to use `proxy.env`; no SOCKS dependency is required for the
+model provider request.
 
 Each production decision audit stores exact requests, raw responses, response
 metadata and validation details for all calls under
