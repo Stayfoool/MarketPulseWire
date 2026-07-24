@@ -13,6 +13,9 @@ from typing import Mapping
 from market_item import RuleFamily
 
 
+LLM_DECISION_RULE_VERSION = "llm-decision-rules-v13-20260724"
+# Historical comparison writers/readers still import these exact version names.
+# New production decisions record only LLM_DECISION_RULE_VERSION.
 RULE_MATRIX_VERSION = "llm-reviewed-rule-matrix-v12-20260724"
 CATALOG_VERSION = "llm-rule-catalog-v13"
 MODEL_ACTIONS = ("push", "daily", "archive")
@@ -26,7 +29,7 @@ class LLMRuleDefinition:
     action_conditions: Mapping[str, str]
     required_facts: tuple[str, ...]
     exclusions: tuple[str, ...]
-    version: str = CATALOG_VERSION
+    version: str = LLM_DECISION_RULE_VERSION
 
     def __post_init__(self) -> None:
         if not self.rule_id or not self.title:

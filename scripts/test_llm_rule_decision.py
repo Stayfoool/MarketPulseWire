@@ -8,7 +8,7 @@ import copy
 import json
 from pathlib import Path
 
-from llm_rule_catalog import CATALOG_VERSION, RULE_MATRIX_VERSION, RULES, rules_for_families
+from llm_rule_catalog import LLM_DECISION_RULE_VERSION, RULES, rules_for_families
 from llm_rule_decision import (
     MAX_BODY_INPUT_CHARS,
     MAX_EVIDENCE_REFS_PER_LIST,
@@ -110,8 +110,7 @@ def _response(
 
 
 def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
-    assert CATALOG_VERSION == "llm-rule-catalog-v13"
-    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v12-20260724"
+    assert LLM_DECISION_RULE_VERSION == "llm-decision-rules-v13-20260724"
     assert len(RULES) == 16
     assert len({rule.rule_id for rule in RULES}) == len(RULES)
     assert {rule.rule_id for rule in RULES} == {
@@ -140,7 +139,7 @@ def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
         "trade_policy",
     }
     for rule in RULES:
-        assert rule.version == CATALOG_VERSION
+        assert rule.version == LLM_DECISION_RULE_VERSION
         assert rule.allowed_actions
         assert set(rule.allowed_actions) <= {"push", "daily", "archive"}
         assert rule.required_facts
@@ -233,7 +232,7 @@ def test_every_allowed_action_projects_to_decision_result_with_fixed_responses()
             assert result.decision.audit_json["semantic_action_selected_by_model"] is True
             assert result.decision.audit_json["production_authority"] is False
             assert result.decision.audit_json["model"] == "fixed-test-model"
-            assert result.rule_catalog_version == CATALOG_VERSION
+            assert result.llm_decision_rule_version == LLM_DECISION_RULE_VERSION
             assert result.rule_config_version == "test-private-config-v1"
 
 

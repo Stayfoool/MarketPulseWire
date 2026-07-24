@@ -2382,7 +2382,11 @@ def test_new_core_has_only_reviewed_production_importers() -> None:
                 production_importers.append(path.name)
             elif isinstance(node, ast.ImportFrom) and node.module == "rule_core_v1":
                 production_importers.append(path.name)
-    assert sorted(production_importers) == ["production_admission.py", "rule_core_runtime_shadow.py"]
+    assert sorted(production_importers) == [
+        "llm_production_decision.py",
+        "production_admission.py",
+        "rule_core_runtime_shadow.py",
+    ]
 
 
 def main() -> int:

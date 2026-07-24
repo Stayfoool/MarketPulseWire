@@ -14,7 +14,18 @@ from market_item import DecisionResult
 COMPANY_EVENT_RULE_ID = "company_event_dedup"
 COMPANY_EVENT_LOOKBACK_DAYS = 90
 BEIJING_TIMEZONE = timezone(timedelta(hours=8))
-ELIGIBLE_RULE_IDS = {"holding_keyword_immediate_alert", "industry_quantified_hardline"}
+ELIGIBLE_RULE_IDS = {
+    "holding_keyword_immediate_alert",
+    "industry_quantified_hardline",
+    "holding_immediate_alert",
+    "holding_material_event",
+    "semiconductor_price_supply_change",
+    "semiconductor_material_change",
+    "semiconductor_performance_change",
+    "industry_forecast_revision",
+    "ai_compute_constraint",
+    "ai_credit_constraint",
+}
 
 # These ids only preserve reservations created by the bounded predecessor. They
 # do not control which issuers are eligible for extraction.

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import time
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable
 
 from llm_analysis import ChatCompletionResponse, LLMBalanceInsufficientError
-from llm_rule_catalog import CATALOG_VERSION, RULE_MATRIX_VERSION
+from llm_rule_catalog import LLM_DECISION_RULE_VERSION
 from llm_rule_decision import (
     ENGINE_VERSION,
     PROMPT_VERSION,
@@ -31,6 +33,12 @@ CONTRACT_VERSION = "llm-rule-shadow-v2"
 VALID_CURRENT_ADMISSION_STATUSES = {"admitted", "excluded", "not_applicable", "unknown"}
 VALID_CURRENT_ACTIONS = {"push", "daily", "archive", "ignore"}
 ModelCaller = Callable[[LLMRulePrompt], ChatCompletionResponse]
+
+
+@dataclass(frozen=True)
+class LLMRuleExecution:
+    decision: DecisionResult | None
+    candidate: dict[str, Any]
 
 
 def _clean(value: object, limit: int = 500) -> str:
@@ -199,8 +207,7 @@ def _candidate_base(admission: AdmissionResult) -> dict[str, Any]:
         "body_provided_chars": 0,
         "body_truncated": False,
         "prompt_chars": 0,
-        "rule_matrix_version": RULE_MATRIX_VERSION,
-        "rule_catalog_version": CATALOG_VERSION,
+        "llm_decision_rule_version": LLM_DECISION_RULE_VERSION,
         "prompt_version": PROMPT_VERSION,
         "candidate_engine": ENGINE_VERSION,
     }
@@ -351,6 +358,176 @@ def _combined_response(
     )
 
 
+def execute_llm_rule_decision(
+    item: NormalizedMarketItem,
+    *,
+    admission: AdmissionResult,
+    portfolio: PortfolioRuleConfig,
+    model_caller: ModelCaller,
+    input_text_scope: str | None = None,
+    max_input_chars: int = 120_000,
+    deadline_monotonic: float | None = None,
+    production_authority: bool = False,
+) -> LLMRuleExecution:
+    """Execute and strictly validate one LLM degree decision without persistence."""
+    if admission.status != "admitted":
+        return LLMRuleExecution(None, _candidate_base(admission))
+    try:
+        prompt = build_llm_rule_prompt(
+            item,
+            admission,
+            input_text_scope=input_text_scope,
+            matched_context=_matched_context(item, admission, portfolio),
+            max_input_chars=max_input_chars,
+        )
+    except LLMRuleInputError as exc:
+        candidate = _failure_candidate(admission, "insufficient_input", f"{exc.code}: {exc}")
+        return LLMRuleExecution(None, candidate)
+
+    audit_calls: list[dict[str, Any]] = []
+    request_options = getattr(model_caller, "audit_options", {})
+
+    def call_model(call_prompt: LLMRulePrompt) -> ChatCompletionResponse:
+        if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+            raise TimeoutError("LLM decision exceeded its total deadline")
+        response = model_caller(call_prompt)
+        if deadline_monotonic is not None and time.monotonic() > deadline_monotonic:
+            raise TimeoutError("LLM decision exceeded its total deadline")
+        return response
+
+    try:
+        response = call_model(prompt)
+    except LLMBalanceInsufficientError:
+        audit_calls.append(
+            _model_call_audit(
+                prompt,
+                transport_error="balance_insufficient",
+                request_options=request_options,
+            )
+        )
+        candidate = _failure_candidate(
+            admission,
+            "model_unavailable",
+            "balance_insufficient",
+            prompt=prompt,
+            model_calls=1,
+            model_audit_calls=audit_calls,
+        )
+        return LLMRuleExecution(None, candidate)
+    except TimeoutError:
+        audit_calls.append(
+            _model_call_audit(prompt, transport_error="timeout", request_options=request_options)
+        )
+        candidate = _failure_candidate(
+            admission,
+            "model_unavailable",
+            "timeout",
+            prompt=prompt,
+            model_calls=1,
+            model_audit_calls=audit_calls,
+        )
+        return LLMRuleExecution(None, candidate)
+    except Exception as exc:  # noqa: BLE001 - caller receives a bounded failure result.
+        category = "not_configured" if "未配置" in str(exc) else "request_failed"
+        audit_calls.append(
+            _model_call_audit(prompt, transport_error=category, request_options=request_options)
+        )
+        candidate = _failure_candidate(
+            admission,
+            "model_unavailable",
+            category,
+            prompt=prompt,
+            model_calls=1,
+            model_audit_calls=audit_calls,
+        )
+        return LLMRuleExecution(None, candidate)
+
+    result = validate_llm_rule_response(
+        response.content,
+        item,
+        admission,
+        input_text_scope=prompt.input_text_scope,
+        model=response.model,
+    )
+    audit_calls.append(
+        _model_call_audit(
+            prompt,
+            response=response,
+            result=result,
+            request_options=request_options,
+        )
+    )
+    model_calls = 1
+    if needs_validation_retry(result):
+        repair_prompt: LLMRulePrompt | None = None
+        try:
+            repair_prompt = build_llm_rule_repair_prompt(
+                prompt,
+                previous_response=response.content,
+                validation_errors=result.validation_errors,
+                max_input_chars=max_input_chars,
+            )
+            repair_response = call_model(repair_prompt)
+        except Exception as exc:  # noqa: BLE001 - retain the validated first-call failure.
+            if repair_prompt is not None:
+                model_calls = 2
+                transport_error = "timeout" if isinstance(exc, TimeoutError) else "repair_request_failed"
+                audit_calls.append(
+                    _model_call_audit(
+                        repair_prompt,
+                        transport_error=transport_error,
+                        request_options=request_options,
+                    )
+                )
+        else:
+            response = _combined_response(response, repair_response)
+            prompt = repair_prompt
+            model_calls = 2
+            result = validate_llm_rule_response(
+                repair_response.content,
+                item,
+                admission,
+                input_text_scope=repair_prompt.input_text_scope,
+                model=repair_response.model,
+            )
+            audit_calls.append(
+                _model_call_audit(
+                    repair_prompt,
+                    response=repair_response,
+                    result=result,
+                    request_options=request_options,
+                )
+            )
+    if result.evaluation_status != "completed":
+        candidate = _failure_candidate(
+            admission,
+            result.evaluation_status,
+            "; ".join(result.validation_errors),
+            prompt=prompt,
+            response=response,
+            model_calls=model_calls,
+            model_audit_calls=audit_calls,
+        )
+        return LLMRuleExecution(None, candidate)
+
+    decision = result.decision
+    if decision is None:
+        raise ValueError("completed model validation did not return DecisionResult")
+    if production_authority:
+        audit = dict(decision.audit_json)
+        audit["production_authority"] = True
+        decision = replace(decision, audit_json=audit)
+    candidate = _completed_candidate(
+        admission,
+        prompt,
+        response,
+        result,
+        model_calls=model_calls,
+        model_audit_calls=audit_calls,
+    )
+    return LLMRuleExecution(decision, candidate)
+
+
 def compare_llm_rule_candidate(
     item: NormalizedMarketItem,
     *,
@@ -386,127 +563,15 @@ def compare_llm_rule_candidate(
         "matched_families": _families(current_matched_families),
         **_decision_summary(current_decision),
     }
-    if admission.status != "admitted":
-        candidate = _candidate_base(admission)
-    else:
-        try:
-            prompt = build_llm_rule_prompt(
-                item,
-                admission,
-                input_text_scope=input_text_scope,
-                matched_context=_matched_context(item, admission, portfolio),
-                max_input_chars=max_input_chars,
-            )
-        except LLMRuleInputError as exc:
-            candidate = _failure_candidate(admission, "insufficient_input", f"{exc.code}: {exc}")
-        else:
-            audit_calls: list[dict[str, Any]] = []
-            request_options = getattr(model_caller, "audit_options", {})
-            try:
-                response = model_caller(prompt)
-            except LLMBalanceInsufficientError:
-                audit_calls.append(
-                    _model_call_audit(
-                        prompt,
-                        transport_error="balance_insufficient",
-                        request_options=request_options,
-                    )
-                )
-                candidate = _failure_candidate(admission, "model_unavailable", "balance_insufficient", prompt=prompt, model_calls=1, model_audit_calls=audit_calls)
-            except TimeoutError:
-                audit_calls.append(
-                    _model_call_audit(
-                        prompt,
-                        transport_error="timeout",
-                        request_options=request_options,
-                    )
-                )
-                candidate = _failure_candidate(admission, "model_unavailable", "timeout", prompt=prompt, model_calls=1, model_audit_calls=audit_calls)
-            except Exception as exc:  # noqa: BLE001 - report-only failure must remain isolated.
-                category = "not_configured" if "未配置" in str(exc) else "request_failed"
-                audit_calls.append(
-                    _model_call_audit(
-                        prompt,
-                        transport_error=category,
-                        request_options=request_options,
-                    )
-                )
-                candidate = _failure_candidate(admission, "model_unavailable", category, prompt=prompt, model_calls=1, model_audit_calls=audit_calls)
-            else:
-                result = validate_llm_rule_response(
-                    response.content,
-                    item,
-                    admission,
-                    input_text_scope=prompt.input_text_scope,
-                    model=response.model,
-                )
-                audit_calls.append(
-                    _model_call_audit(
-                        prompt,
-                        response=response,
-                        result=result,
-                        request_options=request_options,
-                    )
-                )
-                model_calls = 1
-                if needs_validation_retry(result):
-                    repair_prompt: LLMRulePrompt | None = None
-                    try:
-                        repair_prompt = build_llm_rule_repair_prompt(
-                            prompt,
-                            previous_response=response.content,
-                            validation_errors=result.validation_errors,
-                            max_input_chars=max_input_chars,
-                        )
-                        repair_response = model_caller(repair_prompt)
-                    except Exception:  # noqa: BLE001 - retain the validated first-call failure.
-                        if repair_prompt is not None:
-                            model_calls = 2
-                            audit_calls.append(
-                                _model_call_audit(
-                                    repair_prompt,
-                                    transport_error="repair_request_failed",
-                                    request_options=request_options,
-                                )
-                            )
-                    else:
-                        response = _combined_response(response, repair_response)
-                        prompt = repair_prompt
-                        model_calls = 2
-                        result = validate_llm_rule_response(
-                            repair_response.content,
-                            item,
-                            admission,
-                            input_text_scope=repair_prompt.input_text_scope,
-                            model=repair_response.model,
-                        )
-                        audit_calls.append(
-                            _model_call_audit(
-                                repair_prompt,
-                                response=repair_response,
-                                result=result,
-                                request_options=request_options,
-                            )
-                        )
-                if result.evaluation_status == "completed":
-                    candidate = _completed_candidate(
-                        admission,
-                        prompt,
-                        response,
-                        result,
-                        model_calls=model_calls,
-                        model_audit_calls=audit_calls,
-                    )
-                else:
-                    candidate = _failure_candidate(
-                        admission,
-                        result.evaluation_status,
-                        "; ".join(result.validation_errors),
-                        prompt=prompt,
-                        response=response,
-                        model_calls=model_calls,
-                        model_audit_calls=audit_calls,
-                    )
+    execution = execute_llm_rule_decision(
+        item,
+        admission=admission,
+        portfolio=portfolio,
+        model_caller=model_caller,
+        input_text_scope=input_text_scope,
+        max_input_chars=max_input_chars,
+    )
+    candidate = execution.candidate
 
     comparable = candidate.get("evaluation_status") == "completed"
     changed_fields = [

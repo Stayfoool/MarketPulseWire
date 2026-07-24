@@ -596,6 +596,7 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
     original_module = market_runtime._selected_module
     original_deliver = market_runtime.deliver_article_review
     original_prepare = market_runtime.prepare_item_for_decision
+    original_decider = market_runtime.decide_market_item_with_llm
     calls = {"evaluate": 0, "deliver": 0}
     decision = DecisionResult(action="push", importance="high", reason="HBM扩产")
 
@@ -618,6 +619,7 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
     try:
         market_runtime._selected_module = lambda _kind: FakeModule
         market_runtime.prepare_item_for_decision = lambda value: value
+        market_runtime.decide_market_item_with_llm = lambda *_args, **_kwargs: decision
 
         def fake_deliver(*_args, **kwargs):
             calls["deliver"] += 1
@@ -645,6 +647,7 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
                 store_kind="article",
                 db_path=db_path,
                 production_admission=admitted(),
+                production_portfolio=object(),
                 market_item_id=item_id,
                 market_review_id=review_id,
             )
@@ -655,6 +658,7 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
                 store_kind="article",
                 db_path=db_path,
                 production_admission=admitted(),
+                production_portfolio=object(),
                 market_item_id=repeated_ids[0],
                 market_review_id=repeated_ids[1],
             )
@@ -675,12 +679,14 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
         market_runtime._selected_module = original_module
         market_runtime.deliver_article_review = original_deliver
         market_runtime.prepare_item_for_decision = original_prepare
+        market_runtime.decide_market_item_with_llm = original_decider
     assert calls == {"evaluate": 1, "deliver": 1}
 
 
 def test_production_event_runtime_completes_unified_result_before_legacy_analysis() -> None:
     original_module = market_runtime._selected_module
     original_prepare = market_runtime.prepare_item_for_decision
+    original_decider = market_runtime.decide_market_item_with_llm
     calls = {"analyze": 0}
     decision = DecisionResult(action="daily", importance="medium", reason="公告跟踪")
 
@@ -692,6 +698,7 @@ def test_production_event_runtime_completes_unified_result_before_legacy_analysi
         def analyze_event(*_args, **kwargs):
             calls["analyze"] += 1
             assert kwargs["persist_legacy"] is False
+            assert kwargs["decision"] is decision
             return {
                 "core_content": "公告跟踪",
                 "_decision_result": decision.to_dict(),
@@ -701,6 +708,7 @@ def test_production_event_runtime_completes_unified_result_before_legacy_analysi
     try:
         market_runtime._selected_module = lambda _kind: FakeEventModule
         market_runtime.prepare_item_for_decision = lambda value: value
+        market_runtime.decide_market_item_with_llm = lambda *_args, **_kwargs: decision
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "event-runtime.sqlite3"
             init_db(db_path).close()
@@ -723,6 +731,7 @@ def test_production_event_runtime_completes_unified_result_before_legacy_analysi
                 db_path=db_path,
                 deliver=False,
                 production_admission=admitted(),
+                production_portfolio=object(),
                 market_item_id=item_id,
                 market_review_id=review_id,
             )
@@ -733,6 +742,7 @@ def test_production_event_runtime_completes_unified_result_before_legacy_analysi
                 db_path=db_path,
                 deliver=False,
                 production_admission=admitted(),
+                production_portfolio=object(),
                 market_item_id=item_id,
                 market_review_id=review_id,
             )
@@ -749,12 +759,14 @@ def test_production_event_runtime_completes_unified_result_before_legacy_analysi
     finally:
         market_runtime._selected_module = original_module
         market_runtime.prepare_item_for_decision = original_prepare
+        market_runtime.decide_market_item_with_llm = original_decider
     assert calls == {"analyze": 1}
 
 
 def test_production_official_runtime_uses_unified_result_and_compatibility_copy() -> None:
     original_module = market_runtime._selected_module
     original_prepare = market_runtime.prepare_item_for_decision
+    original_decider = market_runtime.decide_market_item_with_llm
     decision = DecisionResult(action="archive", importance="low", reason="例行官网更新")
 
     class FakeOfficialModule:
@@ -775,6 +787,7 @@ def test_production_official_runtime_uses_unified_result_and_compatibility_copy(
     try:
         market_runtime._selected_module = lambda _kind: FakeOfficialModule
         market_runtime.prepare_item_for_decision = lambda value: value
+        market_runtime.decide_market_item_with_llm = lambda *_args, **_kwargs: decision
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "official-runtime.sqlite3"
             init_db(db_path).close()
@@ -795,6 +808,7 @@ def test_production_official_runtime_uses_unified_result_and_compatibility_copy(
                 db_path=db_path,
                 deliver=False,
                 production_admission=admitted(),
+                production_portfolio=object(),
                 market_item_id=item_id,
                 market_review_id=review_id,
             )
@@ -812,6 +826,101 @@ def test_production_official_runtime_uses_unified_result_and_compatibility_copy(
     finally:
         market_runtime._selected_module = original_module
         market_runtime.prepare_item_for_decision = original_prepare
+        market_runtime.decide_market_item_with_llm = original_decider
+
+
+def test_production_llm_failure_retries_same_review_without_delivery() -> None:
+    original_module = market_runtime._selected_module
+    original_decider = market_runtime.decide_market_item_with_llm
+    calls = {"evaluate": 0}
+    decision = DecisionResult(
+        action="daily",
+        importance="medium",
+        reason="模型固定响应",
+        audit_json={"production_authority": True},
+    )
+
+    class FakeModule:
+        @staticmethod
+        def evaluate_article_review(*_args, **kwargs):
+            calls["evaluate"] += 1
+            assert kwargs["decision"] is decision
+            return {
+                "importance": "medium",
+                "push_now": False,
+                "reason": decision.reason,
+                "daily_summary": "模型固定响应",
+                "raw": {"decision_result": decision.to_dict()},
+            }
+
+        @staticmethod
+        def gate_lines(_review):
+            return []
+
+    try:
+        market_runtime._selected_module = lambda _kind: FakeModule
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "llm-retry.sqlite3"
+            init_db(db_path).close()
+            item = NormalizedMarketItem(
+                source="test_news",
+                source_category="news_media",
+                content_type="article",
+                title="模型失败后重试",
+                url="https://example.com/retry",
+                raw={"id": "llm-retry-1"},
+            )
+            raw_item = {"id": "llm-retry-1", "title": item.title, "url": item.url}
+            item_id, review_id = record_production_admission(item, admitted(), db_path=db_path)
+            market_runtime.decide_market_item_with_llm = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("model unavailable")
+            )
+            try:
+                market_runtime.process_market_item(
+                    item,
+                    raw_item,
+                    store_kind="article",
+                    db_path=db_path,
+                    deliver=False,
+                    production_admission=admitted(),
+                    production_portfolio=object(),
+                    market_item_id=item_id,
+                    market_review_id=review_id,
+                )
+            except RuntimeError as exc:
+                assert "model unavailable" in str(exc)
+            else:
+                raise AssertionError("production model failure must fail the review")
+            failed_ids = record_production_admission(item, admitted(), db_path=db_path)
+            assert failed_ids == (item_id, review_id)
+            with sqlite3.connect(db_path) as conn:
+                assert conn.execute("SELECT review_status FROM market_reviews WHERE id=?", (review_id,)).fetchone()[0] == "failed_retryable"
+                assert conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='article_reviews'"
+                ).fetchone()[0] == 0
+
+            market_runtime.decide_market_item_with_llm = lambda *_args, **_kwargs: decision
+            outcome = market_runtime.process_market_item(
+                item,
+                raw_item,
+                store_kind="article",
+                db_path=db_path,
+                deliver=False,
+                production_admission=admitted(),
+                production_portfolio=object(),
+                market_item_id=item_id,
+                market_review_id=review_id,
+            )
+            with sqlite3.connect(db_path) as conn:
+                assert conn.execute("SELECT review_status FROM market_reviews WHERE id=?", (review_id,)).fetchone()[0] == "succeeded"
+                assert conn.execute("SELECT COUNT(*) FROM market_reviews").fetchone()[0] == 1
+            assert outcome.market_review_id == review_id
+            assert outcome.flow_result.decision.action == "daily"
+    finally:
+        market_runtime._selected_module = original_module
+        market_runtime.decide_market_item_with_llm = original_decider
+    assert calls == {"evaluate": 1}
 
 
 def main() -> int:
@@ -830,6 +939,7 @@ def main() -> int:
     test_production_content_runtime_uses_unified_result_for_existing_and_delivery()
     test_production_event_runtime_completes_unified_result_before_legacy_analysis()
     test_production_official_runtime_uses_unified_result_and_compatibility_copy()
+    test_production_llm_failure_retries_same_review_without_delivery()
     print("market flow checks passed")
     return 0
 

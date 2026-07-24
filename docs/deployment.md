@@ -179,41 +179,21 @@ Install services and timers:
 ./scripts/install_remote_systemd.sh
 ```
 
-The installer copies but keeps these standalone report-only shadow collector timers disabled:
+The installer copies but keeps these standalone report-only collector timers disabled:
 
 - `surveil-research-collector-shadow.timer`
 - `surveil-official-collector-shadow.timer`
 - `surveil-news-collector-shadow.timer`
 - `surveil-collector-shadow-digest.timer`
 
-These standalone shadow jobs are migration aids and are not used by the normal
-production schedule. The three production collector services now enter through
-`run_production_with_rule_shadow.py`. Its default behavior is exactly the old
-production command. When the private `.env` sets
-`RULE_CORE_SHADOW_AUTORUN=1` and supplies both
-`RULE_CORE_SHADOW_CONFIG` and `RULE_CORE_SHADOW_PORTFOLIO`, the unified runtime
-compares the existing production `DecisionResult` with the report-only LLM
-strength decision after the production `DecisionResult` exists and before
-delivery. Both use the exact production `NormalizedMarketItem`; the LLM
-comparison also reuses the exact production five-group `AdmissionResult` and
-current production SQLite holdings rather than running range admission again.
-It writes one bounded report without body text. The service wrapper does not
-run a second collector; after the production collector succeeds it only
-refreshes the combined Markdown/JSON view. Configuration, candidate evaluation
-or report failures cannot change the production collector exit status,
-production decision, review storage, dedup reservation or delivery.
-
-The private comparison paths remain required for compatibility with existing
-report configuration and deterministic operator tools. They should point to
-reviewed private files under a service-user-readable directory and must not be
-put in Git. New production comparisons use `RULE_CORE_CONFIG` plus current
-production SQLite holdings for range admission; `RULE_CORE_SHADOW_PORTFOLIO`
-does not override them. The runtime compares newly inserted review records and
-newly analyzed events; range-excluded, baseline, unanalysed and existing items
-do not create comparison records. Each source family keeps its bounded
-comparison JSON for audit, and the wrapper refreshes
-`reports/rule-core-shadow-combined-latest.md` plus `.json` as the daily
-operator view across research, official-company and news batches.
+These standalone jobs are migration aids and are not used by the normal
+production schedule. The production collectors use the shared runtime directly.
+After five-group range admission, `decision_engine.py` calls the reviewed LLM
+degree rules and returns the only production `DecisionResult`. There is no
+configuration selector between the LLM and the retained deterministic code, and
+model failure does not fall back. A failed model request, invalid result or
+private-audit write marks the current review `failed_retryable` and creates no
+interpretation, delivery or dedup reservation.
 
 `RULE_CORE_CONFIG` is the persisted source for production five-group range
 admission and the Web workbench's `媒体关键词` page. The page edits only
@@ -225,11 +205,10 @@ every other rule section, writes atomically with mode `0600`, and creates a
 private backup beside the rule file. There is no runtime precedence between
 code-default, base and include keyword lists.
 
-When report-only LLM strength comparison is enabled, set
-`RULE_CORE_SHADOW_CONFIG` to the same private rule file as `RULE_CORE_CONFIG`.
-`RULE_CORE_SHADOW_PORTFOLIO` remains a report compatibility input only;
-production admission and the LLM comparison of newly admitted items use the
-current Web-managed production SQLite holdings.
+Historical comparison tools may still read `RULE_CORE_SHADOW_CONFIG` and
+`RULE_CORE_SHADOW_PORTFOLIO`, but neither is a production decision input.
+Production admission and the LLM decision use `RULE_CORE_CONFIG` and current
+Web-managed production SQLite holdings.
 
 For an existing installation that still has private
 `config/media_keywords.json`, preview the one-time migration after deploying
@@ -281,72 +260,34 @@ replaces the private configuration. Verify file ownership/mode, configuration
 version, title-only count, core macro-indicator count and representative range
 admission replays before restarting affected Alibaba services.
 
-When `RULE_CORE_SHADOW_AUTORUN=1`, installation also enables
-`surveil-rule-shadow-daily.timer`. It runs every day at 15:30
-`Asia/Shanghai`, covers the continuous interval from the previous 15:30
-inclusive to the current 15:30 exclusive, and writes dated
-`reports/rule-core-shadow-daily-YYYY-MM-DD.md` and `.json` files. A successful
-report with comparable or skipped new items sends one Feishu reminder through
-the existing private webhook settings; an empty interval sends nothing. A
-successfully notified date is not recalculated or notified again by the scheduled job. The Web
-workbench exposes the dated JSON reports read-only under `规则对比报告`; it does
-not expose candidate enablement or delivery controls. If the private comparison
-switch is disabled, installation disables this daily timer as well.
+Installation disables `surveil-rule-shadow-daily.timer` and enables
+`surveil-llm-decision-audit-cleanup.timer` at 15:30 `Asia/Shanghai`. No new
+current-versus-candidate report or Feishu reminder is generated. Existing dated
+and combined comparison reports remain available read-only in the Web
+workbench. The cleanup retains those historical report files while removing
+expired sensitive model requests/responses.
 
-Each new per-item comparison records its comparison time, candidate engine and
-version, private rule-configuration version and deployed code revision. The
-combined/daily report preserves those fields. The Web workbench can filter the
-selected report to items evaluated by the latest candidate version, while still
-combining that filter with action-change, execution-status and current/candidate
-action filters. For retained deterministic reports created before the explicit
-new-rule version field existed,
-the combiner conservatively treats only records at or after the verified
-completion time of the latest rule-changing deployment as latest-version
-records; earlier records remain `较早或无法确认`.
-
-The comparison candidate remains deterministic unless the private server
-configuration explicitly sets:
-
-```text
-RULE_COMPARISON_CANDIDATE=llm
-```
-
-Do not set this value merely because the supporting code has been deployed.
-Before enabling it, calculate the admitted-item call volume and expected token
-and cost range, explain the production impact, and obtain explicit user
-approval. The current production `DecisionResult`, review, delivery and dedup
-remain authoritative after the selector is enabled; the LLM result is still
-used only in the comparison report.
-
-Optional private limits for that later approved observation are:
-
-```text
-RULE_COMPARISON_LLM_MAX_INPUT_CHARS=120000
-RULE_COMPARISON_LLM_MAX_OUTPUT_TOKENS=6000
-RULE_COMPARISON_LLM_THINKING_TYPE=
-```
-
-An admitted item with a non-empty title may enter LLM comparison even when
-`full_text` is empty. Available summary is included. Available body text is
+An admitted item with a non-empty title enters the production LLM decision even
+when `full_text` is empty. Available summary is included. Available body text is
 limited by code to its first 3,000 characters and divided into numbered exact
 source segments. The model returns segment ids instead of copying quotes; code
 resolves those ids to the original text. Each rule may cite at most three exact
 segments; response-wide evidence totals remain audit metrics rather than
 validity limits, and ellipsis punctuation does not invalidate a segment. The
-catalog contains only specific strength-decision rules. All `not_matched`
-results produce a report-only `archive` candidate; no match plus any
-`uncertain` result produces no candidate. Invalid or unavailable model output
-is recorded as unable to compare and never falls back to the deterministic
-candidate. A structurally invalid, evidence-invalid or conflicting response may
-receive one bounded correction request containing the validation errors.
+catalog contains only reviewed degree-decision rules. All `not_matched` results
+produce `archive`; no match plus any `uncertain` result produces no decision.
+A structurally invalid, evidence-invalid or conflicting response may receive
+one correction request containing the validation errors. Network retries and
+that correction share one hard 120-second total wall-clock budget.
 
-Each per-item LLM comparison audit stores the exact requests, raw responses,
-response metadata and validation details for all calls. These files are mode
-`0600`, remain only in the Alibaba service account's private runtime report
-directory and have their sensitive request/response payload removed by the
-15:30 report job after 30 days. The bounded per-item comparison metadata remains
-available after redaction. Combined/daily reports and the Web API never copy the
-complete request, article body, raw provider response or response id.
+Each production decision audit stores exact requests, raw responses, response
+metadata and validation details for all calls under
+`reports/llm-decision-audits`. The directory is mode `0700`, files are mode
+`0600`, and direct `market_item_id` / `market_review_id` fields link the audit to
+SQLite without storing its complete content there. The cleanup task removes
+sensitive request/response content after 30 days while retaining bounded result
+metadata. Web, Git, Feishu and local report copies never receive complete model
+input, article body or raw provider response.
 
 An operator may explicitly rebuild a historical daily file from its retained
 per-item comparison reports without sending another reminder:
@@ -380,6 +321,12 @@ All general collectors construct `NormalizedMarketItem` and call
 `official_news_reviews`, and `events/event_analyses` stores. The former
 direct/compat runtime switch and compatibility wrappers have been removed; rollback
 now uses the normal Git/PR/deployment process instead of selecting a second runtime.
+The LLM decision cutover follows the same rule: there is no runtime selector back
+to the deterministic decision. Record the preceding Git revision before deployment.
+If rollback criteria are met, stop affected Alibaba collectors, deploy that exact
+preceding revision, restart the same services and verify service health, logs and
+SQLite integrity. Do not rewrite already completed reviews or deliveries during
+rollback.
 The research collector also runs public list/sitemap page sources such as
 TrendForce/SEMI pages and AlphaAbstract summaries on the same low-frequency page
 cadence. AlphaAbstract uses its public `sitemap.xml` and public summary pages;

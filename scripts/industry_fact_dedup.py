@@ -10,7 +10,15 @@ from market_item import DecisionResult
 
 INDUSTRY_FACT_RULE_ID = "industry_fact_dedup"
 INDUSTRY_FACT_LOOKBACK_MINUTES = 36 * 60
-INDUSTRY_HARDLINE_RULE_ID = "industry_quantified_hardline"
+INDUSTRY_HARDLINE_RULE_IDS = {
+    "industry_quantified_hardline",
+    "semiconductor_price_supply_change",
+    "semiconductor_material_change",
+    "semiconductor_performance_change",
+    "industry_forecast_revision",
+    "ai_compute_constraint",
+    "ai_credit_constraint",
+}
 
 IBM_PATTERN = re.compile(r"(?<![a-z0-9])ibm(?![a-z0-9])", re.IGNORECASE)
 COREWEAVE_PATTERN = re.compile(r"(?<![a-z0-9])(?:coreweave|crwv(?:\.o)?)(?![a-z0-9])", re.IGNORECASE)
@@ -179,7 +187,7 @@ def _matches_any(text: str, patterns: tuple[re.Pattern[str], ...]) -> bool:
 
 
 def _has_industry_rule(decision: DecisionResult) -> bool:
-    return any(hit.get("rule_id") == INDUSTRY_HARDLINE_RULE_ID for hit in decision.rule_hits)
+    return any(hit.get("rule_id") in INDUSTRY_HARDLINE_RULE_IDS for hit in decision.rule_hits)
 
 
 def _has_independent_memory_supply_fact(text: str) -> bool:

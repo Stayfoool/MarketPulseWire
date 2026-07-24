@@ -226,14 +226,14 @@ def test_historical_rebuild_fails_when_retained_reports_are_missing() -> None:
 
 def test_systemd_timer_and_installer_use_beijing_1530() -> None:
     root = Path(__file__).resolve().parents[1]
-    timer = (root / "systemd" / "surveil-rule-shadow-daily.timer").read_text(encoding="utf-8")
-    service = (root / "systemd" / "surveil-rule-shadow-daily.service").read_text(encoding="utf-8")
+    timer = (root / "systemd" / "surveil-llm-decision-audit-cleanup.timer").read_text(encoding="utf-8")
+    service = (root / "systemd" / "surveil-llm-decision-audit-cleanup.service").read_text(encoding="utf-8")
     installer = (root / "scripts" / "install_remote_systemd.sh").read_text(encoding="utf-8")
     assert "OnCalendar=*-*-* 15:30:00 Asia/Shanghai" in timer
     assert "Persistent=true" in timer
-    assert "rule_core_shadow_daily.py" in service
-    assert "systemctl enable --now surveil-rule-shadow-daily.timer" in installer
-    assert "RULE_CORE_SHADOW_AUTORUN=(1|true|yes|on)" in installer
+    assert "llm_decision_audit_cleanup.py" in service
+    assert "systemctl enable --now surveil-llm-decision-audit-cleanup.timer" in installer
+    assert "systemctl disable --now surveil-rule-shadow-daily.timer" in installer
 
     try:
         load_daily_report(root / "reports", "2026-99-99")

@@ -62,7 +62,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-china-media.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-sina-stock-news.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-article-daily.service, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-rule-shadow-daily.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-llm-decision-audit-cleanup.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signals-extract.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-outcome.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-review.service, \\
@@ -80,7 +80,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-overseas-media.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-china-media.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-article-daily.timer, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-rule-shadow-daily.timer, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-llm-decision-audit-cleanup.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signals-extract.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-outcome.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-signal-review.timer, \\
@@ -99,7 +99,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block start surveil-overseas-media.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-china-media.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-article-daily.service, \\
-    \$SYSTEMCTL_BIN --no-block start surveil-rule-shadow-daily.service, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-llm-decision-audit-cleanup.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-signals-extract.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-signal-outcome.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-signal-review.service, \\
@@ -145,12 +145,10 @@ else
   systemctl enable --now surveil-china-media.timer
 fi
 systemctl enable --now surveil-article-daily.timer
-if grep -Eq '^RULE_CORE_SHADOW_AUTORUN=(1|true|yes|on)$' '$REMOTE_DIR/.env' 2>/dev/null; then
-  systemctl enable --now surveil-rule-shadow-daily.timer
-else
-  systemctl disable --now surveil-rule-shadow-daily.timer >/dev/null 2>&1 || true
-  echo 'RULE_CORE_SHADOW_AUTORUN 未启用，保持规则对比日报定时器停用。'
-fi
+systemctl disable --now surveil-rule-shadow-daily.timer >/dev/null 2>&1 || true
+systemctl stop surveil-rule-shadow-daily.service >/dev/null 2>&1 || true
+systemctl enable --now surveil-llm-decision-audit-cleanup.timer
+echo '已停用新旧规则对比日报；保留每日 30 天敏感审计清理。'
 systemctl enable --now surveil-signals-extract.timer
 systemctl enable --now surveil-signal-outcome.timer
 systemctl enable --now surveil-signal-review.timer
@@ -213,10 +211,10 @@ systemctl --no-pager --full status surveil-research-collector.timer || true
 systemctl --no-pager --full status surveil-official-collector.timer || true
 systemctl --no-pager --full status surveil-news-collector.timer || true
 systemctl --no-pager --full status surveil-value-directory.timer || true
-systemctl --no-pager --full status surveil-rule-shadow-daily.timer || true
+systemctl --no-pager --full status surveil-llm-decision-audit-cleanup.timer || true
 systemctl --no-pager --full status surveil-research-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-official-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-news-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-x-stream.service || true
-echo '已安装 surveil-db-init.service，启用公司公告、Sina 个股新闻、生产 collector timers（按 DISABLE_LEGACY_* 切换生产/历史入口）、文章日报、信号抽取/outcome/复盘/复盘日报、持仓 Web UI，并启动新浪快讯常驻服务；report-only collector shadow timers 默认停用。公司公告默认 report_only，可在来源配置审阅后切换 live。'
+echo '已安装 surveil-db-init.service，启用公司公告、Sina 个股新闻、生产 collector timers（按 DISABLE_LEGACY_* 切换生产/历史入口）、文章日报、大模型审计清理、信号抽取/outcome/复盘/复盘日报、持仓 Web UI，并启动新浪快讯常驻服务；新旧规则对比日报和 report-only collector shadow timers 停用。公司公告默认 report_only，可在来源配置审阅后切换 live。'
 "

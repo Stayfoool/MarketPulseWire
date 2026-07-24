@@ -1,0 +1,12 @@
+[Unit]
+Description=Surveil LLM decision audit retention cleanup
+After=surveil-db-init.service
+
+[Service]
+Type=oneshot
+User=surveil
+WorkingDirectory=/opt/surveil
+EnvironmentFile=-/opt/surveil/.env
+ExecStart=/opt/surveil/.venv/bin/python /opt/surveil/scripts/llm_decision_audit_cleanup.py
+StandardOutput=append:/opt/surveil/logs/llm-decision-audit-cleanup.log
+StandardError=append:/opt/surveil/logs/llm-decision-audit-cleanup.err.log

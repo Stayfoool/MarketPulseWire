@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from attributed_research import prepare_item_for_decision
 from db_utils import connect_sqlite
+from decision_engine import decide_market_item_with_llm
 from market_db import DEFAULT_DB_PATH
 from market_delivery import deliver_article_review, deliver_official_review
 from market_item import (
@@ -268,15 +269,31 @@ def _process_content_item(
         payload = dict(snapshot["payload"])
         inserted = False
     elif market_review_id is not None:
+        decision_item = prepare_item_for_decision(item)
+        production_decision: DecisionResult | None = None
+        if production_admission is not None:
+            if production_portfolio is None or market_item_id is None:
+                raise RuntimeError("production review is missing portfolio or market item identity")
+            production_decision = decide_market_item_with_llm(
+                decision_item,
+                admission=production_admission,
+                portfolio=production_portfolio,
+                market_item_id=market_item_id,
+                market_review_id=market_review_id,
+            )
         with connect_sqlite(db_path) as conn:
-            decision_item = prepare_item_for_decision(item)
             evaluate = (
                 module.evaluate_official_review
                 if store_kind == "official"
                 else module.evaluate_article_review
             )
             payload = evaluate(
-                conn, source, raw_item, source_profile_id=source_profile_id, normalized_item=decision_item
+                conn,
+                source,
+                raw_item,
+                source_profile_id=source_profile_id,
+                normalized_item=decision_item,
+                decision=production_decision,
             )
         inserted = not canonical_existing
     else:
@@ -350,7 +367,11 @@ def _process_content_item(
             compatibility_writer=write_compatibility,
             alias=(item_kind, source, item_id, storage_ref["store_kind"]),
         )
-    if inserted and not flow_result.decision.audit_json.get("contract_error"):
+    if (
+        inserted
+        and production_admission is None
+        and not flow_result.decision.audit_json.get("contract_error")
+    ):
         if production_admission is None and (
             current_admission_status == "unknown"
             and current_admission_reason == "current_runtime_does_not_expose_admission"
@@ -510,12 +531,24 @@ def _process_event_item(
         storage_ref=storage_ref,
     )
     try:
+        production_decision: DecisionResult | None = None
+        if production_admission is not None:
+            if production_portfolio is None or market_item_id is None or market_review_id is None:
+                raise RuntimeError("production review is missing portfolio, market item, or review identity")
+            production_decision = decide_market_item_with_llm(
+                decision_item,
+                admission=production_admission,
+                portfolio=production_portfolio,
+                market_item_id=market_item_id,
+                market_review_id=market_review_id,
+            )
         analysis = module.analyze_event(
             event_id,
             task=task,
             db_path=db_path,
             normalized_item=decision_item,
             persist_legacy=market_review_id is None,
+            decision=production_decision,
         )
     except Exception as exc:  # noqa: BLE001 - preserve the inserted event reference for batch recovery
         raise MarketItemProcessingError(str(exc), partial) from exc
@@ -548,7 +581,7 @@ def _process_event_item(
             compatibility_writer=write_event_compatibility,
             alias=("event", item.source, str(event_id), "events"),
         )
-    if not flow_result.decision.audit_json.get("contract_error"):
+    if production_admission is None and not flow_result.decision.audit_json.get("contract_error"):
         record_rule_comparison(
             decision_item,
             flow_result.decision,

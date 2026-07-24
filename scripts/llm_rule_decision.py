@@ -13,9 +13,8 @@ from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 from llm_rule_catalog import (
-    CATALOG_VERSION,
+    LLM_DECISION_RULE_VERSION,
     MODEL_ACTIONS,
-    RULE_MATRIX_VERSION,
     LLMRuleDefinition,
     rules_for_families,
 )
@@ -101,8 +100,7 @@ class LLMRuleCandidateResult:
     applicable_families: tuple[RuleFamily, ...]
     evidence_reference_count: int = 0
     evidence_character_count: int = 0
-    rule_matrix_version: str = RULE_MATRIX_VERSION
-    rule_catalog_version: str = CATALOG_VERSION
+    llm_decision_rule_version: str = LLM_DECISION_RULE_VERSION
     rule_config_version: str = ""
     prompt_version: str = PROMPT_VERSION
     model: str = ""
@@ -162,8 +160,7 @@ class LLMRuleCandidateResult:
             "applicable_families": list(self.applicable_families),
             "evidence_reference_count": self.evidence_reference_count,
             "evidence_character_count": self.evidence_character_count,
-            "rule_matrix_version": self.rule_matrix_version,
-            "rule_catalog_version": self.rule_catalog_version,
+            "llm_decision_rule_version": self.llm_decision_rule_version,
             "rule_config_version": self.rule_config_version,
             "prompt_version": self.prompt_version,
             "model": self.model,
@@ -641,8 +638,7 @@ def _candidate_decision(
         audit_json={
             "candidate_engine": ENGINE_VERSION,
             "schema_version": SCHEMA_VERSION,
-            "rule_matrix_version": RULE_MATRIX_VERSION,
-            "rule_catalog_version": CATALOG_VERSION,
+            "llm_decision_rule_version": LLM_DECISION_RULE_VERSION,
             "prompt_version": PROMPT_VERSION,
             "model": model,
             "item_digest": item_digest,

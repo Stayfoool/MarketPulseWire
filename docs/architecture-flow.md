@@ -27,7 +27,7 @@ flowchart LR
     Item --> Admission["Five production range-admission groups"]
     Admission -->|admitted| Runtime["process_market_item"]
     Admission -->|excluded| Seen["seen_items admission audit only"]
-    Runtime --> Decision["DecisionResult"]
+    Runtime --> Decision["decision_engine: LLM DecisionResult"]
     Decision --> Interpretation["InterpretationResult"]
     Interpretation --> Store["Existing review store adapter"]
     Store --> Delivery["market_delivery"]
@@ -62,9 +62,7 @@ is not a production input. Missing or invalid production rule configuration
 fails closed and leaves a retryable processing state; it does not fall back to
 the preceding source-specific admission.
 
-Before an admitted item that requires analysis enters the active decision, `market_runtime.py` calls the existing `prepare_item_for_decision()` at most once. The returned `NormalizedMarketItem`, including any validated `_attributed_research` extraction, is then reused by the active decision/store adapter and the optional report-only LLM strength comparison. The comparison receives the exact production `AdmissionResult` and production portfolio used for admission; it does not re-admit the item from `RULE_CORE_SHADOW_PORTFOLIO`. Baseline and already-existing event rows do not trigger this preparation. The comparison report may retain normalized institution ids but removes attribution quotes, claim quotes and body text.
-
-Pure, source-neutral statements of an established Federal Reserve policy-transmission relationship, such as easing benefiting gold, Bitcoin, non-US currencies or metals, are deterministically downgraded from `push` to `daily` after the macro rule. This downgrade applies only when the item contains no actual policy decision, quantified rate-path repricing, quantified observed asset move, unusual inverse relationship, correction, direct Fed statement or asset-specific hard fact. It retains the original rule hit and records the initial/final action plus local evidence in the decision audit; it cannot promote a non-push action.
+Before an admitted item that requires analysis enters the active decision, `market_runtime.py` calls `prepare_item_for_decision()` at most once. The returned `NormalizedMarketItem`, including any validated `_attributed_research` extraction, is passed with the exact production `AdmissionResult` and current production portfolio to `decision_engine.py`. The engine calls the reviewed LLM degree rules once under one 120-second total deadline, validates the complete result, writes the mode-`0600` private audit and returns the only production `DecisionResult`. Baseline, excluded, unanalysed and already-succeeded rows do not call the model. Model, validation or audit-write failure leaves no decision, interpretation, delivery or dedup reservation and marks the current review `failed_retryable`.
 
 Push-eligible US CPI, PCE and nonfarm coverage may also receive a delivery-only identity from locally bound evidence. Preview and actual-release identities use country, indicator and reference period. The extractor considers every indicator occurrence in a claim before binding the nearest preceding reference month, so an early generic `CPI` label cannot hide a later locally complete `6月...CPI月率` fact. Market reactions use the same reference period, conservatively inferring the immediately preceding month when a reaction names the indicator but omits the period, so cross-asset and next-day retellings converge. Each phase can deliver once across sources. Corrections, policy decisions, quantified path repricing, unusual inverse relationships, asset-specific hard facts and direct Kevin Warsh statements bypass the reaction identity, including when a retained fact is mixed with already-covered market interpretation. Other cross-asset reactions to a Fed easing or tightening impulse without a named data release share one direction-specific 14-day delivery identity. The extractors use original item text and deterministic evidence only; delivery dedup does not change the decision or use an LLM.
 
@@ -86,29 +84,30 @@ The former direct/compat route switch and these wrapper modules have been remove
 
 | Module | Current responsibility |
 |---|---|
-| `market_runtime.py` | Normalization boundary, one-time pre-decision evidence preparation, store adapter selection, orchestration, fail-closed contract handling, and the exact production `AdmissionResult` passed to the report-only comparison |
-| `decision_engine.py` | Deterministic `DecisionResult`, including final push action |
+| `market_runtime.py` | Normalization boundary, one-time pre-decision evidence preparation, production LLM decision invocation through `decision_engine`, store adapter selection, orchestration and fail-closed review handling |
+| `decision_engine.py` | Single production decision boundary. It delegates admitted items to the reviewed LLM decision and returns the only authoritative `DecisionResult`; retained deterministic functions are unreachable from production pending a separately approved cleanup PR |
 | `production_admission.py` | Sole production entry for the five range-admission groups; validates `RULE_CORE_CONFIG`, converts current Web-managed SQLite holdings to `PortfolioRuleConfig`, applies ordinary/holding-only/official-trade source boundaries and returns the auditable `AdmissionResult`; it cannot decide action, write reviews or deliver |
 | `rule_core_v1.py` | Side-effect-free five-group admission and inactive deterministic strength rules. Production calls only `admit_market_item()` through `production_admission.py`; `evaluate_market_item()` remains non-authoritative. Bounded admission evidence includes all matched content-family evidence and global exclusion evidence |
 | `llm_rule_catalog.py` | Versioned catalog of the 17 human-reviewed specific strength-decision rules across the five existing content rule groups; stores allowed actions, rule text, required facts and exclusions without matching article text, reading private configuration or calling a model |
-| `llm_rule_decision.py` | Report-only LLM decision contract: applies the confirmed company-disclosure/Sina-stock-news holding-only source boundary, selects rules only from an existing admitted `AdmissionResult`, accepts title/summary/body inputs with body code-bounded to its first 3,000 characters, divides the exact model-visible article fields into numbered source segments, and strictly validates compact per-rule JSON, allowed actions and source-segment references before code resolves exact evidence and mechanically aggregates the final action. Each rule may reference at most three segments; response-wide evidence totals are audit metrics rather than validity limits. It has no review, storage, delivery or dedup authority |
-| `llm_rule_shadow.py` | Optional report-only LLM candidate: evaluates the same prepared production `NormalizedMarketItem`, calls the configured text model for an admitted item, validates the response through `llm_rule_decision.py`, and returns a bounded comparison candidate. Any structurally invalid, evidence-invalid or conflicting first response may receive one bounded correction request containing the exact validation errors without changing rules, article evidence or admission. Every attempted request, raw response and validation result is attached only to the private per-item audit; model failure or a still-invalid correction produces no candidate action |
-| `investment_bank_research.py` | Side-effect-free local extraction shared by the active investment-bank rating wrapper and the report-only candidate: trusted institution, holding/industry subject, rating/target-price/coverage action, allocation action or complete rotation, and verbatim evidence; it does not read Rule Center, SQLite, source profiles or deliver messages |
+| `llm_rule_decision.py` | LLM decision contract: selects only the rules applicable to an existing admitted `AdmissionResult`, accepts title/summary/body with body code-bounded to 3,000 characters, divides model-visible text into numbered segments, and strictly validates per-rule JSON, allowed actions and exact evidence before mechanically aggregating the final action |
+| `llm_rule_shadow.py` | Shared side-effect-free LLM execution used by production and retained historical comparison tools. It builds one prompt, performs strict validation and permits one correction request containing only the original response and validation errors |
+| `llm_production_decision.py` | Production deadline and private-audit wrapper. It enforces one 120-second total budget across retries and correction, writes one mode-`0600` audit linked by market item/review ids, and fails closed when no valid audited decision exists |
+| `investment_bank_research.py` | Side-effect-free local extraction used by pre-decision research attribution and retained deterministic compatibility: trusted institution, holding/industry subject, rating/target-price/coverage action, allocation action or complete rotation, and verbatim evidence |
 | `rule_core_fixture.py` | Strict loader for the sanitized public v1 behavior corpus; test/spec support only |
 | `market_lifecycle_v1.py` | Inactive lifecycle/source-integration contract, bounded discovery shape, legal transitions and honest read-only projections over the current article/event physical stores |
 | `rule_config_migration_v1.py` | Inactive redacted preview of explicitly supplied legacy keyword origins versus a reviewed v1 target configuration; never writes configuration or prints keyword values |
 | `rule_core_replay.py` | Inactive no-write comparison of explicit current outcome snapshots against the pure v1 core, including changed fields and source-invariance violations |
 | `rule_core_history_replay.py` | Inactive operator-only reader for an explicit local SQLite snapshot; strict mode requires stored full text and uses `mode=ro`/`query_only`, while optional title/summary proxy screening is explicitly non-comparative; delegates comparison to `rule_core_replay.py` |
 | `rule_core_shadow.py` | Side-effect-free comparison of the active `DecisionResult` with `rule_core_v1` for the same normalized item; records only bounded differences and cannot change review or delivery |
-| `rule_core_runtime_shadow.py` | Optional report-only strength-decision writer using the same admitted production `NormalizedMarketItem`, exact production `AdmissionResult`, and current production portfolio. `RULE_COMPARISON_CANDIDATE=llm` selects the reviewed LLM candidate. It records comparison time, candidate engine/version, private configuration version and deployed code revision, writes sensitive per-item audits mode `0600`, and cannot write reviews, reserve delivery keys or send messages |
+| `rule_core_runtime_shadow.py` | Historical/operator comparison writer retained for reading or explicit reconstruction of old reports; the production runtime no longer calls it |
 | `rule_core_shadow_combined.py` | Report-only combiner for existing comparison reports; separates action comparisons, both-not-admitted items, admission differences and model/validation failures; preserves candidate engine/version, bounded resolved rule evidence, body-source label, model metadata, token usage and elapsed time; and refreshes one latest Markdown/JSON view across research, official and news production batches. Combined reports never copy the private model request, article body or raw response, and non-action-comparison rows are not counted as action upgrades or downgrades |
 | `rule_core_shadow_daily.py` | Report-only daily review job; removes sensitive model request/response payloads from private per-item audits after 30 days while retaining bounded comparison metadata, freezes one 15:30-to-15:30 Beijing Markdown/JSON report, and sends at most one Feishu reminder when the interval has comparable or unable-to-compare items. Daily reports never copy private model requests, article bodies or raw responses. An explicit historical rebuild only re-aggregates retained comparisons, records that the candidate was not re-evaluated and preserves any prior sent reminder |
 | `rule_shadow_report_store.py` | Bounded read-only loader for dated rule comparison reports used by the authenticated Web workbench; each Web filter accepts multiple selected values, values inside one filter use OR, and candidate-version, execution-status, action-change and current/candidate-action filters combine with AND in memory. The loader cannot evaluate rules or send messages |
 | `rule_core_shadow_report.py` | Inactive operator-only reader for a shadow collector JSON report; supplies complete retained item text to `rule_core_shadow.py` and writes only a bounded comparison report |
-| `run_production_with_rule_shadow.py` | Production service entry wrapper; runs the existing collector once and, when comparison is enabled, refreshes the combined report after runtime comparison files have been written; it does not start a second collector or evaluate rules |
+| `run_production_with_rule_shadow.py` | Retained production service entry wrapper; despite its historical filename, it now runs the selected collector once and never records or refreshes old-versus-LLM reports |
 | `ai_credit_risk.py` | Source-neutral deterministic AI borrower, funding-event and qualitative credit-stress evidence classification |
 | `ai_compute_supply_demand.py` | Source-neutral deterministic AI compute supply, demand, capacity and constraint classification |
-| `macro_policy.py` | Source-neutral macro-data release/reaction and generic Fed policy-transmission evidence classification; production wrappers read Rule Center lazily and preserve the active production decision contract |
+| `macro_policy.py` | Retained deterministic macro-data/Fed evidence classification used by compatibility tests and delivery-only extraction; it is not the production action decision |
 | `trade_friction.py` | Source-neutral China-US / China-EU trade-friction classification and evidence extraction |
 | `trade_policy_monitor.py` | Official API/RSS/list discovery, new-item detail enrichment, baseline and source health |
 | `company_disclosures.py` | One logical portfolio-disclosure collector, provider selection, baseline, source state and health |
@@ -126,7 +125,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `company_event_dedup.py` | Generic claim-local company-event fact sets, lifecycle versions and legacy reservation aliases |
 | `market_view.py` | Read-only unified projection across existing stores |
 | `source_profiles.py` | Source catalog, runtime ownership, health keys and editable source settings |
-| `rule_config_schema.py` | Side-effect-free parser shared by the report-only rule core and the production Web/config path; validates the complete private global rule JSON without importing candidate decision behavior into production collectors |
+| `rule_config_schema.py` | Side-effect-free parser for the production five-group range-admission configuration and Web configuration path |
 | `media_keyword_config.py` | Shared loader and atomic Web save path for the private rule configuration's `semiconductor_ai_keywords`, title-only subset and `exclude_keywords`; validates the complete rule file and preserves every unrelated rule section |
 | `migrate_media_keywords.py` | Operator-only preview/apply migration from the retired private base/include media-keyword fields into the reviewed `semiconductor_ai_keywords`; preview redacts values and apply creates a private backup |
 | `migrate_admission_simplification.py` | Operator-only preview/apply migration that installs a privately reviewed title-only subset, removes standalone generic AI terms and replaces legacy macro tiers with the old primary list; preview exposes counts and hashes only and apply creates a private backup |
@@ -214,12 +213,12 @@ Attributed-research delivery identities normally use the validated institution, 
 
 The ordered `investment_bank_rating_target_direct_holding` rule requires one local evidence window to bind a recognized institution, one directly mentioned holding and an actual rating, target-price or coverage action. An attached collector symbol, a generic earnings-estimate revision or institution/holding/action terms scattered across a multi-company article cannot create this rule hit. Bounded adjacent-sentence attribution is accepted only when the second sentence explicitly continues with `该行` / `其` / `the bank` or an equivalent report reference.
 
-The report-only new rule core applies trusted-institution rating, target-price and coverage changes only to the holding rule family. It applies explicit buy/sell/long/short/add/reduce/overweight/underweight allocation changes and complete two-sided rotations only to the holding and semiconductor/AI rule families. Macro-data releases, international-bank Fed-path forecasts/revisions and trade-policy changes continue through their dedicated content rules; an allocation verb plus a macro/Fed/trade term cannot promote those families or replace their evidence requirements.
+The production LLM rule catalog applies trusted-institution rating, target-price and coverage changes only to the holding rule family. It applies explicit buy/sell/long/short/add/reduce/overweight/underweight allocation changes and complete two-sided rotations only to the holding and semiconductor/AI rule families. Macro-data releases, international-bank Fed-path forecasts/revisions and trade-policy changes continue through their dedicated content rules; an allocation verb plus a macro/Fed/trade term cannot promote those families or replace their evidence requirements.
 
 For a Value Directory first-page preview, the existing bounded extraction now
 also exposes an explicitly labeled historical share-price close and its date as
 `reference_price` and `reference_price_date`; it does not expose the full OCR
-page to the strength-decision model. The existing report-only
+page to the degree-decision model. The production
 `holding_rating_revision` and `investment_bank_allocation_change` rules let the
 model calculate `target price / report historical close - 1` and select the
 action from the unrounded result. A result at least 30.0% or at most -30.0% may
@@ -232,19 +231,14 @@ the trusted institution, stock, current target price, historical close and
 close date. Ambiguous labels, prior or consensus targets, 52-week ranges,
 external live prices, mismatched currencies or share classes, unclear corporate
 actions, and a material rating/direction conflict require `uncertain`. The
-shared LLM system prompt is unchanged, no deterministic target-gap calculator
-is added, and this result remains a report-only candidate without production
-delivery authority.
+shared LLM system prompt is unchanged and no deterministic target-gap calculator
+is added.
 
-Within the same report-only `fed_policy` decision group, a separately reported material view from a configured trusted international bank's explicitly identified chief executive or chair can use the existing `fed_policy_material_exception`. It requires local leader attribution and at least two independently supported signals across an explicit stocks/long-Treasuries stance, a directional or quantified rate/yield view, and a material cross-asset risk judgment. A bank name, analyst comment, generic leadership interview or single-asset valuation view cannot create `push`; the active production international-bank/Fed wrappers are unchanged.
+Within the production `fed_policy` decision group, a separately reported material view from a configured trusted international bank's explicitly identified chief executive or chair can use `fed_policy_material_exception`. It requires local leader attribution and at least two independently supported signals across an explicit stocks/long-Treasuries stance, a directional or quantified rate/yield view, and a material cross-asset risk judgment. A bank name, analyst comment, generic leadership interview or single-asset valuation view cannot create `push`.
 
-The Rule Center exposes execution semantics from the runtime registry. Rules inside `first_matching_push_rule()` use `ordered_first_match` and retain an editable priority. Fed-path, trade-friction, attributed-research, industry-hardline and AI credit-risk rules are evaluated independently in `decision_engine`, use `parallel_merge`, and expose no priority setting; multiple push-eligible hits are combined rather than suppressing one another.
+The Rule Center still exposes the retained deterministic registry for compatibility and historical inspection. Those action rules are not called by the production runtime and will be removed only after the approved observation period and a separate cleanup PR.
 
-The `ai_hyperscaler_credit_stress` rule is source-neutral and uses deterministic local evidence only. It covers Alphabet/Google, Amazon/AWS, Meta, Microsoft, Oracle, NVIDIA, SpaceX and OpenAI when AI infrastructure purpose and debt context are locally bound. Ordinary issuance and one qualitative concern produce `daily`; an explicit financing/capex/rating/liquidity hard outcome, or at least two independent stress families including a concrete market outcome, can produce `push`. The rule uses no LLM extraction, external bond feed or numeric spread/leverage threshold. Generic financing no longer counts as an industry-hardline capex/investment event by itself.
-
-The report-only new rule invocation additionally treats a formally maintained regulatory guarantee, collateral or letter-of-credit requirement and a locally bound AI-infrastructure credit-rating downgrade as hard funding outcomes. Possible or unconfirmed future requirements and background contract/investment amounts do not qualify. The shared classifier keeps this extension off by default so the active production wrapper retains its existing behavior until the new rule core is approved for authority.
-
-The `ai_compute_supply_demand` rule is a source-neutral deterministic `parallel_merge` rule. It binds subject, compute resource, event, direction, stage and verbatim evidence. Generic confidence, forecasts, non-binding intentions, downstream demand and unbound price moves remain `daily` or unmatched. Its catalyst identity uses the existing atomic `rule_alert_dedup` path.
+The production `ai_credit_constraint` and `ai_compute_constraint` rules are source-neutral catalog entries. Their model findings require exact local evidence and pass the same strict action/evidence validation as every other rule. Existing deterministic AI credit/compute modules remain compatibility code only; delivery identities may still use deterministic extraction after a valid push solely to suppress duplicate sends, without changing action.
 
 ## Storage
 
@@ -260,7 +254,7 @@ New production items also use the canonical storage contract:
   `InterpretationResult`. An admitted row is completed with the exact results
   returned by the unified runtime before delivery. It also retains the bounded
   compatibility payload needed to reproduce existing Web, digest, feedback and
-  signal views; private report-only LLM requests/responses remain outside
+  signal views; private production LLM requests/responses remain outside
   SQLite.
 - `market_item_aliases` maps the unified item identity to the existing
   `article`, `official` and numeric `event` identities. Feishu feedback tokens,
@@ -368,58 +362,29 @@ When Feishu market feedback is explicitly enabled, unified article, official-new
 
 The Web workbench exposes a lightweight authenticated `/api/health/summary` projection for separate Task Health and Information Sources badges. One batched read-only `systemctl show` call pairs each production timer with its execution service; `task_failures` counts current logical-task failures, while `source_failures` counts only failing enabled profiles that are visible in the Information Sources view. Shadow units, cut-over legacy units, the disabled-by-default JYGS path and disabled source profiles do not contribute. The browser refreshes this summary only while visible. The full Task Health view retains detailed systemd rows, raw source-health/X connection diagnostics and bounded log tails even when a raw diagnostic does not map to a source-profile badge count.
 
-The optional LLM strength-decision comparison remains report-only. With the
-private switch enabled, an item admitted by the five production range-admission
-groups completes the existing production decision and passes that
-`DecisionResult`, the exact production `AdmissionResult`, and the current
-production portfolio to the comparison writer before delivery. An excluded item
-does not invoke the LLM comparison, interpretation, review or delivery.
-The writer emits one bounded per-item JSON record without a body field and
-records comparison time, candidate engine/version, private configuration version
-and deployed code revision; configuration, import, evaluation or write failure
-is isolated from the active result. The production collector wrapper never
-re-collects the item and only refreshes `rule-core-shadow-combined-latest` after
-the normal collector exits successfully. LLM comparison results do not change
-the production range admission, `DecisionResult`, review storage, dedup reservation or
-delivery. When the private comparison switch is enabled,
-`surveil-rule-shadow-daily.timer` runs at 15:30 Beijing time and freezes
-`rule-core-shadow-daily-YYYY-MM-DD.md/json` for the preceding 24-hour 15:30
-boundary. It sends one Feishu reminder only when that interval has comparable or
-unable-to-compare items, and a successful reminder prevents duplicate sends for
-the same report date. The authenticated Web workbench reads these dated JSON
-files through a bounded read-only API. Its candidate-version, execution-status,
-action-change and current/candidate-action filters are checkbox-based: selected
-values inside one filter use OR, different filters combine with AND, and an empty
-selection means all values. The view exposes no rule, decision, configuration or
-delivery mutation. Comparison before the production `NormalizedMarketItem`
-boundary is not implemented.
+The reviewed LLM degree rules are the only production action decision. There is
+no runtime selector and no fallback to the retained deterministic rules. A
+non-empty title is sufficient input; available summary is included and available
+body is code-truncated to its first 3,000 characters. The exact model-visible
+fields are split into numbered source segments of at most 300 characters. The
+model returns segment ids, every applicable rule exactly once, and only actions
+defined by that rule. Code resolves the ids to exact source text, validates the
+complete response and mechanically aggregates `push > daily > archive`. All
+`not_matched` returns `archive`; no match plus any unresolved `uncertain`
+produces no `DecisionResult`. One invalid first response may receive one
+correction request without changing rules, article input or admission. The
+initial call, provider retries and correction share one hard 120-second budget.
 
-The reviewed LLM rule catalog, validation contract and optional report-only runtime are connected behind a private selector. The selector defaults to the deterministic new-rule candidate, so deploying this code does not create model calls. When `RULE_COMPARISON_CANDIDATE=llm` is explicitly approved and configured, each admitted production item is sent to the configured text model after the current production decision already exists and before delivery. A non-empty title is sufficient; available summary is included and available body is code-truncated to its first 3,000 characters. Code divides the exact model-visible title, summary and body at sentence boundaries, then bounds every ordered evidence segment to at most 300 characters without dropping input text. The model returns segment ids for evidence or counterevidence instead of copying quotes; each rule may return at most three references, while response-wide reference and character totals are recorded for audit but do not invalidate otherwise valid rule results. Ellipsis punctuation does not make an exact non-empty source segment invalid. The current production action and redundant source/admission audit metadata are not included in the model input. Only the applicable specific strength-decision rules are sent, without ordinary fallback rules. Every applicable rule must return one compact conditional result. Any structurally invalid, evidence-invalid or conflicting first response may receive one correction request containing the original response and exact validation errors; rules, article evidence and admission cannot change. The model selects each matched rule action; code mechanically aggregates `push > daily > archive`. If every specific rule is `not_matched`, code returns a report-only `archive` candidate; if no rule matches and at least one is `uncertain`, no candidate action is created. A valid structured result can create only a report candidate; model unavailability, insufficient input or a still-invalid correction creates no candidate action and cannot fall back to the deterministic candidate. The mode-`0600` per-item audit retains every exact request, raw response, response metadata and validation result for 30 days. The daily job then removes only those sensitive payloads while retaining bounded comparison metadata. Combined/daily reports and the Web API retain provided-field and length metadata, bounded resolved evidence, model/provider metadata, token usage, call/attempt counts and elapsed time, but never copy the complete request, article body, raw response or response id. Fixed-response CI covers every allowed action, source applicability, input truncation, evidence ids, ellipsis evidence, per-rule evidence bounds, correction, invalid structures, prompt injection, audit permissions, retention and aggregate-report redaction.
-
-Within the report-only semiconductor/AI strength rules, execution is not a
-prerequisite for `push`. A specific and attributable expected, planned or
-considered price or supply change may qualify when its object, direction and
-material magnitude or comparison are explicit. A named major customer entering
-concrete testing, validation, introduction evaluation or adoption evaluation
-for a specific product or platform may also qualify before an order, revenue or
-delivery. Title, summary and body evidence may be combined, while reporting and
-stage qualifiers must remain in the reason. `uncertain` is reserved for missing,
-truncated or conflicting action-determining facts and one uncertain rule cannot
-cancel another rule's complete `push` evidence. These semantics do not change
-the production `decision_engine` or grant the comparison candidate delivery
-authority.
-
-The same report-only `semiconductor_material_change` rule treats an
-attributable update about a key product moving from small-scale output to
-stable scaled production as a two-sided material signal. A core manufacturer
-or its top management reporting a smooth, on-schedule, early or
-above-expectation key production milestone may qualify for `push`; so may a
-specific major bottleneck, strongest comparative difficulty warning, blockage,
-delay or target reduction. A plan without a new production status, prototype
-or pilot display, routine engineering difficulty, historical statement or
-unattributed speculation remains `daily` or `archive`. The shared system prompt
-is unchanged; these boundaries live only in the applicable reviewed rule
-payload, and reporting qualifiers cannot be rewritten as realized outcomes.
+Each production call writes its exact prompt, response, response metadata and
+validation details to one service-account-private audit file under
+`reports/llm-decision-audits`, with directory mode `0700` and file mode `0600`.
+The file links directly to `market_item_id` and `market_review_id`; full prompts,
+article body and raw response do not enter SQLite, Web, Git or Feishu. The
+`surveil-llm-decision-audit-cleanup.timer` removes sensitive request/response
+content after 30 days while retaining bounded result metadata. The former
+15:30 new-versus-old report timer is disabled. Existing dated and combined
+comparison reports remain readable in the Web workbench as historical records,
+but production no longer creates or sends new comparison reports.
 
 The same `holdings_web.py` process serves the workbench shell and its same-origin assets. `web/index.html` owns the document structure, `web/styles.css` owns presentation and `web/app.js` owns browser rendering and `/api/*` calls. The Python handler substitutes only the environment/token-hint placeholders and exposes an explicit `/static/styles.css` and `/static/app.js` allowlist; it is not a generic file server. API routes, authentication behavior, loopback binding and SSH-tunnel access remain unchanged.
 
@@ -437,7 +402,7 @@ Review condition: reconsider convergence when X posts can be represented without
 
 `jygs_actions.py` remains a disabled-by-default legacy product path for JYGS action prediction and its dedicated card. It is not a general market-information source profile. Its direct LLM prediction contract is isolated in that module and covered by `test_jygs_actions.py`.
 
-Review condition: retire the path or move it behind `NormalizedMarketItem` and deterministic decisions before enabling it as a normal production source.
+Review condition: retire the path or move it behind `NormalizedMarketItem` and the production LLM decision before enabling it as a normal production source.
 
 ## Runtime And Deployment Facts
 

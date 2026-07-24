@@ -1,10 +1,9 @@
-"""Unified deterministic decision wrapper for market items.
+"""Single decision boundary for production LLM and retained legacy rules.
 
 This module is the second migration step toward the three-layer market flow.
-It is intentionally passive: it does not call LLMs, send Feishu cards, write
-SQLite, or reserve delivery dedup keys. It only evaluates the existing
-deterministic rule helpers and converts their legacy dict outputs into the
-shared DecisionResult shape.
+Production calls the reviewed LLM through ``decide_market_item_with_llm``.
+The deterministic helpers remain temporarily for compatibility tests and
+rollback history, but the production runtime does not call them.
 """
 
 from __future__ import annotations
@@ -17,12 +16,32 @@ from attributed_research import EXTRACTION_KEY, attributed_research_rule
 from industry_hardline import industry_topic_hard_variable_rule
 from international_bank_fed import international_bank_fed_rate_path_rule
 from macro_policy import generic_fed_transmission_classification, macro_policy_match
-from market_item import VALID_ACTIONS, DecisionResult, NormalizedMarketItem, normalize_importance
+from market_item import AdmissionResult, VALID_ACTIONS, DecisionResult, NormalizedMarketItem, normalize_importance
 from push_rules import first_matching_push_rule
 from trade_friction import trade_friction_rule
 
 
 ENGINE_VERSION = "decision_engine_v1"
+
+
+def decide_market_item_with_llm(
+    item: NormalizedMarketItem,
+    *,
+    admission: AdmissionResult,
+    portfolio: Any,
+    market_item_id: int,
+    market_review_id: int,
+) -> DecisionResult:
+    """Invoke the only production degree/action decision implementation."""
+    from llm_production_decision import decide_production_market_item
+
+    return decide_production_market_item(
+        item,
+        admission=admission,
+        portfolio=portfolio,
+        market_item_id=market_item_id,
+        market_review_id=market_review_id,
+    )
 
 
 def _clean_text(value: Any) -> str:
@@ -287,6 +306,25 @@ def attach_decision_to_event_analysis(
         updated["_decision_final_fields"] = _event_final_fields(updated)
         return updated
     decision = decide_market_item(item, source=source, holdings=holdings or [], symbols=symbols)
+    updated = dict(analysis)
+    updated.update(
+        _prefixed_metadata(
+            decision,
+            final_fields={
+                "importance": decision.importance,
+                "should_push": decision.should_push,
+                "reason": decision.brief_reason or decision.reason,
+            },
+        )
+    )
+    return updated
+
+
+def attach_decision_result_to_event_analysis(
+    decision: DecisionResult,
+    analysis: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach an already-finalized event decision without recomputing rules."""
     updated = dict(analysis)
     updated.update(
         _prefixed_metadata(

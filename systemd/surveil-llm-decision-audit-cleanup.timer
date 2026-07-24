@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Surveil LLM decision audit retention cleanup daily
+
+[Timer]
+OnCalendar=*-*-* 15:30:00 Asia/Shanghai
+Persistent=true
+Unit=surveil-llm-decision-audit-cleanup.service
+
+[Install]
+WantedBy=timers.target
