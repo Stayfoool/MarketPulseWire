@@ -69,11 +69,10 @@ class TradeCorridor:
 class RuleConfig:
     config_version: str
     semiconductor_ai_keywords: tuple[str, ...]
+    semiconductor_ai_title_keywords: tuple[str, ...]
     major_semiconductor_customers: tuple[str, ...]
     exclude_keywords: tuple[str, ...]
     macro_indicators: tuple[str, ...]
-    macro_primary_indicators: tuple[str, ...]
-    macro_secondary_indicators: tuple[str, ...]
     macro_context_aliases: tuple[str, ...]
     fed_event_aliases: tuple[str, ...]
     fed_actor_aliases: tuple[str, ...]
@@ -161,6 +160,7 @@ def parse_rule_config(payload: Mapping[str, Any]) -> RuleConfig:
         "schema_version",
         "config_version",
         "semiconductor_ai_keywords",
+        "semiconductor_ai_title_keywords",
         "major_semiconductor_customers",
         "exclude_keywords",
         "macro_data",
@@ -170,6 +170,9 @@ def parse_rule_config(payload: Mapping[str, Any]) -> RuleConfig:
     }
     unknown = set(payload) - expected
     missing = expected - set(payload)
+    # The title-only subset is optional for one deployment step so an old
+    # private config can be read before its explicit migration is applied.
+    missing.discard("semiconductor_ai_title_keywords")
     if unknown or missing:
         raise RuleConfigError(
             f"rule config keys invalid: missing={sorted(missing)} unknown={sorted(unknown)}"
@@ -179,12 +182,16 @@ def parse_rule_config(payload: Mapping[str, Any]) -> RuleConfig:
     config_version = clean_value(payload.get("config_version"))
     if not config_version:
         raise RuleConfigError("config_version is required")
-    macro = mapping(
-        payload.get("macro_data"),
-        "macro_data",
-        {"indicators", "context_aliases", "tiers"},
-    )
-    tiers = mapping(macro.get("tiers"), "macro_data.tiers", {"primary", "secondary"})
+    raw_macro = payload.get("macro_data")
+    if not isinstance(raw_macro, dict):
+        raise RuleConfigError("macro_data must be an object")
+    unknown_macro = set(raw_macro) - {"indicators", "context_aliases", "tiers"}
+    missing_macro = {"indicators", "context_aliases"} - set(raw_macro)
+    if unknown_macro or missing_macro:
+        raise RuleConfigError(
+            f"macro_data keys invalid: missing={sorted(missing_macro)} unknown={sorted(unknown_macro)}"
+        )
+    macro = raw_macro
     fed = mapping(
         payload.get("fed_policy"),
         "fed_policy",
@@ -200,23 +207,38 @@ def parse_rule_config(payload: Mapping[str, Any]) -> RuleConfig:
         "trade_policy",
         {"corridors", "instruments", "stages", "focus_industries"},
     )
-    primary = tuple_strings(tiers.get("primary"), "macro_data.tiers.primary")
-    secondary = tuple_strings(tiers.get("secondary"), "macro_data.tiers.secondary")
     indicators = tuple_strings(macro.get("indicators"), "macro_data.indicators")
-    if not set(primary + secondary).issubset(set(indicators)):
-        raise RuleConfigError("macro tiers must reference configured indicators")
+    tiers = macro.get("tiers")
+    if tiers is not None:
+        tiers = mapping(tiers, "macro_data.tiers", {"primary", "secondary"})
+        primary = tuple_strings(tiers.get("primary"), "macro_data.tiers.primary")
+        secondary = tuple_strings(tiers.get("secondary"), "macro_data.tiers.secondary")
+        if not set(primary + secondary).issubset(set(indicators)):
+            raise RuleConfigError("macro tiers must reference configured indicators")
+        # Transitional compatibility: old configs retain their primary list,
+        # while secondary indicators stop entering production admission.
+        indicators = primary
+    semiconductor_keywords = tuple_strings(
+        payload.get("semiconductor_ai_keywords"), "semiconductor_ai_keywords"
+    )
+    title_keywords = tuple_strings(
+        payload.get("semiconductor_ai_title_keywords", []),
+        "semiconductor_ai_title_keywords",
+    )
+    semiconductor_keyword_keys = {value.casefold() for value in semiconductor_keywords}
+    if not {value.casefold() for value in title_keywords}.issubset(semiconductor_keyword_keys):
+        raise RuleConfigError(
+            "semiconductor_ai_title_keywords must be a subset of semiconductor_ai_keywords"
+        )
     config = RuleConfig(
         config_version=config_version,
-        semiconductor_ai_keywords=tuple_strings(
-            payload.get("semiconductor_ai_keywords"), "semiconductor_ai_keywords"
-        ),
+        semiconductor_ai_keywords=semiconductor_keywords,
+        semiconductor_ai_title_keywords=title_keywords,
         major_semiconductor_customers=tuple_strings(
             payload.get("major_semiconductor_customers"), "major_semiconductor_customers"
         ),
         exclude_keywords=tuple_strings(payload.get("exclude_keywords"), "exclude_keywords"),
         macro_indicators=indicators,
-        macro_primary_indicators=primary,
-        macro_secondary_indicators=secondary,
         macro_context_aliases=tuple_strings(
             macro.get("context_aliases"), "macro_data.context_aliases"
         ),

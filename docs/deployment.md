@@ -213,11 +213,13 @@ operator view across research, official-company and news batches.
 
 `RULE_CORE_CONFIG` is the persisted source for production five-group range
 admission and the Web workbench's `媒体关键词` page. The page edits only
-`semiconductor_ai_keywords` and
-`exclude_keywords`; the save path validates the complete rule configuration,
-preserves every other rule section, writes atomically with mode `0600`, and
-creates a private backup beside the rule file. There is no runtime precedence
-between code-default, base and include keyword lists.
+`semiconductor_ai_keywords`, its validated
+`semiconductor_ai_title_keywords` subset and `exclude_keywords`. Terms in the
+subset match only titles; other master-list terms match the complete normalized
+rule text. The save path validates the complete rule configuration, preserves
+every other rule section, writes atomically with mode `0600`, and creates a
+private backup beside the rule file. There is no runtime precedence between
+code-default, base and include keyword lists.
 
 When report-only LLM strength comparison is enabled, set
 `RULE_CORE_SHADOW_CONFIG` to the same private rule file as `RULE_CORE_CONFIG`.
@@ -252,6 +254,28 @@ terms that must remain omitted are reported by hashed identifier and are not
 restored. Keep the generated backup and
 verify the effective count and configuration version through the authenticated
 Web page before restarting or manually running collectors.
+
+After deploying the admission simplification, place the reviewed title-only
+subset in a service-private mode-`0600` JSON array. Its values must already
+exist in the private `semiconductor_ai_keywords` master list. Preview the
+combined keyword and macro migration without printing private values:
+
+```bash
+sudo -u surveil /opt/surveil/.venv/bin/python \
+  /opt/surveil/scripts/migrate_admission_simplification.py \
+  --env-file /opt/surveil/.env \
+  --title-keywords-file /opt/surveil-private/semiconductor-ai-title-keywords.json
+```
+
+The preview removes standalone generic `AI`/`人工智能`, reports their hashed
+identifiers, and replaces legacy `macro_data.tiers` with the old `primary`
+list as the sole `macro_data.indicators` list. It does not create exceptions or
+reaction-based admission for removed secondary indicators. After reviewing the
+redacted counts, apply the same migration explicitly with `--apply`. The apply
+validates the complete rule file, creates a mode-`0600` backup and atomically
+replaces the private configuration. Verify file ownership/mode, configuration
+version, title-only count, core macro-indicator count and representative range
+admission replays before restarting affected Alibaba services.
 
 When `RULE_CORE_SHADOW_AUTORUN=1`, installation also enables
 `surveil-rule-shadow-daily.timer`. It runs every day at 15:30

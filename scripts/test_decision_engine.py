@@ -218,14 +218,12 @@ def test_macro_primary_text_decides_push_without_raw_event_marker() -> None:
     assert decision.rule_hits[0]["macro_policy_line"]["tier"] == "primary"
 
 
-def test_macro_secondary_match_becomes_limited_judgement_candidate() -> None:
+def test_macro_secondary_data_does_not_enter_decision() -> None:
     item = {"source": "news_media", "title": "美国ADP就业人数大幅不及预期，2年期美债收益率大跌8个基点"}
     decision = decide_market_item(item, holdings=[])
-    assert decision.action == "daily"
-    assert decision.importance == "medium"
-    assert decision.need_limited_llm_judgement is True
-    assert decision.candidate_rules[0]["rule_id"] == "macro_policy_line"
-    assert decision.candidate_rules[0]["macro_policy_line"]["tier"] == "secondary_major"
+    assert decision.action == "archive"
+    assert decision.rule_hits == []
+    assert decision.candidate_rules == []
 
 
 def test_compute_daily_candidate_does_not_suppress_macro_push() -> None:
@@ -355,7 +353,7 @@ def main() -> int:
     test_news_media_attributed_semianalysis_hard_variable_pushes()
     test_holding_and_attributed_research_rules_are_preserved_together()
     test_macro_primary_text_decides_push_without_raw_event_marker()
-    test_macro_secondary_match_becomes_limited_judgement_candidate()
+    test_macro_secondary_data_does_not_enter_decision()
     test_compute_daily_candidate_does_not_suppress_macro_push()
     test_generic_fed_asset_transmission_is_downgraded_across_sources()
     test_new_policy_repricing_market_move_and_hard_fact_remain_pushes()

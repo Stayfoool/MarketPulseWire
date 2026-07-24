@@ -343,7 +343,7 @@
       "text": "美国 PPI 低于预期并引发明确汇市反应。",
       "symbols": [],
       "portfolio_fixture": "empty",
-      "expected": {"admission": "admitted", "action": "push", "push_eligible": true, "rule_id": "macro_secondary_reaction"},
+      "expected": {"admission": "excluded", "action": null, "push_eligible": false, "rule_id": null},
       "variants": [{"variant_id": "MACRO-003", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
     },
     {
@@ -370,7 +370,7 @@
       "text": "美国大宗商品综述仅转述 PPI 和利率担忧，不是数据发布。",
       "symbols": [],
       "portfolio_fixture": "empty",
-      "expected": {"admission": "admitted", "action": "archive", "push_eligible": false, "rule_id": "macro_indirect_summary"},
+      "expected": {"admission": "excluded", "action": null, "push_eligible": false, "rule_id": null},
       "variants": [{"variant_id": "MACRO-006", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
     },
     {
@@ -379,7 +379,7 @@
       "text": "美国进口物价意外上行，但没有政策含义或市场后果。",
       "symbols": [],
       "portfolio_fixture": "empty",
-      "expected": {"admission": "admitted", "action": "daily", "push_eligible": false, "rule_id": "macro_release_expected"},
+      "expected": {"admission": "excluded", "action": null, "push_eligible": false, "rule_id": null},
       "variants": [{"variant_id": "MACRO-007", "source": "finance_media", "source_category": "news_media", "publisher_role": "news_media", "content_type": "article"}]
     },
 

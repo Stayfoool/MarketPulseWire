@@ -43,13 +43,13 @@ def test_restricted_judgement_instruction_includes_rule_context_and_enum() -> No
     decision = DecisionResult(
         action="daily",
         importance="medium",
-        reason="候选宏观规则命中但需确认市场反应。",
-        candidate_rules=[{"rule_id": "macro_policy_line", "tier": "secondary_major"}],
+        reason="候选贸易政策规则命中但需确认升级程度。",
+        candidate_rules=[{"rule_id": "trade_friction_escalation"}],
         need_limited_llm_judgement=True,
     )
     instruction = restricted_judgement_instruction(decision)
     assert "不能覆盖硬规则强推" in instruction
-    assert "macro_policy_line" in instruction
+    assert "trade_friction_escalation" in instruction
     for value in LLM_JUDGEMENT_ENUM:
         assert value in instruction
 

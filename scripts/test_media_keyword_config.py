@@ -18,6 +18,7 @@ from media_keyword_config import (
     save_media_keyword_config,
 )
 from migrate_media_keywords import APPROVED_SAFE_ALIASES, build_migration
+from migrate_admission_simplification import build_migration as build_admission_migration
 from rule_core_v1 import (
     SourceAdmissionPolicy,
     admit_market_item,
@@ -69,6 +70,7 @@ def test_migration_preserves_user_delta_without_restoring_generic_power_defaults
         rule_path = root / "private-rule-config.json"
         payload = _config(rule_path)
         payload["semiconductor_ai_keywords"] = ["HBM", "GPU"]
+        payload["semiconductor_ai_title_keywords"] = []
         rule_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
@@ -122,9 +124,44 @@ def test_runtime_match_reads_the_same_private_rule_keywords() -> None:
                 os.environ["RULE_CORE_CONFIG"] = previous
 
 
+def test_admission_simplification_migration_is_redacted_and_primary_only() -> None:
+    payload = json.loads(PUBLIC_CONFIG.read_text(encoding="utf-8"))
+    payload["semiconductor_ai_keywords"] = ["AI", "人工智能", "ModelCo", "HBM"]
+    payload["semiconductor_ai_title_keywords"] = []
+    payload["macro_data"] = {
+        "indicators": ["CPI", "ADP"],
+        "context_aliases": ["美国"],
+        "tiers": {"primary": ["CPI"], "secondary": ["ADP"]},
+    }
+    migration = build_admission_migration(payload, title_keywords=["ModelCo"])
+    updated = migration["updated"]
+    preview = migration["preview"]
+    assert updated["semiconductor_ai_keywords"] == ["ModelCo", "HBM"]
+    assert updated["semiconductor_ai_title_keywords"] == ["ModelCo"]
+    assert updated["macro_data"] == {
+        "indicators": ["CPI"],
+        "context_aliases": ["美国"],
+    }
+    assert preview["removed_generic_count"] == 2
+    assert preview["removed_macro_indicator_count"] == 1
+    assert "ModelCo" not in json.dumps(preview)
+
+
+def test_admission_simplification_rejects_title_terms_outside_master_list() -> None:
+    payload = json.loads(PUBLIC_CONFIG.read_text(encoding="utf-8"))
+    try:
+        build_admission_migration(payload, title_keywords=["private-unknown-term"])
+    except ValueError as exc:
+        assert "term:" in str(exc)
+        assert "private-unknown-term" not in str(exc)
+    else:
+        raise AssertionError("unknown title-only terms must fail closed")
+
+
 def test_new_aliases_are_cross_source_and_holding_only_sources_stay_bounded() -> None:
     payload = json.loads(PUBLIC_CONFIG.read_text(encoding="utf-8"))
     payload["semiconductor_ai_keywords"] = list(APPROVED_SAFE_ALIASES)
+    payload["semiconductor_ai_title_keywords"] = []
     config = parse_rule_config(payload)
     portfolio = parse_portfolio_config([])
     for source in ("digitimes_en_daily", "wallstreetcn_news"):
@@ -164,6 +201,8 @@ def main() -> int:
     test_save_updates_one_rule_config_atomically_and_preserves_other_rules()
     test_migration_preserves_user_delta_without_restoring_generic_power_defaults()
     test_runtime_match_reads_the_same_private_rule_keywords()
+    test_admission_simplification_migration_is_redacted_and_primary_only()
+    test_admission_simplification_rejects_title_terms_outside_master_list()
     test_new_aliases_are_cross_source_and_holding_only_sources_stay_bounded()
     print("unified media keyword config checks passed")
     return 0

@@ -100,6 +100,7 @@ def build_migration(
         "migration_version": "media-keywords-to-semiconductor-ai-v1",
         "current_config_version": current["config_version"],
         "current_keyword_count": len(current_keywords),
+        "current_title_keyword_count": len(current["semiconductor_ai_title_keywords"]),
         "legacy_user_base_count": len(legacy["base_keywords"]),
         "legacy_user_include_count": len(legacy["include_keywords"]),
         "legacy_user_exclude_count": len(legacy["exclude_keywords"]),
@@ -113,6 +114,7 @@ def build_migration(
         "changed": merged_keywords != current_keywords
         or merged_excludes != list(current["exclude_keywords"]),
         "keywords": merged_keywords,
+        "title_keywords": list(current["semiconductor_ai_title_keywords"]),
         "exclude_keywords": merged_excludes,
     }
 
@@ -145,6 +147,7 @@ def main() -> int:
             migration["keywords"],
             migration["exclude_keywords"],
             target,
+            semiconductor_ai_title_keywords=migration.get("title_keywords", []),
         )
         result.update(
             {

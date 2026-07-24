@@ -13,6 +13,7 @@ from rule_core_fixture import FixtureContractError, load_fixture_payload, valida
 from rule_core_v1 import (
     RuleConfigError,
     SourceAdmissionPolicy,
+    admit_market_item,
     evaluate_market_item,
     parse_portfolio_config,
     parse_rule_config,
@@ -101,6 +102,16 @@ def test_rule_config_and_fixture_schemas_fail_closed() -> None:
         pass
     else:
         raise AssertionError("missing config version must fail closed")
+    legacy = copy.deepcopy(config_payload)
+    legacy.pop("semiconductor_ai_title_keywords")
+    legacy["macro_data"] = {
+        "indicators": ["CPI", "ADP"],
+        "context_aliases": ["美国"],
+        "tiers": {"primary": ["CPI"], "secondary": ["ADP"]},
+    }
+    parsed_legacy = parse_rule_config(legacy)
+    assert parsed_legacy.semiconductor_ai_title_keywords == ()
+    assert parsed_legacy.macro_indicators == ("CPI",)
     broken = copy.deepcopy(config_payload)
     broken["trade_policy"]["corridors"]["china_us"] = {
         "china_terms": ["中国"],
@@ -231,6 +242,74 @@ def test_trusted_institution_domains_are_optional_and_non_authoritative() -> Non
     assert official_research.decision.action == media_reprint.decision.action == "daily"
     assert official_research.decision.rule_hits[0]["attributed_institutions"] == ["trusted_research"]
     assert "attributed_institutions" not in media_reprint.decision.rule_hits[0]
+
+
+def test_semiconductor_title_keywords_do_not_admit_incidental_body_mentions() -> None:
+    payload = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    payload["semiconductor_ai_keywords"] = ["OpenAI", "AI", "HBM"]
+    payload["semiconductor_ai_title_keywords"] = ["OpenAI", "AI"]
+    config = parse_rule_config(payload)
+    portfolio = parse_portfolio_config([])
+
+    cases = (
+        (
+            NormalizedMarketItem(
+                source="finance_media",
+                title="Stripe reports stronger free cash flow",
+                full_text="Stripe serves OpenAI and other AI customers.",
+            ),
+            "excluded",
+        ),
+        (
+            NormalizedMarketItem(
+                source="industry_media",
+                title="OpenAI announces a new model roadmap",
+            ),
+            "admitted",
+        ),
+        (
+            NormalizedMarketItem(
+                source="finance_media",
+                title="OCI Holdings reports stronger earnings",
+                full_text="Management cited AI-driven electricity demand.",
+            ),
+            "excluded",
+        ),
+        (
+            NormalizedMarketItem(
+                source="industry_media",
+                title="Memory supplier expands capacity",
+                full_text="The company started new HBM production.",
+            ),
+            "admitted",
+        ),
+    )
+    for item, expected_status in cases:
+        result = admit_market_item(
+            item,
+            rule_config=config,
+            portfolio=portfolio,
+            source_policy=SourceAdmissionPolicy(),
+        )
+        assert result.status == expected_status, item.title
+
+    holding_portfolio = parse_portfolio_config(
+        [
+            {
+                "symbol": "PRIVATE",
+                "names": ["Private Holding"],
+                "related_news_keywords": ["Stripe"],
+            }
+        ]
+    )
+    holding_result = admit_market_item(
+        cases[0][0],
+        rule_config=config,
+        portfolio=holding_portfolio,
+        source_policy=SourceAdmissionPolicy(),
+    )
+    assert holding_result.status == "admitted"
+    assert holding_result.matched_families == ("holding",)
 
 
 def test_all_approved_v1_cases_are_executable() -> None:
@@ -1656,12 +1735,14 @@ def test_migrated_macro_reactions_and_fed_transmission_are_source_neutral() -> N
         ("美国CPI高于预期，2年期美债收益率大涨8个基点。", "push", "macro_surprise"),
         ("美国CPI与市场预期一致。", "daily", "macro_release_expected"),
         ("美国非农就业报告将于明晚公布。", "daily", "macro_release_preview"),
-        ("美国ADP就业人数不及预期，但没有明显市场反应。", "daily", "macro_release_expected"),
+        ("美国ADP就业人数不及预期，但没有明显市场反应。", None, None),
         (
             "美国ADP就业人数不及预期。数据公布后，2年期美债收益率大跌8个基点。",
-            "push",
-            "macro_secondary_reaction",
+            None,
+            None,
         ),
+        ("美国初请失业金人数大幅高于预期。", None, None),
+        ("美国续请失业金人数意外上升。", None, None),
         (
             "美联储降息将利好黄金、比特币和非美货币。",
             "daily",
@@ -1714,6 +1795,9 @@ def test_migrated_macro_reactions_and_fed_transmission_are_source_neutral() -> N
             ).decision
             for source, category, role, content_type in source_variants
         ]
+        if expected_rule_id is None:
+            assert all(decision is None for decision in decisions), text
+            continue
         assert all(decision is not None for decision in decisions), text
         assert {decision.action for decision in decisions if decision} == {expected_action}, text
         assert {
@@ -2153,6 +2237,7 @@ def main() -> int:
     test_passive_admission_contract_rejects_invalid_combinations()
     test_rule_config_and_fixture_schemas_fail_closed()
     test_trusted_institution_domains_are_optional_and_non_authoritative()
+    test_semiconductor_title_keywords_do_not_admit_incidental_body_mentions()
     test_all_approved_v1_cases_are_executable()
     test_source_identity_and_llm_availability_cannot_change_core_result()
     test_holding_capital_change_uses_document_title_to_resolve_routine_attachments()

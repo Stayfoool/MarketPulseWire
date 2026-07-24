@@ -110,9 +110,9 @@ def _response(
 
 
 def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
-    assert CATALOG_VERSION == "llm-rule-catalog-v9"
-    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v8-20260724"
-    assert len(RULES) == 17
+    assert CATALOG_VERSION == "llm-rule-catalog-v10"
+    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v9-20260724"
+    assert len(RULES) == 16
     assert len({rule.rule_id for rule in RULES}) == len(RULES)
     assert {rule.rule_id for rule in RULES} == {
         "holding_immediate_alert",
@@ -126,7 +126,6 @@ def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
         "ai_credit_constraint",
         "investment_bank_allocation_change",
         "macro_surprise",
-        "macro_secondary_reaction",
         "fed_path_change",
         "fed_official_stance_change",
         "fed_policy_material_exception",
@@ -888,12 +887,14 @@ def test_evidence_references_are_exact_and_bounded() -> None:
     assert title_result.evaluation_status == "completed"
     assert title_result.candidate_action == "push"
 
-    duplicate = copy.deepcopy(response)
-    duplicate["rule_results"][1]["judgement"] = "uncertain"
-    duplicate["rule_results"][1].pop("evidence_ids", None)
-    duplicate["rule_results"][1]["counterevidence_ids"] = ["B1"]
-    duplicate["rule_results"][1]["reason"] = "存在冲突信息。"
-    duplicate_result = validate_llm_rule_response(duplicate, item, admission)
+    duplicate_admission = _admission(("semiconductor_ai",))
+    duplicate = _response("semiconductor_ai", "semiconductor_material_change", "push")
+    duplicate["rule_results"][0]["judgement"] = "uncertain"
+    duplicate["rule_results"][0].pop("action", None)
+    duplicate["rule_results"][0].pop("evidence_ids", None)
+    duplicate["rule_results"][0]["counterevidence_ids"] = ["B1"]
+    duplicate["rule_results"][0]["reason"] = "存在冲突信息。"
+    duplicate_result = validate_llm_rule_response(duplicate, item, duplicate_admission)
     assert duplicate_result.evaluation_status == "completed"
 
 

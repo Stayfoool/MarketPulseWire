@@ -13,8 +13,8 @@ from typing import Mapping
 from market_item import RuleFamily
 
 
-RULE_MATRIX_VERSION = "llm-reviewed-rule-matrix-v8-20260724"
-CATALOG_VERSION = "llm-rule-catalog-v9"
+RULE_MATRIX_VERSION = "llm-reviewed-rule-matrix-v9-20260724"
+CATALOG_VERSION = "llm-rule-catalog-v10"
 MODEL_ACTIONS = ("push", "daily", "archive")
 
 
@@ -225,16 +225,6 @@ RULES: tuple[LLMRuleDefinition, ...] = (
         archive="不属于美国数据，或者只是历史回顾。",
         required=("美国核心指标", "当前正式发布状态", "实际值或方向", "预期比较"),
         exclusions=("其他国家同名指标", "历史回顾", "没有预期比较"),
-    ),
-    _rule(
-        "macro_secondary_reaction",
-        "macro_data",
-        "美国次级宏观数据和政策或市场反应",
-        push="次级美国指标明确偏离预期，同时出现重大政策含义或可归因的明确市场反应。",
-        daily="次级指标存在偏离，但没有政策或市场后果。",
-        archive="行情无法归因于该数据，或者只是一般综述。",
-        required=("美国次级指标", "当前发布和预期偏离", "政策含义或可归因市场反应"),
-        exclusions=("无法归因行情", "一般综述", "没有当前发布"),
     ),
     _rule(
         "fed_path_change",

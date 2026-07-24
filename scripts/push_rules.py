@@ -1214,7 +1214,7 @@ def macro_policy_event_rule(
     if not macro.get("matched"):
         return None
     tier = str(macro.get("tier") or "")
-    if tier not in {"primary", "secondary_major", "market_reaction"}:
+    if tier != "primary":
         return None
     reason = str(macro.get("reason") or "美国核心宏观/Fed 政策线命中。")
     full_reason = f"宏观政策硬规则：{reason} 这类信息可能影响美债、美元、A 股风险偏好和成长股估值，先即时提醒。"
