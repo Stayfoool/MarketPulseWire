@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Run one production collector, then refresh its report-only comparison view.
+"""Run one production collector through the retained service entrypoint.
 
-The production runtime records comparisons from its exact NormalizedMarketItem.
-This wrapper never collects a second copy of an item. Report refresh failures
-never change the production collector exit status.
+The historical filename is retained for systemd compatibility. Production no
+longer records or refreshes old-versus-LLM comparison reports.
 """
 
 from __future__ import annotations
@@ -98,24 +97,11 @@ def run_batch(
     env = dict(env or os.environ)
     production_command = collector_command(collector)
     production_result = _run(production_command, env=env, runner=runner)
-    production_status = int(getattr(production_result, "returncode", 1))
-    if production_status != 0:
-        return production_status
-
-    followup = refresh_combined_report(
-        env=env,
-        runner=runner,
-        report_dir=report_dir,
-    )
-    if followup.get("status") not in {"disabled", "skipped", "completed"}:
-        print(f"rule core shadow follow-up failed: {followup}", file=sys.stderr, flush=True)
-    elif followup.get("status") == "completed":
-        print(f"rule core shadow combined: {followup.get('combined_report')}", flush=True)
-    return production_status
+    return int(getattr(production_result, "returncode", 1))
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run a production collector with an optional read-only rule comparison.")
+    parser = argparse.ArgumentParser(description="Run one production collector.")
     parser.add_argument("--collector", choices=sorted(COLLECTOR_COMMANDS), required=True)
     args = parser.parse_args()
     return run_batch(args.collector)

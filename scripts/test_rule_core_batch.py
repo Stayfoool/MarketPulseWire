@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression checks for the production-and-report-refresh wrapper."""
+"""Regression checks for the retained production collector wrapper."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ def test_default_keeps_the_existing_production_command_only() -> None:
     assert calls[0][1:] == list(batch.collector_command("news"))
 
 
-def test_enabled_followup_only_refreshes_reports_without_second_collection() -> None:
+def test_old_comparison_setting_no_longer_refreshes_reports() -> None:
     with TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         calls: list[list[str]] = []
@@ -38,14 +38,13 @@ def test_enabled_followup_only_refreshes_reports_without_second_collection() -> 
             runner=runner,
             report_dir=report_dir,
         ) == 0
-        assert len(calls) == 2
+        assert len(calls) == 1
         assert "--production" in calls[0]
-        assert "scripts/rule_core_shadow_combined.py" in calls[1]
         assert all("--direct-shadow" not in call for call in calls)
         assert all("scripts/rule_core_shadow_report.py" not in call for call in calls)
 
 
-def test_enabled_followup_refreshes_combined_report() -> None:
+def test_historical_report_refresh_remains_explicitly_callable() -> None:
     with TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         report_dir = root / "reports"
@@ -59,25 +58,9 @@ def test_enabled_followup_refreshes_combined_report() -> None:
             return SimpleNamespace(returncode=0)
 
         env = {"RULE_CORE_SHADOW_AUTORUN": "1"}
-        assert batch.run_batch("news", env=env, runner=runner, report_dir=report_dir) == 0
+        result = batch.refresh_combined_report(env=env, runner=runner, report_dir=report_dir)
+        assert result["status"] == "completed"
         assert any("scripts/rule_core_shadow_combined.py" in call for call in calls)
-
-
-def test_report_refresh_failure_does_not_change_production_status() -> None:
-    calls = 0
-
-    def runner(command, **kwargs):
-        nonlocal calls
-        calls += 1
-        return SimpleNamespace(returncode=0 if calls == 1 else 2)
-
-    env = {
-        "RULE_CORE_SHADOW_AUTORUN": "1",
-        "RULE_CORE_SHADOW_CONFIG": "/missing/rule.json",
-        "RULE_CORE_SHADOW_PORTFOLIO": "/missing/portfolio.json",
-    }
-    assert batch.run_batch("research", env=env, runner=runner) == 0
-    assert calls == 2
 
 
 def test_production_units_use_the_wrapper_entrypoint() -> None:
@@ -90,9 +73,8 @@ def test_production_units_use_the_wrapper_entrypoint() -> None:
 
 def main() -> int:
     test_default_keeps_the_existing_production_command_only()
-    test_enabled_followup_only_refreshes_reports_without_second_collection()
-    test_enabled_followup_refreshes_combined_report()
-    test_report_refresh_failure_does_not_change_production_status()
+    test_old_comparison_setting_no_longer_refreshes_reports()
+    test_historical_report_refresh_remains_explicitly_callable()
     test_production_units_use_the_wrapper_entrypoint()
     print("rule core batch checks passed")
     return 0

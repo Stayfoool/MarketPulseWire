@@ -12,6 +12,7 @@ from market_item import DecisionResult
 MARKET_TIMEZONE = timezone(timedelta(hours=8))
 MARKET_MOVE_RULE_ID = "intraday_market_move"
 MARKET_MOVE_LOOKBACK_MINUTES = 45
+HOLDING_MARKET_MOVE_RULE_IDS = {"holding_keyword_immediate_alert", "holding_immediate_alert"}
 
 UP_MARKERS = ("直线拉升", "涨势扩大", "封涨停", "涨停", "涨超", "大涨", "拉升", "上涨", "走强")
 DOWN_MARKERS = ("直线跳水", "跌势扩大", "封跌停", "跌停", "跌超", "大跌", "跳水", "下跌", "走弱")
@@ -55,7 +56,7 @@ def _concept(text: str) -> str:
 
 def _target_key(decision: DecisionResult) -> str:
     for hit in decision.rule_hits:
-        if str(hit.get("rule_id") or "") != "holding_keyword_immediate_alert":
+        if str(hit.get("rule_id") or "") not in HOLDING_MARKET_MOVE_RULE_IDS:
             continue
         targets = hit.get("related_targets") if isinstance(hit.get("related_targets"), list) else []
         for target in targets:
@@ -64,6 +65,15 @@ def _target_key(decision: DecisionResult) -> str:
             name = str(target.get("name") or "").strip().lower()
             symbol = str(target.get("code") or "").strip().upper()
             value = re.sub(r"[^a-z0-9\u4e00-\u9fff.]", "", name or symbol.lower())
+            if value:
+                return value
+    admission = decision.audit_json.get("admission")
+    evidence = admission.get("evidence") if isinstance(admission, dict) else []
+    for item in evidence if isinstance(evidence, list) else []:
+        if not isinstance(item, dict) or item.get("rule_family") != "holding":
+            continue
+        for subject in item.get("matched_subjects") if isinstance(item.get("matched_subjects"), list) else []:
+            value = re.sub(r"[^a-z0-9\u4e00-\u9fff.]", "", str(subject).strip().lower())
             if value:
                 return value
     return ""

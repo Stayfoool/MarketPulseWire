@@ -69,7 +69,8 @@ def evaluate_market_item(
         holdings=holdings or [],
         symbols=symbols,
     )
-    resolved_decision = apply_deterministic_source_controls(decision_item, resolved_decision)
+    if not (decision is not None and resolved_decision.audit_json.get("production_authority") is True):
+        resolved_decision = apply_deterministic_source_controls(decision_item, resolved_decision)
     should_interpret = bool(
         source_interpretation is None
         and (

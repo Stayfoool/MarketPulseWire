@@ -209,6 +209,36 @@ def test_live_unified_collector_calls_cannot_omit_production_admission() -> None
             assert "production_admission" in keywords, (
                 f"{filename}:{node.lineno} live process_market_item call omits production_admission"
             )
+            assert "production_portfolio" in keywords, (
+                f"{filename}:{node.lineno} live process_market_item call omits production_portfolio"
+            )
+
+
+def test_production_decision_boundary_is_llm_only() -> None:
+    runtime = (SCRIPTS / "market_runtime.py").read_text(encoding="utf-8")
+    engine = (SCRIPTS / "decision_engine.py").read_text(encoding="utf-8")
+    production = (SCRIPTS / "llm_production_decision.py").read_text(encoding="utf-8")
+    content_adapter = (SCRIPTS / "market_content_adapter.py").read_text(encoding="utf-8")
+    event_adapter = (SCRIPTS / "market_event_adapter.py").read_text(encoding="utf-8")
+    flow = (SCRIPTS / "market_flow.py").read_text(encoding="utf-8")
+
+    assert "from decision_engine import decide_market_item_with_llm" in runtime
+    assert runtime.count("decide_market_item_with_llm(") == 2
+    assert "def decide_market_item_with_llm(" in engine
+    assert "from llm_production_decision import decide_production_market_item" in engine
+    assert "RULE_COMPARISON_CANDIDATE" not in production
+    for forbidden in (
+        "first_matching_push_rule",
+        "apply_deterministic_source_controls",
+        "apply_skeptic_review",
+        "apply_event_push_rules",
+        "market_delivery",
+        "complete_market_review",
+    ):
+        assert forbidden not in production
+    assert 'decision.audit_json.get("production_authority") is True' in content_adapter
+    assert "attach_decision_result_to_event_analysis(decision, {})" in event_adapter
+    assert 'resolved_decision.audit_json.get("production_authority") is True' in flow
 
 
 def test_removed_compatibility_modules_do_not_return() -> None:
@@ -449,9 +479,6 @@ def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importe
                 top_level_imports.add(node.module.split(".")[0])
         assert "rule_center" not in top_level_imports
     report_only_modules = {
-        "llm_rule_catalog.py",
-        "llm_rule_decision.py",
-        "llm_rule_shadow.py",
         "rule_core_fixture.py",
         "rule_core_replay.py",
         "rule_core_history_replay.py",
@@ -462,6 +489,7 @@ def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importe
         "rule_core_runtime_shadow.py",
         "rule_config_migration_v1.py",
         "market_lifecycle_v1.py",
+        "llm_decision_audit_cleanup.py",
     }
     for path in SCRIPTS.glob("*.py"):
         if path.name.startswith("test_") or path.name in report_only_modules:
@@ -501,6 +529,7 @@ def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importe
 def main() -> int:
     test_unified_collectors_use_runtime_without_owning_delivery()
     test_live_unified_collector_calls_cannot_omit_production_admission()
+    test_production_decision_boundary_is_llm_only()
     test_removed_compatibility_modules_do_not_return()
     test_independent_routes_are_explicit_and_tested()
     test_direct_urllib_request_usage_is_explicit_and_bounded()

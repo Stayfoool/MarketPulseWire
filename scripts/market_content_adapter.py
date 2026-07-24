@@ -189,12 +189,14 @@ def _evaluate_content_item(
     holdings: list[dict[str, Any]],
     *,
     official: bool = False,
+    decision: DecisionResult | None = None,
 ) -> MarketFlowResult:
     source_interpretation = _source_enrichment_interpretation(normalized)
     value_directory_source = normalized.source.startswith("value_directory_")
     return evaluate_market_item(
         normalized,
         holdings=holdings,
+        decision=decision,
         source_interpretation=source_interpretation,
         content=_interpretation_content(source, item),
         task=(
@@ -348,12 +350,16 @@ def evaluate_article_review(
     *,
     source_profile_id: str | None = None,
     normalized_item: NormalizedMarketItem | None = None,
+    decision: DecisionResult | None = None,
 ) -> dict[str, Any]:
     """Run the production article/news spine without choosing a storage table."""
     holdings = load_enabled_holdings_for_rules()
     normalized = normalized_item or normalized_article_item(source, item)
-    flow_result = _evaluate_content_item(source, item, normalized, holdings)
+    flow_result = _evaluate_content_item(source, item, normalized, holdings, decision=decision)
     review = _article_review_from_results(item, flow_result.decision, flow_result.interpretation)
+    if decision is not None and decision.audit_json.get("production_authority") is True:
+        review = _attach_article_flow_audit(review, flow_result)
+        return attach_decision_result_to_article_review(flow_result.decision, review)
     review = apply_skeptic_review(
         conn,
         source=source,
@@ -386,6 +392,7 @@ def process_article_review(
     *,
     source_profile_id: str | None = None,
     normalized_item: NormalizedMarketItem | None = None,
+    decision: DecisionResult | None = None,
 ) -> dict[str, Any]:
     """Compatibility entry that evaluates and stores the historical article row."""
     normalized = normalized_item or normalized_article_item(source, item)
@@ -395,6 +402,7 @@ def process_article_review(
         item,
         source_profile_id=source_profile_id,
         normalized_item=normalized,
+        decision=decision,
     )
     store_article_flow_review(conn, source, item, review, normalized)
     return review
@@ -498,12 +506,18 @@ def evaluate_official_review(
     *,
     source_profile_id: str | None = None,
     normalized_item: NormalizedMarketItem | None = None,
+    decision: DecisionResult | None = None,
 ) -> dict[str, Any]:
     """Run the production official-news spine without choosing a storage table."""
     holdings = load_enabled_holdings_for_rules()
     normalized = normalized_item or normalized_official_item(source, item)
-    flow_result = _evaluate_content_item(source, item, normalized, holdings, official=True)
+    flow_result = _evaluate_content_item(
+        source, item, normalized, holdings, official=True, decision=decision
+    )
     review = _official_review_from_results(item, flow_result.decision, flow_result.interpretation)
+    if decision is not None and decision.audit_json.get("production_authority") is True:
+        review = _attach_official_flow_audit(review, flow_result)
+        return attach_decision_result_to_official_review(flow_result.decision, review)
     review = apply_skeptic_review(
         conn,
         source=source,
@@ -536,6 +550,7 @@ def process_official_review(
     *,
     source_profile_id: str | None = None,
     normalized_item: NormalizedMarketItem | None = None,
+    decision: DecisionResult | None = None,
 ) -> dict[str, Any]:
     """Compatibility entry that evaluates and stores the historical official row."""
     normalized = normalized_item or normalized_official_item(source, item)
@@ -545,6 +560,7 @@ def process_official_review(
         item,
         source_profile_id=source_profile_id,
         normalized_item=normalized,
+        decision=decision,
     )
     store_official_flow_review(conn, source, item, review, normalized)
     return review

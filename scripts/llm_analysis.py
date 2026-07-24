@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -11,6 +12,8 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
+
+import httpx
 
 from env_utils import get_env
 
@@ -331,6 +334,133 @@ def call_chat_completion_raw_with_prompts(
         value = raw_usage.get(key)
         if isinstance(value, (int, float)) and int(value) >= 0:
             usage[key] = int(value)
+    return ChatCompletionResponse(
+        content=raw_content,
+        model=model,
+        provider=urllib.parse.urlparse(base_url).hostname or "",
+        response_id=str(result.get("id") or "")[:200],
+        usage=usage,
+        attempts=attempts_used,
+        elapsed_seconds=round(time.monotonic() - total_started_at, 6),
+    )
+
+
+def call_chat_completion_raw_with_prompts_hard_deadline(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    deadline_monotonic: float,
+    user_agent: str = "surveil-llm-analysis/0.1",
+    truncate_user_prompt: bool = True,
+    thinking_override: str | None = None,
+    max_tokens_override: int | None = None,
+    temperature_override: float | None = None,
+) -> ChatCompletionResponse:
+    """Call the compatible chat API without exceeding one shared wall-clock deadline."""
+    config = llm_config()
+    if not config:
+        raise RuntimeError("LLM 未配置")
+    api_key, base_url, model = config
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": user_prompt.strip()[: input_limit()] if truncate_user_prompt else user_prompt.strip(),
+            },
+        ],
+        "temperature": 0.2 if temperature_override is None else float(temperature_override),
+        "max_tokens": max_tokens_override or max_output_tokens(),
+    }
+    thinking = (thinking_override or thinking_type(base_url, model)).strip().lower()
+    if "deepseek" in base_url.lower() and thinking == "enabled" and os.getenv("LLM_ALLOW_DEEPSEEK_THINKING", "").strip() != "1":
+        thinking = "disabled"
+    if thinking in {"enabled", "disabled"}:
+        payload["thinking"] = {"type": thinking}
+    if json_response_format_enabled(base_url):
+        payload["response_format"] = {"type": "json_object"}
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json; charset=utf-8",
+        "Accept": "application/json",
+        "User-Agent": user_agent,
+    }
+
+    async def run() -> tuple[dict[str, Any], int]:
+        attempts = retry_count() + 1
+        last_error: Exception | None = None
+        async with httpx.AsyncClient(timeout=None) as client:
+            for attempt in range(attempts):
+                remaining = deadline_monotonic - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("LLM decision exceeded its total deadline")
+                try:
+                    async with asyncio.timeout(remaining):
+                        response = await client.post(
+                            chat_completions_url(base_url),
+                            json=payload,
+                            headers=headers,
+                        )
+                except TimeoutError as exc:
+                    last_error = exc
+                    if attempt >= attempts - 1:
+                        raise TimeoutError("LLM decision exceeded its total deadline") from exc
+                except httpx.RequestError as exc:
+                    last_error = exc
+                    if attempt >= attempts - 1:
+                        raise RuntimeError(f"LLM 网络请求失败：{exc}") from exc
+                else:
+                    body = response.text
+                    lower_body = body.lower()
+                    if response.status_code == 402 or "insufficient balance" in lower_body or "余额不足" in body:
+                        raise LLMBalanceInsufficientError(f"LLM 余额不足：{body}")
+                    if 500 <= response.status_code < 600 and attempt < attempts - 1:
+                        last_error = RuntimeError(f"LLM 请求失败：HTTP {response.status_code}\n{body}")
+                    elif response.is_error:
+                        raise RuntimeError(f"LLM 请求失败：HTTP {response.status_code}\n{body}")
+                    else:
+                        try:
+                            parsed = response.json()
+                        except ValueError as exc:
+                            raise RuntimeError(f"LLM 响应不是有效 JSON：{body[:500]}") from exc
+                        if not isinstance(parsed, dict):
+                            raise RuntimeError("LLM 响应不是 JSON object")
+                        if attempt > 0:
+                            log_llm_retry(f"LLM 重试成功：第 {attempt + 1}/{attempts} 次")
+                        return parsed, attempt + 1
+                if attempt < attempts - 1:
+                    delay = retry_sleep_seconds(attempt)
+                    remaining = deadline_monotonic - time.monotonic()
+                    if remaining <= delay:
+                        raise TimeoutError("LLM decision exceeded its total deadline") from last_error
+                    log_llm_retry(f"LLM 网络/服务错误：{last_error}，准备重试 {attempt + 2}/{attempts}")
+                    await asyncio.sleep(delay)
+        raise RuntimeError(f"LLM 网络请求失败：{last_error}")
+
+    total_started_at = time.monotonic()
+    try:
+        result, attempts_used = asyncio.run(run())
+    except TimeoutError:
+        raise
+    choices = result.get("choices") or []
+    if not choices:
+        raise RuntimeError(f"LLM 响应缺少 choices：{json.dumps(result, ensure_ascii=False)[:500]}")
+    message = choices[0].get("message") or {}
+    raw_content = str(
+        message.get("content")
+        or message.get("reasoning_content")
+        or message.get("output_text")
+        or ""
+    ).strip()
+    if not raw_content:
+        raise RuntimeError("LLM 响应为空")
+    raw_usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
+    usage = {
+        key: int(raw_usage[key])
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+        if isinstance(raw_usage.get(key), (int, float)) and int(raw_usage[key]) >= 0
+    }
     return ChatCompletionResponse(
         content=raw_content,
         model=model,

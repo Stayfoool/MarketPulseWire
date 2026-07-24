@@ -196,7 +196,14 @@ def _contains_any(text: str, values: tuple[str, ...]) -> bool:
 
 
 def _macro_rule_matched(decision: DecisionResult) -> bool:
-    return any(str(hit.get("rule_id") or "") == "macro_policy_line" for hit in decision.rule_hits)
+    eligible_rule_ids = {
+        "macro_policy_line",
+        "macro_surprise",
+        "fed_path_change",
+        "fed_official_stance_change",
+        "fed_policy_material_exception",
+    }
+    return any(str(hit.get("rule_id") or "") in eligible_rule_ids for hit in decision.rule_hits)
 
 
 def _indicator_occurrences(claim: str) -> list[tuple[str, int]]:

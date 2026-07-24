@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from attributed_research import prepare_item_for_decision
-from decision_engine import attach_decision_to_event_analysis
+from decision_engine import attach_decision_result_to_event_analysis, attach_decision_to_event_analysis
 from market_flow import evaluate_market_item
 from market_flow_adapters import (
     event_with_ingestion_audit,
@@ -105,6 +105,7 @@ def analyze_event(
     *,
     normalized_item: NormalizedMarketItem | None = None,
     persist_legacy: bool = True,
+    decision: DecisionResult | None = None,
 ) -> dict[str, Any]:
     event_row = event_row_by_id(event_id, db_path)
     if not event_row:
@@ -137,18 +138,22 @@ def analyze_event(
 
     event = event_mapping_from_row(event_row)
     decision_item = normalized_item or prepare_item_for_decision(normalized_event_item(event))
-    decision_fields = apply_event_rules_to_analysis(
-        event_row,
-        {},
-        db_path=db_path,
-        normalized_item=decision_item,
+    decision_fields = (
+        attach_decision_result_to_event_analysis(decision, {})
+        if decision is not None
+        else apply_event_rules_to_analysis(
+            event_row,
+            {},
+            db_path=db_path,
+            normalized_item=decision_item,
+        )
     )
-    decision = decision_result_from_payload(decision_fields)
-    if decision is None:
+    resolved_decision = decision or decision_result_from_payload(decision_fields)
+    if resolved_decision is None:
         raise RuntimeError(f"事件决策结果缺失：{event_id}")
     flow_result = evaluate_market_item(
         decision_item,
-        decision=decision,
+        decision=resolved_decision,
         content=build_portfolio_event_input(event_row, db_path=db_path),
         task="为一条已完成规则决策的公告、研报、快讯或异动信息生成极简实时摘要。",
         intro="请解读以下持仓事件",
