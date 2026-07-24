@@ -15,6 +15,7 @@ from llm_analysis import call_chat_completion_raw_with_prompts_hard_deadline
 from llm_rule_decision import LLMRulePrompt, resolve_input_text_scope
 from llm_rule_shadow import LLMRuleExecution, execute_llm_rule_decision
 from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem
+from market_store import application_revision
 from rule_core_v1 import PortfolioRuleConfig
 
 
@@ -27,19 +28,6 @@ PRODUCTION_MAX_OUTPUT_TOKENS = 6000
 
 class ProductionLLMDecisionError(RuntimeError):
     """Raised when an admitted item cannot produce an audited production decision."""
-
-
-def _application_revision() -> str:
-    marker = ROOT / ".deploy-version"
-    try:
-        text = marker.read_text(encoding="utf-8")
-    except OSError:
-        return ""
-    for line in text.splitlines():
-        key, separator, value = line.partition("=")
-        if separator and key.strip() == "commit":
-            return value.strip()
-    return ""
 
 
 def _default_model_caller(deadline_monotonic: float):
@@ -150,7 +138,7 @@ def decide_production_market_item(
         deadline_monotonic=deadline,
         production_authority=True,
     )
-    application_revision = _application_revision()
+    deployed_revision = application_revision()
     generated_at = datetime.now(timezone.utc).isoformat()
     audit_path = _write_private_audit(
         execution,
@@ -160,7 +148,7 @@ def decide_production_market_item(
         market_review_id=market_review_id,
         audit_dir=audit_dir,
         generated_at=generated_at,
-        application_revision=application_revision,
+        application_revision=deployed_revision,
     )
     if execution.decision is None:
         status = str(execution.candidate.get("evaluation_status") or "invalid_output")
@@ -171,7 +159,7 @@ def decide_production_market_item(
         {
             "production_authority": True,
             "production_decision_contract_version": PRODUCTION_DECISION_CONTRACT_VERSION,
-            "application_revision": application_revision,
+            "application_revision": deployed_revision,
             "market_item_id": market_item_id,
             "market_review_id": market_review_id,
             "audit_recorded": True,

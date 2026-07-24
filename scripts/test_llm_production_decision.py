@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import stat
 import time
 from pathlib import Path
@@ -82,47 +83,57 @@ def response(action: str = "push") -> ChatCompletionResponse:
 
 
 def test_valid_decisions_write_private_audits_and_keep_actions_authoritative() -> None:
-    for index, action in enumerate(("push", "daily", "archive"), start=1):
-        with TemporaryDirectory() as tmp:
-            audit_dir = Path(tmp) / "audits"
-            decision = decide_production_market_item(
-                item(),
-                admission=admission(),
-                portfolio=parse_portfolio_config([]),
-                market_item_id=10 + index,
-                market_review_id=20 + index,
-                audit_dir=audit_dir,
-                model_caller=lambda _prompt, selected=action: response(selected),
-            )
-            assert decision.action == action
-            assert decision.audit_json["production_authority"] is True
-            assert decision.audit_json["market_item_id"] == 10 + index
-            assert decision.audit_json["market_review_id"] == 20 + index
-            paths = list(audit_dir.glob("llm-decision-audit-*.json"))
-            assert len(paths) == 1
-            assert stat.S_IMODE(audit_dir.stat().st_mode) == 0o700
-            assert stat.S_IMODE(paths[0].stat().st_mode) == 0o600
-            payload = json.loads(paths[0].read_text(encoding="utf-8"))
-            assert payload["market_item_id"] == 10 + index
-            assert payload["market_review_id"] == 20 + index
-            assert payload["decision"]["action"] == action
-            assert "PRIVATE_PRODUCTION_BODY" in json.dumps(payload["model_audit"], ensure_ascii=False)
+    original_revision = os.environ.get("SURVEIL_REVISION")
+    os.environ["SURVEIL_REVISION"] = "fixed-production-revision"
+    try:
+        for index, action in enumerate(("push", "daily", "archive"), start=1):
+            with TemporaryDirectory() as tmp:
+                audit_dir = Path(tmp) / "audits"
+                decision = decide_production_market_item(
+                    item(),
+                    admission=admission(),
+                    portfolio=parse_portfolio_config([]),
+                    market_item_id=10 + index,
+                    market_review_id=20 + index,
+                    audit_dir=audit_dir,
+                    model_caller=lambda _prompt, selected=action: response(selected),
+                )
+                assert decision.action == action
+                assert decision.audit_json["production_authority"] is True
+                assert decision.audit_json["application_revision"] == "fixed-production-revision"
+                assert decision.audit_json["market_item_id"] == 10 + index
+                assert decision.audit_json["market_review_id"] == 20 + index
+                paths = list(audit_dir.glob("llm-decision-audit-*.json"))
+                assert len(paths) == 1
+                assert stat.S_IMODE(audit_dir.stat().st_mode) == 0o700
+                assert stat.S_IMODE(paths[0].stat().st_mode) == 0o600
+                payload = json.loads(paths[0].read_text(encoding="utf-8"))
+                assert payload["application_revision"] == "fixed-production-revision"
+                assert payload["market_item_id"] == 10 + index
+                assert payload["market_review_id"] == 20 + index
+                assert payload["decision"]["action"] == action
+                assert "PRIVATE_PRODUCTION_BODY" in json.dumps(payload["model_audit"], ensure_ascii=False)
 
-            original_skeptic = market_content_adapter.apply_skeptic_review
-            try:
-                market_content_adapter.apply_skeptic_review = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                    AssertionError("production LLM decisions must not enter skeptic postprocessing")
-                )
-                review = market_content_adapter.evaluate_article_review(
-                    __import__("sqlite3").connect(":memory:"),
-                    item().source,
-                    item().raw | {"title": item().title, "summary": item().summary, "full_text": item().full_text},
-                    normalized_item=item(),
-                    decision=decision,
-                )
-            finally:
-                market_content_adapter.apply_skeptic_review = original_skeptic
-            assert review["raw"]["decision_result"]["action"] == action
+                original_skeptic = market_content_adapter.apply_skeptic_review
+                try:
+                    market_content_adapter.apply_skeptic_review = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                        AssertionError("production LLM decisions must not enter skeptic postprocessing")
+                    )
+                    review = market_content_adapter.evaluate_article_review(
+                        __import__("sqlite3").connect(":memory:"),
+                        item().source,
+                        item().raw | {"title": item().title, "summary": item().summary, "full_text": item().full_text},
+                        normalized_item=item(),
+                        decision=decision,
+                    )
+                finally:
+                    market_content_adapter.apply_skeptic_review = original_skeptic
+                assert review["raw"]["decision_result"]["action"] == action
+    finally:
+        if original_revision is None:
+            os.environ.pop("SURVEIL_REVISION", None)
+        else:
+            os.environ["SURVEIL_REVISION"] = original_revision
 
 
 def test_invalid_output_fails_closed_after_auditing() -> None:
