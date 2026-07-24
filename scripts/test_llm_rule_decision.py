@@ -110,8 +110,8 @@ def _response(
 
 
 def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
-    assert CATALOG_VERSION == "llm-rule-catalog-v10"
-    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v9-20260724"
+    assert CATALOG_VERSION == "llm-rule-catalog-v11"
+    assert RULE_MATRIX_VERSION == "llm-reviewed-rule-matrix-v10-20260724"
     assert len(RULES) == 16
     assert len({rule.rule_id for rule in RULES}) == len(RULES)
     assert {rule.rule_id for rule in RULES} == {
@@ -671,6 +671,127 @@ def test_key_product_production_ramp_is_material_in_both_directions() -> None:
     assert "从小规模生产扩大到稳定规模生产" in prompt_rules
 
 
+def test_ai_infrastructure_capex_and_hyperscaler_free_cash_flow_are_material() -> None:
+    rules = {rule.rule_id: rule for rule in rules_for_families(("semiconductor_ai",))}
+    material = rules["semiconductor_material_change"]
+    performance = rules["semiconductor_performance_change"]
+    assert "超大规模云厂商或半导体、AI 基础设施核心厂商" in material.action_conditions["push"]
+    assert "上调、下调、提前、延后或取消重大资本开支" in material.action_conditions["push"]
+    assert "明确金额、幅度、前值比较、实际支出或关键产能用途" in material.action_conditions["push"]
+    assert "一般资本开支或继续投资表态" in material.action_conditions["daily"]
+    assert "自由现金流大幅变化、由正转负或由负转正" in performance.action_conditions["push"]
+    assert "AI 基础设施资本开支、需求兑现或持续投资能力" in performance.action_conditions["push"]
+    assert "自由现金流普通波动、仅有时点性原因" in performance.action_conditions["daily"]
+
+    def market_item(source: str, category: str, title: str, summary: str) -> NormalizedMarketItem:
+        return NormalizedMarketItem(
+            source=source,
+            source_category=category,
+            publisher_role="news_media",
+            content_type="article",
+            title=title,
+            summary=summary,
+            full_text=f"公司公告及报道正文：{summary}",
+            url="https://example.test/ai-infrastructure-capex",
+            published_at="2026-07-23T22:08:41+08:00",
+        )
+
+    admission = _admission(("semiconductor_ai",))
+    google_items = (
+        market_item(
+            "sina_finance_articles",
+            "news_media",
+            "谷歌再次上调人工智能基础设施资本开支",
+            "Alphabet将全年资本开支预期上调至1950亿至2050亿美元，单季支出449亿美元，导致自由现金流由正转负。",
+        ),
+        market_item(
+            "finance_media",
+            "research_industry_media",
+            "谷歌再次上调人工智能基础设施资本开支",
+            "Alphabet将全年资本开支预期上调至1950亿至2050亿美元，单季支出449亿美元，导致自由现金流由正转负。",
+        ),
+    )
+    response = _response(
+        "semiconductor_ai",
+        "semiconductor_material_change",
+        "push",
+        overrides={
+            "semiconductor_material_change": {
+                "rule_id": "semiconductor_material_change",
+                "judgement": "matched",
+                "action": "push",
+                "evidence_ids": ["T1", "S1"],
+                "reason": "正式上调巨额AI基础设施资本开支并披露实际支出。",
+            },
+            "semiconductor_performance_change": {
+                "rule_id": "semiconductor_performance_change",
+                "judgement": "matched",
+                "action": "push",
+                "evidence_ids": ["S1"],
+                "reason": "自由现金流由正转负并明确归因于AI基础设施资本开支。",
+            },
+        },
+    )
+    results = [validate_llm_rule_response(response, item, admission) for item in google_items]
+    assert [result.candidate_action for result in results] == ["push", "push"]
+    for result in results:
+        assert result.evaluation_status == "completed"
+        assert result.decision is not None
+        assert {hit["rule_id"] for hit in result.decision.rule_hits} == {
+            "semiconductor_material_change",
+            "semiconductor_performance_change",
+        }
+
+    capex_cases = (
+        (
+            "台积电将先进制程和先进封装资本开支提高至520亿美元",
+            "公司正式上调年度资本开支，新增投资用于先进制程晶圆厂和CoWoS产能。",
+            "push",
+        ),
+        (
+            "阿斯麦延后关键设备扩产计划",
+            "公司将原定重大产能投资延后一年，影响先进光刻设备供应计划。",
+            "push",
+        ),
+        (
+            "三星表示将继续投资未来技术",
+            "公司未披露金额、变化幅度、实际支出或半导体及AI基础设施的具体用途。",
+            "daily",
+        ),
+    )
+    for title, summary, action in capex_cases:
+        item = market_item("industry_media", "research_industry_media", title, summary)
+        result = validate_llm_rule_response(
+            _response("semiconductor_ai", "semiconductor_material_change", action),
+            item,
+            admission,
+        )
+        assert result.evaluation_status == "completed"
+        assert result.candidate_action == action
+
+    timing_item = market_item(
+        "finance_media",
+        "news_media",
+        "云厂商季度自由现金流小幅波动",
+        "公司称变化来自税款支付时点，未影响AI资本开支或持续投资能力。",
+    )
+    timing_result = validate_llm_rule_response(
+        _response("semiconductor_ai", "semiconductor_performance_change", "daily"),
+        timing_item,
+        admission,
+    )
+    assert timing_result.evaluation_status == "completed"
+    assert timing_result.candidate_action == "daily"
+
+    prompt = build_llm_rule_prompt(google_items[0], admission)
+    prompt_rules = json.dumps(prompt.user_payload["rules"], ensure_ascii=False)
+    assert "自由现金流大幅变化、由正转负或由负转正" in prompt_rules
+    assert all(
+        name not in prompt_rules
+        for name in ("谷歌", "Google", "台积电", "TSMC", "阿斯麦", "ASML", "三星", "Samsung")
+    )
+
+
 def test_target_price_implied_move_uses_existing_rules_and_model_arithmetic() -> None:
     holding_rule = next(rule for rule in RULES if rule.rule_id == "holding_rating_revision")
     industry_rule = next(
@@ -972,6 +1093,7 @@ def main() -> int:
     test_multiple_admitted_families_share_one_response_and_highest_action_wins()
     test_semiconductor_expectations_can_push_without_claiming_execution()
     test_key_product_production_ramp_is_material_in_both_directions()
+    test_ai_infrastructure_capex_and_hyperscaler_free_cash_flow_are_material()
     test_target_price_implied_move_uses_existing_rules_and_model_arithmetic()
     test_invalid_json_unknown_missing_and_forbidden_fields_fail_closed()
     test_undefined_action_and_duplicate_rule_fail_closed()
