@@ -316,6 +316,21 @@ def test_deployment_preserves_private_proxy_state_and_disables_shadows() -> None
         assert f"systemctl enable --now {timer}" not in installer
 
 
+def test_low_frequency_interval_timers_rearm_after_deployment() -> None:
+    expectations = {
+        "surveil-sina-stock-news.timer": ("OnActiveSec=5min", "OnUnitActiveSec=30min"),
+        "surveil-signals-extract.timer": ("OnActiveSec=8min", "OnUnitActiveSec=10min"),
+    }
+    for filename, expected_lines in expectations.items():
+        lines = {
+            line.strip()
+            for line in (ROOT / "systemd" / filename).read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+        assert not any(line.startswith("OnBootSec=") for line in lines), filename
+        assert set(expected_lines) <= lines
+
+
 def test_rule_center_execution_modes_match_runtime_ordering() -> None:
     ordered_runtime_ids = set(ORDERED_FIRST_MATCH_RULE_IDS)
     ordered_definition_ids: set[str] = set()
@@ -534,6 +549,7 @@ def main() -> int:
     test_independent_routes_are_explicit_and_tested()
     test_direct_urllib_request_usage_is_explicit_and_bounded()
     test_deployment_preserves_private_proxy_state_and_disables_shadows()
+    test_low_frequency_interval_timers_rearm_after_deployment()
     test_rule_center_execution_modes_match_runtime_ordering()
     test_source_profiles_have_complete_runtime_ownership()
     test_common_rule_is_stable_across_transport_metadata()
