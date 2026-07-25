@@ -330,6 +330,14 @@ def test_low_frequency_interval_timers_rearm_after_deployment() -> None:
         assert not any(line.startswith("OnBootSec=") for line in lines), filename
         assert set(expected_lines) <= lines
 
+    installer = (ROOT / "scripts" / "install_remote_systemd.sh").read_text(encoding="utf-8")
+    for unit in expectations:
+        enable = f"systemctl enable --now {unit}"
+        restart = f"systemctl restart {unit}"
+        assert installer.count(enable) == 1
+        assert installer.count(restart) == 1
+        assert installer.index(enable) < installer.index(restart)
+
 
 def test_rule_center_execution_modes_match_runtime_ordering() -> None:
     ordered_runtime_ids = set(ORDERED_FIRST_MATCH_RULE_IDS)

@@ -401,7 +401,9 @@ many days after the host booted, so `OnBootSec` could already be expired and
 leave an enabled timer with no next trigger. Their existing subsequent periods
 remain controlled by `OnUnitActiveSec` (30 minutes and 10 minutes respectively).
 After installation, verify that both timers show a future `NEXT` value instead
-of only checking that they are enabled and active.
+of only checking that they are enabled and active. The installer explicitly
+restarts both timers after enabling them because `enable --now` does not restart
+an already-active timer or reset its monotonic schedule.
 
 The high-frequency persistent fetchers remain:
 
