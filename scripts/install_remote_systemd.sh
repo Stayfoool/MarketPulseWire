@@ -128,6 +128,7 @@ rm -f /etc/systemd/system/surveil-ifind-notice.timer /etc/systemd/system/surveil
 systemctl daemon-reload
 systemctl enable --now surveil-company-disclosures.timer
 systemctl enable --now surveil-sina-stock-news.timer
+systemctl restart surveil-sina-stock-news.timer
 if grep -Eq '^DISABLE_LEGACY_RESEARCH_MONITORS=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
   systemctl disable --now surveil-overseas-media.timer >/dev/null 2>&1 || true
   systemctl stop surveil-overseas-media.service >/dev/null 2>&1 || true
@@ -150,6 +151,7 @@ systemctl stop surveil-rule-shadow-daily.service >/dev/null 2>&1 || true
 systemctl enable --now surveil-llm-decision-audit-cleanup.timer
 echo '已停用新旧规则对比日报；保留每日 30 天敏感审计清理。'
 systemctl enable --now surveil-signals-extract.timer
+systemctl restart surveil-signals-extract.timer
 systemctl enable --now surveil-signal-outcome.timer
 systemctl enable --now surveil-signal-review.timer
 systemctl enable --now surveil-signal-digest.timer
