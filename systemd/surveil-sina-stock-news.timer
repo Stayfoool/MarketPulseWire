@@ -2,7 +2,7 @@
 Description=Run Surveil Sina per-stock news batch every 30 minutes
 
 [Timer]
-OnBootSec=5min
+OnActiveSec=5min
 OnUnitActiveSec=30min
 Persistent=true
 Unit=surveil-sina-stock-news.service
