@@ -543,7 +543,7 @@ def canonical_feedback_snapshot(
         return None
     row = conn.execute(
         """
-        SELECT r.decision_json,r.legacy_payload_json,
+        SELECT r.decision_json,r.legacy_payload_json,r.application_revision,
                (SELECT d.id FROM deliveries d
                 WHERE d.market_item_id=m.id AND d.status='sent'
                 ORDER BY d.id DESC LIMIT 1) delivery_id,
@@ -569,8 +569,9 @@ def canonical_feedback_snapshot(
     return {
         "decision": _json_dict(row[0]),
         "legacy_payload": payload,
-        "delivery_id": row[2],
-        "delivery_status": str(row[3] or ("sent" if historically_sent else "")),
+        "application_revision": str(row[2] or ""),
+        "delivery_id": row[3],
+        "delivery_status": str(row[4] or ("sent" if historically_sent else "")),
     }
 
 

@@ -231,12 +231,92 @@ def _load_json(value: Any) -> dict[str, Any]:
 
 
 def _decision_snapshot(payload: dict[str, Any]) -> tuple[str, list[str], str]:
-    decision = decision_result_from_payload(payload)
+    # Unified storage keeps decision_json as a bare DecisionResult, while
+    # compatibility payloads retain the historical decision_result wrapper.
+    candidate = {"decision_result": payload} if "action" in payload else payload
+    decision = decision_result_from_payload(candidate)
     if not decision:
         return "", [], ""
     rule_ids = [str(hit.get("rule_id") or "") for hit in decision.rule_hits if hit.get("rule_id")]
-    version = str(decision.audit_json.get("decision_version") or decision.audit_json.get("schema_version") or "")
+    version = str(
+        decision.audit_json.get("decision_version")
+        or decision.audit_json.get("llm_decision_rule_version")
+        or decision.audit_json.get("schema_version")
+        or ""
+    )
     return decision.action, list(dict.fromkeys(rule_ids)), version
+
+
+def repair_missing_feedback_snapshots(
+    conn: sqlite3.Connection,
+    *,
+    apply: bool = False,
+) -> dict[str, int]:
+    """Repair empty feedback decision snapshots from their exact sent delivery."""
+    rows = conn.execute(
+        """
+        SELECT f.id,d.status,r.decision_json,r.application_revision,f.decision_version,
+               EXISTS (
+                   SELECT 1 FROM market_item_aliases a
+                   WHERE a.market_item_id=d.market_item_id
+                     AND a.item_kind=f.item_kind
+                     AND a.source=f.source
+                     AND a.legacy_item_id=f.item_id
+               ) identity_matches
+        FROM market_feedback f
+        LEFT JOIN deliveries d ON d.id=f.delivery_id
+        LEFT JOIN market_reviews r
+          ON r.id=d.market_review_id AND r.market_item_id=d.market_item_id
+        WHERE f.item_kind<>'test' AND COALESCE(f.decision_action,'')=''
+        ORDER BY f.id
+        """
+    ).fetchall()
+    result = {
+        "candidates": len(rows),
+        "repairable": 0,
+        "unresolved": 0,
+        "updated": 0,
+    }
+    repairs: list[tuple[str, str, str, int]] = []
+    for row in rows:
+        (
+            feedback_id,
+            delivery_status,
+            decision_json,
+            application_revision,
+            existing_version,
+            identity_matches,
+        ) = row
+        action, rule_ids, version = _decision_snapshot(_load_json(decision_json))
+        if delivery_status != "sent" or not identity_matches or action not in {
+            "push",
+            "daily",
+            "archive",
+            "ignore",
+        }:
+            result["unresolved"] += 1
+            continue
+        result["repairable"] += 1
+        repairs.append(
+            (
+                action,
+                json.dumps(rule_ids, ensure_ascii=False),
+                version or str(application_revision or existing_version or ""),
+                int(feedback_id),
+            )
+        )
+    if apply and repairs:
+        changes_before = conn.total_changes
+        conn.executemany(
+            """
+            UPDATE market_feedback
+            SET decision_action=?,rule_ids_json=?,decision_version=?
+            WHERE id=? AND COALESCE(decision_action,'')=''
+            """,
+            repairs,
+        )
+        result["updated"] = conn.total_changes - changes_before
+    return result
 
 
 def runtime_revision() -> str:
@@ -273,7 +353,7 @@ def resolve_feedback_snapshot(
         return {
             "decision_action": action,
             "rule_ids": rule_ids,
-            "decision_version": version,
+            "decision_version": version or canonical.get("application_revision") or "",
             "delivery_status": canonical["delivery_status"],
             "delivery_id": canonical["delivery_id"],
         }

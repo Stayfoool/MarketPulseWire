@@ -18,13 +18,19 @@ from market_canonical_reader import (
 from article_daily import fetch_digest_rows as fetch_article_digest_rows
 from holdings_web import fetch_events_rows
 from market_db import init_db
-from market_feedback import feedback_quality_payload
+from market_feedback import (
+    FeedbackIdentity,
+    feedback_quality_payload,
+    repair_missing_feedback_snapshots,
+    resolve_feedback_snapshot,
+)
 from market_review_store import (
     ensure_article_reviews_table,
     ensure_official_news_table,
     insert_event_analysis,
     upsert_event_record,
 )
+from market_storage_audit import audit_storage
 from market_storage_migration import migrate_legacy_results
 from official_news_daily import fetch_digest_rows as fetch_official_digest_rows
 from signals_extract import extract_signals
@@ -257,6 +263,98 @@ def test_canonical_readers_preserve_behavior_and_identity() -> None:
             assert article_feedback is not None
             assert article_feedback["decision"]["action"] == "push"
             assert article_feedback["delivery_status"] == "sent"
+            linked = conn.execute(
+                """
+                SELECT m.id,r.id
+                FROM market_item_aliases a
+                JOIN market_items m ON m.id=a.market_item_id
+                JOIN market_reviews r ON r.market_item_id=m.id AND r.is_current=1
+                WHERE a.item_kind='article' AND a.source='test_source'
+                  AND a.legacy_item_id='article-push'
+                """
+            ).fetchone()
+            linked_delivery_id = conn.execute(
+                """
+                INSERT INTO deliveries (
+                    market_item_id,market_review_id,channel,status,decision_action,
+                    attempted_at,sent_at,error,payload_json
+                ) VALUES (?,?,'feishu','sent','push',
+                          '2026-07-23T01:10:00+00:00','2026-07-23T01:10:00+00:00','','{}')
+                """,
+                (linked[0], linked[1]),
+            ).lastrowid
+            article_snapshot = resolve_feedback_snapshot(
+                conn, FeedbackIdentity("article", "test_source", "article-push")
+            )
+            assert article_snapshot == {
+                "decision_action": "push",
+                "rule_ids": ["rule_push"],
+                "decision_version": "decision-test-v1",
+                "delivery_status": "sent",
+                "delivery_id": linked_delivery_id,
+            }
+            conn.execute(
+                """
+                INSERT INTO market_feedback (
+                    feedback_event_id,item_kind,source,item_id,delivery_id,label,
+                    reason_tags_json,note,operator_id,message_id,chat_id,
+                    decision_action,rule_ids_json,delivery_status,decision_version,
+                    clicked_at_us,received_at,raw_json
+                ) VALUES (
+                    'feedback-missing-snapshot','article','test_source','article-push',?,
+                    'high_value','[]','','operator','','','','[]','sent','old-revision',
+                    1,'2026-07-23T01:11:00+00:00','{}'
+                )
+                """,
+                (linked_delivery_id,),
+            )
+            broken_audit = audit_storage(
+                conn,
+                since="2026-07-23T00:00:00+00:00",
+                until="2026-07-24T00:00:00+00:00",
+            )
+            assert broken_audit["checks"]["feedback_snapshot_action_mismatch"] == 1
+            assert broken_audit["checks"]["feedback_snapshot_rule_ids_missing"] == 1
+            assert repair_missing_feedback_snapshots(conn) == {
+                "candidates": 1,
+                "repairable": 1,
+                "unresolved": 0,
+                "updated": 0,
+            }
+            assert repair_missing_feedback_snapshots(conn, apply=True) == {
+                "candidates": 1,
+                "repairable": 1,
+                "unresolved": 0,
+                "updated": 1,
+            }
+            repaired = conn.execute(
+                """
+                SELECT decision_action,rule_ids_json,decision_version
+                FROM market_feedback WHERE feedback_event_id='feedback-missing-snapshot'
+                """
+            ).fetchone()
+            assert tuple(repaired) == ("push", '["rule_push"]', "decision-test-v1")
+            repaired_audit = audit_storage(
+                conn,
+                since="2026-07-23T00:00:00+00:00",
+                until="2026-07-24T00:00:00+00:00",
+            )
+            assert repaired_audit["checks"]["feedback_snapshot_action_mismatch"] == 0
+            assert repaired_audit["checks"]["feedback_snapshot_rule_ids_missing"] == 0
+            bare_decision = json.loads(
+                conn.execute(
+                    "SELECT decision_json FROM market_reviews WHERE id=?", (linked[1],)
+                ).fetchone()[0]
+            )
+            bare_decision["audit_json"].pop("decision_version")
+            conn.execute(
+                "UPDATE market_reviews SET decision_json=?,application_revision=? WHERE id=?",
+                (json.dumps(bare_decision), "application-revision-test", linked[1]),
+            )
+            fallback_snapshot = resolve_feedback_snapshot(
+                conn, FeedbackIdentity("article", "test_source", "article-push")
+            )
+            assert fallback_snapshot["decision_version"] == "application-revision-test"
             event_feedback = canonical_feedback_snapshot(
                 conn, "event", "event_source", str(ids["reviewed"])
             )
