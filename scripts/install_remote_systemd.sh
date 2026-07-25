@@ -46,6 +46,30 @@ if ! sudo -u '$REMOTE_SERVICE_USER' test -r \"\$RULE_CORE_CONFIG_PATH\"; then
   echo 'RULE_CORE_CONFIG 对生产服务账号不可读，停止启动生产采集服务。' >&2
   exit 1
 fi
+LLM_DECISION_RULE_CONFIG_PATH=\"\$(sed -n 's/^LLM_DECISION_RULE_CONFIG=//p' '$REMOTE_DIR/.env' | tail -n 1)\"
+if [ -z \"\$LLM_DECISION_RULE_CONFIG_PATH\" ] || [ ! -f \"\$LLM_DECISION_RULE_CONFIG_PATH\" ]; then
+  echo 'LLM_DECISION_RULE_CONFIG 未配置或文件不存在，停止启动生产采集服务。' >&2
+  exit 1
+fi
+if [ \"\$(stat -c '%a' \"\$LLM_DECISION_RULE_CONFIG_PATH\")\" != '600' ]; then
+  echo 'LLM_DECISION_RULE_CONFIG 文件权限必须为 0600，停止启动生产采集服务。' >&2
+  exit 1
+fi
+if [ \"\$(stat -c '%U' \"\$LLM_DECISION_RULE_CONFIG_PATH\")\" != '$REMOTE_SERVICE_USER' ]; then
+  echo 'LLM_DECISION_RULE_CONFIG 文件所有者必须为生产服务账号，停止启动生产采集服务。' >&2
+  exit 1
+fi
+if ! sudo -u '$REMOTE_SERVICE_USER' test -r \"\$LLM_DECISION_RULE_CONFIG_PATH\"; then
+  echo 'LLM_DECISION_RULE_CONFIG 对生产服务账号不可读，停止启动生产采集服务。' >&2
+  exit 1
+fi
+if ! cd '$REMOTE_DIR' || ! sudo -u '$REMOTE_SERVICE_USER' env \
+  PYTHONPATH='$REMOTE_DIR/scripts' \
+  LLM_DECISION_RULE_CONFIG=\"\$LLM_DECISION_RULE_CONFIG_PATH\" \
+  '$REMOTE_DIR/.venv/bin/python' -c 'import llm_rule_catalog'; then
+  echo 'LLM_DECISION_RULE_CONFIG 内容校验失败，停止启动生产采集服务。' >&2
+  exit 1
+fi
 cp /tmp/surveil-systemd/*.service /etc/systemd/system/
 cp /tmp/surveil-systemd/*.timer /etc/systemd/system/
 systemctl daemon-reload

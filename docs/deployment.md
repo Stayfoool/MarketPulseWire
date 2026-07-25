@@ -50,6 +50,29 @@ range admission fails closed when it is missing or invalid. The repository
 `config/rule_core_v1.test.json` is only a CI fixture and must not be used as the
 production configuration.
 
+`LLM_DECISION_RULE_CONFIG` must point to the separate private LLM decision-rule
+JSON before any production collector is started. Keep the Mac development copy
+at `config/llm_decision_rules.json`; it is gitignored and must be mode `0600`.
+Keep the Alibaba copy at `/opt/surveil/config/llm_decision_rules.json`, owned by
+the production service account and mode `0600`. `deploy_remote.sh` explicitly
+excludes this path, so normal deployment neither uploads, deletes nor replaces
+the private rules. Git contains only `config/llm_decision_rules.test.json`, whose
+synthetic text is for CI and must never be used in production.
+
+Before restarting production after a rule change, validate both files through
+the loader and compare their SHA-256 digests without printing their content:
+
+```bash
+LLM_DECISION_RULE_CONFIG=config/llm_decision_rules.json \
+  PYTHONPATH=scripts python3 -c 'import llm_rule_catalog; print(llm_rule_catalog.LLM_DECISION_RULE_VERSION, len(llm_rule_catalog.RULES))'
+shasum -a 256 config/llm_decision_rules.json
+ssh surveil-alibaba "sudo -u surveil env PYTHONPATH=/opt/surveil/scripts LLM_DECISION_RULE_CONFIG=/opt/surveil/config/llm_decision_rules.json /opt/surveil/.venv/bin/python -c 'import llm_rule_catalog; print(llm_rule_catalog.LLM_DECISION_RULE_VERSION, len(llm_rule_catalog.RULES))' && sha256sum /opt/surveil/config/llm_decision_rules.json"
+```
+
+The version, rule count and SHA-256 digest must match. Missing, unreadable,
+wrong-permission or invalid private rules stop systemd installation and fail
+production decisions closed; they never fall back to tracked test rules.
+
 The Web process requires the repository `web/` directory alongside `scripts/`.
 `deploy_remote.sh` already synchronizes both directories; do not deploy
 `scripts/holdings_web.py` by itself. The browser loads `web/index.html`,
@@ -207,8 +230,9 @@ code-default, base and include keyword lists.
 
 Historical comparison tools may still read `RULE_CORE_SHADOW_CONFIG` and
 `RULE_CORE_SHADOW_PORTFOLIO`, but neither is a production decision input.
-Production admission and the LLM decision use `RULE_CORE_CONFIG` and current
-Web-managed production SQLite holdings.
+Production admission uses `RULE_CORE_CONFIG` and current Web-managed production
+SQLite holdings. The LLM decision additionally loads its exact degree-decision
+rules from `LLM_DECISION_RULE_CONFIG`.
 
 For an existing installation that still has private
 `config/media_keywords.json`, preview the one-time migration after deploying
@@ -274,7 +298,7 @@ source segments. The model returns segment ids instead of copying quotes; code
 resolves those ids to the original text. Each rule may cite at most three exact
 segments; response-wide evidence totals remain audit metrics rather than
 validity limits, and ellipsis punctuation does not invalidate a segment. The
-catalog contains only reviewed degree-decision rules. All `not_matched` results
+private file contains only reviewed degree-decision rules. All `not_matched` results
 produce `archive`; no match plus any `uncertain` result produces no decision.
 A structurally invalid, evidence-invalid or conflicting response may receive
 one correction request containing the validation errors. Network retries and
