@@ -110,7 +110,7 @@ def _response(
 
 
 def test_catalog_is_versioned_complete_and_has_only_reviewed_actions() -> None:
-    assert LLM_DECISION_RULE_VERSION == "llm-decision-rules-v14-20260724"
+    assert LLM_DECISION_RULE_VERSION == "llm-decision-rules-v15-20260725"
     assert len(RULES) == 16
     assert len({rule.rule_id for rule in RULES}) == len(RULES)
     assert {rule.rule_id for rule in RULES} == {
@@ -212,6 +212,54 @@ def test_holding_share_transactions_are_explicit_push_conditions() -> None:
             assert result.decision.rule_hits[0]["rule_id"] == "holding_material_event"
             assert result.decision.rule_hits[0]["evidence"][0]["field"] == "full_text"
             assert result.decision.audit_json["production_authority"] is False
+
+
+def test_holding_related_industry_hard_facts_are_source_neutral_push() -> None:
+    rule = next(rule for rule in RULES if rule.rule_id == "holding_material_event")
+    push = rule.action_conditions["push"]
+    assert "已配置关联新闻关键词命中同行、产品或产业链对象" in push
+    assert "供需明确偏紧或主力企业满产" in push
+    assert "相对现有产能的显著倍数锁定" in push
+    assert "关联新闻关键词只证明关联，单独命中不能push" in push
+
+    body = (
+        "MLCC供需格局偏紧，主力企业产线满载，上游材料商订单充沛。"
+        "已有上游材料企业获得下游客户长期锁定订单，锁定产能达到现有产能的4倍。"
+        "三环集团、风华高科处于MLCC主力厂商，国瓷材料提供上游陶瓷粉体。"
+    )
+    admission = _admission(("holding",))
+    response = _response(
+        "holding",
+        "holding_material_event",
+        "push",
+        overrides={
+            "holding_material_event": {
+                "rule_id": "holding_material_event",
+                "judgement": "matched",
+                "action": "push",
+                "evidence_ids": ["B1", "B2", "B3"],
+                "reason": "MLCC供需偏紧、主力企业满产及四倍产能长期锁量共同构成重大行业硬事实，并明确影响持仓产业链。",
+            }
+        },
+    )
+    sources = (
+        ("sina_stock_news", "portfolio_stock_news"),
+        ("finance_media", "news_media"),
+    )
+    for source, source_category in sources:
+        market_item = _item(
+            source=source,
+            source_category=source_category,
+            content_type="portfolio_news" if source == "sina_stock_news" else "article",
+            full_text=body,
+        )
+        market_item.title = "4倍产能提前锁死！MLCC开启超景气红利周期"
+        result = validate_llm_rule_response(response, market_item, admission)
+        assert result.evaluation_status == "completed", result.validation_errors
+        assert result.candidate_action == "push"
+        assert result.decision is not None
+        assert result.decision.action == "push"
+        assert result.decision.rule_hits[0]["rule_id"] == "holding_material_event"
 
 
 def test_every_allowed_action_projects_to_decision_result_with_fixed_responses() -> None:
@@ -1215,6 +1263,7 @@ def test_pr_a_modules_have_no_transport_runtime_or_storage_imports() -> None:
 def main() -> int:
     test_catalog_is_versioned_complete_and_has_only_reviewed_actions()
     test_holding_share_transactions_are_explicit_push_conditions()
+    test_holding_related_industry_hard_facts_are_source_neutral_push()
     test_every_allowed_action_projects_to_decision_result_with_fixed_responses()
     test_source_applicability_keeps_company_disclosures_and_sina_stock_news_holding_only()
     test_prompt_uses_bounded_available_input_without_current_production_decision()

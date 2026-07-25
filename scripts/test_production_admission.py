@@ -123,6 +123,26 @@ def test_ordinary_sources_use_five_groups_and_holding_only_sources_do_not() -> N
         assert direct_holding.matched_families == ("holding",)
 
 
+def test_direct_holding_keeps_configured_related_keyword_evidence() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "surveil.sqlite3"
+        seed_holding(db_path)
+        result = evaluate_production_admission(
+            item(
+                "测试股份所在HBM peer行业供需偏紧，主力企业满产并获得四倍产能长期锁量订单",
+                source="sina_stock_news",
+                category="portfolio_stock_news",
+            ),
+            db_path=db_path,
+            env={"RULE_CORE_CONFIG": str(RULE_CONFIG)},
+        )
+        assert result.status == "admitted"
+        assert result.matched_families == ("holding",)
+        evidence = {item.reason_code: item for item in result.evidence}
+        assert set(evidence) == {"holding_direct_identity", "holding_related_keyword"}
+        assert evidence["holding_related_keyword"].matched_subjects == ("测试股份",)
+
+
 def test_official_trade_source_uses_direct_trade_admission() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "surveil.sqlite3"
@@ -164,6 +184,7 @@ def main() -> int:
     test_missing_production_rule_config_fails_closed()
     test_production_portfolio_comes_from_sqlite()
     test_ordinary_sources_use_five_groups_and_holding_only_sources_do_not()
+    test_direct_holding_keeps_configured_related_keyword_evidence()
     test_official_trade_source_uses_direct_trade_admission()
     test_context_and_lifecycle_reuse_exact_admission()
     print("production admission checks passed")

@@ -1094,7 +1094,6 @@ def _holding_evidence(
                     relation="direct",
                 )
             )
-            continue
         if _matches(text, holding.exclude_keywords):
             continue
         related = _matches(text, holding.related_news_keywords)
