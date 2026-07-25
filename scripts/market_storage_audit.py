@@ -251,6 +251,36 @@ def audit_storage(conn: sqlite3.Connection, *, since: str, until: str) -> dict[s
             """,
             article_params,
         ),
+        "feedback_snapshot_action_mismatch": _scalar(
+            conn,
+            """
+            SELECT COUNT(*)
+            FROM market_feedback f
+            LEFT JOIN deliveries d ON d.id=f.delivery_id
+            LEFT JOIN market_reviews r
+              ON r.id=d.market_review_id AND r.market_item_id=d.market_item_id
+            WHERE f.received_at>=? AND f.received_at<? AND f.item_kind<>'test'
+              AND (
+                d.status<>'sent' OR r.id IS NULL
+                OR COALESCE(f.decision_action,'')<>COALESCE(r.decision_action,'')
+              )
+            """,
+            article_params,
+        ),
+        "feedback_snapshot_rule_ids_missing": _scalar(
+            conn,
+            """
+            SELECT COUNT(*)
+            FROM market_feedback f
+            JOIN deliveries d ON d.id=f.delivery_id AND d.status='sent'
+            JOIN market_reviews r
+              ON r.id=d.market_review_id AND r.market_item_id=d.market_item_id
+            WHERE f.received_at>=? AND f.received_at<? AND f.item_kind<>'test'
+              AND json_array_length(COALESCE(f.rule_ids_json,'[]'))=0
+              AND json_array_length(COALESCE(json_extract(r.decision_json,'$.rule_hits'),'[]'))>0
+            """,
+            article_params,
+        ),
         "orphan_alias": _scalar(
             conn,
             """
