@@ -173,6 +173,7 @@ def main() -> int:
     test_env = os.environ.copy()
     test_env["RULE_CORE_CONFIG"] = str(ROOT / "config" / "rule_core_v1.test.json")
     test_env["RULE_CORE_SHADOW_CONFIG"] = str(ROOT / "config" / "rule_core_v1.test.json")
+    test_env["LLM_DECISION_RULE_CONFIG"] = str(ROOT / "config" / "llm_decision_rules.test.json")
     for index, filename in enumerate(CI_SAFE_TESTS, start=1):
         print(f"[{index}/{len(CI_SAFE_TESTS)}] {filename}", flush=True)
         result = subprocess.run(

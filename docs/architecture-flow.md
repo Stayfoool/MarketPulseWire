@@ -62,7 +62,7 @@ is not a production input. Missing or invalid production rule configuration
 fails closed and leaves a retryable processing state; it does not fall back to
 the preceding source-specific admission.
 
-Before an admitted item that requires analysis enters the active decision, `market_runtime.py` calls `prepare_item_for_decision()` at most once. The returned `NormalizedMarketItem`, including any validated `_attributed_research` extraction, is passed with the exact production `AdmissionResult` and current production portfolio to `decision_engine.py`. The engine calls the reviewed LLM degree rules once under one 120-second total deadline, validates the complete result, writes the mode-`0600` private audit and returns the only production `DecisionResult`. The LLM HTTP client uses the configured provider endpoint directly and does not inherit collector `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` variables; those proxies remain scoped to source fetching. Baseline, excluded, unanalysed and already-succeeded rows do not call the model. Model, validation or audit-write failure leaves no decision, interpretation, delivery or dedup reservation and marks the current review `failed_retryable`.
+Before an admitted item that requires analysis enters the active decision, `market_runtime.py` calls `prepare_item_for_decision()` at most once. The returned `NormalizedMarketItem`, including any validated `_attributed_research` extraction, is passed with the exact production `AdmissionResult` and current production portfolio to `decision_engine.py`. The engine loads the reviewed LLM degree rules from the private mode-`0600` file selected by `LLM_DECISION_RULE_CONFIG`, calls them once under one 120-second total deadline, validates the complete result, writes the mode-`0600` private audit and returns the only production `DecisionResult`. Missing or invalid private decision rules fail closed. The LLM HTTP client uses the configured provider endpoint directly and does not inherit collector `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` variables; those proxies remain scoped to source fetching. Baseline, excluded, unanalysed and already-succeeded rows do not call the model. Model, validation or audit-write failure leaves no decision, interpretation, delivery or dedup reservation and marks the current review `failed_retryable`.
 
 Push-eligible US CPI, PCE and nonfarm coverage may also receive a delivery-only identity from locally bound evidence. Preview and actual-release identities use country, indicator and reference period. The extractor considers every indicator occurrence in a claim before binding the nearest preceding reference month, so an early generic `CPI` label cannot hide a later locally complete `6月...CPI月率` fact. Market reactions use the same reference period, conservatively inferring the immediately preceding month when a reaction names the indicator but omits the period, so cross-asset and next-day retellings converge. Each phase can deliver once across sources. Corrections, policy decisions, quantified path repricing, unusual inverse relationships, asset-specific hard facts and direct Kevin Warsh statements bypass the reaction identity, including when a retained fact is mixed with already-covered market interpretation. Other cross-asset reactions to a Fed easing or tightening impulse without a named data release share one direction-specific 14-day delivery identity. The extractors use original item text and deterministic evidence only; delivery dedup does not change the decision or use an LLM.
 
@@ -88,7 +88,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `decision_engine.py` | Single production decision boundary. It delegates admitted items to the reviewed LLM decision and returns the only authoritative `DecisionResult`; retained deterministic functions are unreachable from production pending a separately approved cleanup PR |
 | `production_admission.py` | Sole production entry for the five range-admission groups; validates `RULE_CORE_CONFIG`, converts current Web-managed SQLite holdings to `PortfolioRuleConfig`, applies ordinary/holding-only/official-trade source boundaries and returns the auditable `AdmissionResult`; it cannot decide action, write reviews or deliver |
 | `rule_core_v1.py` | Side-effect-free five-group admission and inactive deterministic strength rules. Production calls only `admit_market_item()` through `production_admission.py`; `evaluate_market_item()` remains non-authoritative. Bounded admission evidence includes all matched content-family evidence and global exclusion evidence |
-| `llm_rule_catalog.py` | Versioned catalog of the 17 human-reviewed specific strength-decision rules across the five existing content rule groups; stores allowed actions, rule text, required facts and exclusions without matching article text, reading private configuration or calling a model |
+| `llm_rule_catalog.py` | Strict loader and schema validator for the gitignored private LLM decision-rule JSON selected by `LLM_DECISION_RULE_CONFIG`; exports validated rules to the prompt builder and fails closed when the file is missing or invalid |
 | `llm_rule_decision.py` | LLM decision contract: selects only the rules applicable to an existing admitted `AdmissionResult`, accepts title/summary/body with body code-bounded to 3,000 characters, divides model-visible text into numbered segments, and strictly validates per-rule JSON, allowed actions and exact evidence before mechanically aggregating the final action |
 | `llm_rule_shadow.py` | Shared side-effect-free LLM execution used by production and retained historical comparison tools. It builds one prompt, performs strict validation and permits one correction request containing only the original response and validation errors |
 | `llm_production_decision.py` | Production deadline and private-audit wrapper. It enforces one 120-second total budget across retries and correction, writes one mode-`0600` audit linked by market item/review ids, and fails closed when no valid audited decision exists |
@@ -213,26 +213,15 @@ Attributed-research delivery identities normally use the validated institution, 
 
 The ordered `investment_bank_rating_target_direct_holding` rule requires one local evidence window to bind a recognized institution, one directly mentioned holding and an actual rating, target-price or coverage action. An attached collector symbol, a generic earnings-estimate revision or institution/holding/action terms scattered across a multi-company article cannot create this rule hit. Bounded adjacent-sentence attribution is accepted only when the second sentence explicitly continues with `该行` / `其` / `the bank` or an equivalent report reference.
 
-The production LLM rule catalog applies trusted-institution rating, target-price and coverage changes only to the holding rule family. It applies explicit buy/sell/long/short/add/reduce/overweight/underweight allocation changes and complete two-sided rotations only to the holding and semiconductor/AI rule families. Macro-data releases, international-bank Fed-path forecasts/revisions and trade-policy changes continue through their dedicated content rules; an allocation verb plus a macro/Fed/trade term cannot promote those families or replace their evidence requirements.
+The exact LLM decision-rule titles, action conditions, required facts and
+exclusions live only in the private rule file. Git tracks their schema, strict
+loader, prompt contract and synthetic fixed-response tests, not production rule
+content. The Mac development copy and Alibaba production copy must have the same
+version and SHA-256 digest before a production restart.
 
-For a Value Directory first-page preview, the existing bounded extraction now
-also exposes an explicitly labeled historical share-price close and its date as
-`reference_price` and `reference_price_date`; it does not expose the full OCR
-page to the degree-decision model. The production
-`holding_rating_revision` and `investment_bank_allocation_change` rules let the
-model calculate `target price / report historical close - 1` and select the
-action from the unrounded result. A result at least 30.0% or at most -30.0% may
-select `push`; 17.6% and 29.9% remain ordinary unless another reviewed
-condition independently matches. A current or newly published report and its
-current rating or target price are not, by themselves, a new long/short,
-allocation, coverage or revision action; article evidence must state that
-action explicitly. The evidence must identify
-the trusted institution, stock, current target price, historical close and
-close date. Ambiguous labels, prior or consensus targets, 52-week ranges,
-external live prices, mismatched currencies or share classes, unclear corporate
-actions, and a material rating/direction conflict require `uncertain`. The
-shared LLM system prompt is unchanged and no deterministic target-gap calculator
-is added.
+For a Value Directory first-page preview, the existing bounded extraction exposes
+the structured fields required by the private rules without exposing the full OCR
+page to the degree-decision model.
 
 Within the production `fed_policy` decision group, a separately reported material view from a configured trusted international bank's explicitly identified chief executive or chair can use `fed_policy_material_exception`. It requires local leader attribution and at least two independently supported signals across an explicit stocks/long-Treasuries stance, a directional or quantified rate/yield view, and a material cross-asset risk judgment. A bank name, analyst comment, generic leadership interview or single-asset valuation view cannot create `push`.
 

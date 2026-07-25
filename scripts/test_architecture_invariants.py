@@ -302,9 +302,13 @@ def test_deployment_preserves_private_proxy_state_and_disables_shadows() -> None
     assert "--exclude '.git/'" in deploy
     assert "--exclude '.paddleocr/'" in deploy
     assert "--exclude 'reports/'" in deploy
+    assert "--exclude 'config/llm_decision_rules.json'" in deploy
     assert "RULE_CORE_CONFIG_PATH=" in installer
     assert "RULE_CORE_CONFIG 未配置或文件不存在" in installer
     assert "RULE_CORE_CONFIG 对生产服务账号不可读" in installer
+    assert "LLM_DECISION_RULE_CONFIG_PATH=" in installer
+    assert "LLM_DECISION_RULE_CONFIG 文件权限必须为 0600" in installer
+    assert "LLM_DECISION_RULE_CONFIG 内容校验失败" in installer
     shadow_timers = (
         "surveil-research-collector-shadow.timer",
         "surveil-official-collector-shadow.timer",
