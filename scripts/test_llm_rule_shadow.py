@@ -273,6 +273,7 @@ def test_company_disclosure_receives_only_holding_rules_and_minimal_matched_cont
     assert prompt.user_payload["matched_context"] == {
         "holding_subjects": ["甲公司"],
         "holding_symbols": ["000001.SZ"],
+        "matched_related_keywords": ["HBM"],
         "immediate_alert_keywords": ["临时停产"],
     }
     assert comparison["candidate"]["action"] == "daily"
