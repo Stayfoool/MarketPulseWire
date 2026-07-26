@@ -227,6 +227,7 @@ function showView(name) {
   document.getElementById(`tab-${name}`).classList.add('active');
   if (name === 'overview') loadOverview();
   if (name === 'events') loadEventsView();
+  if (name === 'llm-decisions') loadLlmDecisions();
   if (name === 'feedback') loadFeedbackQuality();
   if (name === 'signals') loadSignals();
   if (name === 'relations') loadRelationManager();
@@ -435,6 +436,132 @@ async function loadEvents() {
         <td>${feedbackBadge(item)}</td>
       </tr>
     `).join('') || '<tr><td colspan="7">没有匹配事件。</td></tr>';
+  } catch (err) {
+    showStatus(err.message, 'err');
+  }
+}
+
+function llmDecisionStatusLabel(status) {
+  return {
+    completed: '已完成',
+    uncertain: 'uncertain',
+    model_unavailable: '大模型不可用',
+    invalid_output: '输出无效',
+    evidence_invalid: '证据无效',
+    conflict: '结果冲突',
+    pending: '等待判断'
+  }[status] || status || '未记录';
+}
+
+function llmDecisionAssessmentHtml(assessment) {
+  const judgement = String(assessment?.judgement || '');
+  const action = assessment?.action ? ` ${badge(assessment.action)}` : '';
+  const references = [...(assessment?.evidence || []), ...(assessment?.counterevidence || [])];
+  const referenceHtml = references.map(reference => `
+    <div class="hint">${escapeHtml(reference.evidence_id || '')}${reference.field ? `（${escapeHtml(reference.field)}）` : ''}：${escapeHtml(reference.quote || '')}</div>
+  `).join('');
+  return `
+    <div class="llm-assessment">
+      <div><strong>${escapeHtml(assessment?.rule_id || '未记录规则')}</strong> ${badge(judgement)}${action}</div>
+      <div class="summary-cell">${escapeHtml(assessment?.reason || '未记录理由')}</div>
+      ${referenceHtml || '<div class="hint">未记录证据或反证</div>'}
+    </div>
+  `;
+}
+
+function llmDecisionAttemptHtml(attempt, index) {
+  const calls = Array.isArray(attempt?.calls) ? attempt.calls : [];
+  const assessments = calls.flatMap(call => Array.isArray(call?.rule_assessments) ? call.rule_assessments : []);
+  const errors = calls.flatMap(call => Array.isArray(call?.validation_errors) ? call.validation_errors : []);
+  return `
+    <div class="llm-attempt">
+      <div><strong>第 ${index + 1} 次模型尝试</strong> ${badge(llmDecisionStatusLabel(attempt?.evaluation_status || ''))} <span class="hint">${escapeHtml(formatTime(attempt?.generated_at || ''))}</span></div>
+      ${attempt?.failure_reason ? `<div class="summary-cell">${escapeHtml(attempt.failure_reason)}</div>` : ''}
+      ${assessments.map(llmDecisionAssessmentHtml).join('')}
+      ${errors.map(error => `<div class="hint">校验：${escapeHtml(error)}</div>`).join('')}
+      ${!assessments.length && !errors.length && !attempt?.failure_reason ? '<div class="hint">没有可展示的有界判断摘要。</div>' : ''}
+    </div>
+  `;
+}
+
+function llmDecisionDetailsHtml(item) {
+  const assessments = Array.isArray(item.rule_assessments) ? item.rule_assessments : [];
+  const attempts = Array.isArray(item.attempts) ? item.attempts : [];
+  const current = assessments.length
+    ? `<div class="llm-detail-group"><strong>当前 DecisionResult</strong>${assessments.map(llmDecisionAssessmentHtml).join('')}</div>`
+    : '';
+  const history = attempts.length
+    ? `<div class="llm-detail-group"><strong>模型尝试记录</strong>${attempts.map(llmDecisionAttemptHtml).join('')}</div>`
+    : '<div class="hint">没有私有审计摘要可展示。</div>';
+  const safeUrl = safeExternalUrl(item.url);
+  return `
+    <details class="llm-decision-details">
+      <summary>查看判断理由和证据</summary>
+      <div class="llm-detail-meta">review ${escapeHtml(item.market_review_id || '')} / ${escapeHtml(item.review_status || '')} / ${escapeHtml(item.source_item_id || '')}</div>
+      ${item.decision_reason ? `<div class="summary-cell"><strong>总体理由：</strong>${escapeHtml(item.decision_reason)}</div>` : ''}
+      ${safeUrl ? `<div class="hint"><a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">打开原文</a></div>` : ''}
+      ${current}${history}
+    </details>
+  `;
+}
+
+async function loadLlmDecisions() {
+  try {
+    const params = new URLSearchParams();
+    const startDate = document.getElementById('llmDecisionFromDate').value;
+    const endDate = document.getElementById('llmDecisionToDate').value;
+    if (Boolean(startDate) !== Boolean(endDate)) {
+      showStatus('开始日期和结束日期必须同时填写。', 'err');
+      return;
+    }
+    if (startDate && endDate && startDate > endDate) {
+      showStatus('开始日期不能晚于结束日期。', 'err');
+      return;
+    }
+    if (startDate && endDate) {
+      params.set('from', startDate);
+      params.set('to', endDate);
+    }
+    const action = document.getElementById('llmDecisionAction').value;
+    const status = document.getElementById('llmDecisionStatus').value;
+    const source = document.getElementById('llmDecisionSource').value.trim();
+    const query = document.getElementById('llmDecisionQuery').value.trim();
+    if (action) params.set('action', action);
+    if (status) params.set('status', status);
+    if (source) params.set('source', source);
+    if (query) params.set('q', query);
+    const data = await api('/api/llm-decisions?' + params.toString());
+    const summary = data.summary || {};
+    const actions = summary.actions || {};
+    const statuses = summary.statuses || {};
+    document.getElementById('llmDecisionMetrics').innerHTML = [
+      ['当前条目', summary.rows || 0],
+      ['push', actions.push || 0],
+      ['daily', actions.daily || 0],
+      ['archive', actions.archive || 0],
+      ['uncertain 尝试', summary.uncertain_attempts || 0],
+      ['仍 failed_retryable', summary.current_failed_retryable || 0],
+      ['uncertain 后完成', summary.uncertain_then_completed || 0],
+      ['模型状态', Object.entries(statuses).map(([key, value]) => `${llmDecisionStatusLabel(key)} ${value}`).join('；') || '-']
+    ].map(item => `<section class="metric"><div class="label">${escapeHtml(item[0])}</div><div class="value">${escapeHtml(item[1])}</div></section>`).join('');
+    document.getElementById('llmDecisionRows').innerHTML = (data.rows || []).map(item => {
+      const safeUrl = safeExternalUrl(item.url);
+      const title = safeUrl
+        ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title || '')}</a>`
+        : escapeHtml(item.title || '');
+      const action = item.decision_action ? badge(item.decision_action) : '<span class="badge">未生成 action</span>';
+      const attempts = Number(item.attempts?.length || 0);
+      return `
+        <tr>
+          <td>${escapeHtml(formatTime(item.review_created_at || ''))}</td>
+          <td>${escapeHtml(item.source || '')}<div class="hint">${escapeHtml(item.item_kind || '')}</div></td>
+          <td class="summary-cell"><div><strong>${title}</strong></div><div class="hint">${escapeHtml(item.source_item_id || '')}</div>${llmDecisionDetailsHtml(item)}</td>
+          <td>${action}<div class="hint">${escapeHtml(item.importance || '')}</div></td>
+          <td>${badge(llmDecisionStatusLabel(item.model_status || ''))}<div class="hint">${escapeHtml(item.review_status || '')}</div></td>
+          <td>${attempts ? `${attempts} 次` : '—'}</td>
+        </tr>
+      `;
+    }).join('') || '<tr><td colspan="6">没有匹配的大模型决策。</td></tr>';
   } catch (err) {
     showStatus(err.message, 'err');
   }

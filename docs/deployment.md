@@ -315,6 +315,33 @@ sensitive request/response content after 30 days while retaining bounded result
 metadata. Web, Git, Feishu and local report copies never receive complete model
 input, article body or raw provider response.
 
+The authenticated Web workbench's `大模型决策` view reads completed
+`DecisionResult` fields from unified SQLite and joins failed attempts to the
+bounded `web_projection` stored in the same private audit file. The projection
+contains only bounded rule judgments, reasons, evidence/counterevidence and
+version metadata; it is not a decision input. After deploying code that adds the
+projection writer, preview the retained audit files without printing their
+content:
+
+```bash
+sudo -u surveil /opt/surveil/.venv/bin/python \
+  /opt/surveil/scripts/backfill_llm_decision_web_projection.py \
+  --audit-dir /opt/surveil/reports/llm-decision-audits
+```
+
+Apply only after reviewing the redacted counts:
+
+```bash
+sudo -u surveil /opt/surveil/.venv/bin/python \
+  /opt/surveil/scripts/backfill_llm_decision_web_projection.py \
+  --audit-dir /opt/surveil/reports/llm-decision-audits --apply
+```
+
+The command changes only mode-`0600` private audit files, is idempotent, makes
+no model request, changes no SQLite row and never sends a message. If the
+30-day cleanup has already removed raw calls, an existing `web_projection` is
+preserved.
+
 An operator may explicitly rebuild a historical daily file from its retained
 per-item comparison reports without sending another reminder:
 
