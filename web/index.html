@@ -15,7 +15,8 @@
   <nav class="tabs">
     <button id="tab-overview" onclick="showView('overview')">今日总览</button>
     <button id="tab-events" onclick="showView('events')">事件中心</button>
-    <button id="tab-llm-decisions" onclick="showView('llm-decisions')">大模型决策</button>
+    <button id="tab-llm-decisions" onclick="showView('llm-decisions')">大模型决策回顾</button>
+    <button id="tab-rules" onclick="showView('rules')">规则</button>
     <button id="tab-feedback" onclick="showView('feedback')">反馈质量</button>
     <button id="tab-signals" onclick="showView('signals')">信号复盘</button>
     <button id="tab-relations" onclick="showView('relations')">关系映射</button>
@@ -125,6 +126,53 @@
             <tbody id="llmDecisionRows"></tbody>
           </table>
         </div>
+      </section>
+    </section>
+
+    <section id="view-rules" class="view">
+      <div class="section-title">
+        <h2>规则</h2>
+        <button onclick="loadCurrentRules(true)">刷新</button>
+      </div>
+      <div class="rules-tabs" role="tablist" aria-label="当前规则类型">
+        <button id="rulesTabAdmission" class="active" role="tab" aria-selected="true" onclick="showRulesSection('admission')">范围准入规则</button>
+        <button id="rulesTabLlm" role="tab" aria-selected="false" onclick="showRulesSection('llm')">大模型决策规则</button>
+      </div>
+
+      <section id="rulesSectionAdmission" class="rules-section">
+        <div id="rangeAdmissionStatus"></div>
+        <div id="rangeAdmissionMetrics" class="metric-grid"></div>
+        <div class="rules-actions">
+          <button onclick="showView('holdings')">持仓管理</button>
+          <button onclick="showView('keywords')">媒体关键词</button>
+        </div>
+        <section class="panel rules-panel">
+          <div id="rangeAdmissionGroups" class="rule-definition-list"></div>
+        </section>
+        <section class="panel rules-panel">
+          <div class="rule-panel-heading">来源边界</div>
+          <div id="rangeAdmissionBoundaries" class="rule-boundary-list"></div>
+        </section>
+      </section>
+
+      <section id="rulesSectionLlm" class="rules-section" hidden>
+        <div id="llmRuleStatus"></div>
+        <div id="llmRuleMetrics" class="metric-grid"></div>
+        <div class="toolbar">
+          <select id="llmRuleFamily" aria-label="规则族" style="width:190px" onchange="renderLlmRules()">
+            <option value="">全部规则族</option>
+          </select>
+          <select id="llmRuleAction" aria-label="允许的 action" style="width:180px" onchange="renderLlmRules()">
+            <option value="">全部允许 action</option>
+            <option value="push">push</option>
+            <option value="daily">daily</option>
+            <option value="archive">archive</option>
+          </select>
+          <input id="llmRuleQuery" placeholder="搜索标题、规则编号和规则内容" style="width:320px" oninput="renderLlmRules()">
+        </div>
+        <section class="panel rules-panel">
+          <div id="llmRuleList" class="rule-definition-list"></div>
+        </section>
       </section>
     </section>
 

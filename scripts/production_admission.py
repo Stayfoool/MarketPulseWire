@@ -82,9 +82,13 @@ def _string_values(value: object) -> tuple[str, ...]:
     return tuple(values)
 
 
-def load_production_portfolio(db_path: Path) -> PortfolioRuleConfig:
+def load_production_portfolio(
+    db_path: Path,
+    *,
+    read_only: bool = False,
+) -> PortfolioRuleConfig:
     holdings: list[HoldingRule] = []
-    for raw_holding in load_enabled_holdings(db_path):
+    for raw_holding in load_enabled_holdings(db_path, read_only=read_only):
         raw = raw_holding.get("raw") if isinstance(raw_holding.get("raw"), dict) else {}
         symbol = " ".join(str(raw_holding.get("symbol") or "").split())
         names = _string_values(

@@ -90,6 +90,42 @@ td textarea { min-height: 38px; resize: vertical; }
 .llm-assessment { margin-top: 7px; padding: 7px 8px; border-left: 3px solid #b7d9d3; background: #f8fbfb; }
 .llm-attempt { margin-top: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: #fbfcfd; }
 #view-llm-decisions table { min-width: 980px; }
+.rules-tabs { display: inline-flex; gap: 2px; padding: 3px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 6px; background: #eef2f6; }
+.rules-tabs button { border: 0; background: transparent; }
+.rules-tabs button.active { background: white; color: var(--accent); box-shadow: 0 1px 2px rgba(15, 23, 42, .12); }
+.rules-actions { display: flex; gap: 8px; justify-content: flex-end; margin: -4px 0 10px; }
+.rules-panel { margin-top: 12px; }
+.rules-inline-status { display: block; margin-bottom: 12px; }
+.rule-metric-value { font-size: 14px !important; line-height: 1.35; overflow-wrap: anywhere; }
+.rule-definition-list { padding: 0 14px; }
+.rule-definition { border-bottom: 1px solid var(--line); }
+.rule-definition:last-child { border-bottom: 0; }
+.rule-definition > summary { min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 2px; cursor: pointer; list-style: none; }
+.rule-definition > summary::-webkit-details-marker { display: none; }
+.rule-definition > summary::before { content: "\25B8"; flex: 0 0 auto; color: var(--muted); }
+.rule-definition[open] > summary::before { content: "\25BE"; }
+.rule-definition > summary > span:first-of-type { display: flex; flex: 1 1 auto; min-width: 0; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.rule-definition summary strong { font-size: 14px; }
+.rule-definition summary code, .rule-code-values code { overflow-wrap: anywhere; color: #526273; font-size: 12px; }
+.rule-count { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.rule-summary-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.rule-definition-body { padding: 0 2px 14px 22px; }
+.rule-definition-body > p { margin: 0 0 12px; color: #526273; font-size: 13px; line-height: 1.55; }
+.rule-field { margin-top: 12px; }
+.rule-field-label { display: flex; align-items: center; gap: 7px; color: #334e68; font-size: 12px; font-weight: 650; }
+.rule-field-label span { color: var(--muted); font-weight: 400; }
+.rule-field ul, .rule-field ol { margin: 6px 0 0; padding-left: 22px; columns: 2; column-gap: 32px; }
+.rule-field li { break-inside: avoid; margin-bottom: 5px; color: #526273; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.rule-action-condition { display: grid; grid-template-columns: 66px minmax(0, 1fr); align-items: start; gap: 8px; margin-top: 7px; }
+.rule-action-condition p { margin: 1px 0 0; color: #526273; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.rule-panel-heading { padding: 12px 14px; border-bottom: 1px solid var(--line); color: #334e68; font-size: 13px; font-weight: 650; }
+.rule-boundary-list { padding: 0 14px; }
+.rule-boundary { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.rule-boundary:last-child { border-bottom: 0; }
+.rule-boundary strong { font-size: 13px; }
+.rule-boundary p { margin: 5px 0 0; color: #526273; font-size: 13px; line-height: 1.5; }
+.rule-code-values { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 8px; }
+.rule-empty { padding: 24px 2px; color: var(--muted); font-size: 13px; text-align: center; }
 .rule-shadow-filters { align-items: end; }
 .rule-shadow-filter-field { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
 .rule-shadow-multi-select { position: relative; width: 170px; color: var(--text); font-size: 13px; }
@@ -114,6 +150,11 @@ tr.health-issue-row td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
   nav.tabs { padding-left: 12px; padding-right: 12px; }
   main { padding-left: 12px; padding-right: 12px; }
   #healthUnitSummary { flex-basis: 100%; margin-left: 0; text-align: left; }
+  .rules-tabs { display: flex; }
+  .rules-tabs button { flex: 1 1 0; height: auto; min-height: 34px; }
+  .rule-definition > summary { align-items: flex-start; }
+  .rule-summary-badges { justify-content: flex-start; }
+  .rule-field ul, .rule-field ol { columns: 1; }
 }
 .status { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: white; margin-bottom: 12px; display: none; }
 .status.ok { display: block; border-color: #99d6cc; color: var(--ok); }
