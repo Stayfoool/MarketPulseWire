@@ -139,7 +139,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | Domestic and overseas news media | `news_collector.py` -> `china_finance_media_monitor.py` / `wallstreetcn_monitor.py` / RSS helpers | Sina, Yicai, CLS, Jin10 and WallstreetCN public article/flash discovery; unified runtime, article store |
 | Official trade policy | `news_collector.py` -> `trade_policy_monitor.py` | Federal Register, USTR, European Commission and MOFCOM public sources; reserve `seen_items` before optional detail enrichment, then unified runtime and article store |
 | Sina 7x24 flash | `sina_flash.py` | Reserve every discovered flash in `seen_items`; five-group-admitted flashes continue through the unified runtime into the event store |
-| Sina portfolio stock news | `sina_stock_news.py` | Relevance enrichment, then unified runtime and event store |
+| Sina portfolio stock news | `sina_stock_news.py` | Relevance enrichment, then unified runtime and event store. Rediscovery skips succeeded reviews but re-enters the same `failed_retryable` review with the complete stored event content; one repeated failure does not abort the remaining holdings batch |
 | Company disclosures | `company_disclosures.py` -> `cninfo_disclosure_provider.py` | Twice daily CNINFO fulltext/relation discovery and official-PDF enrichment; report-only writes baseline event audits, while live mode enables analysis and delivery |
 | AlphaAbstract research summaries | `alphabstract_monitor.py` through `research_collector.py` | Public sitemap discovery reserves `seen_items` identity before public-summary page enrichment, then unified runtime and article store |
 | ValueList research directory | `value_directory_monitor.py` | One private-browser session collects all enabled lists and visible first-page preview metadata, then closes before OCR and unified runtime/article-store processing |
@@ -271,6 +271,13 @@ versions remain stored. Existing external ids are resolved through
 `market_item_aliases`; historical deliveries without a provable originating
 review link only to the item. Legacy writes and tables remain enabled for
 rollback in this stage, but readers do not use them as decision authority.
+
+Signal extraction still derives its rows from this unified current review and
+delivery projection. Each derived signal stores a SHA-256 fingerprint covering
+the complete signal, related targets and evidence. A scheduled re-scan performs
+no SQLite update when that fingerprint is unchanged; a changed decision,
+interpretation, relation mapping or evidence changes the fingerprint and uses
+the existing idempotent upsert.
 
 For newly admitted production items, `market_reviews` is also the processed /
 retry/current-result authority. `market_runtime.py` reuses a completed current

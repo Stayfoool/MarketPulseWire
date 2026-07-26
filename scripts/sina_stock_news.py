@@ -19,8 +19,13 @@ from env_utils import load_env
 from http_utils import http_get
 from llm_analysis import call_chat_completion_with_prompts
 from market_db import DEFAULT_DB_PATH, init_db
+from market_event_adapter import event_mapping_from_row
 from market_flow import normalize_market_item, process_market_item
-from market_review_store import event_content_hash as content_hash, load_enabled_holdings
+from market_review_store import (
+    event_content_hash as content_hash,
+    event_row_by_id,
+    load_enabled_holdings,
+)
 from portfolio_import import import_holdings
 from production_admission import persist_production_admission_context, production_admission_context
 from sina_zy_client import client_from_env, result_data
@@ -888,6 +893,38 @@ def find_existing_article_event(item: dict[str, str], holding: dict[str, Any]) -
     return None
 
 
+def retryable_event_review(
+    event_id: int,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict[str, Any] | None:
+    """Return the current failed unified review linked to one stored event."""
+    with connect_sqlite(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT m.id,r.id,r.review_status,r.admission_json
+            FROM market_item_aliases a
+            JOIN market_items m ON m.id=a.market_item_id
+            JOIN market_reviews r
+              ON r.market_item_id=m.id AND r.task='production'
+             AND r.is_current=1
+            WHERE a.item_kind='event' AND a.source=? AND a.legacy_item_id=?
+            ORDER BY r.id DESC LIMIT 1
+            """,
+            (SOURCE, str(event_id)),
+        ).fetchone()
+    if not row or str(row[2] or "") != "failed_retryable":
+        return None
+    try:
+        admission = json.loads(str(row[3] or "{}"))
+    except json.JSONDecodeError:
+        admission = {}
+    return {
+        "market_item_id": int(row[0]),
+        "market_review_id": int(row[1]),
+        "admission": admission if isinstance(admission, dict) else {},
+    }
+
+
 def merge_holding_into_event(event_id: int, holding: dict[str, Any], *, item: dict[str, str], reason: str) -> None:
     symbol = str(holding.get("symbol") or "").upper()
     name = str(holding.get("name") or "")
@@ -1151,7 +1188,64 @@ def run_once(
                     item=item,
                     reason=relevance_reason,
                 )
-                print(f"seen article event #{existing_event_id}: {event['title']}", flush=True)
+                retry = retryable_event_review(existing_event_id)
+                if retry is None:
+                    print(f"seen article event #{existing_event_id}: {event['title']}", flush=True)
+                    continue
+                stored_row = event_row_by_id(existing_event_id, DEFAULT_DB_PATH)
+                if not stored_row:
+                    print(
+                        f"retryable event #{existing_event_id} missing stored content: {event['title']}",
+                        flush=True,
+                    )
+                    continue
+                stored_event = event_mapping_from_row(stored_row)
+                normalized = normalize_market_item(SOURCE, stored_event, store_kind="event")
+                admission_context = production_admission_context(
+                    normalized, db_path=DEFAULT_DB_PATH
+                )
+                if admission_context.result.to_dict() != retry["admission"]:
+                    print(
+                        f"retryable event #{existing_event_id} admission changed; keep existing review pending: "
+                        f"{event['title']}",
+                        flush=True,
+                    )
+                    continue
+                admission_context = persist_production_admission_context(
+                    normalized, admission_context, db_path=DEFAULT_DB_PATH
+                )
+                if (
+                    admission_context.market_item_id != retry["market_item_id"]
+                    or admission_context.market_review_id != retry["market_review_id"]
+                ):
+                    raise RuntimeError(
+                        f"retry changed unified review identity for event {existing_event_id}"
+                    )
+                try:
+                    outcome = process_market_item(
+                        normalized,
+                        stored_event,
+                        store_kind="event",
+                        task="sina_stock_news_portfolio",
+                        db_path=DEFAULT_DB_PATH,
+                        reprocess_existing=True,
+                        production_admission=admission_context.result,
+                        production_portfolio=admission_context.portfolio,
+                        market_item_id=admission_context.market_item_id,
+                        market_review_id=admission_context.market_review_id,
+                    )
+                except Exception as exc:  # noqa: BLE001 - keep the remaining holdings runnable
+                    print(
+                        f"retryable event #{existing_event_id} remains failed_retryable: "
+                        f"{type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
+                    continue
+                print(
+                    f"retried event #{existing_event_id} review #{retry['market_review_id']}: "
+                    f"delivery={outcome.delivery_status} {event['title']}",
+                    flush=True,
+                )
                 continue
             normalized = normalize_market_item(SOURCE, event, store_kind="event")
             admission_context = production_admission_context(normalized, db_path=DEFAULT_DB_PATH)
@@ -1166,20 +1260,28 @@ def run_once(
                     flush=True,
                 )
                 continue
-            outcome = process_market_item(
-                normalized,
-                event,
-                store_kind="event",
-                task="sina_stock_news_portfolio",
-                db_path=DEFAULT_DB_PATH,
-                baseline_only=baseline_only,
-                production_admission=admission if admission.status == "admitted" else None,
-                production_portfolio=(
-                    admission_context.portfolio if admission.status == "admitted" else None
-                ),
-                market_item_id=admission_context.market_item_id,
-                market_review_id=admission_context.market_review_id,
-            )
+            try:
+                outcome = process_market_item(
+                    normalized,
+                    event,
+                    store_kind="event",
+                    task="sina_stock_news_portfolio",
+                    db_path=DEFAULT_DB_PATH,
+                    baseline_only=baseline_only,
+                    production_admission=admission if admission.status == "admitted" else None,
+                    production_portfolio=(
+                        admission_context.portfolio if admission.status == "admitted" else None
+                    ),
+                    market_item_id=admission_context.market_item_id,
+                    market_review_id=admission_context.market_review_id,
+                )
+            except Exception as exc:  # noqa: BLE001 - one failed review must not abort the batch
+                print(
+                    f"event processing failed_retryable: {type(exc).__name__}: {exc} "
+                    f"title={event['title']}",
+                    flush=True,
+                )
+                continue
             event_id = outcome.event_id
             if not outcome.inserted:
                 merge_holding_into_event(event_id, holding, item=item, reason=relevance_reason)

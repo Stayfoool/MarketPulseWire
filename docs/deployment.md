@@ -435,6 +435,18 @@ The high-frequency persistent fetchers remain:
 systemctl status --no-pager surveil-x-stream.service surveil-sina-flash.service
 ```
 
+After the private rule/configuration preflight succeeds, the installer restarts
+an enabled `surveil-feishu-feedback.service` and `surveil-x-stream.service` even
+when each unit was already active. `systemctl enable --now` alone does not load
+new Python code into an existing long-running process. Verify their
+`ExecMainStartTimestamp` after deployment, in addition to enabled/active state.
+
+`surveil-signals-extract.timer` may continue scanning the configured lookback
+window every ten minutes, but unchanged derived signals, targets and evidence
+must produce zero SQLite writes. Check the `signals_unchanged` count in its
+summary when investigating database writer contention; do not shorten an
+unrelated collector transaction merely to make this derived task finish.
+
 `surveil-company-disclosures.timer` retains the former announcement schedule at
 08:00 and 20:00. Its source profile defaults to `provider=cninfo_public` and
 `operation_mode=report_only`; report-only runs update source state, PDF cache,

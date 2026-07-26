@@ -26,7 +26,7 @@ from signal_store import (
     normalize_symbol,
     symbol_market,
     target_key,
-    upsert_signal,
+    upsert_signal_if_changed,
 )
 from stock_relations import related_targets_for_context
 
@@ -813,7 +813,14 @@ def x_rows(conn: sqlite3.Connection, since: str) -> list[sqlite3.Row]:
 def extract_signals(*, db_path: Path, days: int, dry_run: bool = False) -> dict[str, int]:
     init_db(db_path).close()
     since = cutoff_iso(days)
-    counts = {"events": 0, "article_reviews": 0, "official_news_reviews": 0, "signals": 0, "targets": 0}
+    counts = {
+        "events": 0,
+        "article_reviews": 0,
+        "official_news_reviews": 0,
+        "signals": 0,
+        "signals_unchanged": 0,
+        "targets": 0,
+    }
     with connect_sqlite(db_path) as conn:
         conn.row_factory = sqlite3.Row
         candidates: list[tuple[str, tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]]] = []
@@ -864,10 +871,24 @@ def extract_signals(*, db_path: Path, days: int, dry_run: bool = False) -> dict[
                     flush=True,
                 )
                 continue
-            signal_id = upsert_signal(conn, signal, targets=targets, evidence=evidence)
-            counts["signals"] += 1
-            counts["targets"] += len([target for target in targets if target_key(target) != "unknown"])
-            print(f"signal #{signal_id}: {signal['source']} {signal['title'][:80]}", flush=True)
+            signal_id, changed = upsert_signal_if_changed(
+                conn,
+                signal,
+                targets=targets,
+                evidence=evidence,
+                ensure_schema=False,
+            )
+            if changed:
+                counts["signals"] += 1
+                counts["targets"] += len(
+                    [target for target in targets if target_key(target) != "unknown"]
+                )
+                print(
+                    f"signal #{signal_id}: {signal['source']} {signal['title'][:80]}",
+                    flush=True,
+                )
+            else:
+                counts["signals_unchanged"] += 1
     return counts
 
 

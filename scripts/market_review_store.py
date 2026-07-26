@@ -152,7 +152,8 @@ def event_row_by_id(event_id: int, db_path: Path = DEFAULT_DB_PATH) -> dict[str,
     with connect_sqlite(db_path) as conn:
         row = conn.execute(
             """
-            SELECT source, event_type, title, summary, full_text, url, published_at, symbols_json, raw_json
+            SELECT source, source_event_id, event_type, title, summary, full_text,
+                   url, published_at, symbols_json, themes_json, raw_json
             FROM events
             WHERE id = ?
             """,
@@ -160,9 +161,22 @@ def event_row_by_id(event_id: int, db_path: Path = DEFAULT_DB_PATH) -> dict[str,
         ).fetchone()
     if not row:
         return None
-    source, event_type, title, summary, full_text, url, published_at, symbols_json, raw_json = row
+    (
+        source,
+        source_event_id,
+        event_type,
+        title,
+        summary,
+        full_text,
+        url,
+        published_at,
+        symbols_json,
+        themes_json,
+        raw_json,
+    ) = row
     return {
         "source": source,
+        "source_event_id": source_event_id,
         "event_type": event_type,
         "title": title,
         "summary": summary,
@@ -170,6 +184,7 @@ def event_row_by_id(event_id: int, db_path: Path = DEFAULT_DB_PATH) -> dict[str,
         "url": url,
         "published_at": published_at,
         "symbols_json": symbols_json,
+        "themes_json": themes_json,
         "raw_json": raw_json,
     }
 

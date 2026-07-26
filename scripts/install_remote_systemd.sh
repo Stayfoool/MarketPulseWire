@@ -215,6 +215,7 @@ fi
 systemctl enable --now surveil-holdings-web.service
 if grep -Eq '^FEISHU_FEEDBACK_(LISTENER_)?ENABLED=(1|true|yes|on)$' '$REMOTE_DIR/.env' 2>/dev/null; then
   systemctl enable --now surveil-feishu-feedback.service
+  systemctl restart surveil-feishu-feedback.service
 else
   systemctl disable --now surveil-feishu-feedback.service >/dev/null 2>&1 || true
   echo 'FEISHU_FEEDBACK_LISTENER_ENABLED / FEISHU_FEEDBACK_ENABLED 未启用，保持 surveil-feishu-feedback.service 停用。'
@@ -223,6 +224,7 @@ systemctl enable surveil-sina-flash.service
 systemctl restart surveil-sina-flash.service
 if grep -Eq '^X_BEARER_TOKEN=[^[:space:]]+' '$REMOTE_DIR/.env' 2>/dev/null; then
   systemctl enable --now surveil-x-stream.service
+  systemctl restart surveil-x-stream.service
 else
   systemctl disable --now surveil-x-stream.service >/dev/null 2>&1 || true
   echo 'X_BEARER_TOKEN 未配置，保持 surveil-x-stream.service 停用。'

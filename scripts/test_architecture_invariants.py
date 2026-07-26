@@ -309,6 +309,12 @@ def test_deployment_preserves_private_proxy_state_and_disables_shadows() -> None
     assert "LLM_DECISION_RULE_CONFIG_PATH=" in installer
     assert "LLM_DECISION_RULE_CONFIG 文件权限必须为 0600" in installer
     assert "LLM_DECISION_RULE_CONFIG 内容校验失败" in installer
+    for service in ("surveil-feishu-feedback.service", "surveil-x-stream.service"):
+        enable = f"systemctl enable --now {service}"
+        restart = f"systemctl restart {service}"
+        assert installer.count(enable) == 1
+        assert installer.count(restart) == 1
+        assert installer.index(enable) < installer.index(restart)
     shadow_timers = (
         "surveil-research-collector-shadow.timer",
         "surveil-official-collector-shadow.timer",

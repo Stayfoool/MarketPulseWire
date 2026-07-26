@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -111,9 +112,58 @@ def upsert_signal(
 ) -> int:
     """Insert or update one signal and its traceable targets/evidence."""
     ensure_signal_tables(conn)
-    now = utc_now()
+    signal_id, _changed = upsert_signal_if_changed(
+        conn, signal, targets=targets, evidence=evidence, ensure_schema=False
+    )
+    return signal_id
+
+
+def _extraction_fingerprint(
+    signal: dict[str, Any],
+    targets: list[dict[str, Any]],
+    evidence: list[dict[str, Any]],
+) -> str:
+    raw = dict(signal.get("raw") or {})
+    raw.pop("_extraction_fingerprint", None)
+    payload = {
+        "signal": {**signal, "raw": raw},
+        "targets": targets,
+        "evidence": evidence,
+    }
+    return hashlib.sha256(json_dumps(payload).encode("utf-8")).hexdigest()
+
+
+def upsert_signal_if_changed(
+    conn: sqlite3.Connection,
+    signal: dict[str, Any],
+    *,
+    targets: list[dict[str, Any]] | None = None,
+    evidence: list[dict[str, Any]] | None = None,
+    ensure_schema: bool = True,
+) -> tuple[int, bool]:
+    """Upsert a signal only when its complete derived input has changed."""
+    if ensure_schema:
+        ensure_signal_tables(conn)
+    current_targets = targets or []
+    current_evidence = evidence or []
+    fingerprint = _extraction_fingerprint(signal, current_targets, current_evidence)
     source_table = str(signal["source_table"])
     source_id = str(signal["source_id"])
+    existing = conn.execute(
+        "SELECT id, raw_json FROM signals WHERE source_table = ? AND source_id = ?",
+        (source_table, source_id),
+    ).fetchone()
+    if existing:
+        existing_raw = json_loads(str(existing[1] or "{}"), {})
+        if (
+            isinstance(existing_raw, dict)
+            and existing_raw.get("_extraction_fingerprint") == fingerprint
+        ):
+            return int(existing[0]), False
+
+    now = utc_now()
+    stored_raw = dict(signal.get("raw") or {})
+    stored_raw["_extraction_fingerprint"] = fingerprint
     conn.execute(
         """
         INSERT INTO signals (
@@ -159,7 +209,7 @@ def upsert_signal(
             str(signal.get("invalidation") or ""),
             str(signal.get("model") or ""),
             str(signal.get("prompt_version") or PROMPT_VERSION),
-            json_dumps(signal.get("raw") or {}),
+            json_dumps(stored_raw),
             now,
             now,
         ),
@@ -171,12 +221,12 @@ def upsert_signal(
     if not row:
         raise RuntimeError(f"signal upsert failed: {source_table}/{source_id}")
     signal_id = int(row[0])
-    for target in targets or []:
+    for target in current_targets:
         upsert_target(conn, signal_id, target)
-    for item in evidence or []:
+    for item in current_evidence:
         insert_evidence(conn, signal_id, item)
     conn.commit()
-    return signal_id
+    return signal_id, True
 
 
 def upsert_target(conn: sqlite3.Connection, signal_id: int, target: dict[str, Any]) -> int:

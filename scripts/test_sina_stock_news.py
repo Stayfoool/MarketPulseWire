@@ -3,6 +3,16 @@
 
 from __future__ import annotations
 
+import tempfile
+from pathlib import Path
+
+from db_utils import connect_sqlite
+from market_db import init_db
+from market_event_adapter import event_mapping_from_row
+from market_flow import normalize_market_item
+from market_item import AdmissionEvidence, AdmissionResult
+from market_review_store import event_row_by_id, upsert_event_record
+from market_store import ensure_market_item_alias, record_production_admission
 from sina_stock_news import (
     canonical_article_url,
     freshness_hint,
@@ -10,12 +20,80 @@ from sina_stock_news import (
     is_relevant_to_holding,
     legacy_source_event_id_for_item,
     parse_news_items,
+    retryable_event_review,
     similar_news_title,
     source_event_id_for_item,
 )
 
 
+def assert_retryable_review_uses_stored_event() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
+        event = {
+            "source": "sina_stock_news",
+            "source_event_id": "article:retry-test",
+            "event_type": "stock_news",
+            "title": "测试公司确认重大订单",
+            "summary": "列表摘要",
+            "full_text": "数据库中保存的完整正文，必须用于同一条 review 的重试。",
+            "url": "https://example.com/retry-test",
+            "published_at": "2026-07-26T01:00:00+00:00",
+            "symbols": ["000001.SZ"],
+            "themes": ["测试主题"],
+            "raw": {"source_event_id": "article:retry-test"},
+        }
+        event_id, inserted = upsert_event_record(event, db_path)
+        assert inserted
+        normalized = normalize_market_item("sina_stock_news", event, store_kind="event")
+        admission = AdmissionResult(
+            status="admitted",
+            reason_code="holding_match",
+            matched_families=("holding",),
+            evidence=(AdmissionEvidence("holding", "entity", "测试公司"),),
+            config_version="test-config",
+        )
+        market_item_id, review_id = record_production_admission(
+            normalized,
+            admission,
+            db_path=db_path,
+        )
+        with connect_sqlite(db_path) as conn:
+            ensure_market_item_alias(
+                conn,
+                market_item_id,
+                item_kind="event",
+                source="sina_stock_news",
+                legacy_item_id=str(event_id),
+                legacy_store_kind="events",
+            )
+            conn.execute(
+                "UPDATE market_reviews SET review_status='failed_retryable' WHERE id=?",
+                (review_id,),
+            )
+            conn.commit()
+        retry = retryable_event_review(event_id, db_path)
+        assert retry is not None
+        assert retry["market_item_id"] == market_item_id
+        assert retry["market_review_id"] == review_id
+        assert retry["admission"] == admission.to_dict()
+        stored = event_row_by_id(event_id, db_path)
+        assert stored is not None
+        mapped = event_mapping_from_row(stored)
+        assert mapped["source_event_id"] == event["source_event_id"]
+        assert mapped["full_text"] == event["full_text"]
+        assert mapped["themes"] == event["themes"]
+        with connect_sqlite(db_path) as conn:
+            conn.execute(
+                "UPDATE market_reviews SET review_status='succeeded' WHERE id=?",
+                (review_id,),
+            )
+            conn.commit()
+        assert retryable_event_review(event_id, db_path) is None
+
+
 def main() -> int:
+    assert_retryable_review_uses_stored_event()
     fiber_item = {
         "title": "算力时代拉动光纤刚需，苏州光纤企业产能排至2027年，自主研发加车载新场景赋能光通信长效发展"
     }
