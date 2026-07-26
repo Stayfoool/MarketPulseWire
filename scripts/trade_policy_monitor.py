@@ -18,7 +18,6 @@ from typing import Any, Iterable
 
 from db_utils import retry_on_locked, update_seen_item_lifecycle
 from http_utils import http_get
-from decision_engine import decide_market_item
 from market_flow import normalize_market_item, process_market_item
 from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from rss_monitor import DB_PATH, connect_db, save_new_items, strip_tags
@@ -605,19 +604,16 @@ def shadow_collect(
             discovered = discover_items(source)
             selected = discovered if limit <= 0 else discovered[:limit]
             items = enrich_unseen_items(source, selected, enrich_all=True)
-            candidates = []
-            for item in items:
-                decision = decide_market_item(normalized_trade_policy_item(item, source), holdings=[])
-                candidates.append(
-                    {
-                        "source": source.name,
-                        "id": item.get("id", ""),
-                        "title": item.get("title", ""),
-                        "url": item.get("url", ""),
-                        "published_at": item.get("published_at", ""),
-                        "decision": decision.to_dict(),
-                    }
-                )
+            candidates = [
+                {
+                    "source": source.name,
+                    "id": item.get("id", ""),
+                    "title": item.get("title", ""),
+                    "url": item.get("url", ""),
+                    "published_at": item.get("published_at", ""),
+                }
+                for item in items
+            ]
             rows.append(
                 {
                     "source": source.name,
@@ -662,7 +658,7 @@ def main() -> int:
     load_env(ENV_PATH)
     parser = argparse.ArgumentParser(description="Monitor official China-US / China-EU trade-policy sources.")
     parser.add_argument("--source", action="append", default=[], help="只跑指定 source id，可重复。")
-    parser.add_argument("--shadow", action="store_true", help="只抓取、解析和运行直接决策，不写生产库或投递。")
+    parser.add_argument("--shadow", action="store_true", help="只抓取和解析，不写生产库或投递。")
     parser.add_argument("--limit", type=int, default=10, help="shadow 每个来源最多输出条数；0 表示不限制。")
     parser.add_argument("--notify-baseline", action="store_true", help="首次建立基线时也处理旧条目；默认关闭。")
     args = parser.parse_args()

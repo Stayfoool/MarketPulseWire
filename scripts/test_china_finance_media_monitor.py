@@ -12,8 +12,6 @@ from types import SimpleNamespace
 
 import china_finance_media_monitor as cfm
 import investment_universe as iu
-from decision_engine import decide_market_item
-from market_item import NormalizedMarketItem
 from china_finance_media_monitor import cls_sign, next_data_from_html, parse_cls_time
 from media_keyword_config import keyword_matches_text
 
@@ -80,37 +78,6 @@ def test_cls_items_preserve_vip_product_and_author_targets() -> None:
         {"name": "东山精密", "code": "002384.SZ", "raw_code": "sz002384"},
     ]
     assert items[0]["raw"]["cls_metadata"] == metadata
-
-
-def test_cls_observation_metadata_does_not_change_decision_action() -> None:
-    holding = {
-        "symbol": "301217.SZ",
-        "name": "铜冠铜箔",
-        "aliases": [],
-        "news_keywords": ["pcb"],
-        "news_exclude_keywords": [],
-    }
-    item = {
-        "source": "cls_telegraph_api",
-        "source_category": "news_media",
-        "publisher_role": "news_media",
-        "content_type": "article",
-        "title": "AI PCB项目计划扩产，这家公司获机构净买入。",
-        "summary": "AI PCB项目计划扩产，这家公司获机构净买入。",
-    }
-    metadata = {
-        "type": "20026",
-        "product_label": "机构龙虎榜解读",
-        "share_img_name": "vip.png",
-        "is_vip": True,
-        "author_targets": [{"name": "东山精密", "code": "002384.SZ", "raw_code": "sz002384"}],
-    }
-    without_metadata = decide_market_item(item, holdings=[holding])
-    with_metadata = decide_market_item({**item, "raw": {"cls_metadata": metadata}}, holdings=[holding])
-    assert without_metadata.action == with_metadata.action == "push"
-    assert [hit["rule_id"] for hit in without_metadata.rule_hits] == [
-        hit["rule_id"] for hit in with_metadata.rule_hits
-    ]
 
 
 def test_cls_poll_interval_skips_recent_fetch() -> None:
@@ -558,12 +525,10 @@ def test_china_media_focus_filters_generic_power_and_accepts_ai_context() -> Non
 
 
 def test_current_admission_is_equivalent_after_normalization() -> None:
-    original_fed = cfm.fed_path_candidate
     original_match = cfm.investment_universe_match
     original_macro = cfm.is_macro_event
     original_focus = cfm.is_media_focus_item
     try:
-        cfm.fed_path_candidate = lambda item: False
         cfm.investment_universe_match = lambda source, item: {
             "matched": True,
             "tags": ["semiconductor_ai"],
@@ -590,7 +555,6 @@ def test_current_admission_is_equivalent_after_normalization() -> None:
         for field in ("admitted", "reason", "matched_families"):
             assert before[field] == after[field]
     finally:
-        cfm.fed_path_candidate = original_fed
         cfm.investment_universe_match = original_match
         cfm.is_macro_event = original_macro
         cfm.is_media_focus_item = original_focus
@@ -986,37 +950,6 @@ def test_sina_generic_title_uses_detail_body_for_focus() -> None:
         cfm.investment_universe_match = original_match
 
 
-def test_sina_nvidia_cpo_decision_is_source_neutral() -> None:
-    text = (
-        "花旗与英伟达IR交流，英伟达表示Rubin Ultra没有延迟，CPO已随Spectrum-X交换机进入量产，"
-        "客户采用率很高。从2028年Feynman架构开始，NVLink客户可以选择CPO或铜连接。"
-    )
-    variants = (
-        NormalizedMarketItem(
-            source=cfm.SINA_FINANCE_SOURCE,
-            source_category="news_media",
-            publisher_role="news_media",
-            content_type="article",
-            title="英伟达：CPO已进入量产",
-            summary=text,
-            full_text=text,
-        ),
-        NormalizedMarketItem(
-            source="cls_telegraph_api",
-            source_category="news_media",
-            publisher_role="news_media",
-            content_type="article",
-            title="英伟达：CPO已进入量产",
-            summary=text,
-            full_text=text,
-        ),
-    )
-    decisions = [decide_market_item(item, holdings=[]) for item in variants]
-    assert {decision.action for decision in decisions} == {"push"}
-    assert {decision.importance for decision in decisions} == {"high"}
-    assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"industry_quantified_hardline"}
-
-
 def test_default_sources_include_star_market_daily() -> None:
     assert "star_market_daily_subject" in cfm.parse_sources_arg([])
     assert "sina_finance_articles" in cfm.parse_sources_arg([])
@@ -1027,7 +960,6 @@ def main() -> int:
     test_parse_cls_time_accepts_seconds_and_milliseconds()
     test_parse_cls_time_keeps_timezone_aware_iso()
     test_cls_items_preserve_vip_product_and_author_targets()
-    test_cls_observation_metadata_does_not_change_decision_action()
     test_cls_poll_interval_skips_recent_fetch()
     test_run_once_fetches_sources_independently()
     test_seen_item_lifecycle_migration_baseline_and_retry()
@@ -1050,7 +982,6 @@ def main() -> int:
     test_sina_roll_stops_at_watermark_and_skips_seen_items()
     test_sina_first_run_baseline_and_idempotency()
     test_sina_generic_title_uses_detail_body_for_focus()
-    test_sina_nvidia_cpo_decision_is_source_neutral()
     test_default_sources_include_star_market_daily()
     print("china_finance_media_monitor helper tests OK")
     return 0

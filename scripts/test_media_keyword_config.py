@@ -19,7 +19,7 @@ from media_keyword_config import (
 )
 from migrate_media_keywords import APPROVED_SAFE_ALIASES, build_migration
 from migrate_admission_simplification import build_migration as build_admission_migration
-from rule_core_v1 import (
+from admission_rules import (
     SourceAdmissionPolicy,
     admit_market_item,
     parse_portfolio_config,

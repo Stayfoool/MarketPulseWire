@@ -325,6 +325,23 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
     },
 )
 
+_ACTIVE_EVIDENCE_RULES = {
+    "macro_policy_line": {
+        "name": "宏观/Fed 证据抽取",
+        "description": "为范围识别和来源元数据提取核心宏观/Fed 证据；不决定 action。",
+        "runtime": "macro_policy / range and source evidence",
+    },
+    "attributed_research_hard_variable": {
+        "name": "受信研究机构归因抽取",
+        "description": "维护受信研究机构及别名，用于决策前归因证据抽取；不决定 action。",
+        "runtime": "attributed_research / pre-decision evidence",
+    },
+}
+RULE_DEFINITIONS = tuple(
+    {**rule, **_ACTIVE_EVIDENCE_RULES[str(rule["id"])]}
+    for rule in RULE_DEFINITIONS
+    if str(rule["id"]) in _ACTIVE_EVIDENCE_RULES
+)
 RULE_BY_ID = {str(rule["id"]): rule for rule in RULE_DEFINITIONS}
 
 
@@ -460,12 +477,6 @@ def effective_list(rule_id: str, key: str, default: Iterable[object], *, replace
     return tuple(normalize_list([*default, *values]))
 
 
-def _theme_settings() -> dict[str, Any]:
-    from investment_bank_theme_config import load_config
-
-    return load_config()
-
-
 def _rule_view(rule: dict[str, Any], settings: dict[str, Any], stats: dict[str, Any]) -> dict[str, Any]:
     fields = []
     for field in rule.get("fields") or ():
@@ -528,7 +539,6 @@ def _marker_stats(conn, markers: tuple[str, ...], cutoff: str) -> dict[str, Any]
 
 def rule_center_payload(db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
     generic = load_rule_config()
-    theme = _theme_settings()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
     init_db(db_path).close()
     with connect_sqlite(db_path) as conn:
@@ -536,15 +546,11 @@ def rule_center_payload(db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
         for definition in RULE_DEFINITIONS:
             rule_id = str(definition["id"])
             settings = dict(generic["rules"][rule_id])
-            if definition.get("external_config") == "investment_bank_theme":
-                settings.update(theme)
             rules.append(_rule_view(definition, settings, _marker_stats(conn, tuple(definition["hit_markers"]), cutoff)))
     return {
         "rules": rules,
         "config_path": str(CONFIG_PATH),
         "has_local_override": CONFIG_PATH.exists(),
-        "theme_config_path": str(ROOT / "config" / "investment_bank_theme_rules.json"),
-        "theme_has_local_override": (ROOT / "config" / "investment_bank_theme_rules.json").exists(),
         "runtime_note": "保存后新资讯会动态读取私有配置，无需重启；只有同时更新代码或环境变量时才需要重启对应常驻服务。",
     }
 
@@ -586,19 +592,10 @@ def _write_audit(before: dict[str, Any], after: dict[str, Any], db_path: Path) -
 def save_rule_center_config(raw: object, *, db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
     incoming_rules = raw.get("rules") if isinstance(raw, dict) and isinstance(raw.get("rules"), dict) else {}
     before_generic = load_rule_config()
-    before_theme = _theme_settings()
     generic_input = {"rules": {rule_id: incoming_rules.get(rule_id) for rule_id in RULE_BY_ID}}
     saved_generic = save_rule_config(generic_input)
-
-    theme_input = incoming_rules.get("international_bank_theme_strategy")
-    if isinstance(theme_input, dict):
-        from investment_bank_theme_config import save_config
-
-        saved_theme = save_config(theme_input)
-    else:
-        saved_theme = before_theme
-    before = {"rules": {**before_generic["rules"], "international_bank_theme_strategy": before_theme}}
-    after = {"rules": {**saved_generic["rules"], "international_bank_theme_strategy": saved_theme}}
+    before = {"rules": before_generic["rules"]}
+    after = {"rules": saved_generic["rules"]}
     _write_audit(before, after, db_path)
     return rule_center_payload(db_path)
 
@@ -693,87 +690,3 @@ def _event_candidates(conn, cutoff: str, limit: int) -> list[dict[str, Any]]:
             }
         )
     return candidates
-
-
-def simulate_rules(*, db_path: Path = DEFAULT_DB_PATH, days: int = 7, limit: int = 120) -> dict[str, Any]:
-    """Evaluate recent stored entries with the live rules without sending Feishu."""
-    from attributed_research import attributed_research_rule
-    from ai_compute_supply_demand import ai_compute_supply_demand_rule
-    from ai_credit_risk import ai_credit_risk_rule
-    from industry_hardline import industry_topic_hard_variable_rule
-    from push_rules import first_matching_push_rule, load_enabled_holdings_for_rules
-    from source_profiles import runtime_source_profile
-
-    safe_days = max(1, min(int(days), 60))
-    safe_limit = max(10, min(int(limit), 300))
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=safe_days)).isoformat()
-    init_db(db_path).close()
-    with connect_sqlite(db_path) as conn:
-        candidates = _article_candidates(conn, cutoff, safe_limit) + _event_candidates(conn, cutoff, safe_limit)
-    holdings = load_enabled_holdings_for_rules(db_path)
-    results = []
-    for item in candidates:
-        profile = runtime_source_profile(str(item["source"])) or {}
-        item["source_category"] = str(profile.get("category") or item.get("source_category") or "")
-        item["publisher_role"] = str(profile.get("publisher_role") or item.get("publisher_role") or "")
-        matches: list[dict[str, Any]] = []
-        rule = first_matching_push_rule(source=str(item["source"]), item=item, holdings=holdings)
-        if rule:
-            matches.append(
-                {
-                    "rule_id": rule["rule_id"],
-                    "name": RULE_BY_ID.get(rule["rule_id"], {}).get("name", rule["rule_id"]),
-                    "reason": str(rule.get("brief_reason") or rule.get("reason") or ""),
-                }
-            )
-        industry = industry_topic_hard_variable_rule(str(item["source"]), item)
-        if industry:
-            matches.append(
-                {
-                    "rule_id": "industry_quantified_hardline",
-                    "name": "重点主题与产业硬变量",
-                    "reason": str(industry.get("brief_reason") or industry.get("reason") or ""),
-                }
-            )
-        compute = ai_compute_supply_demand_rule(str(item["source"]), item)
-        if compute:
-            matches.append(
-                {
-                    "rule_id": "ai_compute_supply_demand",
-                    "name": "AI算力供需变化",
-                    "reason": str(compute.get("brief_reason") or compute.get("reason") or ""),
-                    "action": str(compute.get("decision_action") or ""),
-                }
-            )
-        credit = ai_credit_risk_rule(str(item["source"]), item)
-        if credit:
-            matches.append(
-                {
-                    "rule_id": "ai_hyperscaler_credit_stress",
-                    "name": "AI 信用与融资风险",
-                    "reason": str(credit.get("brief_reason") or credit.get("reason") or ""),
-                    "action": str(credit.get("decision_action") or ""),
-                }
-            )
-        attributed = attributed_research_rule(item)
-        if attributed:
-            matches.append(
-                {
-                    "rule_id": "attributed_research_hard_variable",
-                    "name": "明确署名的行业研究硬变量",
-                    "reason": str(attributed.get("brief_reason") or attributed.get("reason") or ""),
-                }
-            )
-        if not matches:
-            continue
-        results.append(
-            {
-                "kind": item["kind"],
-                "source": item["source"],
-                "item_id": item["item_id"],
-                "title": item["title"],
-                "published_at": item["published_at"],
-                "matches": matches,
-            }
-        )
-    return {"days": safe_days, "scanned": len(candidates), "matched": len(results), "results": results[:100]}

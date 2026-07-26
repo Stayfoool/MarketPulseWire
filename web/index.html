@@ -21,7 +21,6 @@
     <button id="tab-sources" onclick="showView('sources')" aria-label="信息源，无当前故障"><span>信息源</span><span id="sourceAlertBadge" class="nav-alert-badge" hidden></span></button>
     <button id="tab-health" onclick="showView('health')" aria-label="任务健康，无当前故障"><span>任务健康</span><span id="healthAlertBadge" class="nav-alert-badge" hidden></span></button>
     <button id="tab-keywords" onclick="showView('keywords')">媒体关键词</button>
-    <button id="tab-rules" onclick="showView('rules')">规则中心</button>
     <button id="tab-rule-shadow" onclick="showView('rule-shadow')">规则对比报告</button>
     <button id="tab-settings" onclick="showView('settings')">配置中心</button>
     <button id="tab-holdings" onclick="showView('holdings')">持仓管理</button>
@@ -412,68 +411,6 @@
 保存后如需立即生效，请按页面提示重启对应服务。
       </div>
       <div id="settingsGrid" class="settings-grid"></div>
-      <section class="panel" style="margin-top:12px">
-        <div class="section-title">
-          <h3 style="margin:0">确定性推送规则</h3>
-          <button class="primary" onclick="showView('rules')">打开规则中心</button>
-        </div>
-        <div class="hint">国际投行、持仓硬变量、核心公司官网、宏观/Fed、SemiAnalysis 和量化产业硬变量规则已集中到规则中心。页面仅开放启停、顺序、白名单和额外词表等安全调整，并提供历史 dry-run 与修改审计。</div>
-      </section>
-    </section>
-
-    <section id="view-rules" class="view">
-      <div class="section-title">
-        <h2>规则中心</h2>
-        <div>
-          <button onclick="loadRuleCenter()">刷新</button>
-          <button class="primary" onclick="saveRuleCenter()">保存规则</button>
-        </div>
-      </div>
-      <div id="ruleCenterHint" class="status ok" style="display:block">
-规则由代码定义默认边界；本页仅调整安全参数。保存不会发送历史新闻，新的采集轮次会自动读取私有配置。
-      </div>
-      <div id="ruleCenterMetrics" class="metric-grid"></div>
-      <div id="ruleCenterRows"></div>
-      <section class="panel" style="margin-top:12px">
-        <div class="section-title">
-          <h3 style="margin:0">规则 Dry-run</h3>
-          <div>
-            <input id="ruleSimulationDays" type="number" min="1" max="60" value="7" style="width:80px">
-            <button class="primary" onclick="runRuleSimulation()">用最近新闻模拟</button>
-          </div>
-        </div>
-        <div class="hint">只读取数据库中最近的文章和事件，按当前页面已保存的规则运行；不会发飞书、不会改新闻状态。</div>
-        <div class="table-wrap" style="margin-top:10px; max-height:420px">
-          <table>
-            <thead>
-              <tr>
-                <th style="width:120px">时间</th>
-                <th style="width:150px">来源</th>
-                <th>新闻与命中规则</th>
-              </tr>
-            </thead>
-            <tbody id="ruleSimulationRows"></tbody>
-          </table>
-        </div>
-      </section>
-      <section class="panel" style="margin-top:12px">
-        <div class="section-title">
-          <h3 style="margin:0">规则修改审计</h3>
-          <button onclick="loadRuleAudit()">刷新</button>
-        </div>
-        <div class="table-wrap" style="max-height:300px">
-          <table>
-            <thead>
-              <tr>
-                <th style="width:170px">时间</th>
-                <th style="width:120px">操作者</th>
-                <th>变化</th>
-              </tr>
-            </thead>
-            <tbody id="ruleAuditRows"></tbody>
-          </table>
-        </div>
-      </section>
     </section>
 
     <section id="view-rule-shadow" class="view">

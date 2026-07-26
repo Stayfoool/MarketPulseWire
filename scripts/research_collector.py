@@ -27,7 +27,6 @@ from collector_runtime import (
     load_source_states,
     save_source_state,
 )
-from collector_direct_shadow import attach_direct_decision_shadow, direct_shadow_counts, safe_load_shadow_holdings
 from db_utils import connect_sqlite, ensure_source_state_table
 from media_sources import OVERSEAS_MEDIA_FEEDS
 from rss_monitor import CORE_COMPANY_FEEDS, DB_PATH, fetch_feed, filter_items, run_once as run_rss_once, strip_tags
@@ -166,8 +165,6 @@ def candidate_from_item(
     item: dict[str, Any],
     seen_ids: set[tuple[str, str]],
     *,
-    direct_shadow: bool = False,
-    direct_shadow_holdings: list[dict[str, Any]] | None = None,
     collector: str = "research_collector",
     content_type: str = "article",
 ) -> dict[str, Any]:
@@ -183,17 +180,7 @@ def candidate_from_item(
         "categories": list(item.get("categories") or []),
         "pipeline": "research_media shadow -> decision layer / thin interpretation planned",
     }
-    if not direct_shadow:
-        return candidate
-    return attach_direct_decision_shadow(
-        candidate,
-        source,
-        item,
-        source_category=RESEARCH_CATEGORY,
-        collector=collector,
-        content_type=content_type,
-        holdings=direct_shadow_holdings,
-    )
+    return candidate
 
 
 def limited(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
@@ -270,8 +257,6 @@ def collect_rss_shadow(
     limit: int,
     seen_ids: set[tuple[str, str]],
     save_shadow_state: bool = False,
-    direct_shadow: bool = False,
-    direct_shadow_holdings: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     states = load_shadow_feed_states(feeds, save_shadow_state)
     max_workers = max(1, int(os.getenv("RESEARCH_COLLECTOR_MAX_WORKERS", os.getenv("RSS_FETCH_MAX_WORKERS", "8")) or "8"))
@@ -300,8 +285,6 @@ def collect_rss_shadow(
                                 source,
                                 item,
                                 seen_ids,
-                                direct_shadow=direct_shadow,
-                                direct_shadow_holdings=direct_shadow_holdings,
                                 collector="research_collector.rss",
                             )
                             for item in filtered_items
@@ -329,8 +312,6 @@ def collect_page_shadow(
     *,
     limit: int,
     seen_ids: set[tuple[str, str]],
-    direct_shadow: bool = False,
-    direct_shadow_holdings: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for source in sources:
@@ -352,8 +333,6 @@ def collect_page_shadow(
                                 source.name,
                                 item,
                                 seen_ids,
-                                direct_shadow=direct_shadow,
-                                direct_shadow_holdings=direct_shadow_holdings,
                                 collector="research_collector.page",
                             )
                             for item in items
@@ -386,8 +365,6 @@ def collect_alphabstract_shadow(
     *,
     limit: int,
     seen_ids: set[tuple[str, str]],
-    direct_shadow: bool = False,
-    direct_shadow_holdings: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for source in sources:
@@ -409,8 +386,6 @@ def collect_alphabstract_shadow(
                                 source.name,
                                 item,
                                 seen_ids,
-                                direct_shadow=direct_shadow,
-                                direct_shadow_holdings=direct_shadow_holdings,
                                 collector="research_collector.alphabstract",
                                 content_type="research_summary",
                             )
@@ -447,8 +422,6 @@ def collect_shadow(
     limit: int = 5,
     compare_seen: bool = True,
     save_shadow_state: bool = False,
-    direct_shadow: bool = False,
-    direct_shadow_holdings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     started_at = utc_now()
     alphabstract_sources = alphabstract_sources or []
@@ -463,30 +436,21 @@ def collect_shadow(
         if compare_seen
         else set()
     )
-    holdings_error = ""
-    if direct_shadow and direct_shadow_holdings is None:
-        direct_shadow_holdings, holdings_error = safe_load_shadow_holdings(DB_PATH)
     rss_rows = collect_rss_shadow(
         feeds,
         limit=limit,
         seen_ids=seen_ids,
         save_shadow_state=save_shadow_state,
-        direct_shadow=direct_shadow,
-        direct_shadow_holdings=direct_shadow_holdings,
     )
     page_rows = collect_page_shadow(
         page_sources,
         limit=limit,
         seen_ids=seen_ids,
-        direct_shadow=direct_shadow,
-        direct_shadow_holdings=direct_shadow_holdings,
     )
     alphabstract_rows = collect_alphabstract_shadow(
         alphabstract_sources,
         limit=limit,
         seen_ids=seen_ids,
-        direct_shadow=direct_shadow,
-        direct_shadow_holdings=direct_shadow_holdings,
     )
     all_rows = [*rss_rows, *page_rows, *alphabstract_rows]
     errors = [row for row in all_rows if not row.get("ok")]
@@ -505,17 +469,13 @@ def collect_shadow(
             if item.get("already_seen")
         ),
     }
-    if direct_shadow:
-        counts.update(direct_shadow_counts(all_rows))
     return {
         "ok": not errors,
         "mode": "shadow_dry_run",
         "sent_feishu": False,
         "ran_llm_review": False,
-        "ran_direct_decision_shadow": direct_shadow,
         "wrote_production_seen_items": False,
         "save_shadow_state": save_shadow_state,
-        "direct_shadow_holdings_error": holdings_error,
         "started_at": started_at,
         "finished_at": utc_now(),
         "counts": counts,
@@ -646,11 +606,6 @@ def print_text_summary(payload: dict[str, Any]) -> None:
         f"failed={counts.get('failed_sources', 0)} "
         f"raw_items={counts.get('raw_items', 0)} "
         f"candidates={counts.get('candidates', 0)}"
-        + (
-            f" direct_push={counts.get('direct_shadow_push_candidates', 0)}"
-            if payload.get("ran_direct_decision_shadow")
-            else ""
-        )
     )
     for group in ("rss", "pages", "alphabstract"):
         for row in payload.get(group, []):
@@ -663,10 +618,7 @@ def print_text_summary(payload: dict[str, Any]) -> None:
                 print(f"  error: {row.get('error')}")
             for item in row.get("candidates", [])[:3]:
                 seen = "seen" if item.get("already_seen") else "new?"
-                direct = item.get("direct_shadow") if isinstance(item.get("direct_shadow"), dict) else {}
-                decision = direct.get("decision") if isinstance(direct.get("decision"), dict) else {}
-                action = f", direct={decision.get('action')}" if decision else ""
-                print(f"  - ({seen}{action}) {item.get('title')}")
+                print(f"  - ({seen}) {item.get('title')}")
 
 
 def main() -> int:
@@ -688,7 +640,6 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="输出完整 JSON。")
     parser.add_argument("--write-report", action="store_true", help="把 JSON 报告写入 reports/。")
     parser.add_argument("--no-compare-seen", action="store_true", help="不读取生产库判断 already_seen。")
-    parser.add_argument("--direct-shadow", action="store_true", help="在 shadow 报告中附加统一 decision_engine 直连决策结果；不写库、不发飞书。")
     parser.add_argument("--strict-exit", action="store_true", help="任一 source 失败时返回非 0；默认只在报告中记录错误。")
     parser.add_argument(
         "--save-shadow-state",
@@ -723,7 +674,6 @@ def main() -> int:
             limit=max(0, args.limit),
             compare_seen=not args.no_compare_seen,
             save_shadow_state=args.save_shadow_state,
-            direct_shadow=args.direct_shadow,
         )
     if args.write_report:
         payload["report_path"] = str(write_report(payload))

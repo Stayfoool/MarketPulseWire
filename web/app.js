@@ -12,7 +12,6 @@ let editingRelationId = null;
 let signalRowsCache = [];
 let editingSignalFeedback = null;
 let sourceProfileCache = {categories: [], profiles: []};
-let ruleCenterCache = {rules: []};
 let eventSourceOptionsLoaded = false;
 let ruleShadowReportCache = {items: []};
 
@@ -237,7 +236,6 @@ function showView(name) {
   }
   if (name === 'health') loadHealth();
   if (name === 'keywords') loadKeywords();
-  if (name === 'rules') loadRuleCenter();
   if (name === 'rule-shadow') loadRuleShadowReports();
   if (name === 'settings') {
     loadSettings();
@@ -1129,185 +1127,7 @@ async function saveKeywords() {
   }
 }
 
-function ruleFieldId(ruleId, fieldKey) {
-  return `rule-${ruleId}-${fieldKey}`;
-}
-
-function renderRuleField(rule, field) {
-  const id = ruleFieldId(rule.id, field.key);
-  const help = field.help ? `<div class="hint">${escapeHtml(field.help)}</div>` : '';
-  if (field.type === 'bool') {
-    return `
-      <div class="setting-field">
-        <label><span>${escapeHtml(field.label || field.key)}</span></label>
-        <label><input id="${escapeHtml(id)}" data-rule-id="${escapeHtml(rule.id)}" data-rule-key="${escapeHtml(field.key)}" data-rule-type="bool" type="checkbox" ${field.value ? 'checked' : ''}> 启用</label>
-        ${help}
-      </div>
-    `;
-  }
-  if (field.type === 'list') {
-    return `
-      <div class="setting-field">
-        <label><span>${escapeHtml(field.label || field.key)}</span></label>
-        <textarea id="${escapeHtml(id)}" data-rule-id="${escapeHtml(rule.id)}" data-rule-key="${escapeHtml(field.key)}" data-rule-type="list" style="min-height:72px" placeholder="每行一个">${escapeHtml(keywordListToText(field.value || []))}</textarea>
-        ${help}
-      </div>
-    `;
-  }
-  return `
-    <div class="setting-field">
-      <label><span>${escapeHtml(field.label || field.key)}</span></label>
-      <input id="${escapeHtml(id)}" data-rule-id="${escapeHtml(rule.id)}" data-rule-key="${escapeHtml(field.key)}" data-rule-type="int" type="number" value="${escapeHtml(field.value ?? '')}" min="${escapeHtml(field.min ?? '')}" max="${escapeHtml(field.max ?? '')}">
-      ${help}
-    </div>
-  `;
-}
-
-function renderRuleCenter() {
-  const rules = ruleCenterCache.rules || [];
-  const total = rules.length;
-  const enabled = rules.filter(rule => (rule.fields || []).find(field => field.key === 'enabled')?.value !== false).length;
-  const recent = rules.reduce((sum, rule) => sum + Number((rule.stats || {}).matches_30d || 0), 0);
-  document.getElementById('ruleCenterMetrics').innerHTML = [
-    {label: '硬规则', value: total, hint: '代码定义的确定性规则'},
-    {label: '当前启用', value: enabled, hint: '可在本页启停'},
-    {label: '近 30 天命中', value: recent, hint: '按规则命中 JSON 汇总'}
-  ].map(item => `<section class="metric"><div class="label">${escapeHtml(item.label)}</div><div class="value">${escapeHtml(item.value)}</div><div class="hint">${escapeHtml(item.hint)}</div></section>`).join('');
-  document.getElementById('ruleCenterRows').innerHTML = rules.map(rule => {
-    const stats = rule.stats || {};
-    const last = stats.last_match || {};
-    const fields = rule.fields || [];
-    const left = fields.slice(0, Math.ceil(fields.length / 2));
-    const right = fields.slice(Math.ceil(fields.length / 2));
-    return `
-      <section class="panel" style="margin-top:12px">
-        <div class="section-title">
-          <div>
-            <h3 style="margin:0">${escapeHtml(rule.name || rule.id || '')}</h3>
-            <div class="hint">${escapeHtml(rule.group || '')} / ${escapeHtml(rule.runtime || '')}</div>
-          </div>
-          <div>${badge(rule.execution_mode_label || rule.execution_mode || '')} ${badge('近30天 ' + String(stats.matches_30d || 0) + ' 次')}</div>
-        </div>
-        <div class="summary-cell">${escapeHtml(rule.description || '')}</div>
-        <div class="settings-grid" style="margin-top:10px">
-          <section class="settings-card">${left.map(field => renderRuleField(rule, field)).join('')}</section>
-          <section class="settings-card">
-            ${right.map(field => renderRuleField(rule, field)).join('')}
-            <div class="hint" style="margin-top:12px">最近命中：${last.title ? escapeHtml(shortText(last.title, 160)) : '暂无'}${last.published_at ? '；' + escapeHtml(formatTime(last.published_at)) : ''}</div>
-          </section>
-        </div>
-      </section>
-    `;
-  }).join('') || '<section class="panel">暂无规则定义。</section>';
-}
-
-async function loadRuleCenter() {
-  try {
-    const data = await api('/api/rule-center');
-    ruleCenterCache = data;
-    renderRuleCenter();
-    document.getElementById('ruleCenterHint').textContent =
-      `${data.runtime_note || ''} 私有覆盖：${data.config_path || '-'}；${data.has_local_override ? '已存在覆盖' : '当前使用代码默认'}。`;
-    await loadRuleAudit();
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-function ruleCenterPayloadFromDom() {
-  const rules = {};
-  (ruleCenterCache.rules || []).forEach(rule => { rules[rule.id] = {}; });
-  document.querySelectorAll('[data-rule-id][data-rule-key]').forEach(input => {
-    const ruleId = input.dataset.ruleId;
-    const key = input.dataset.ruleKey;
-    const type = input.dataset.ruleType;
-    if (!rules[ruleId]) rules[ruleId] = {};
-    if (type === 'bool') rules[ruleId][key] = Boolean(input.checked);
-    else if (type === 'list') rules[ruleId][key] = keywordTextToList(input.value);
-    else rules[ruleId][key] = Number(input.value || 0);
-  });
-  return {rules};
-}
-
-async function saveRuleCenter() {
-  try {
-    const data = await api('/api/rule-center', {method: 'POST', body: JSON.stringify(ruleCenterPayloadFromDom())});
-    ruleCenterCache = data;
-    renderRuleCenter();
-    await loadRuleAudit();
-    showStatus('规则中心配置已保存并写入审计记录。新资讯会动态读取，无需重启服务。');
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-async function loadRuleAudit() {
-  try {
-    const data = await api('/api/rule-center/audit');
-    document.getElementById('ruleAuditRows').innerHTML = (data.items || []).map(item => {
-      const changes = (item.changes || []).map(change => {
-        const rule = (ruleCenterCache.rules || []).find(row => row.id === change.rule_id);
-        return `<div><strong>${escapeHtml((rule || {}).name || change.rule_id || '')}</strong>：${escapeHtml(shortText(JSON.stringify(change.after || {}), 220))}</div>`;
-      }).join('');
-      return `<tr><td>${escapeHtml(formatTime(item.changed_at || ''))}</td><td>${escapeHtml(item.actor || '')}</td><td class="summary-cell">${changes || '-'}</td></tr>`;
-    }).join('') || '<tr><td colspan="3">暂无规则修改记录。</td></tr>';
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-async function runRuleSimulation() {
-  try {
-    const days = Number(document.getElementById('ruleSimulationDays').value || 7);
-    const data = await api('/api/rule-center/simulate', {method: 'POST', body: JSON.stringify({days})});
-    document.getElementById('ruleSimulationRows').innerHTML = (data.results || []).map(item => {
-      const matches = (item.matches || []).map(match => `<div><strong>${escapeHtml(match.name || match.rule_id || '')}</strong><div class="hint">${escapeHtml(shortText(match.reason || '', 180))}</div></div>`).join('');
-      return `<tr><td>${escapeHtml(formatTime(item.published_at || ''))}</td><td>${escapeHtml(item.source || '')}</td><td class="summary-cell"><strong>${escapeHtml(item.title || '')}</strong><div style="margin-top:6px">${matches}</div></td></tr>`;
-    }).join('') || `<tr><td colspan="3">最近 ${data.days || days} 天扫描 ${data.scanned || 0} 条，没有命中当前硬规则。</td></tr>`;
-    showStatus(`Dry-run 完成：扫描 ${data.scanned || 0} 条，命中 ${data.matched || 0} 条；未发送飞书。`);
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-async function loadInvestmentBankThemeRules() {
-  try {
-    const data = await api('/api/investment-bank-theme-rules');
-    document.getElementById('investmentBankThemeEnabled').checked = Boolean(data.enabled);
-    document.getElementById('investmentBankThemeMinScore').value = data.min_evidence_score || 2;
-    document.getElementById('investmentBankThemeDedupDays').value = data.dedup_lookback_days || 14;
-    document.getElementById('investmentBankThemeSecondary').checked = Boolean(data.allow_secondary_sources);
-    document.getElementById('investmentBankThemeBanks').value = keywordListToText(data.allowed_banks || []);
-    document.getElementById('investmentBankThemeKeywords').value = keywordListToText(data.extra_theme_keywords || []);
-    document.getElementById('investmentBankThemeActions').value = keywordListToText(data.extra_action_keywords || []);
-    document.getElementById('investmentBankThemeRuleHint').textContent =
-      `本地配置：${data.path || '-'}；${data.has_local_override ? '已存在本地覆盖' : '当前使用代码默认配置'}。`;
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-async function saveInvestmentBankThemeRules() {
-  try {
-    const payload = {
-      enabled: document.getElementById('investmentBankThemeEnabled').checked,
-      min_evidence_score: Number(document.getElementById('investmentBankThemeMinScore').value || 2),
-      dedup_lookback_days: Number(document.getElementById('investmentBankThemeDedupDays').value || 14),
-      allow_secondary_sources: document.getElementById('investmentBankThemeSecondary').checked,
-      allowed_banks: keywordTextToList(document.getElementById('investmentBankThemeBanks').value),
-      extra_theme_keywords: keywordTextToList(document.getElementById('investmentBankThemeKeywords').value),
-      extra_action_keywords: keywordTextToList(document.getElementById('investmentBankThemeActions').value)
-    };
-    const data = await api('/api/investment-bank-theme-rules', {method: 'POST', body: JSON.stringify(payload)});
-    await loadInvestmentBankThemeRules();
-    showStatus(`国际投行重大主题策略已保存：最低证据分 ${data.min_evidence_score}，去重 ${data.dedup_lookback_days} 天。下一条新资讯会自动读取。`);
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
 function ruleShadowUsageText(usage) {
-  if (!usage || typeof usage !== 'object') return '';
   const prompt = Number(usage.prompt_tokens || 0);
   const completion = Number(usage.completion_tokens || 0);
   const total = Number(usage.total_tokens || 0);

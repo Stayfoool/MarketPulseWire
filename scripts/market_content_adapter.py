@@ -8,14 +8,9 @@ from typing import Any
 from decision_engine import (
     attach_decision_result_to_article_review,
     attach_decision_result_to_official_review,
-    attach_decision_to_article_review,
-    attach_decision_to_official_review,
 )
-from industry_hardline import apply_hardline_review_override, explain_hardline
 from llm_analysis import format_llm_analysis
-from macro_policy import apply_macro_review_override, macro_prompt_note
-from market_flow import evaluate_market_item, finalize_market_flow_result
-from market_flow_adapters import store_article_flow_review, store_official_flow_review
+from market_flow import evaluate_market_item
 from market_item import DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem, item_from_article_mapping
 from market_interpreter import thin_system_prompt, thin_user_prompt_template
 from market_review_store import (
@@ -27,8 +22,6 @@ from market_review_store import (
     mark_official_pushed,
     official_review_exists,
 )
-from push_rules import apply_article_push_rules, first_matching_push_rule, load_enabled_holdings_for_rules, review_from_push_rule
-from skeptic_evaluator import apply_skeptic_review, skeptic_lines
 from source_profiles import runtime_source_profile
 
 
@@ -142,16 +135,9 @@ def _target_labels(decision: DecisionResult, interpretation: InterpretationResul
 
 
 def _interpretation_content(source: str, item: dict[str, Any]) -> str:
+    del source
     text = str(item.get("full_text") or item.get("content") or item.get("summary") or "").strip()
-    notes: list[str] = []
-    macro_note = macro_prompt_note(item)
-    hardline_note = explain_hardline(source, (item.get("title"), item.get("summary"), text))
-    if macro_note:
-        notes.append(f"【宏观政策线提示】{macro_note}")
-    if hardline_note:
-        notes.append(f"【产业硬变量线提示】{hardline_note}")
-    notes.append(text)
-    return "\n\n".join(note for note in notes if note)[:12000]
+    return text[:12000]
 
 
 def _source_enrichment_interpretation(normalized: NormalizedMarketItem) -> InterpretationResult | None:
@@ -186,16 +172,14 @@ def _evaluate_content_item(
     source: str,
     item: dict[str, Any],
     normalized: NormalizedMarketItem,
-    holdings: list[dict[str, Any]],
     *,
     official: bool = False,
-    decision: DecisionResult | None = None,
+    decision: DecisionResult,
 ) -> MarketFlowResult:
     source_interpretation = _source_enrichment_interpretation(normalized)
     value_directory_source = normalized.source.startswith("value_directory_")
     return evaluate_market_item(
         normalized,
-        holdings=holdings,
         decision=decision,
         source_interpretation=source_interpretation,
         content=_interpretation_content(source, item),
@@ -334,15 +318,6 @@ def normalize_review(parsed: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def review_article(source: str, item: dict[str, Any]) -> dict[str, Any]:
-    holdings = load_enabled_holdings_for_rules()
-    normalized = normalized_article_item(source, item)
-    flow_result = _evaluate_content_item(source, item, normalized, holdings)
-    review = _article_review_from_results(item, flow_result.decision, flow_result.interpretation)
-    review = _attach_article_flow_audit(review, flow_result)
-    return attach_decision_result_to_article_review(flow_result.decision, review)
-
-
 def evaluate_article_review(
     conn,
     source: str,
@@ -350,62 +325,15 @@ def evaluate_article_review(
     *,
     source_profile_id: str | None = None,
     normalized_item: NormalizedMarketItem | None = None,
-    decision: DecisionResult | None = None,
+    decision: DecisionResult,
 ) -> dict[str, Any]:
     """Run the production article/news spine without choosing a storage table."""
-    holdings = load_enabled_holdings_for_rules()
+    del conn, source_profile_id
     normalized = normalized_item or normalized_article_item(source, item)
-    flow_result = _evaluate_content_item(source, item, normalized, holdings, decision=decision)
+    flow_result = _evaluate_content_item(source, item, normalized, decision=decision)
     review = _article_review_from_results(item, flow_result.decision, flow_result.interpretation)
-    if decision is not None and decision.audit_json.get("production_authority") is True:
-        review = _attach_article_flow_audit(review, flow_result)
-        return attach_decision_result_to_article_review(flow_result.decision, review)
-    review = apply_skeptic_review(
-        conn,
-        source=source,
-        source_profile_id=source_profile_id,
-        item=item,
-        review=review,
-        push_key="push_now",
-    )
-    hard_variable_protected = bool(review.get("industry_hard_variable_override"))
-    blocked = bool(review.get("skeptic_blocked"))
-    downgraded = bool(review.get("skeptic_downgraded")) and not hard_variable_protected
-    flow_result = finalize_market_flow_result(
-        flow_result,
-        final_push=False if blocked or downgraded else None,
-        importance=str(review.get("importance") or ""),
-        reason=str(review.get("reason") or ""),
-        brief_reason=str(review.get("brief_reason") or review.get("reason") or ""),
-        skeptic=dict(review.get("skeptic") or {}),
-        downgraded=downgraded,
-        blocked=blocked,
-    )
     review = _attach_article_flow_audit(review, flow_result)
     return attach_decision_result_to_article_review(flow_result.decision, review)
-
-
-def process_article_review(
-    conn,
-    source: str,
-    item: dict[str, Any],
-    *,
-    source_profile_id: str | None = None,
-    normalized_item: NormalizedMarketItem | None = None,
-    decision: DecisionResult | None = None,
-) -> dict[str, Any]:
-    """Compatibility entry that evaluates and stores the historical article row."""
-    normalized = normalized_item or normalized_article_item(source, item)
-    review = evaluate_article_review(
-        conn,
-        source,
-        item,
-        source_profile_id=source_profile_id,
-        normalized_item=normalized,
-        decision=decision,
-    )
-    store_article_flow_review(conn, source, item, review, normalized)
-    return review
 
 
 def failed_review(item: dict[str, Any], error: Exception) -> dict[str, Any]:
@@ -413,7 +341,7 @@ def failed_review(item: dict[str, Any], error: Exception) -> dict[str, Any]:
     return {
         "importance": "low",
         "push_now": False,
-        "market_impact": "薄解读失败，确定性规则仍可在后续 override 中生效。",
+        "market_impact": "薄解读失败；既有 DecisionResult 保持不变。",
         "incremental_classification": "无法判断",
         "affected_targets": [],
         "daily_summary": str(item.get("title") or "薄解读失败条目"),
@@ -422,46 +350,6 @@ def failed_review(item: dict[str, Any], error: Exception) -> dict[str, Any]:
         "raw": {"error": reason},
         "model": "interpretation_failed",
     }
-
-
-def save_review(conn, source: str, item: dict[str, Any], review: dict[str, Any]) -> None:
-    store_article_flow_review(conn, source, item, review, normalized_article_item(source, item))
-
-
-def apply_hardline_override(source: str, item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
-    return apply_hardline_review_override(source, item, review)
-
-
-def apply_macro_override(item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
-    return apply_macro_review_override(review, item)
-
-
-def rule_first_review(source: str, item: dict[str, Any], *, push_key: str = "push_now") -> dict[str, Any] | None:
-    holdings = load_enabled_holdings_for_rules()
-    normalized = normalized_article_item(source, item)
-    rule = first_matching_push_rule(source=source, item=item, holdings=holdings)
-    if not rule:
-        return None
-    review = review_from_push_rule(rule, item, push_key=push_key)
-    return attach_decision_to_article_review(source, normalized, review, holdings=holdings, push_key=push_key)
-
-
-def apply_push_rule_override(
-    source: str,
-    item: dict[str, Any],
-    review: dict[str, Any],
-    *,
-    push_key: str = "push_now",
-) -> dict[str, Any]:
-    holdings = load_enabled_holdings_for_rules()
-    updated = apply_article_push_rules(source, item, review, holdings=holdings, push_key=push_key)
-    return attach_decision_to_article_review(
-        source,
-        normalized_article_item(source, item),
-        updated,
-        holdings=holdings,
-        push_key=push_key,
-    )
 
 
 def gate_lines(review: dict[str, Any]) -> list[str]:
@@ -475,7 +363,6 @@ def gate_lines(review: dict[str, Any]) -> list[str]:
         lines.append(f"分流理由：{reason}")
     if targets:
         lines.append("相关标的：" + "、".join(str(item) for item in targets[:5]))
-    lines.extend(skeptic_lines(review))
     return lines
 
 
@@ -490,15 +377,6 @@ def normalize_official_review(parsed: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def review_official_news(source: str, item: dict[str, Any]) -> dict[str, Any]:
-    holdings = load_enabled_holdings_for_rules()
-    normalized = normalized_official_item(source, item)
-    flow_result = _evaluate_content_item(source, item, normalized, holdings, official=True)
-    review = _official_review_from_results(item, flow_result.decision, flow_result.interpretation)
-    review = _attach_official_flow_audit(review, flow_result)
-    return attach_decision_result_to_official_review(flow_result.decision, review)
-
-
 def evaluate_official_review(
     conn,
     source: str,
@@ -506,95 +384,15 @@ def evaluate_official_review(
     *,
     source_profile_id: str | None = None,
     normalized_item: NormalizedMarketItem | None = None,
-    decision: DecisionResult | None = None,
+    decision: DecisionResult,
 ) -> dict[str, Any]:
     """Run the production official-news spine without choosing a storage table."""
-    holdings = load_enabled_holdings_for_rules()
+    del conn, source_profile_id
     normalized = normalized_item or normalized_official_item(source, item)
-    flow_result = _evaluate_content_item(
-        source, item, normalized, holdings, official=True, decision=decision
-    )
+    flow_result = _evaluate_content_item(source, item, normalized, official=True, decision=decision)
     review = _official_review_from_results(item, flow_result.decision, flow_result.interpretation)
-    if decision is not None and decision.audit_json.get("production_authority") is True:
-        review = _attach_official_flow_audit(review, flow_result)
-        return attach_decision_result_to_official_review(flow_result.decision, review)
-    review = apply_skeptic_review(
-        conn,
-        source=source,
-        source_profile_id=source_profile_id,
-        item=item,
-        review=review,
-        push_key="should_push_now",
-    )
-    hard_variable_protected = bool(review.get("industry_hard_variable_override"))
-    blocked = bool(review.get("skeptic_blocked"))
-    downgraded = bool(review.get("skeptic_downgraded")) and not hard_variable_protected
-    flow_result = finalize_market_flow_result(
-        flow_result,
-        final_push=False if blocked or downgraded else None,
-        importance=str(review.get("importance") or ""),
-        reason=str(review.get("reason") or ""),
-        brief_reason=str(review.get("brief_reason") or review.get("reason") or ""),
-        skeptic=dict(review.get("skeptic") or {}),
-        downgraded=downgraded,
-        blocked=blocked,
-    )
     review = _attach_official_flow_audit(review, flow_result)
     return attach_decision_result_to_official_review(flow_result.decision, review)
-
-
-def process_official_review(
-    conn,
-    source: str,
-    item: dict[str, Any],
-    *,
-    source_profile_id: str | None = None,
-    normalized_item: NormalizedMarketItem | None = None,
-    decision: DecisionResult | None = None,
-) -> dict[str, Any]:
-    """Compatibility entry that evaluates and stores the historical official row."""
-    normalized = normalized_item or normalized_official_item(source, item)
-    review = evaluate_official_review(
-        conn,
-        source,
-        item,
-        source_profile_id=source_profile_id,
-        normalized_item=normalized,
-        decision=decision,
-    )
-    store_official_flow_review(conn, source, item, review, normalized)
-    return review
-
-
-def save_official_review(conn, source: str, item: dict[str, Any], review: dict[str, Any]) -> None:
-    store_official_flow_review(conn, source, item, review, normalized_official_item(source, item))
-
-
-def apply_official_hardline_override(source: str, item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
-    updated = apply_hardline_review_override(source, item, review)
-    if updated.get("push_now"):
-        updated["should_push_now"] = True
-    return updated
-
-
-def rule_first_official_review(source: str, item: dict[str, Any]) -> dict[str, Any] | None:
-    holdings = load_enabled_holdings_for_rules()
-    rule = first_matching_push_rule(source=source, item=item, holdings=holdings)
-    if not rule:
-        return None
-    review = review_from_push_rule(rule, item, push_key="should_push_now")
-    review["analysis"] = {
-        "core_content": str(item.get("summary") or item.get("title") or "").strip(),
-        "related_targets": rule.get("related_targets") or [],
-        "llm_mode": "rule_only",
-    }
-    return attach_decision_to_official_review(source, normalized_official_item(source, item), review, holdings=holdings)
-
-
-def apply_official_push_rule_override(source: str, item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
-    holdings = load_enabled_holdings_for_rules()
-    updated = apply_article_push_rules(source, item, review, holdings=holdings, push_key="should_push_now")
-    return attach_decision_to_official_review(source, normalized_official_item(source, item), updated, holdings=holdings)
 
 
 def analysis_lines_from_review(review: dict[str, Any]) -> list[str]:
@@ -608,7 +406,6 @@ def analysis_lines_from_review(review: dict[str, Any]) -> list[str]:
     reason = str(review.get("reason") or "").strip()
     if reason:
         prefix.append(f"分流理由：{reason}")
-    prefix.extend(skeptic_lines(review))
     return [lines[0], *prefix, *lines[1:]] if lines else prefix
 
 

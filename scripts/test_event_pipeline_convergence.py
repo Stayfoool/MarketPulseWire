@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 import market_event_adapter
 import market_flow
 from market_db import init_db
-from market_item import InterpretationResult
+from market_item import DecisionResult, InterpretationResult
 
 
 def test_decision_result_action_precedes_legacy_push_fields() -> None:
@@ -70,7 +70,16 @@ def test_analyze_event_writes_interpretation_result_and_legacy_fields() -> None:
         )
         try:
             market_flow.interpret_market_item = fake_interpret
-            analysis = market_event_adapter.analyze_event(event_id, db_path=db_path)
+            analysis = market_event_adapter.analyze_event(
+                event_id,
+                db_path=db_path,
+                decision=DecisionResult(
+                    action="push",
+                    importance="high",
+                    reason="大模型程度决策命中。",
+                    rule_hits=[{"rule_id": "macro_policy_line"}],
+                ),
+            )
         finally:
             market_flow.interpret_market_item = original
 
@@ -91,76 +100,36 @@ def test_analyze_event_writes_interpretation_result_and_legacy_fields() -> None:
     assert stored["_interpretation_result"]["prompt_version"] == "market_interpreter_v1"
 
 
-def test_event_entry_applies_international_bank_theme_decision() -> None:
+def test_event_entry_without_decision_fails_closed() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
-        analysis = market_event_adapter.apply_event_rules_to_analysis(
+        event_id, _ = market_event_adapter.upsert_event(
             {
                 "source": "sina_flash",
+                "source_event_id": "missing-decision",
                 "event_type": "flash_news",
-                "title": "高盛发布投资策略：做多中国 AI 价值链",
-                "summary": (
-                    "高盛认为中国 AI 公司市值与市场空间严重错配，资金从韩国 AI 交易出现结构性资本轮动，"
-                    "建议做多中国 AI 价值链，覆盖半导体、算力和数据中心电力。"
-                ),
-                "full_text": "",
-                "url": "",
+                "title": "测试事件",
+                "summary": "测试摘要。",
                 "published_at": "2026-07-12T12:00:00+00:00",
-                "symbols_json": "[]",
-                "raw_json": "{}",
+                "symbols": [],
+                "raw": {},
             },
-            {},
-            db_path=db_path,
+            db_path,
         )
-    assert analysis["_decision_result"]["action"] == "push"
-    assert analysis["_decision_result"]["rule_hits"][0]["rule_id"] == "international_bank_theme_strategy"
-
-
-def test_event_entry_applies_direct_holding_rating_target_decision() -> None:
-    with TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "surveil.sqlite3"
-        init_db(db_path).close()
-        with sqlite3.connect(db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO portfolio_holdings
-                    (symbol, name, full_name, aliases_json, enabled, raw_json, updated_at)
-                VALUES (?, ?, ?, ?, 1, '{}', ?)
-                """,
-                (
-                    "688017.SH",
-                    "绿的谐波",
-                    "苏州绿的谐波传动科技股份有限公司",
-                    "[]",
-                    "2026-07-12T00:00:00+00:00",
-                ),
-            )
-        analysis = market_event_adapter.apply_event_rules_to_analysis(
-            {
-                "source": "sina_stock_news",
-                "event_type": "portfolio_news",
-                "title": "高盛看衰绿的谐波：488元股价 vs 138元目标价",
-                "summary": "高盛给予绿的谐波显著低于现价的目标价。",
-                "full_text": "",
-                "url": "",
-                "published_at": "2026-07-12T12:00:00+00:00",
-                "symbols_json": '["688017.SH"]',
-                "raw_json": "{}",
-            },
-            {},
-            db_path=db_path,
-        )
-    assert analysis["_decision_result"]["action"] == "push"
-    assert analysis["_decision_result"]["rule_hits"][0]["rule_id"] == "investment_bank_rating_target_direct_holding"
+        try:
+            market_event_adapter.analyze_event(event_id, db_path=db_path)
+        except RuntimeError as exc:
+            assert "决策结果缺失" in str(exc)
+        else:
+            raise AssertionError("event processing must fail closed without DecisionResult")
 
 
 def main() -> int:
     test_decision_result_action_precedes_legacy_push_fields()
     test_legacy_analysis_without_decision_result_cannot_push()
     test_analyze_event_writes_interpretation_result_and_legacy_fields()
-    test_event_entry_applies_international_bank_theme_decision()
-    test_event_entry_applies_direct_holding_rating_target_decision()
+    test_event_entry_without_decision_fails_closed()
     print("event pipeline convergence checks passed")
     return 0
 

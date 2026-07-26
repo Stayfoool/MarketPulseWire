@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from attributed_research import prepare_item_for_decision
-from decision_engine import apply_deterministic_source_controls, decide_market_item
 from market_item import DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem
 from market_interpreter import interpret_market_item
 from market_runtime import (
@@ -14,7 +12,6 @@ from market_runtime import (
     is_official_news_source,
     normalize_market_item,
     process_market_item,
-    record_rule_comparison,
 )
 
 
@@ -48,9 +45,7 @@ def rule_only_interpretation(item: NormalizedMarketItem, decision: DecisionResul
 def evaluate_market_item(
     item: NormalizedMarketItem,
     *,
-    holdings: list[dict[str, Any]] | None = None,
-    symbols: set[str] | list[str] | tuple[str, ...] | None = None,
-    decision: DecisionResult | None = None,
+    decision: DecisionResult,
     source_interpretation: InterpretationResult | None = None,
     content: str = "",
     task: str = "为一条已完成规则决策的市场信息生成极简实时摘要。",
@@ -62,15 +57,9 @@ def evaluate_market_item(
     force_interpretation: bool = False,
     storage_ref: dict[str, Any] | None = None,
 ) -> MarketFlowResult:
-    """Evaluate one normalized item without persistence or delivery side effects."""
-    decision_item = item if decision is not None else prepare_item_for_decision(item)
-    resolved_decision = decision or decide_market_item(
-        decision_item,
-        holdings=holdings or [],
-        symbols=symbols,
-    )
-    if not (decision is not None and resolved_decision.audit_json.get("production_authority") is True):
-        resolved_decision = apply_deterministic_source_controls(decision_item, resolved_decision)
+    """Interpret one normalized item after its authoritative decision exists."""
+    decision_item = item
+    resolved_decision = decision
     should_interpret = bool(
         source_interpretation is None
         and (
@@ -118,60 +107,4 @@ def evaluate_market_item(
             "interpretation_failed": bool(interpretation_error),
             "interpretation_error": interpretation_error,
         },
-    )
-
-
-def finalize_market_flow_result(
-    result: MarketFlowResult,
-    *,
-    final_push: bool | None = None,
-    importance: str = "",
-    reason: str = "",
-    brief_reason: str = "",
-    skeptic: dict[str, Any] | None = None,
-    downgraded: bool = False,
-    blocked: bool = False,
-    storage_ref: dict[str, Any] | None = None,
-) -> MarketFlowResult:
-    """Return a result whose DecisionResult reflects deterministic post-decision controls."""
-    initial = result.decision
-    action = initial.action
-    promotion_rejected = final_push is True and not initial.should_push
-    if final_push is False and initial.should_push:
-        action = "ignore" if blocked else "daily" if downgraded else "archive"
-    audit = dict(initial.audit_json)
-    audit["market_flow_finalization"] = {
-        "initial_action": initial.action,
-        "final_action": action,
-        "final_push": final_push,
-        "downgraded": downgraded,
-        "blocked": blocked,
-        "promotion_rejected": promotion_rejected,
-    }
-    final_decision = DecisionResult(
-        action=action,
-        importance=importance or initial.importance,
-        reason=reason or initial.reason,
-        brief_reason=brief_reason or initial.brief_reason or reason,
-        rule_hits=list(initial.rule_hits),
-        candidate_rules=list(initial.candidate_rules),
-        skeptic=dict(skeptic or initial.skeptic),
-        dedup=dict(initial.dedup),
-        need_llm_interpretation=initial.need_llm_interpretation,
-        need_limited_llm_judgement=initial.need_limited_llm_judgement,
-        audit_json=audit,
-    )
-    flow_audit = dict(result.audit_json)
-    flow_audit["finalized"] = True
-    return MarketFlowResult(
-        item=result.item,
-        decision=final_decision,
-        interpretation=result.interpretation,
-        storage_ref=dict(storage_ref if storage_ref is not None else result.storage_ref),
-        delivery_intent={
-            "action": final_decision.action,
-            "should_deliver": final_decision.should_push,
-            "dedup": dict(final_decision.dedup),
-        },
-        audit_json=flow_audit,
     )

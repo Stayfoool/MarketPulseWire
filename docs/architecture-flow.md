@@ -85,29 +85,21 @@ The former direct/compat route switch and these wrapper modules have been remove
 | Module | Current responsibility |
 |---|---|
 | `market_runtime.py` | Normalization boundary, one-time pre-decision evidence preparation, production LLM decision invocation through `decision_engine`, store adapter selection, orchestration and fail-closed review handling |
-| `decision_engine.py` | Single production decision boundary. It delegates admitted items to the reviewed LLM decision and returns the only authoritative `DecisionResult`; retained deterministic functions are unreachable from production pending a separately approved cleanup PR |
+| `decision_engine.py` | Single production decision boundary. It delegates admitted items to the reviewed LLM decision and returns the only authoritative `DecisionResult`; no deterministic action implementation or fallback remains |
 | `production_admission.py` | Sole production entry for the five range-admission groups; validates `RULE_CORE_CONFIG`, converts current Web-managed SQLite holdings to `PortfolioRuleConfig`, applies ordinary/holding-only/official-trade source boundaries and returns the auditable `AdmissionResult`; it cannot decide action, write reviews or deliver |
-| `rule_core_v1.py` | Side-effect-free five-group admission and inactive deterministic strength rules. Production calls only `admit_market_item()` through `production_admission.py`; `evaluate_market_item()` remains non-authoritative. Bounded admission evidence includes all matched content-family evidence and global exclusion evidence |
+| `admission_rules.py` | Side-effect-free five-group range-admission implementation. It returns bounded `AdmissionResult` evidence and cannot assign action, write reviews or deliver |
 | `llm_rule_catalog.py` | Strict loader and schema validator for the gitignored private LLM decision-rule JSON selected by `LLM_DECISION_RULE_CONFIG`; exports validated rules to the prompt builder and fails closed when the file is missing or invalid |
 | `llm_rule_decision.py` | LLM decision contract: selects only the rules applicable to an existing admitted `AdmissionResult`, accepts title/summary/body with body code-bounded to 3,000 characters, divides model-visible text into numbered segments, and strictly validates per-rule JSON, allowed actions and exact evidence before mechanically aggregating the final action |
 | `llm_rule_shadow.py` | Shared side-effect-free LLM execution used by production and retained historical comparison tools. It builds one prompt, performs strict validation and permits one correction request containing only the original response and validation errors |
 | `llm_production_decision.py` | Production deadline and private-audit wrapper. It enforces one 120-second total budget across retries and correction, writes one mode-`0600` audit linked by market item/review ids, and fails closed when no valid audited decision exists |
-| `investment_bank_research.py` | Side-effect-free local extraction used by pre-decision research attribution and retained deterministic compatibility: trusted institution, holding/industry subject, rating/target-price/coverage action, allocation action or complete rotation, and verbatim evidence |
 | `rule_core_fixture.py` | Strict loader for the sanitized public v1 behavior corpus; test/spec support only |
 | `market_lifecycle_v1.py` | Inactive lifecycle/source-integration contract, bounded discovery shape, legal transitions and honest read-only projections over the current article/event physical stores |
 | `rule_config_migration_v1.py` | Inactive redacted preview of explicitly supplied legacy keyword origins versus a reviewed v1 target configuration; never writes configuration or prints keyword values |
-| `rule_core_replay.py` | Inactive no-write comparison of explicit current outcome snapshots against the pure v1 core, including changed fields and source-invariance violations |
-| `rule_core_history_replay.py` | Inactive operator-only reader for an explicit local SQLite snapshot; strict mode requires stored full text and uses `mode=ro`/`query_only`, while optional title/summary proxy screening is explicitly non-comparative; delegates comparison to `rule_core_replay.py` |
-| `rule_core_shadow.py` | Side-effect-free comparison of the active `DecisionResult` with `rule_core_v1` for the same normalized item; records only bounded differences and cannot change review or delivery |
-| `rule_core_runtime_shadow.py` | Historical/operator comparison writer retained for reading or explicit reconstruction of old reports; the production runtime no longer calls it |
 | `rule_core_shadow_combined.py` | Report-only combiner for existing comparison reports; separates action comparisons, both-not-admitted items, admission differences and model/validation failures; preserves candidate engine/version, bounded resolved rule evidence, body-source label, model metadata, token usage and elapsed time; and refreshes one latest Markdown/JSON view across research, official and news production batches. Combined reports never copy the private model request, article body or raw response, and non-action-comparison rows are not counted as action upgrades or downgrades |
 | `rule_core_shadow_daily.py` | Report-only daily review job; removes sensitive model request/response payloads from private per-item audits after 30 days while retaining bounded comparison metadata, freezes one 15:30-to-15:30 Beijing Markdown/JSON report, and sends at most one Feishu reminder when the interval has comparable or unable-to-compare items. Daily reports never copy private model requests, article bodies or raw responses. An explicit historical rebuild only re-aggregates retained comparisons, records that the candidate was not re-evaluated and preserves any prior sent reminder |
 | `rule_shadow_report_store.py` | Bounded read-only loader for dated rule comparison reports used by the authenticated Web workbench; each Web filter accepts multiple selected values, values inside one filter use OR, and candidate-version, execution-status, action-change and current/candidate-action filters combine with AND in memory. The loader cannot evaluate rules or send messages |
-| `rule_core_shadow_report.py` | Inactive operator-only reader for a shadow collector JSON report; supplies complete retained item text to `rule_core_shadow.py` and writes only a bounded comparison report |
 | `run_production_with_rule_shadow.py` | Retained production service entry wrapper; despite its historical filename, it now runs the selected collector once and never records or refreshes old-versus-LLM reports |
-| `ai_credit_risk.py` | Source-neutral deterministic AI borrower, funding-event and qualitative credit-stress evidence classification |
-| `ai_compute_supply_demand.py` | Source-neutral deterministic AI compute supply, demand, capacity and constraint classification |
-| `macro_policy.py` | Retained deterministic macro-data/Fed evidence classification used by compatibility tests and delivery-only extraction; it is not the production action decision |
+| `macro_policy.py` | Macro-data/Fed range and source-discovery evidence classification; it cannot assign or modify action |
 | `trade_friction.py` | Source-neutral China-US / China-EU trade-friction classification and evidence extraction |
 | `trade_policy_monitor.py` | Official API/RSS/list discovery, new-item detail enrichment, baseline and source health |
 | `company_disclosures.py` | One logical portfolio-disclosure collector, provider selection, baseline, source state and health |
@@ -146,7 +138,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 
 Source-specific login, WAF, API, sitemap discovery, polling, browser profile, OCR and attachment behavior ends before the normalized runtime boundary.
 
-Each ValueList timer run uses one persistent Chromium context for all enabled ValueList sources. It reads both list pages and the visible first-page preview metadata for their bounded entries before closing the context once. Only after profile release succeeds does the monitor run OCR, normalization, the current decision, storage and delivery. There is no preliminary strength-decision gate before preview/OCR; every production-visible item can contribute its available preview evidence to the one normalized decision. A list failure remains attributed to that source while another successfully collected source may continue; a detail-preview failure remains attached to that item and follows the existing preview-failure policy. A browser launch or shutdown failure stops post-browser processing for every source owned by that session, so no later phase can silently relaunch Chromium against the same private profile.
+Each ValueList timer run uses one persistent Chromium context for all enabled ValueList sources. It reads both list pages and the visible first-page preview metadata for their bounded entries before closing the context once. Only after profile release succeeds does the monitor run OCR, normalization, five-group range admission, the LLM degree decision, storage and delivery. There is no preliminary degree-decision gate before preview/OCR; every production-visible item can contribute its available preview evidence to the one normalized decision. A list failure remains attributed to that source while another successfully collected source may continue; a detail-preview failure remains attached to that item. A browser launch or shutdown failure stops post-browser processing for every source owned by that session, so no later phase can silently relaunch Chromium against the same private profile.
 
 Domestic finance media reserve each technically identifiable live discovery in
 `seen_items` before detail enrichment, then record processability and construct
@@ -166,14 +158,14 @@ watermark in its source state; rows first exposed by that widened scope are
 baseline-only and cannot be delivered retroactively. Later live rows reuse the
 same processability, admission and processing states, including retryable
 failures. AlphaAbstract uses the same ordering around its public-summary page.
-These sources persist the same five-group `AdmissionResult` before the existing
-strength decision.
+These sources persist the same five-group `AdmissionResult` before the LLM
+degree decision.
 
 Official trade-policy sources also reserve their stable list identity in
 `seen_items` before optional detail enrichment. A detail failure retains the
 official list evidence and records the fallback. After normalization the official
 trade-policy profile receives direct production `trade_policy` admission and
-continues to the existing strength decision.
+continues to the LLM degree decision.
 
 Sina 7x24 uses `seen_items` for discovery identity, baseline, retry and production
 admission audit. The first non-empty response after this ordering change is an
@@ -192,9 +184,9 @@ Ordinary bounded collector/provider requests use the shared `http_utils` transpo
 
 Company disclosures use the logical source `company_disclosures`. `transport_provider` remains raw audit metadata and cannot affect importance or action. The current fixed provider factory contains `cninfo_public`; a future provider implements the same security-resolution and paginated-list contract and is selected through the private source profile. CNINFO `orgId` mappings, provider baselines and provider-neutral known identities use the existing `source_state`. Fulltext announcements and `relation/category_dyhd_szdy` investor-relations records are queried separately, then normalized identically. A provider's first successful run and every `report_only` discovery enter the unified event runtime only as `baseline_only` audits with analysis and delivery disabled. They remain visible behind Event Center's baseline filter but cannot create a decision, AI interpretation or notification. Historical `ifind_notice` event rows remain readable compatibility data; the expired iFinD announcement timer is removed.
 
-CLS telegraph collection preserves bounded official product metadata in the normalized raw audit: numeric `type`, the official bracketed product label, `share_img`/VIP status, and parsed `author_extends` stock names/codes. Article cards display these fields for an observation phase approved by the user. The metadata does not enter deterministic rule matching, importance or `DecisionResult.action`; the existing public `content` remains the decision text.
+CLS telegraph collection preserves bounded official product metadata in the normalized raw audit: numeric `type`, the official bracketed product label, `share_img`/VIP status, and parsed `author_extends` stock names/codes. Article cards display these fields for an observation phase approved by the user. The metadata does not create range admission, importance or `DecisionResult.action`; the existing public `content` remains part of the model-visible decision text.
 
-The `trade_friction_escalation` rule is not tied to the official source group. It runs in `decision_engine.py` for every normalized current or future source. Explicit policy procedures, instruments, retaliation or worsening China-US / China-EU relations can produce `push`; weaker explicit tension can produce `daily`; routine administrative reviews and generic diplomacy do not receive an alert action.
+The private LLM `trade_friction_escalation` rule is not tied to the official source group. It is applicable to every admitted normalized current or future source. Explicit policy procedures, instruments, retaliation or worsening China-US / China-EU relations can produce `push`; weaker explicit tension can produce `daily`; routine administrative reviews and generic diplomacy do not receive an alert action.
 
 The authenticated Web `媒体关键词` page and every existing media-focus consumer
 read the same `semiconductor_ai_keywords`, `semiconductor_ai_title_keywords`
@@ -225,9 +217,7 @@ page to the degree-decision model.
 
 Within the production `fed_policy` decision group, a separately reported material view from a configured trusted international bank's explicitly identified chief executive or chair can use `fed_policy_material_exception`. It requires local leader attribution and at least two independently supported signals across an explicit stocks/long-Treasuries stance, a directional or quantified rate/yield view, and a material cross-asset risk judgment. A bank name, analyst comment, generic leadership interview or single-asset valuation view cannot create `push`.
 
-The Rule Center still exposes the retained deterministic registry for compatibility and historical inspection. Those action rules are not called by the production runtime and will be removed only after the approved observation period and a separate cleanup PR.
-
-The production `ai_credit_constraint` and `ai_compute_constraint` rules are source-neutral catalog entries. Their model findings require exact local evidence and pass the same strict action/evidence validation as every other rule. Existing deterministic AI credit/compute modules remain compatibility code only; delivery identities may still use deterministic extraction after a valid push solely to suppress duplicate sends, without changing action.
+The production `ai_credit_constraint` and `ai_compute_constraint` rules are source-neutral private LLM decision-rule entries. Their model findings require exact local evidence and pass the same strict action/evidence validation as every other rule. No deterministic AI credit/compute action implementation remains.
 
 ## Storage
 
@@ -359,7 +349,7 @@ When Feishu market feedback is explicitly enabled, unified article, official-new
 The Web workbench exposes a lightweight authenticated `/api/health/summary` projection for separate Task Health and Information Sources badges. One batched read-only `systemctl show` call pairs each production timer with its execution service; `task_failures` counts current logical-task failures, while `source_failures` counts only failing enabled profiles that are visible in the Information Sources view. Shadow units, cut-over legacy units, the disabled-by-default JYGS path and disabled source profiles do not contribute. The browser refreshes this summary only while visible. The full Task Health view retains detailed systemd rows, raw source-health/X connection diagnostics and bounded log tails even when a raw diagnostic does not map to a source-profile badge count.
 
 The reviewed LLM degree rules are the only production action decision. There is
-no runtime selector and no fallback to the retained deterministic rules. A
+no runtime selector, second action implementation or fallback. A
 non-empty title is sufficient input; available summary is included and available
 body is code-truncated to its first 3,000 characters. The exact model-visible
 fields are split into numbered source segments of at most 300 characters. The

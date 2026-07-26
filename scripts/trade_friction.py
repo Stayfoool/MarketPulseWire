@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from typing import Any
 
@@ -445,13 +444,6 @@ def _affected_targets(sectors: list[str], corridors: list[str]) -> list[str]:
     return list(dict.fromkeys(targets))[:8]
 
 
-def _dedup_key(corridors: list[str], tools: list[str], sectors: list[str], evidence: list[str]) -> str:
-    if not tools or not sectors:
-        return ""
-    raw = "|".join([",".join(corridors), ",".join(tools), ",".join(sectors), evidence[0][:180] if evidence else ""])
-    return f"{RULE_ID}:{hashlib.sha256(raw.lower().encode('utf-8')).hexdigest()[:24]}"
-
-
 def classify_trade_friction(item: Any) -> dict[str, Any] | None:
     title, summary, full_text = _legacy_text(item)
     text = "\n".join(part for part in (title, summary, full_text) if part)
@@ -502,15 +494,11 @@ def classify_trade_friction(item: Any) -> dict[str, Any] | None:
         routine_terms.extend(routine)
 
     if concrete_evidence or strong_evidence:
-        action = "push"
-        importance = "high"
         signal = "具体程序/措施" if concrete_evidence else "明确升级/报复信号"
         evidence = concrete_evidence + strong_evidence
     elif routine_terms and not strong_evidence and not weak_terms:
         return None
     elif matched_tools or weak_evidence:
-        action = "daily"
-        importance = "medium"
         signal = "贸易紧张或政策工具信号尚未进入明确行动阶段"
         evidence = weak_evidence
     else:
@@ -527,10 +515,6 @@ def classify_trade_friction(item: Any) -> dict[str, Any] | None:
     rule: dict[str, Any] = {
         "matched": True,
         "rule_id": RULE_ID,
-        "decision_action": action,
-        "importance": importance,
-        "push_now": action == "push",
-        "should_push": action == "push",
         "reason": reason,
         "brief_reason": reason,
         "corridors": corridor_ids,
@@ -550,25 +534,4 @@ def classify_trade_friction(item: Any) -> dict[str, Any] | None:
             for target in targets
         ],
     }
-    return rule
-
-
-def trade_friction_rule(item: Any) -> dict[str, Any] | None:
-    from rule_center import rule_enabled
-
-    if not rule_enabled(RULE_ID):
-        return None
-    classification = classify_trade_friction(item)
-    if not classification:
-        return None
-    rule = dict(classification)
-    dedup_key = _dedup_key(
-        rule["corridors"],
-        rule["policy_tools"],
-        rule["affected_sectors"],
-        rule["evidence"],
-    )
-    if dedup_key:
-        rule["dedup_key"] = dedup_key
-        rule["dedup_lookback_days"] = 3
     return rule

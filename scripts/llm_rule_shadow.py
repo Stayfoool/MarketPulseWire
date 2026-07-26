@@ -21,7 +21,7 @@ from llm_rule_decision import (
     validate_llm_rule_response,
 )
 from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem
-from rule_core_v1 import (
+from admission_rules import (
     PortfolioRuleConfig,
     RuleConfig,
     SourceAdmissionPolicy,

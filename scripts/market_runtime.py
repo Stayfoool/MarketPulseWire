@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import os
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
@@ -78,51 +76,6 @@ class MarketItemProcessingError(RuntimeError):
     def __init__(self, message: str, outcome: MarketProcessOutcome) -> None:
         super().__init__(message)
         self.outcome = outcome
-
-
-def record_rule_comparison(
-    item: NormalizedMarketItem,
-    current_decision: DecisionResult | None,
-    storage_ref: dict[str, Any],
-    *,
-    current_admission_status: str = "unknown",
-    current_admission_reason: str = "current_runtime_does_not_expose_admission",
-    current_matched_families: tuple[str, ...] = (),
-    production_admission: AdmissionResult | None = None,
-    production_portfolio: object | None = None,
-) -> None:
-    """Run the optional comparison without making it part of runtime correctness."""
-    if str(os.environ.get("RULE_CORE_SHADOW_AUTORUN") or "").strip().lower() not in {"1", "true", "yes", "on"}:
-        return
-    try:
-        module = importlib.import_module("rule_core_runtime_shadow")
-        if production_admission is not None:
-            current_admission_status = production_admission.status
-            current_admission_reason = production_admission.reason_code
-            current_matched_families = production_admission.matched_families
-        result = module.record_runtime_comparison(
-            item,
-            current_decision,
-            storage_ref,
-            current_admission_status=current_admission_status,
-            current_admission_reason=current_admission_reason,
-            current_matched_families=current_matched_families,
-            production_admission=production_admission,
-            production_portfolio=production_portfolio,
-        )
-        if result.get("status") == "failed":
-            print(f"rule core comparison failed: {result.get('reason')}", file=sys.stderr, flush=True)
-    except Exception as exc:  # noqa: BLE001 - optional reporting cannot change storage or delivery.
-        print(f"rule core comparison failed: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
-
-
-def _record_rule_comparison(
-    item: NormalizedMarketItem,
-    flow_result: MarketFlowResult,
-    storage_ref: dict[str, Any],
-) -> None:
-    """Compatibility hook retained for focused runtime tests."""
-    record_rule_comparison(item, flow_result.decision, storage_ref)
 
 
 def is_official_news_source(source: str) -> bool:
@@ -269,18 +222,18 @@ def _process_content_item(
         payload = dict(snapshot["payload"])
         inserted = False
     elif market_review_id is not None:
+        if production_admission is None or production_portfolio is None:
+            raise RuntimeError("content processing requires production admission and portfolio")
         decision_item = prepare_item_for_decision(item)
-        production_decision: DecisionResult | None = None
-        if production_admission is not None:
-            if production_portfolio is None or market_item_id is None:
-                raise RuntimeError("production review is missing portfolio or market item identity")
-            production_decision = decide_market_item_with_llm(
-                decision_item,
-                admission=production_admission,
-                portfolio=production_portfolio,
-                market_item_id=market_item_id,
-                market_review_id=market_review_id,
-            )
+        if market_item_id is None:
+            raise RuntimeError("production review is missing market item identity")
+        production_decision = decide_market_item_with_llm(
+            decision_item,
+            admission=production_admission,
+            portfolio=production_portfolio,
+            market_item_id=market_item_id,
+            market_review_id=market_review_id,
+        )
         with connect_sqlite(db_path) as conn:
             evaluate = (
                 module.evaluate_official_review
@@ -306,26 +259,8 @@ def _process_content_item(
             if existing is not None and not reprocess_existing:
                 payload = existing
                 inserted = False
-            elif store_kind == "official":
-                decision_item = prepare_item_for_decision(item)
-                payload = module.process_official_review(
-                    conn,
-                    source,
-                    raw_item,
-                    source_profile_id=source_profile_id,
-                    normalized_item=decision_item,
-                )
-                inserted = existing is None
             else:
-                decision_item = prepare_item_for_decision(item)
-                payload = module.process_article_review(
-                    conn,
-                    source,
-                    raw_item,
-                    source_profile_id=source_profile_id,
-                    normalized_item=decision_item,
-                )
-                inserted = existing is None
+                raise RuntimeError("new content processing requires a production review identity")
             legacy_existing = existing
     if snapshot and snapshot["delivered"]:
         payload = dict(payload)
@@ -367,28 +302,6 @@ def _process_content_item(
             compatibility_writer=write_compatibility,
             alias=(item_kind, source, item_id, storage_ref["store_kind"]),
         )
-    if (
-        inserted
-        and production_admission is None
-        and not flow_result.decision.audit_json.get("contract_error")
-    ):
-        if production_admission is None and (
-            current_admission_status == "unknown"
-            and current_admission_reason == "current_runtime_does_not_expose_admission"
-            and not current_matched_families
-        ):
-            _record_rule_comparison(decision_item, flow_result, storage_ref)
-        else:
-            record_rule_comparison(
-                decision_item,
-                flow_result.decision,
-                storage_ref,
-                current_admission_status=current_admission_status,
-                current_admission_reason=current_admission_reason,
-                current_matched_families=current_matched_families,
-                production_admission=production_admission,
-                production_portfolio=production_portfolio,
-            )
     status = "not_requested"
     if deliver:
         already_sent = bool(snapshot and snapshot["delivered"])
@@ -580,17 +493,6 @@ def _process_event_item(
             legacy_payload=analysis,
             compatibility_writer=write_event_compatibility,
             alias=("event", item.source, str(event_id), "events"),
-        )
-    if production_admission is None and not flow_result.decision.audit_json.get("contract_error"):
-        record_rule_comparison(
-            decision_item,
-            flow_result.decision,
-            storage_ref,
-            current_admission_status=current_admission_status,
-            current_admission_reason=current_admission_reason,
-            current_matched_families=current_matched_families,
-            production_admission=production_admission,
-            production_portfolio=production_portfolio,
         )
     if not deliver:
         status = "not_requested"

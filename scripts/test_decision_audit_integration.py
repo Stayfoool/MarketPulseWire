@@ -8,9 +8,22 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from market_db import init_db
-from market_content_adapter import save_official_review, save_review as save_article_review
-from market_event_adapter import apply_event_rules_to_analysis
+from decision_engine import (
+    attach_decision_result_to_article_review,
+    attach_decision_result_to_event_analysis,
+    attach_decision_result_to_official_review,
+)
+from market_item import DecisionResult
+from market_review_store import save_article_review, save_official_review
+
+
+def fixed_decision(rule_id: str) -> DecisionResult:
+    return DecisionResult(
+        action="push",
+        importance="high",
+        reason="大模型程度决策命中。",
+        rule_hits=[{"rule_id": rule_id}],
+    )
 
 
 def test_article_review_save_adds_decision_audit_without_flipping_push_flag() -> None:
@@ -36,6 +49,9 @@ def test_article_review_save_adds_decision_audit_without_flipping_push_flag() ->
             "raw": {},
         }
         try:
+            review = attach_decision_result_to_article_review(
+                fixed_decision("test_article_rule"), review
+            )
             save_article_review(conn, "cls_telegraph_api", item, review)
             row = conn.execute(
                 "SELECT push_now, gate_json FROM article_reviews WHERE source = ? AND item_id = ?",
@@ -56,7 +72,7 @@ def test_article_review_save_adds_decision_audit_without_flipping_push_flag() ->
     raw = gate["raw"]
     assert raw["decision_passthrough"] is True
     assert raw["decision_result"]["action"] == "push"
-    assert raw["decision_result"]["rule_hits"][0]["rule_id"] == "international_bank_theme_strategy"
+    assert raw["decision_result"]["rule_hits"][0]["rule_id"] == "test_article_rule"
     assert raw["decision_final_fields"]["push_now"] is False
     refreshed = json.loads(refreshed_row[1])
     assert refreshed["raw"]["decision_final_fields"]["push_now"] is False
@@ -80,6 +96,9 @@ def test_official_review_save_adds_decision_audit_to_analysis_json() -> None:
             "analysis": {"core_content": item["summary"]},
         }
         try:
+            review = attach_decision_result_to_official_review(
+                fixed_decision("test_official_rule"), review
+            )
             save_official_review(conn, "nvidia_blog", item, review)
             row = conn.execute(
                 "SELECT should_push_now, analysis_json FROM official_news_reviews WHERE source = ? AND item_id = ?",
@@ -91,41 +110,25 @@ def test_official_review_save_adds_decision_audit_to_analysis_json() -> None:
     analysis = json.loads(row[1])
     assert analysis["_decision_passthrough"] is True
     assert analysis["_decision_result"]["action"] == "push"
-    assert analysis["_decision_result"]["rule_hits"][0]["rule_id"] == "official_company_hard_variable"
+    assert analysis["_decision_result"]["rule_hits"][0]["rule_id"] == "test_official_rule"
     assert analysis["_decision_final_fields"]["should_push_now"] is False
 
 
-def test_event_analysis_gets_decision_audit_after_legacy_rule_application() -> None:
-    with TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "surveil.sqlite3"
-        init_db(db_path).close()
-        event_row = {
-            "source": "sina_flash",
-            "event_type": "flash_news",
-            "title": "美联储主席沃什讲话后，2年期美债收益率大跌",
-            "summary": "市场重新定价美联储降息路径。",
-            "full_text": "",
-            "url": "",
-            "published_at": "2026-07-11T12:30:00+00:00",
-            "symbols_json": "[]",
-            "raw_json": json.dumps(
-                {"macro_policy_line": {"matched": True, "tier": "primary", "reason": "命中美联储主席讲话。"}},
-                ensure_ascii=False,
-            ),
-        }
-        analysis = {"importance": "medium", "push_decision": {"should_push": False, "reason": "旧模型不推。"}}
-        updated = apply_event_rules_to_analysis(event_row, analysis, db_path=db_path)
-    assert updated["push_decision"]["should_push"] is True
+def test_event_analysis_accepts_only_an_explicit_decision() -> None:
+    updated = attach_decision_result_to_event_analysis(
+        fixed_decision("test_event_rule"),
+        {"importance": "medium", "push_decision": {"should_push": False}},
+    )
     assert updated["_decision_passthrough"] is True
     assert updated["_decision_result"]["action"] == "push"
-    assert updated["_decision_result"]["rule_hits"][0]["rule_id"] == "macro_policy_line"
+    assert updated["_decision_result"]["rule_hits"][0]["rule_id"] == "test_event_rule"
     assert updated["_decision_final_fields"]["should_push"] is True
 
 
 def main() -> int:
     test_article_review_save_adds_decision_audit_without_flipping_push_flag()
     test_official_review_save_adds_decision_audit_to_analysis_json()
-    test_event_analysis_gets_decision_audit_after_legacy_rule_application()
+    test_event_analysis_accepts_only_an_explicit_decision()
     print("decision audit integration checks passed")
     return 0
 

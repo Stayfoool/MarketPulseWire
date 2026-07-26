@@ -318,19 +318,11 @@ def test_source_profile_view_is_exposed() -> None:
     assert "信息源" in html
 
 
-def test_investment_bank_theme_rule_configuration_is_exposed() -> None:
+def test_retired_rule_center_is_not_exposed() -> None:
     html = frontend_source()
-    assert "/api/investment-bank-theme-rules" in html
-    assert "国际投行重大主题策略" in html
-    assert "saveInvestmentBankThemeRules" in html
-
-
-def test_rule_center_view_is_exposed() -> None:
-    html = frontend_source()
-    assert "规则中心" in html
-    assert "showView('rules')" in html
-    assert "/api/rule-center" in html
-    assert "runRuleSimulation" in html
+    assert "showView('rules')" not in html
+    assert "/api/rule-center" not in html
+    assert "runRuleSimulation" not in html
 
 
 def test_feedback_quality_view_is_exposed() -> None:
@@ -1379,8 +1371,7 @@ def main() -> int:
     test_static_asset_routes_are_allowlisted()
     test_health_page_exposes_service_action_controls()
     test_source_profile_view_is_exposed()
-    test_investment_bank_theme_rule_configuration_is_exposed()
-    test_rule_center_view_is_exposed()
+    test_retired_rule_center_is_not_exposed()
     test_feedback_quality_view_is_exposed()
     test_holdings_page_marks_environment_and_related_keywords()
     test_event_center_search_filters_before_per_pipeline_limit()

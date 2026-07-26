@@ -12,7 +12,7 @@ import market_content_adapter
 import market_event_adapter
 import market_flow
 import market_runtime
-from market_flow import evaluate_market_item, finalize_market_flow_result
+from market_flow import evaluate_market_item
 from market_db import init_db
 from market_item import AdmissionEvidence, AdmissionResult, DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem
 from market_store import record_production_admission
@@ -70,34 +70,28 @@ def fake_interpretation(*args, **kwargs) -> InterpretationResult:
 
 
 def test_five_content_types_share_one_decision_and_interpretation_contract() -> None:
-    original_decider = market_flow.decide_market_item
     original_interpreter = market_flow.interpret_market_item
-    calls = {"decision": 0, "interpretation": 0}
-
-    def fake_decider(item, *, holdings, symbols=None):
-        calls["decision"] += 1
-        return DecisionResult(
-            action="push",
-            importance="high",
-            reason="canonical hard rule",
-            brief_reason="canonical hard rule",
-            rule_hits=[{"rule_id": "canonical_rule"}],
-            need_llm_interpretation=True,
-        )
+    calls = {"interpretation": 0}
+    decision = DecisionResult(
+        action="push",
+        importance="high",
+        reason="大模型程度决策命中。",
+        brief_reason="大模型程度决策命中。",
+        rule_hits=[{"rule_id": "canonical_rule"}],
+        need_llm_interpretation=True,
+    )
 
     def fake_interpreter(*args, **kwargs):
         calls["interpretation"] += 1
         return fake_interpretation(*args, **kwargs)
 
     try:
-        market_flow.decide_market_item = fake_decider
         market_flow.interpret_market_item = fake_interpreter
-        results = [evaluate_market_item(item) for item in canonical_items()]
+        results = [evaluate_market_item(item, decision=decision) for item in canonical_items()]
     finally:
-        market_flow.decide_market_item = original_decider
         market_flow.interpret_market_item = original_interpreter
 
-    assert calls == {"decision": 5, "interpretation": 5}
+    assert calls == {"interpretation": 5}
     assert all(isinstance(result, MarketFlowResult) for result in results)
     assert all(result.decision.action == "push" for result in results)
     assert all(result.delivery_intent["should_deliver"] is True for result in results)
@@ -107,7 +101,7 @@ def test_five_content_types_share_one_decision_and_interpretation_contract() -> 
     assert sina.item.content_type == "flash"
 
 
-def test_interpretation_failure_preserves_deterministic_action() -> None:
+def test_interpretation_failure_preserves_decision_action() -> None:
     original_interpreter = market_flow.interpret_market_item
     try:
         market_flow.interpret_market_item = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom"))
@@ -157,46 +151,14 @@ def test_supplied_source_interpretation_skips_second_llm_call() -> None:
     assert result.audit_json["interpreter_called"] is False
 
 
-def test_value_directory_preview_failure_policy_finalizes_decision_action() -> None:
-    result = evaluate_market_item(
-        NormalizedMarketItem(
-            source="value_directory_ib_stocks",
-            source_category="research_industry_media",
-            collector="value_directory_monitor",
-            content_type="research_index",
-            title="高盛-交易思路：做多中国人工智能价值链",
-            raw={
-                "value_directory_preview": {
-                    "facts": {"status": "failed", "error": "OCR unavailable"},
-                },
-                "value_directory_policy": {
-                    "preview_enabled": True,
-                    "push_on_preview_failure": False,
-                },
-            },
-        ),
-        decision=DecisionResult(
-            action="push",
-            importance="high",
-            reason="国际投行主题策略规则命中。",
-            rule_hits=[{"rule_id": "international_bank_theme_strategy"}],
-        ),
-    )
-    assert result.decision.action == "archive"
-    assert result.decision.importance == "high"
-    assert result.decision.rule_hits[0]["rule_id"] == "international_bank_theme_strategy"
-    control = result.decision.audit_json["deterministic_source_control"]
-    assert control["control_id"] == "value_directory_preview_failure_block"
-    assert result.delivery_intent["should_deliver"] is False
-
-
 def test_value_directory_enrichment_is_preserved_in_review_audit() -> None:
     original_interpreter = market_flow.interpret_market_item
     try:
         market_flow.interpret_market_item = lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("preview facts should supply the interpretation")
         )
-        review = market_content_adapter.review_article(
+        review = market_content_adapter.evaluate_article_review(
+            None,
             "value_directory_ib_industry_macro",
             {
                 "id": "value-flow-1",
@@ -221,6 +183,7 @@ def test_value_directory_enrichment_is_preserved_in_review_audit() -> None:
                     },
                 },
             },
+            decision=DecisionResult(action="daily", importance="medium", reason="模型判断为日报。"),
         )
     finally:
         market_flow.interpret_market_item = original_interpreter
@@ -229,39 +192,6 @@ def test_value_directory_enrichment_is_preserved_in_review_audit() -> None:
     assert facts["research_action"] == "overweight"
     assert facts["ocr"]["text"] == "Agentic AI to carry Semis further"
     assert review["raw"]["_market_flow_result"]["audit"]["source_interpretation_supplied"] is True
-
-
-def test_post_decision_finalization_updates_one_decision_result() -> None:
-    result = evaluate_market_item(
-        canonical_items()[0],
-        decision=DecisionResult(action="push", importance="high", reason="hard rule"),
-    )
-    finalized = finalize_market_flow_result(
-        result,
-        final_push=False,
-        importance="low",
-        reason="Skeptic blocked",
-        skeptic={"skeptic_verdict": "block"},
-        blocked=True,
-        storage_ref={"store_kind": "article_reviews", "item_id": "test-1"},
-    )
-    assert finalized.decision.action == "ignore"
-    assert finalized.decision.skeptic["skeptic_verdict"] == "block"
-    assert finalized.delivery_intent["should_deliver"] is False
-    assert finalized.storage_ref["store_kind"] == "article_reviews"
-    assert finalized.decision.audit_json["market_flow_finalization"]["initial_action"] == "push"
-
-
-def test_post_decision_finalization_cannot_promote_non_push_action() -> None:
-    result = evaluate_market_item(
-        canonical_items()[0],
-        decision=DecisionResult(action="archive", importance="low", reason="no deterministic match"),
-    )
-    finalized = finalize_market_flow_result(result, final_push=True, importance="high", reason="legacy flag")
-    assert finalized.decision.action == "archive"
-    audit = finalized.decision.audit_json["market_flow_finalization"]
-    assert audit["promotion_rejected"] is True
-    assert finalized.delivery_intent["should_deliver"] is False
 
 
 class _DummyContext:
@@ -925,17 +855,9 @@ def test_production_llm_failure_retries_same_review_without_delivery() -> None:
 
 def main() -> int:
     test_five_content_types_share_one_decision_and_interpretation_contract()
-    test_interpretation_failure_preserves_deterministic_action()
+    test_interpretation_failure_preserves_decision_action()
     test_supplied_source_interpretation_skips_second_llm_call()
-    test_value_directory_preview_failure_policy_finalizes_decision_action()
     test_value_directory_enrichment_is_preserved_in_review_audit()
-    test_post_decision_finalization_updates_one_decision_result()
-    test_post_decision_finalization_cannot_promote_non_push_action()
-    test_reprocessing_existing_review_preserves_pushed_marker()
-    test_existing_legacy_review_without_decision_fails_closed()
-    test_runtime_comparison_receives_the_exact_item_before_delivery()
-    test_analyzed_event_compares_before_delivery_and_baseline_does_not()
-    test_retry_can_finish_an_existing_event_without_analysis()
     test_production_content_runtime_uses_unified_result_for_existing_and_delivery()
     test_production_event_runtime_completes_unified_result_before_legacy_analysis()
     test_production_official_runtime_uses_unified_result_and_compatibility_copy()

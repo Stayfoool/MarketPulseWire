@@ -213,7 +213,7 @@ These standalone jobs are migration aids and are not used by the normal
 production schedule. The production collectors use the shared runtime directly.
 After five-group range admission, `decision_engine.py` calls the reviewed LLM
 degree rules and returns the only production `DecisionResult`. There is no
-configuration selector between the LLM and the retained deterministic code, and
+configuration selector or retained deterministic action code, and
 model failure does not fall back. A failed model request, invalid result or
 private-audit write marks the current review `failed_retryable` and creates no
 interpretation, delivery or dedup reservation.
@@ -228,8 +228,6 @@ every other rule section, writes atomically with mode `0600`, and creates a
 private backup beside the rule file. There is no runtime precedence between
 code-default, base and include keyword lists.
 
-Historical comparison tools may still read `RULE_CORE_SHADOW_CONFIG` and
-`RULE_CORE_SHADOW_PORTFOLIO`, but neither is a production decision input.
 Production admission uses `RULE_CORE_CONFIG` and current Web-managed production
 SQLite holdings. The LLM decision additionally loads its exact degree-decision
 rules from `LLM_DECISION_RULE_CONFIG`.
@@ -350,7 +348,7 @@ All general collectors construct `NormalizedMarketItem` and call
 direct/compat runtime switch and compatibility wrappers have been removed; rollback
 now uses the normal Git/PR/deployment process instead of selecting a second runtime.
 The LLM decision cutover follows the same rule: there is no runtime selector back
-to the deterministic decision. Record the preceding Git revision before deployment.
+to another decision implementation. Record the preceding Git revision before deployment.
 If rollback criteria are met, stop affected Alibaba collectors, deploy that exact
 preceding revision, restart the same services and verify service health, logs and
 SQLite integrity. Do not rewrite already completed reviews or deliveries during
