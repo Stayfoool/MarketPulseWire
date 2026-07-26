@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from llm_analysis import call_chat_completion_raw_with_prompts_hard_deadline
+from llm_decision_web import build_web_projection
 from llm_rule_decision import LLMRulePrompt, resolve_input_text_scope
 from llm_rule_shadow import LLMRuleExecution, execute_llm_rule_decision
 from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem
@@ -98,6 +99,7 @@ def _write_private_audit(
         "decision": execution.decision.to_dict() if execution.decision else None,
         "model_audit": candidate.get("model_audit") or {},
     }
+    payload["web_projection"] = build_web_projection(payload)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     path = audit_dir / (
         f"llm-decision-audit-{market_item_id}-{market_review_id}-{stamp}-{uuid.uuid4().hex[:8]}.json"

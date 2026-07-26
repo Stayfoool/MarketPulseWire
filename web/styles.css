@@ -83,6 +83,13 @@ td textarea { min-height: 38px; resize: vertical; }
 .rule-shadow-table { min-width: 1080px; }
 .rule-shadow-table td { vertical-align: top; }
 .rule-shadow-table tr:first-child td { border-top-color: #99d6cc; }
+.llm-decision-details { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+.llm-decision-details summary { color: var(--accent); cursor: pointer; font-size: 12px; }
+.llm-detail-meta { color: var(--muted); font-size: 12px; margin: 7px 0; }
+.llm-detail-group { margin-top: 9px; }
+.llm-assessment { margin-top: 7px; padding: 7px 8px; border-left: 3px solid #b7d9d3; background: #f8fbfb; }
+.llm-attempt { margin-top: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: #fbfcfd; }
+#view-llm-decisions table { min-width: 980px; }
 .rule-shadow-filters { align-items: end; }
 .rule-shadow-filter-field { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
 .rule-shadow-multi-select { position: relative; width: 170px; color: var(--text); font-size: 13px; }

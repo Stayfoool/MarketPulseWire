@@ -111,6 +111,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `market_review_store.py` | SQLite review/event persistence and historical row loading |
 | `market_delivery.py` | Rule/fact dedup reservation, Feishu execution, delivery status, pushed markers |
 | `market_feedback.py` | Cross-source append-only human feedback, signed item identity, last-click-wins projection and quality aggregates |
+| `llm_decision_web.py` | Read-only Web projection of current SQLite `DecisionResult` plus bounded private-audit attempt summaries; it cannot create, change or restore an action |
 | `feishu_app.py` / `feishu_feedback_service.py` | Feedback-enabled application-bot send and official long-connection card callbacks |
 | `macro_event_dedup.py` | Delivery-only US macro preview/release/reaction and Fed policy cross-asset reaction identities, including mixed-Warsh handling |
 | `industry_fact_dedup.py` | Bounded delivery-only industry fact identities and material-update exclusions |
@@ -371,6 +372,17 @@ content after 30 days while retaining bounded result metadata. The former
 15:30 new-versus-old report timer is disabled. Existing dated and combined
 comparison reports remain readable in the Web workbench as historical records,
 but production no longer creates or sends new comparison reports.
+
+The authenticated Web `/api/llm-decisions` view reads final action, article
+metadata and valid `DecisionResult` rule hits from unified SQLite. Failed model
+attempts are joined by `market_review_id` to the private audit file's bounded
+`web_projection`, which contains only status, bounded reasons, rule judgments,
+bounded evidence/counterevidence and version metadata. The endpoint never reads
+or returns complete model requests, article bodies or raw model responses. An
+`uncertain` attempt is shown as a failed evaluation with no `DecisionResult`,
+never as a push-eligible action. The projection remains in the same private
+audit file after sensitive request/response cleanup; it is not a second store or
+decision authority.
 
 The same `holdings_web.py` process serves the workbench shell and its same-origin assets. `web/index.html` owns the document structure, `web/styles.css` owns presentation and `web/app.js` owns browser rendering and `/api/*` calls. The Python handler substitutes only the environment/token-hint placeholders and exposes an explicit `/static/styles.css` and `/static/app.js` allowlist; it is not a generic file server. API routes, authentication behavior, loopback binding and SSH-tunnel access remain unchanged.
 

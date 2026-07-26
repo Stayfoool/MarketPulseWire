@@ -38,6 +38,7 @@ from holdings_store import (
 from market_db import DEFAULT_DB_PATH
 from market_canonical_reader import canonical_event_rows, migration_ready as canonical_migration_ready
 from market_feedback import FEEDBACK_LABELS, feedback_projection_by_item, feedback_quality_payload
+from llm_decision_web import llm_decision_rows, llm_decision_summary
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
 from market_view import article_view_from_row, event_view_from_row, official_view_from_row
 from rule_shadow_report_store import list_daily_reports, load_daily_report
@@ -959,6 +960,32 @@ def fetch_events_rows(
     rows = [item for item in rows if matches(item)]
     rows.sort(key=lambda item: displayed_event_time(item, time_basis), reverse=True)
     return rows[: max(1, min(limit, 300))]
+
+
+def fetch_llm_decision_rows(
+    start_day: str = "",
+    end_day: str = "",
+    action: str = "",
+    status: str = "",
+    source: str = "",
+    query: str = "",
+    limit: int = 200,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    start_utc, end_utc, _, _ = utc_window_for_range(start_day, end_day)
+    with connect_sqlite(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = llm_decision_rows(
+            conn,
+            start_utc=start_utc,
+            end_utc=end_utc,
+            action=action,
+            status=status,
+            source=source,
+            query=query,
+            limit=limit,
+        )
+    return {"rows": rows, "summary": llm_decision_summary(rows)}
 
 
 def fetch_signal_rows(
@@ -2052,6 +2079,31 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                     limit=limit,
                 )
                 self.send_json({"ok": True, "events": events, "feedback_summary": event_feedback_summary(events)})
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # noqa: BLE001
+                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path == "/api/llm-decisions":
+            if not self.require_auth():
+                return
+            try:
+                qs = parse_qs(parsed.query)
+                limit_raw = (qs.get("limit") or ["200"])[0]
+                try:
+                    limit = int(limit_raw)
+                except ValueError:
+                    limit = 200
+                payload = fetch_llm_decision_rows(
+                    start_day=(qs.get("from") or [""])[0],
+                    end_day=(qs.get("to") or [""])[0],
+                    action=(qs.get("action") or [""])[0],
+                    status=(qs.get("status") or [""])[0],
+                    source=(qs.get("source") or [""])[0],
+                    query=(qs.get("q") or [""])[0],
+                    limit=limit,
+                )
+                self.send_json({"ok": True, **payload})
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except Exception as exc:  # noqa: BLE001

@@ -15,6 +15,7 @@
   <nav class="tabs">
     <button id="tab-overview" onclick="showView('overview')">今日总览</button>
     <button id="tab-events" onclick="showView('events')">事件中心</button>
+    <button id="tab-llm-decisions" onclick="showView('llm-decisions')">大模型决策</button>
     <button id="tab-feedback" onclick="showView('feedback')">反馈质量</button>
     <button id="tab-signals" onclick="showView('signals')">信号复盘</button>
     <button id="tab-relations" onclick="showView('relations')">关系映射</button>
@@ -81,6 +82,47 @@
               </tr>
             </thead>
             <tbody id="eventRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="view-llm-decisions" class="view">
+      <div class="toolbar">
+        <label class="date-range-field">开始日期<input id="llmDecisionFromDate" type="date" style="width:145px"></label>
+        <label class="date-range-field">结束日期<input id="llmDecisionToDate" type="date" style="width:145px"></label>
+        <select id="llmDecisionAction" aria-label="最终 action" style="width:150px" onchange="loadLlmDecisions()">
+          <option value="">全部最终 action</option>
+          <option value="push">push</option>
+          <option value="daily">daily</option>
+          <option value="archive">archive</option>
+        </select>
+        <select id="llmDecisionStatus" aria-label="模型状态" style="width:180px" onchange="loadLlmDecisions()">
+          <option value="">全部模型状态</option>
+          <option value="completed">已完成</option>
+          <option value="uncertain">uncertain</option>
+          <option value="model_unavailable">大模型不可用</option>
+          <option value="pending">等待判断</option>
+        </select>
+        <input id="llmDecisionSource" placeholder="来源" style="width:220px">
+        <input id="llmDecisionQuery" placeholder="搜索标题、来源、编号" style="width:260px">
+        <button class="primary" onclick="loadLlmDecisions()">查询</button>
+      </div>
+      <section class="panel">
+        <div id="llmDecisionMetrics" class="metric-grid"></div>
+        <div class="table-wrap">
+          <table class="events-table">
+            <thead>
+              <tr>
+                <th style="width:150px">判断时间</th>
+                <th style="width:150px">来源</th>
+                <th>文章</th>
+                <th style="width:150px">最终 action</th>
+                <th style="width:180px">模型状态</th>
+                <th style="width:120px">尝试</th>
+              </tr>
+            </thead>
+            <tbody id="llmDecisionRows"></tbody>
           </table>
         </div>
       </section>

@@ -40,6 +40,7 @@ CI_SAFE_TESTS = (
     "test_link_enrichment.py",
     "test_llm_analysis.py",
     "test_llm_decision_audit_cleanup.py",
+    "test_llm_decision_web.py",
     "test_llm_production_decision.py",
     "test_llm_json_recovery.py",
     "test_llm_rule_decision.py",
