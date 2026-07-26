@@ -330,7 +330,7 @@ def test_source_profile_view_is_exposed() -> None:
 
 def test_retired_rule_center_is_not_exposed() -> None:
     html = frontend_source()
-    assert "showView('rules')" not in html
+    assert "/api/current-rules" in html
     assert "/api/rule-center" not in html
     assert "runRuleSimulation" not in html
 

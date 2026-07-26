@@ -38,9 +38,19 @@ def event_content_hash(*parts: str) -> str:
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
-def load_enabled_holdings(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
-    init_db(db_path).close()
-    with connect_sqlite(db_path) as conn:
+def load_enabled_holdings(
+    db_path: Path = DEFAULT_DB_PATH,
+    *,
+    read_only: bool = False,
+) -> list[dict[str, Any]]:
+    if read_only:
+        if not db_path.is_file():
+            raise FileNotFoundError(f"SQLite 数据库不存在：{db_path}")
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    else:
+        init_db(db_path).close()
+        conn = connect_sqlite(db_path)
+    with conn:
         rows = conn.execute(
             """
             SELECT symbol, name, full_name, aliases_json, raw_json

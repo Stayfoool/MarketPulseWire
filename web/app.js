@@ -14,6 +14,7 @@ let editingSignalFeedback = null;
 let sourceProfileCache = {categories: [], profiles: []};
 let eventSourceOptionsLoaded = false;
 let ruleShadowReportCache = {items: []};
+let currentRulesCache = null;
 
 function headers() {
   const h = {'Content-Type': 'application/json'};
@@ -228,6 +229,7 @@ function showView(name) {
   if (name === 'overview') loadOverview();
   if (name === 'events') loadEventsView();
   if (name === 'llm-decisions') loadLlmDecisions();
+  if (name === 'rules') loadCurrentRules();
   if (name === 'feedback') loadFeedbackQuality();
   if (name === 'signals') loadSignals();
   if (name === 'relations') loadRelationManager();
@@ -242,6 +244,188 @@ function showView(name) {
     loadSettings();
   }
   if (name === 'holdings' && !loadedHoldings) reloadData();
+}
+
+function ruleMetric(label, value, compact=false) {
+  return `<div class="metric"><div class="label">${escapeHtml(label)}</div><div class="value ${compact ? 'rule-metric-value' : ''}">${escapeHtml(value)}</div></div>`;
+}
+
+function ruleValueList(field) {
+  const values = Array.isArray(field?.values) ? field.values : [];
+  const truncation = field?.truncated ? `<div class="hint">仅显示前 ${values.length} 项，共 ${Number(field.count || values.length)} 项。</div>` : '';
+  return `
+    <div class="rule-field">
+      <div class="rule-field-label">${escapeHtml(field?.label || '')}<span>${Number(field?.count || 0)}</span></div>
+      ${values.length ? `<ul>${values.map(value => `<li>${escapeHtml(value)}</li>`).join('')}</ul>` : '<div class="hint">当前没有配置项。</div>'}
+      ${truncation}
+    </div>
+  `;
+}
+
+function renderRangeAdmissionRules(section) {
+  const status = document.getElementById('rangeAdmissionStatus');
+  const metrics = document.getElementById('rangeAdmissionMetrics');
+  const groups = document.getElementById('rangeAdmissionGroups');
+  const boundaries = document.getElementById('rangeAdmissionBoundaries');
+  if (!section || section.status !== 'loaded') {
+    status.className = 'status err rules-inline-status';
+    status.textContent = section?.error || '范围准入规则加载失败。';
+    metrics.innerHTML = '';
+    groups.innerHTML = '';
+    boundaries.innerHTML = '';
+    return;
+  }
+  status.className = 'status ok rules-inline-status';
+  status.textContent = '当前生产配置已通过严格校验。';
+  metrics.innerHTML = [
+    ruleMetric('配置版本', section.config_version || '-', true),
+    ruleMetric('规则合同', section.contract_version || '-', true),
+    ruleMetric('准入组', String(section.group_count || 0)),
+    ruleMetric('组间关系', section.relation === 'or' ? '或' : (section.relation || '-')),
+    ruleMetric('全局排除', String(section.global_exclusions?.count || 0))
+  ].join('');
+  const groupHtml = (section.groups || []).map((group, index) => `
+    <details class="rule-definition" ${index === 0 ? 'open' : ''}>
+      <summary>
+        <span><strong>${escapeHtml(group.title || '')}</strong><code>${escapeHtml(group.family || '')}</code></span>
+        <span class="rule-count">${Number(group.count || 0)} 项</span>
+      </summary>
+      <div class="rule-definition-body">
+        <p>${escapeHtml(group.summary || '')}</p>
+        ${(group.fields || []).map(ruleValueList).join('')}
+      </div>
+    </details>
+  `).join('');
+  const exclusions = section.global_exclusions || {};
+  groups.innerHTML = groupHtml + `
+    <details class="rule-definition">
+      <summary><span><strong>${escapeHtml(exclusions.label || '全局排除关键词')}</strong><code>global_exclude</code></span><span class="rule-count">${Number(exclusions.count || 0)} 项</span></summary>
+      <div class="rule-definition-body">
+        <p>命中时排除当前信息；持仓名称、别名或代码直接命中的结果不受该全局排除影响。</p>
+        ${ruleValueList(exclusions)}
+      </div>
+    </details>
+  `;
+  boundaries.innerHTML = (section.source_boundaries || []).map(boundary => `
+    <div class="rule-boundary">
+      <strong>${escapeHtml(boundary.title || '')}</strong>
+      <p>${escapeHtml(boundary.description || '')}</p>
+      ${(boundary.values || []).length ? `<div class="rule-code-values">${boundary.values.map(value => `<code>${escapeHtml(value)}</code>`).join('')}</div>` : ''}
+    </div>
+  `).join('');
+}
+
+function llmRuleMatches(rule, family, action, query) {
+  if (family && rule.family !== family) return false;
+  if (action && !(rule.allowed_actions || []).includes(action)) return false;
+  if (!query) return true;
+  const searchable = [
+    rule.rule_id,
+    rule.family,
+    rule.family_label,
+    rule.title,
+    ...Object.values(rule.action_conditions || {}),
+    ...(rule.required_facts || []),
+    ...(rule.exclusions || [])
+  ].join(' ').toLowerCase();
+  return searchable.includes(query);
+}
+
+function llmRuleTextList(label, values) {
+  const items = Array.isArray(values) ? values : [];
+  return `
+    <div class="rule-field">
+      <div class="rule-field-label">${escapeHtml(label)}<span>${items.length}</span></div>
+      ${items.length ? `<ol>${items.map(value => `<li>${escapeHtml(value)}</li>`).join('')}</ol>` : '<div class="hint">无</div>'}
+    </div>
+  `;
+}
+
+function renderLlmRules() {
+  const section = currentRulesCache?.llm_decision;
+  const status = document.getElementById('llmRuleStatus');
+  const metrics = document.getElementById('llmRuleMetrics');
+  const list = document.getElementById('llmRuleList');
+  if (!section || section.status !== 'loaded') {
+    status.className = 'status err rules-inline-status';
+    status.textContent = section?.error || '大模型决策规则加载失败。';
+    metrics.innerHTML = '';
+    list.innerHTML = '';
+    return;
+  }
+  status.className = 'status ok rules-inline-status';
+  status.textContent = '当前私有规则文件已通过严格校验。';
+  const family = document.getElementById('llmRuleFamily').value;
+  const action = document.getElementById('llmRuleAction').value;
+  const query = document.getElementById('llmRuleQuery').value.trim().toLowerCase();
+  const filtered = (section.rules || []).filter(rule => llmRuleMatches(rule, family, action, query));
+  metrics.innerHTML = [
+    ruleMetric('规则版本', section.version || '-', true),
+    ruleMetric('全部规则', String(section.rule_count || 0)),
+    ruleMetric('当前显示', String(filtered.length)),
+    ruleMetric('规则族', String((section.families || []).length))
+  ].join('');
+  list.innerHTML = filtered.map(rule => {
+    const actionConditions = ['push', 'daily', 'archive']
+      .filter(value => Object.prototype.hasOwnProperty.call(rule.action_conditions || {}, value))
+      .map(value => `<div class="rule-action-condition"><span class="badge">${escapeHtml(value)}</span><p>${escapeHtml(rule.action_conditions[value])}</p></div>`)
+      .join('');
+    return `
+      <details class="rule-definition">
+        <summary>
+          <span><strong>${escapeHtml(rule.title || '')}</strong><code>${escapeHtml(rule.rule_id || '')}</code></span>
+          <span class="rule-summary-badges"><span class="badge">${escapeHtml(rule.family_label || rule.family || '')}</span>${(rule.allowed_actions || []).map(value => `<span class="badge">${escapeHtml(value)}</span>`).join('')}</span>
+        </summary>
+        <div class="rule-definition-body">
+          <div class="rule-field-label">action 条件</div>
+          ${actionConditions}
+          ${llmRuleTextList('必需事实', rule.required_facts)}
+          ${llmRuleTextList('排除条件', rule.exclusions)}
+        </div>
+      </details>
+    `;
+  }).join('') || '<div class="rule-empty">没有符合当前筛选条件的规则。</div>';
+}
+
+function populateLlmRuleFamilies(section) {
+  const select = document.getElementById('llmRuleFamily');
+  const selected = select.value;
+  const labels = {};
+  (section.rules || []).forEach(rule => { labels[rule.family] = rule.family_label || rule.family; });
+  select.innerHTML = '<option value="">全部规则族</option>' + (section.families || []).map(family => `<option value="${escapeHtml(family)}">${escapeHtml(labels[family] || family)}</option>`).join('');
+  if ([...select.options].some(option => option.value === selected)) select.value = selected;
+}
+
+async function loadCurrentRules(force=false) {
+  if (currentRulesCache && !force) {
+    renderRangeAdmissionRules(currentRulesCache.range_admission);
+    renderLlmRules();
+    return;
+  }
+  document.getElementById('rangeAdmissionStatus').className = 'status busy rules-inline-status';
+  document.getElementById('rangeAdmissionStatus').textContent = '正在读取当前规则...';
+  document.getElementById('llmRuleStatus').className = 'status busy rules-inline-status';
+  document.getElementById('llmRuleStatus').textContent = '正在读取当前规则...';
+  try {
+    currentRulesCache = await api('/api/current-rules', {cache: 'no-store'});
+    renderRangeAdmissionRules(currentRulesCache.range_admission);
+    if (currentRulesCache.llm_decision?.status === 'loaded') populateLlmRuleFamilies(currentRulesCache.llm_decision);
+    renderLlmRules();
+  } catch (err) {
+    currentRulesCache = null;
+    renderRangeAdmissionRules({status: 'error', error: err.message});
+    renderLlmRules();
+  }
+}
+
+function showRulesSection(name) {
+  const admission = name !== 'llm';
+  document.getElementById('rulesSectionAdmission').hidden = !admission;
+  document.getElementById('rulesSectionLlm').hidden = admission;
+  document.getElementById('rulesTabAdmission').classList.toggle('active', admission);
+  document.getElementById('rulesTabLlm').classList.toggle('active', !admission);
+  document.getElementById('rulesTabAdmission').setAttribute('aria-selected', String(admission));
+  document.getElementById('rulesTabLlm').setAttribute('aria-selected', String(!admission));
 }
 
 function formatPct(value) {

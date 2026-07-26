@@ -39,6 +39,7 @@ from market_db import DEFAULT_DB_PATH
 from market_canonical_reader import canonical_event_rows, migration_ready as canonical_migration_ready
 from market_feedback import FEEDBACK_LABELS, feedback_projection_by_item, feedback_quality_payload
 from llm_decision_web import llm_decision_rows, llm_decision_summary
+from current_rules_web import current_rules_payload
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
 from market_view import article_view_from_row, event_view_from_row, official_view_from_row
 from rule_shadow_report_store import list_daily_reports, load_daily_report
@@ -1986,6 +1987,8 @@ class HoldingsHandler(BaseHTTPRequestHandler):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -2108,6 +2111,11 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except Exception as exc:  # noqa: BLE001
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+        if parsed.path == "/api/current-rules":
+            if not self.require_auth():
+                return
+            self.send_json({"ok": True, **current_rules_payload()})
             return
         if parsed.path == "/api/signals":
             if not self.require_auth():
