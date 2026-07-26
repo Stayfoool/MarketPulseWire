@@ -261,9 +261,14 @@ def event_mapping_from_row(event_row: dict[str, Any]) -> dict[str, Any]:
         raw = json.loads(str(event_row.get("raw_json") or "{}"))
     except json.JSONDecodeError:
         raw = {}
+    try:
+        themes = json.loads(str(event_row.get("themes_json") or "[]"))
+    except json.JSONDecodeError:
+        themes = []
     return {
         "source": event_row.get("source"),
-        "source_event_id": raw.get("source_event_id") if isinstance(raw, dict) else "",
+        "source_event_id": event_row.get("source_event_id")
+        or (raw.get("source_event_id") if isinstance(raw, dict) else ""),
         "event_type": event_row.get("event_type"),
         "title": event_row.get("title"),
         "summary": event_row.get("summary"),
@@ -271,6 +276,7 @@ def event_mapping_from_row(event_row: dict[str, Any]) -> dict[str, Any]:
         "url": event_row.get("url"),
         "published_at": event_row.get("published_at"),
         "symbols": symbols if isinstance(symbols, list) else [],
+        "themes": themes if isinstance(themes, list) else [],
         "raw": raw if isinstance(raw, dict) else {},
     }
 

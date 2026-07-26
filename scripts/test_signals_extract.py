@@ -262,6 +262,9 @@ def test_extract_signals_from_existing_sources() -> None:
         assert ("NVDA", "NVDA", "global_mapping") in targets
         extract_signals(db_path=path, days=TEST_WINDOW_DAYS, dry_run=False)
         assert conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0] == 4
+        second_counts = extract_signals(db_path=path, days=TEST_WINDOW_DAYS, dry_run=False)
+        assert second_counts["signals"] == 0
+        assert second_counts["signals_unchanged"] == 4
         conn.close()
 
 
