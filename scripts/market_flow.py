@@ -84,7 +84,7 @@ def evaluate_market_item(
                 extra_notes=extra_notes,
                 user_agent=user_agent,
             )
-        except Exception as exc:  # noqa: BLE001 - interpretation must not erase deterministic intent
+        except Exception as exc:  # noqa: BLE001 - interpretation must not erase the authoritative decision
             interpretation = interpretation_failure(exc)
             interpretation_error = str(exc).strip()[:500]
     else:

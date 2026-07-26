@@ -1,8 +1,8 @@
 """Trusted research attribution across normalized market content.
 
 The LLM, when needed, only extracts structured claims with verbatim evidence.
-This module validates that evidence before the deterministic decision engine
-can turn the extraction into a push rule.
+This module validates that evidence before it is supplied to the reviewed LLM
+degree decision.
 """
 
 from __future__ import annotations
