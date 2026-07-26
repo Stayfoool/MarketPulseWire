@@ -6,10 +6,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from decision_engine import decide_market_item
-from market_item import NormalizedMarketItem
-from push_rules import ORDERED_FIRST_MATCH_RULE_IDS
-from rule_center import ORDERED_FIRST_MATCH, PARALLEL_MERGE, RULE_DEFINITIONS
 from source_profiles import build_profiles
 
 
@@ -116,7 +112,7 @@ DIRECT_URLLIB_EXCEPTIONS = {
     "value_directory_preview.py": {
         "kind": "bounded_binary",
         "reason": "ValueList preview handling downloads bounded image payloads before OCR and has dedicated model fallbacks.",
-        "test": "test_value_directory_flow.py",
+        "test": "test_value_directory_monitor.py",
     },
     "x_check.py": {
         "kind": "operator_tool",
@@ -225,6 +221,7 @@ def test_production_decision_boundary_is_llm_only() -> None:
     assert "from decision_engine import decide_market_item_with_llm" in runtime
     assert runtime.count("decide_market_item_with_llm(") == 2
     assert "def decide_market_item_with_llm(" in engine
+    assert "def decide_market_item(" not in engine
     assert "from llm_production_decision import decide_production_market_item" in engine
     assert "RULE_COMPARISON_CANDIDATE" not in production
     for forbidden in (
@@ -236,9 +233,11 @@ def test_production_decision_boundary_is_llm_only() -> None:
         "complete_market_review",
     ):
         assert forbidden not in production
-    assert 'decision.audit_json.get("production_authority") is True' in content_adapter
+    assert "apply_skeptic_review" not in content_adapter
     assert "attach_decision_result_to_event_analysis(decision, {})" in event_adapter
-    assert 'resolved_decision.audit_json.get("production_authority") is True' in flow
+    assert "decide_market_item(" not in flow
+    assert not (SCRIPTS / "rule_core_v1.py").exists()
+    assert not (SCRIPTS / "rule_core_runtime_shadow.py").exists()
 
 
 def test_removed_compatibility_modules_do_not_return() -> None:
@@ -349,22 +348,6 @@ def test_low_frequency_interval_timers_rearm_after_deployment() -> None:
         assert installer.index(enable) < installer.index(restart)
 
 
-def test_rule_center_execution_modes_match_runtime_ordering() -> None:
-    ordered_runtime_ids = set(ORDERED_FIRST_MATCH_RULE_IDS)
-    ordered_definition_ids: set[str] = set()
-    for rule in RULE_DEFINITIONS:
-        rule_id = str(rule["id"])
-        mode = str(rule.get("execution_mode") or "")
-        field_keys = {str(field["key"]) for field in rule.get("fields") or ()}
-        assert mode in {ORDERED_FIRST_MATCH, PARALLEL_MERGE}, rule_id
-        if mode == ORDERED_FIRST_MATCH:
-            ordered_definition_ids.add(rule_id)
-            assert "priority" in field_keys, rule_id
-        else:
-            assert "priority" not in field_keys, rule_id
-    assert ordered_definition_ids == ordered_runtime_ids
-
-
 def test_source_profiles_have_complete_runtime_ownership() -> None:
     profiles = build_profiles()
     ids = [profile.id for profile in profiles]
@@ -395,170 +378,6 @@ def test_source_profiles_have_complete_runtime_ownership() -> None:
         )
 
 
-def test_common_rule_is_stable_across_transport_metadata() -> None:
-    text = "HBM supply shortage will persist until 2028 and prices are projected to double."
-    variants = (
-        NormalizedMarketItem(
-            source="trendforce_semiconductors",
-            source_category="research_industry_media",
-            publisher_role="research_publisher",
-            collector="rss_monitor",
-            content_type="article",
-            title=text,
-        ),
-        NormalizedMarketItem(
-            source="sina_flash",
-            source_category="news_media",
-            publisher_role="news_media",
-            collector="sina_flash",
-            content_type="flash",
-            title=text,
-        ),
-    )
-    decisions = [decide_market_item(item, holdings=[]) for item in variants]
-    assert {decision.action for decision in decisions} == {"push"}
-    assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"industry_quantified_hardline"}
-
-
-def test_trade_friction_rule_is_stable_across_transport_metadata() -> None:
-    text = "European Commission initiates an anti-subsidy investigation into battery electric vehicles from China."
-    variants = (
-        NormalizedMarketItem(
-            source="eu_press_corner_trade_policy",
-            source_category="official_policy",
-            publisher_role="government_official",
-            collector="trade_policy_monitor",
-            content_type="official_policy",
-            title=text,
-        ),
-        NormalizedMarketItem(
-            source="cls_telegraph_api",
-            source_category="news_media",
-            publisher_role="news_media",
-            collector="china_finance_media_monitor",
-            content_type="article",
-            title=text,
-        ),
-    )
-    decisions = [decide_market_item(item, holdings=[]) for item in variants]
-    assert {decision.action for decision in decisions} == {"push"}
-    assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"trade_friction_escalation"}
-
-
-def test_ai_compute_rule_is_stable_across_transport_metadata() -> None:
-    text = "Meta正在构建一项云业务，以出售其过剩的AI算力。"
-    variants = (
-        NormalizedMarketItem(
-            source="cls_telegraph_api",
-            source_category="news_media",
-            publisher_role="news_media",
-            collector="china_finance_media_monitor",
-            content_type="article",
-            title=text,
-        ),
-        NormalizedMarketItem(
-            source="future_company_feed",
-            source_category="official_company",
-            publisher_role="company_official",
-            collector="rss_monitor",
-            content_type="official_news",
-            title=text,
-        ),
-    )
-    decisions = [decide_market_item(item, holdings=[]) for item in variants]
-    assert {decision.action for decision in decisions} == {"push"}
-    assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"ai_compute_supply_demand"}
-    assert {decision.dedup["dedup_key"] for decision in decisions} == {decisions[0].dedup["dedup_key"]}
-
-
-def test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importer() -> None:
-    core = parsed_module("rule_core_v1.py")
-    imports: set[str] = set()
-    for node in ast.walk(core):
-        if isinstance(node, ast.Import):
-            imports.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imports.add(node.module.split(".")[0])
-    assert imports == {
-        "__future__",
-        "ai_compute_supply_demand",
-        "ai_credit_risk",
-        "hashlib",
-        "international_bank_fed",
-        "investment_bank_research",
-        "macro_policy",
-        "re",
-        "dataclasses",
-        "rule_config_schema",
-        "trade_friction",
-        "typing",
-        "urllib",
-        "market_item",
-    }
-    for classifier_name in (
-        "ai_compute_supply_demand.py",
-        "ai_credit_risk.py",
-        "international_bank_fed.py",
-        "investment_bank_research.py",
-        "macro_policy.py",
-        "trade_friction.py",
-    ):
-        classifier = parsed_module(classifier_name)
-        top_level_imports: set[str] = set()
-        for node in classifier.body:
-            if isinstance(node, ast.Import):
-                top_level_imports.update(alias.name.split(".")[0] for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                top_level_imports.add(node.module.split(".")[0])
-        assert "rule_center" not in top_level_imports
-    report_only_modules = {
-        "rule_core_fixture.py",
-        "rule_core_replay.py",
-        "rule_core_history_replay.py",
-        "rule_core_shadow.py",
-        "rule_core_shadow_combined.py",
-        "rule_core_shadow_daily.py",
-        "rule_core_shadow_report.py",
-        "rule_core_runtime_shadow.py",
-        "rule_config_migration_v1.py",
-        "market_lifecycle_v1.py",
-        "llm_decision_audit_cleanup.py",
-    }
-    for path in SCRIPTS.glob("*.py"):
-        if path.name.startswith("test_") or path.name in report_only_modules:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=path.name)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                assert all(alias.name not in {Path(name).stem for name in report_only_modules} for alias in node.names), path.name
-            elif isinstance(node, ast.ImportFrom):
-                assert node.module not in {Path(name).stem for name in report_only_modules}, path.name
-
-    runtime_shadow = parsed_module("rule_core_runtime_shadow.py")
-    runtime_imports: set[str] = set()
-    for node in ast.walk(runtime_shadow):
-        if isinstance(node, ast.Import):
-            runtime_imports.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            runtime_imports.add(node.module.split(".")[0])
-    assert "rule_core_v1" in runtime_imports
-    assert "rule_core_shadow" in runtime_imports
-    assert "llm_rule_shadow" in runtime_imports
-    assert "llm_rule_catalog" in runtime_imports
-    assert "llm_rule_decision" in runtime_imports
-    runtime_text = (SCRIPTS / "rule_core_runtime_shadow.py").read_text(encoding="utf-8")
-    assert "market_delivery" not in runtime_text
-    assert "connect_sqlite" not in runtime_text
-    assert '"full_text"' not in runtime_text
-
-    production_admission_text = (SCRIPTS / "production_admission.py").read_text(encoding="utf-8")
-    for forbidden in ("market_delivery", "review_store", "send_card", "event_analyses"):
-        assert forbidden not in production_admission_text
-    llm_shadow_text = (SCRIPTS / "llm_rule_shadow.py").read_text(encoding="utf-8")
-    assert "market_delivery" not in llm_shadow_text
-    assert "connect_sqlite" not in llm_shadow_text
-
-
 def main() -> int:
     test_unified_collectors_use_runtime_without_owning_delivery()
     test_live_unified_collector_calls_cannot_omit_production_admission()
@@ -568,12 +387,7 @@ def main() -> int:
     test_direct_urllib_request_usage_is_explicit_and_bounded()
     test_deployment_preserves_private_proxy_state_and_disables_shadows()
     test_low_frequency_interval_timers_rearm_after_deployment()
-    test_rule_center_execution_modes_match_runtime_ordering()
     test_source_profiles_have_complete_runtime_ownership()
-    test_common_rule_is_stable_across_transport_metadata()
-    test_trade_friction_rule_is_stable_across_transport_metadata()
-    test_ai_compute_rule_is_stable_across_transport_metadata()
-    test_candidate_rule_core_is_side_effect_free_and_has_one_report_only_importer()
     print("architecture invariant checks passed")
     return 0
 

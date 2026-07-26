@@ -4,12 +4,7 @@
 from __future__ import annotations
 
 import china_finance_media_monitor as cfm
-from macro_policy import (
-    apply_macro_review_override,
-    classify_macro_policy_content,
-    is_macro_event,
-    macro_policy_match,
-)
+from macro_policy import classify_macro_policy_content, is_macro_event, macro_policy_match
 from sina_flash import event_from_row
 
 
@@ -61,16 +56,6 @@ def test_retail_sales_is_ignored() -> None:
     assert macro_policy_match({"title": "美国零售销售数据今晚公布"})["matched"] is False
 
 
-def test_macro_review_override_pushes_primary_events() -> None:
-    review = {"importance": "medium", "push_now": False, "affected_targets": [], "reason": "普通宏观预告。"}
-    item = {"title": "美国非农就业报告明晚公布，市场预期失业率维持不变"}
-    updated = apply_macro_review_override(review, item)
-    assert updated["importance"] == "high"
-    assert updated["push_now"] is True
-    assert updated["macro_policy_line"]["tier"] == "primary"
-    assert "A股风险偏好" in updated["affected_targets"]
-
-
 def test_china_media_focus_accepts_macro_items() -> None:
     item = {
         "title": "沃什讲话后，2年期美债收益率大跌",
@@ -103,7 +88,6 @@ def main() -> int:
     test_secondary_data_is_not_macro_policy_line()
     test_macro_classification_uses_only_core_indicators()
     test_retail_sales_is_ignored()
-    test_macro_review_override_pushes_primary_events()
     test_china_media_focus_accepts_macro_items()
     test_sina_flash_macro_event_without_holdings_match()
     print("macro policy checks passed")

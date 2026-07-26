@@ -6,8 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from attributed_research import prepare_item_for_decision
-from decision_engine import attach_decision_result_to_event_analysis, attach_decision_to_event_analysis
+from decision_engine import attach_decision_result_to_event_analysis
 from market_flow import evaluate_market_item
 from market_flow_adapters import (
     event_with_ingestion_audit,
@@ -24,7 +23,6 @@ from market_review_store import (
     latest_event_analysis,
     load_enabled_holdings as store_load_enabled_holdings,
 )
-from push_rules import apply_event_push_rules
 from source_profiles import runtime_source_profile
 
 
@@ -112,45 +110,14 @@ def analyze_event(
         raise RuntimeError(f"事件不存在：{event_id}")
     existing = latest_event_analysis(event_id, task, db_path) if persist_legacy else None
     if existing:
-        parsed = existing["analysis"]
-        updated = apply_event_rules_to_analysis(
-            event_row,
-            parsed,
-            db_path=db_path,
-            normalized_item=normalized_item,
-        )
-        if updated != parsed:
-            importance, classification, direction, impact_duration, should_push = analysis_record_fields(updated)
-            store_event_flow_analysis(
-                event_id,
-                task,
-                str(parsed.get("_model") or ""),
-                updated,
-                importance=importance,
-                classification=classification,
-                direction=direction,
-                impact_duration=impact_duration,
-                should_push=should_push,
-                existing_analysis_id=int(existing["id"]),
-                db_path=db_path,
-            )
-        return updated
+        return existing["analysis"]
 
     event = event_mapping_from_row(event_row)
-    decision_item = normalized_item or prepare_item_for_decision(normalized_event_item(event))
-    decision_fields = (
-        attach_decision_result_to_event_analysis(decision, {})
-        if decision is not None
-        else apply_event_rules_to_analysis(
-            event_row,
-            {},
-            db_path=db_path,
-            normalized_item=decision_item,
-        )
-    )
-    resolved_decision = decision or decision_result_from_payload(decision_fields)
-    if resolved_decision is None:
+    if decision is None:
         raise RuntimeError(f"事件决策结果缺失：{event_id}")
+    decision_item = normalized_item or normalized_event_item(event)
+    decision_fields = attach_decision_result_to_event_analysis(decision, {})
+    resolved_decision = decision
     flow_result = evaluate_market_item(
         decision_item,
         decision=resolved_decision,
@@ -211,45 +178,6 @@ def analysis_record_fields(parsed: dict[str, Any]) -> tuple[str, str, str, str, 
         impact_duration = str(price_impact.get("duration") or "")
     should_push = 1 if should_push_analysis(parsed, importance) else 0
     return importance, classification, direction, impact_duration, should_push
-
-
-def apply_event_rules_to_analysis(
-    event_row: dict[str, Any],
-    analysis: dict[str, Any],
-    *,
-    db_path: Path = DEFAULT_DB_PATH,
-    normalized_item: NormalizedMarketItem | None = None,
-) -> dict[str, Any]:
-    try:
-        symbols = json.loads(str(event_row.get("symbols_json") or "[]"))
-    except json.JSONDecodeError:
-        symbols = []
-    try:
-        raw = json.loads(str(event_row.get("raw_json") or "{}"))
-    except json.JSONDecodeError:
-        raw = {}
-    event = {
-        "source": event_row.get("source"),
-        "event_type": event_row.get("event_type"),
-        "title": event_row.get("title"),
-        "summary": event_row.get("summary"),
-        "full_text": event_row.get("full_text"),
-        "url": event_row.get("url"),
-        "published_at": event_row.get("published_at"),
-        "raw": raw if isinstance(raw, dict) else {},
-    }
-    symbol_set = {str(symbol).upper() for symbol in symbols if str(symbol).strip()}
-    holdings = load_enabled_holdings(db_path)
-    updated = apply_event_push_rules(event, analysis, holdings=holdings, symbols=symbol_set)
-    decision_item = normalized_item or prepare_item_for_decision(normalized_event_item(event))
-    return attach_decision_to_event_analysis(
-        str(event.get("source") or ""),
-        decision_item,
-        updated,
-        holdings=holdings,
-        symbols=symbol_set,
-        refresh=True,
-    )
 
 
 def event_mapping_from_row(event_row: dict[str, Any]) -> dict[str, Any]:
@@ -350,11 +278,11 @@ def maybe_deliver_event(
     market_item_id: int | None = None,
     market_review_id: int | None = None,
 ) -> str:
-    """Refresh the decision and delegate delivery execution."""
+    """Load the existing decision and delegate delivery execution."""
     event_row = event_row_by_id(event_id, db_path)
     if not event_row:
         raise RuntimeError(f"事件不存在：{event_id}")
-    updated = analysis if decision is not None else apply_event_rules_to_analysis(event_row, analysis, db_path=db_path)
+    updated = analysis
     decision = decision or decision_result_from_payload(updated)
     if decision is None:
         record_delivery(

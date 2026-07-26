@@ -24,7 +24,6 @@ from typing import Any, Iterable
 import china_finance_media_monitor as china_media
 import trade_policy_monitor as trade_policy
 from china_media_sources import CHINA_MEDIA_FEEDS, CHINA_MEDIA_LABELS
-from collector_direct_shadow import attach_direct_decision_shadow, direct_shadow_counts, safe_load_shadow_holdings
 from collector_runtime import filter_enabled_mapping_for_run
 from market_review_store import article_item_id
 from rss_monitor import DB_PATH, strip_tags
@@ -166,9 +165,6 @@ def candidate_from_item(
     item: dict[str, Any],
     seen_ids: set[tuple[str, str]],
     reviewed_ids: set[tuple[str, str]],
-    *,
-    direct_shadow: bool = False,
-    direct_shadow_holdings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     item_id = article_item_id(item)
     would_focus = china_media.should_focus_item(dict(item, full_text=item.get("content") or item.get("summary") or ""))
@@ -186,17 +182,7 @@ def candidate_from_item(
         "body_source": str(item.get("body_source") or ""),
         "pipeline": "news_media shadow -> decision layer / thin interpretation planned",
     }
-    if not direct_shadow:
-        return candidate
-    return attach_direct_decision_shadow(
-        candidate,
-        source,
-        item,
-        source_category=NEWS_CATEGORY,
-        collector="news_collector",
-        content_type="article",
-        holdings=direct_shadow_holdings,
-    )
+    return candidate
 
 
 def limited(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
@@ -219,8 +205,6 @@ def collect_source_shadow(
     seen_ids: set[tuple[str, str]],
     reviewed_ids: set[tuple[str, str]],
     respect_prod_cls_state: bool = False,
-    direct_shadow: bool = False,
-    direct_shadow_holdings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     try:
         raw_items = fetch_source_items(source, respect_prod_cls_state=respect_prod_cls_state)
@@ -230,8 +214,6 @@ def collect_source_shadow(
                 item,
                 seen_ids,
                 reviewed_ids,
-                direct_shadow=direct_shadow,
-                direct_shadow_holdings=direct_shadow_holdings,
             )
             for item in raw_items
         ]
@@ -269,17 +251,12 @@ def collect_shadow(
     compare_seen: bool = True,
     compare_reviews: bool = True,
     respect_prod_cls_state: bool = False,
-    direct_shadow: bool = False,
-    direct_shadow_holdings: list[dict[str, Any]] | None = None,
     policy_sources: list[TradePolicySource] | None = None,
 ) -> dict[str, Any]:
     started_at = utc_now()
     source_ids = list(sources)
     seen_ids = load_seen_item_ids(source_ids) if compare_seen else set()
     reviewed_ids = load_reviewed_item_ids(source_ids) if compare_reviews else set()
-    holdings_error = ""
-    if direct_shadow and direct_shadow_holdings is None:
-        direct_shadow_holdings, holdings_error = safe_load_shadow_holdings(DB_PATH)
     max_workers = max(1, int(os.getenv("NEWS_COLLECTOR_MAX_WORKERS", os.getenv("CHINA_MEDIA_FETCH_MAX_WORKERS", "3")) or "3"))
     rows_by_source: dict[str, dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=min(max_workers, max(1, len(sources)))) as executor:
@@ -292,8 +269,6 @@ def collect_shadow(
                 seen_ids=seen_ids,
                 reviewed_ids=reviewed_ids,
                 respect_prod_cls_state=respect_prod_cls_state,
-                direct_shadow=direct_shadow,
-                direct_shadow_holdings=direct_shadow_holdings,
             ): source
             for source, url in sources.items()
         }
@@ -307,20 +282,17 @@ def collect_shadow(
         for policy_row in policy_payload.get("rows", []):
             candidates = []
             for item in policy_row.get("candidates", []):
-                decision = item.get("decision") if isinstance(item.get("decision"), dict) else {}
-                action = str(decision.get("action") or "archive")
                 candidates.append(
                     {
                         **item,
                         "already_seen": False,
                         "already_reviewed": False,
-                        "would_focus": action in {"push", "daily"},
+                        "would_focus": False,
                         "mandatory_push": "",
                         "summary": "",
                         "source_module": policy_row.get("label", policy_row.get("source", "")),
                         "body_source": "official policy shadow",
-                        "pipeline": "official policy shadow -> source-neutral decision engine",
-                        "direct_shadow": {"decision": decision},
+                        "pipeline": "official policy collection shadow",
                     }
                 )
             rows.append(
@@ -358,19 +330,15 @@ def collect_shadow(
             if item.get("already_reviewed")
         ),
     }
-    if direct_shadow:
-        counts.update(direct_shadow_counts(rows))
     return {
         "ok": not errors,
         "mode": "shadow_dry_run",
         "sent_feishu": False,
         "ran_llm_review": False,
-        "ran_direct_decision_shadow": direct_shadow,
         "wrote_production_seen_items": False,
         "wrote_production_reviews": False,
         "touched_production_source_state": False,
         "respect_prod_cls_state": respect_prod_cls_state,
-        "direct_shadow_holdings_error": holdings_error,
         "started_at": started_at,
         "finished_at": utc_now(),
         "counts": counts,
@@ -452,11 +420,6 @@ def print_text_summary(payload: dict[str, Any]) -> None:
         f"raw_items={counts.get('raw_items', 0)} "
         f"candidates={counts.get('candidates', 0)} "
         f"focus={counts.get('focus_candidates', 0)}"
-        + (
-            f" direct_push={counts.get('direct_shadow_push_candidates', 0)}"
-            if payload.get("ran_direct_decision_shadow")
-            else ""
-        )
     )
     for row in payload.get("sources", []):
         status = "OK" if row.get("ok") else "ERR"
@@ -471,10 +434,7 @@ def print_text_summary(payload: dict[str, Any]) -> None:
             seen = "seen" if item.get("already_seen") else "new?"
             reviewed = "reviewed" if item.get("already_reviewed") else "unreviewed"
             focus = "focus" if item.get("would_focus") else "non-focus"
-            direct = item.get("direct_shadow") if isinstance(item.get("direct_shadow"), dict) else {}
-            decision = direct.get("decision") if isinstance(direct.get("decision"), dict) else {}
-            action = f", direct={decision.get('action')}" if decision else ""
-            print(f"  - ({seen}, {reviewed}, {focus}{action}) {item.get('title')}")
+            print(f"  - ({seen}, {reviewed}, {focus}) {item.get('title')}")
 
 
 def main() -> int:
@@ -493,7 +453,6 @@ def main() -> int:
         action="store_true",
         help="让财联社 shadow 抓取尊重生产 CLS_MIN_POLL_SECONDS；默认不读写生产轮询状态。",
     )
-    parser.add_argument("--direct-shadow", action="store_true", help="在 shadow 报告中附加统一 decision_engine 直连决策结果；不写库、不发飞书。")
     parser.add_argument("--strict-exit", action="store_true", help="任一 source 失败时返回非 0；默认只在报告中记录错误。")
     args = parser.parse_args()
 
@@ -511,7 +470,6 @@ def main() -> int:
             compare_seen=not args.no_compare_seen,
             compare_reviews=not args.no_compare_reviews,
             respect_prod_cls_state=args.respect_prod_cls_state,
-            direct_shadow=args.direct_shadow,
             policy_sources=policy_sources,
         )
     if args.write_report:

@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from market_item import AdmissionResult, NormalizedMarketItem
-from push_rules import load_enabled_holdings_for_rules
+from market_review_store import load_enabled_holdings
 from rule_config_schema import RuleConfig, parse_rule_config
-from rule_core_v1 import (
+from admission_rules import (
     HoldingRule,
     PortfolioRuleConfig,
     SourceAdmissionPolicy,
@@ -84,7 +84,7 @@ def _string_values(value: object) -> tuple[str, ...]:
 
 def load_production_portfolio(db_path: Path) -> PortfolioRuleConfig:
     holdings: list[HoldingRule] = []
-    for raw_holding in load_enabled_holdings_for_rules(db_path):
+    for raw_holding in load_enabled_holdings(db_path):
         raw = raw_holding.get("raw") if isinstance(raw_holding.get("raw"), dict) else {}
         symbol = " ".join(str(raw_holding.get("symbol") or "").split())
         names = _string_values(

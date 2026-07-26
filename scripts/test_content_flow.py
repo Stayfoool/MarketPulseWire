@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import inspect
-import sqlite3
 
 import alphabstract_monitor
 import china_finance_media_monitor
@@ -14,7 +13,7 @@ import market_runtime
 import rss_monitor
 import trendforce_page_monitor
 import value_directory_monitor
-from market_item import InterpretationResult
+from market_item import DecisionResult, InterpretationResult
 from settings_store import FIELDS_BY_KEY
 
 
@@ -33,7 +32,8 @@ def test_article_interpretation_cannot_override_decision_action() -> None:
     original = market_flow.interpret_market_item
     try:
         market_flow.interpret_market_item = fake_interpretation
-        review = market_content_adapter.review_article(
+        review = market_content_adapter.evaluate_article_review(
+            None,
             "cls_telegraph_api",
             {
                 "id": "macro-1",
@@ -41,6 +41,12 @@ def test_article_interpretation_cannot_override_decision_action() -> None:
                 "summary": "市场重新定价美联储降息路径。",
                 "published_at": "2026-07-12T00:00:00+00:00",
             },
+            decision=DecisionResult(
+                action="push",
+                importance="high",
+                reason="大模型程度决策命中。",
+                need_llm_interpretation=True,
+            ),
         )
     finally:
         market_flow.interpret_market_item = original
@@ -54,7 +60,8 @@ def test_official_flow_uses_same_decision_and_interpretation_contract() -> None:
     original = market_flow.interpret_market_item
     try:
         market_flow.interpret_market_item = fake_interpretation
-        review = market_content_adapter.review_official_news(
+        review = market_content_adapter.evaluate_official_review(
+            None,
             "nvidia_blog",
             {
                 "id": "rubin-1",
@@ -62,62 +69,18 @@ def test_official_flow_uses_same_decision_and_interpretation_contract() -> None:
                 "summary": "NVIDIA details GPU systems, liquid cooling, and AI factory deployment.",
                 "published_at": "2026-07-12T00:00:00+00:00",
             },
+            decision=DecisionResult(
+                action="push",
+                importance="high",
+                reason="大模型程度决策命中。",
+                need_llm_interpretation=True,
+            ),
         )
     finally:
         market_flow.interpret_market_item = original
     assert review["should_push_now"] is True
     assert review["analysis"]["_decision_result"]["action"] == "push"
     assert review["analysis"]["_interpretation_result"]["core_content"] == "统一薄解读核心内容。"
-
-
-def test_yicai_morning_brief_has_no_special_decision_rule() -> None:
-    review = market_content_adapter.rule_first_review(
-        "yicai_brief",
-        {
-            "id": "morning-1",
-            "title": "券商晨会观点速递",
-            "summary": "多家券商发布今日行业观点。",
-        },
-    )
-    assert review is None
-
-
-def test_skeptic_final_action_is_persisted_in_decision_result() -> None:
-    original_interpreter = market_flow.interpret_market_item
-    original_skeptic = market_content_adapter.apply_skeptic_review
-    conn = sqlite3.connect(":memory:")
-    market_content_adapter.ensure_article_reviews_table(conn)
-
-    def block_review(conn, **kwargs):
-        review = dict(kwargs["review"])
-        review["push_now"] = False
-        review["importance"] = "low"
-        review["skeptic_blocked"] = True
-        review["skeptic"] = {"skeptic_verdict": "block", "reason": "测试阻断"}
-        return review
-
-    try:
-        market_flow.interpret_market_item = fake_interpretation
-        market_content_adapter.apply_skeptic_review = block_review
-        review = market_content_adapter.process_article_review(
-            conn,
-            "nvidia_blog",
-            {
-                "id": "official-blocked-1",
-                "title": "NVIDIA announces HBM mass production and capacity expansion",
-                "summary": "The company begins volume production for AI data-center systems.",
-            },
-        )
-        stored = market_content_adapter.article_review_exists(conn, "nvidia_blog", "official-blocked-1")
-    finally:
-        market_flow.interpret_market_item = original_interpreter
-        market_content_adapter.apply_skeptic_review = original_skeptic
-        conn.close()
-    assert review["push_now"] is False
-    assert review["raw"]["decision_result"]["action"] == "ignore"
-    assert review["raw"]["decision_result"]["skeptic"]["skeptic_verdict"] == "block"
-    assert stored is not None
-    assert stored["raw"]["raw"]["decision_result"]["action"] == "ignore"
 
 
 def test_runtime_and_monitor_imports_use_one_unified_path() -> None:
@@ -153,8 +116,6 @@ def test_value_directory_uses_unified_runtime_after_private_enrichment() -> None
 def main() -> int:
     test_article_interpretation_cannot_override_decision_action()
     test_official_flow_uses_same_decision_and_interpretation_contract()
-    test_yicai_morning_brief_has_no_special_decision_rule()
-    test_skeptic_final_action_is_persisted_in_decision_result()
     test_runtime_and_monitor_imports_use_one_unified_path()
     test_value_directory_uses_unified_runtime_after_private_enrichment()
     print("content flow checks passed")

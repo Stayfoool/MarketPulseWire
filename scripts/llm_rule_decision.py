@@ -19,7 +19,7 @@ from llm_rule_catalog import (
     rules_for_families,
 )
 from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem, RuleFamily
-from rule_core_v1 import apply_source_admission_boundary, source_allowed_families
+from admission_rules import apply_source_admission_boundary, source_allowed_families
 
 
 SCHEMA_VERSION = "llm-rule-match-v6"

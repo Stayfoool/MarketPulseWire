@@ -17,7 +17,7 @@ from llm_analysis import ChatCompletionResponse
 from llm_production_decision import ProductionLLMDecisionError, decide_production_market_item
 from llm_rule_catalog import rules_for_families
 from market_item import AdmissionEvidence, AdmissionResult, NormalizedMarketItem
-from rule_core_v1 import parse_portfolio_config
+from admission_rules import parse_portfolio_config
 
 
 QUOTE = "HBM产能扩张项目已确认进入执行阶段。"
@@ -114,20 +114,17 @@ def test_valid_decisions_write_private_audits_and_keep_actions_authoritative() -
                 assert payload["decision"]["action"] == action
                 assert "PRIVATE_PRODUCTION_BODY" in json.dumps(payload["model_audit"], ensure_ascii=False)
 
-                original_skeptic = market_content_adapter.apply_skeptic_review
+                conn = __import__("sqlite3").connect(":memory:")
                 try:
-                    market_content_adapter.apply_skeptic_review = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                        AssertionError("production LLM decisions must not enter skeptic postprocessing")
-                    )
                     review = market_content_adapter.evaluate_article_review(
-                        __import__("sqlite3").connect(":memory:"),
+                        conn,
                         item().source,
                         item().raw | {"title": item().title, "summary": item().summary, "full_text": item().full_text},
                         normalized_item=item(),
                         decision=decision,
                     )
                 finally:
-                    market_content_adapter.apply_skeptic_review = original_skeptic
+                    conn.close()
                 assert review["raw"]["decision_result"]["action"] == action
     finally:
         if original_revision is None:

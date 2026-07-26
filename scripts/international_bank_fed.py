@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from typing import Any, Iterable
 
@@ -437,10 +436,6 @@ def _source_tier(item: dict[str, Any]) -> str:
     return "机构公开材料" if role in {"first_party", "investment_bank"} or "官网" in text else "媒体明确署名转述"
 
 
-def fed_path_candidate(item: dict[str, Any]) -> bool:
-    return international_bank_fed_rate_path_rule(str(item.get("source") or ""), item) is not None
-
-
 def classify_trusted_financial_leader_macro_judgement(
     item: dict[str, Any],
     *,
@@ -528,10 +523,6 @@ def classify_trusted_financial_leader_macro_judgement(
         return {
             "matched": True,
             "rule_id": "fed_policy_material_exception",
-            "decision_action": "push",
-            "importance": "high",
-            "push_now": True,
-            "should_push": True,
             "reason": reason,
             "brief_reason": reason,
             "event_type": "trusted_financial_leader_material_judgement",
@@ -680,8 +671,6 @@ def classify_international_bank_fed_path(
         or attributed_strong_bp
         or attributed_strong_terminal
     )
-    action = "push" if material else "daily"
-    importance = "high" if material else "medium"
     forecast_year = _forecast_year(text, item)
     display_action = {"hike": "加息", "cut": "降息", "hold": "维持利率", "terminal_rate": "终端利率"}.get(revised_action, "调整")
     path_display = f"{revised_count}次{display_action}" if revised_count is not None else display_action
@@ -693,10 +682,6 @@ def classify_international_bank_fed_path(
     rule = {
         "matched": True,
         "rule_id": RULE_ID,
-        "decision_action": action,
-        "importance": importance,
-        "push_now": action == "push",
-        "should_push": action == "push",
         "reason": reason,
         "brief_reason": reason,
         "affected_targets": [f"{banks[0]}：{previous_display} -> {path_display}", *TARGETS][:5],
@@ -731,50 +716,3 @@ def classify_international_bank_fed_path(
         "evidence_quotes": evidence,
     }
     return rule
-
-
-def _dedup_key(classification: dict[str, Any]) -> str:
-    banks = classification.get("banks") or []
-    months = classification.get("meeting_months") or []
-    identity = "|".join(
-        (
-            str(banks[0]) if banks else "unknown",
-            str(classification.get("report_date") or "undated"),
-            str(classification.get("forecast_horizon") or "unspecified"),
-            str(classification.get("revised_action") or "unspecified"),
-            str(classification.get("revised_count"))
-            if classification.get("revised_count") is not None
-            else "unknown",
-            str(classification.get("cumulative_bp"))
-            if classification.get("cumulative_bp") is not None
-            else "unknown",
-            str(classification.get("terminal_rate") or "unknown"),
-            ",".join(str(value) for value in months),
-        )
-    )
-    digest = hashlib.sha256(identity.casefold().encode("utf-8")).hexdigest()[:20]
-    return f"ib_fed_path:{digest}"
-
-
-def international_bank_fed_rate_path_rule(source: str, item: dict[str, Any]) -> dict[str, Any] | None:
-    from rule_center import rule_enabled, rule_settings
-
-    if not rule_enabled(RULE_ID):
-        return None
-    configured = {
-        str(value).casefold()
-        for value in rule_settings(RULE_ID).get("allowed_banks") or []
-        if str(value).strip()
-    }
-    classification = classify_international_bank_fed_path(
-        item,
-        allowed_banks=configured or {name.casefold() for name in FED_PATH_BANKS},
-    )
-    if not classification:
-        return None
-    return {
-        **classification,
-        "dedup_key": _dedup_key(classification),
-        "dedup_lookback_days": 14,
-        "source": source,
-    }

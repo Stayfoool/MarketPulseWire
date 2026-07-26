@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from collector_runtime import filter_enabled_mapping_for_run, load_source_states, save_source_state
-from collector_direct_shadow import attach_direct_decision_shadow, direct_shadow_counts, safe_load_shadow_holdings
 from db_utils import connect_sqlite, ensure_source_state_table
 from rss_monitor import DB_PATH, fetch_feed, filter_items, run_once as run_rss_once, strip_tags
 from source_profiles import SOURCE_PROFILE_CONFIG_PATH, runtime_profile_map
@@ -122,9 +121,6 @@ def candidate_from_item(
     item: dict[str, Any],
     seen_ids: set[tuple[str, str]],
     reviewed_ids: set[tuple[str, str]],
-    *,
-    direct_shadow: bool = False,
-    direct_shadow_holdings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     item_id = str(item.get("id") or item.get("url") or item.get("title") or "")
     candidate = {
@@ -139,17 +135,7 @@ def candidate_from_item(
         "categories": list(item.get("categories") or []),
         "pipeline": "official_company shadow -> decision layer / thin interpretation planned",
     }
-    if not direct_shadow:
-        return candidate
-    return attach_direct_decision_shadow(
-        candidate,
-        source,
-        item,
-        source_category=OFFICIAL_CATEGORY,
-        collector="official_collector.rss",
-        content_type="official_news",
-        holdings=direct_shadow_holdings,
-    )
+    return candidate
 
 
 def limited(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
@@ -182,8 +168,6 @@ def collect_rss_shadow(
     seen_ids: set[tuple[str, str]],
     reviewed_ids: set[tuple[str, str]],
     save_shadow_state: bool = False,
-    direct_shadow: bool = False,
-    direct_shadow_holdings: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     states = load_shadow_feed_states(feeds, save_shadow_state)
     max_workers = max(1, int(os.getenv("OFFICIAL_COLLECTOR_MAX_WORKERS", os.getenv("RSS_FETCH_MAX_WORKERS", "8")) or "8"))
@@ -213,8 +197,6 @@ def collect_rss_shadow(
                                 item,
                                 seen_ids,
                                 reviewed_ids,
-                                direct_shadow=direct_shadow,
-                                direct_shadow_holdings=direct_shadow_holdings,
                             )
                             for item in filtered_items
                         ],
@@ -243,24 +225,17 @@ def collect_shadow(
     compare_seen: bool = True,
     compare_reviews: bool = True,
     save_shadow_state: bool = False,
-    direct_shadow: bool = False,
-    direct_shadow_holdings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     started_at = utc_now()
     source_ids = list(feeds)
     seen_ids = load_seen_item_ids(source_ids) if compare_seen else set()
     reviewed_ids = load_reviewed_item_ids(source_ids) if compare_reviews else set()
-    holdings_error = ""
-    if direct_shadow and direct_shadow_holdings is None:
-        direct_shadow_holdings, holdings_error = safe_load_shadow_holdings(DB_PATH)
     rss_rows = collect_rss_shadow(
         feeds,
         limit=limit,
         seen_ids=seen_ids,
         reviewed_ids=reviewed_ids,
         save_shadow_state=save_shadow_state,
-        direct_shadow=direct_shadow,
-        direct_shadow_holdings=direct_shadow_holdings,
     )
     errors = [row for row in rss_rows if not row.get("ok")]
     counts = {
@@ -282,18 +257,14 @@ def collect_shadow(
             if item.get("already_reviewed")
         ),
     }
-    if direct_shadow:
-        counts.update(direct_shadow_counts(rss_rows))
     return {
         "ok": not errors,
         "mode": "shadow_dry_run",
         "sent_feishu": False,
         "ran_llm_review": False,
-        "ran_direct_decision_shadow": direct_shadow,
         "wrote_production_seen_items": False,
         "wrote_production_reviews": False,
         "save_shadow_state": save_shadow_state,
-        "direct_shadow_holdings_error": holdings_error,
         "started_at": started_at,
         "finished_at": utc_now(),
         "counts": counts,
@@ -360,11 +331,6 @@ def print_text_summary(payload: dict[str, Any]) -> None:
         f"failed={counts.get('failed_sources', 0)} "
         f"raw_items={counts.get('raw_items', 0)} "
         f"candidates={counts.get('candidates', 0)}"
-        + (
-            f" direct_push={counts.get('direct_shadow_push_candidates', 0)}"
-            if payload.get("ran_direct_decision_shadow")
-            else ""
-        )
     )
     for row in payload.get("rss", []):
         status = "OK" if row.get("ok") else "ERR"
@@ -377,10 +343,7 @@ def print_text_summary(payload: dict[str, Any]) -> None:
         for item in row.get("candidates", [])[:3]:
             seen = "seen" if item.get("already_seen") else "new?"
             reviewed = "reviewed" if item.get("already_reviewed") else "unreviewed"
-            direct = item.get("direct_shadow") if isinstance(item.get("direct_shadow"), dict) else {}
-            decision = direct.get("decision") if isinstance(direct.get("decision"), dict) else {}
-            action = f", direct={decision.get('action')}" if decision else ""
-            print(f"  - ({seen}, {reviewed}{action}) {item.get('title')}")
+            print(f"  - ({seen}, {reviewed}) {item.get('title')}")
 
 
 def main() -> int:
@@ -394,7 +357,6 @@ def main() -> int:
     parser.add_argument("--write-report", action="store_true", help="把 JSON 报告写入 reports/。")
     parser.add_argument("--no-compare-seen", action="store_true", help="不读取生产库判断 already_seen。")
     parser.add_argument("--no-compare-reviews", action="store_true", help="不读取 official_news_reviews 判断 already_reviewed。")
-    parser.add_argument("--direct-shadow", action="store_true", help="在 shadow 报告中附加统一 decision_engine 直连决策结果；不写库、不发飞书。")
     parser.add_argument("--strict-exit", action="store_true", help="任一 source 失败时返回非 0；默认只在报告中记录错误。")
     parser.add_argument(
         "--save-shadow-state",
@@ -418,7 +380,6 @@ def main() -> int:
             compare_seen=not args.no_compare_seen,
             compare_reviews=not args.no_compare_reviews,
             save_shadow_state=args.save_shadow_state,
-            direct_shadow=args.direct_shadow,
         )
     if args.write_report:
         payload["report_path"] = str(write_report(payload))

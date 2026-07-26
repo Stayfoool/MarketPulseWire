@@ -39,10 +39,7 @@ from market_db import DEFAULT_DB_PATH
 from market_canonical_reader import canonical_event_rows, migration_ready as canonical_migration_ready
 from market_feedback import FEEDBACK_LABELS, feedback_projection_by_item, feedback_quality_payload
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
-from investment_bank_theme_config import config_payload as investment_bank_theme_config_payload
-from investment_bank_theme_config import save_config as save_investment_bank_theme_config
 from market_view import article_view_from_row, event_view_from_row, official_view_from_row
-from rule_center import list_rule_audit, rule_center_payload, save_rule_center_config, simulate_rules
 from rule_shadow_report_store import list_daily_reports, load_daily_report
 from settings_store import save_settings, settings_payload
 from signals_extract import extract_signals
@@ -2206,24 +2203,6 @@ class HoldingsHandler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
-        if parsed.path == "/api/rule-center":
-            if not self.require_auth():
-                return
-            try:
-                payload = rule_center_payload(DEFAULT_DB_PATH)
-                payload["ok"] = True
-                self.send_json(payload)
-            except Exception as exc:  # noqa: BLE001
-                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
-            return
-        if parsed.path == "/api/rule-center/audit":
-            if not self.require_auth():
-                return
-            try:
-                self.send_json({"ok": True, "items": list_rule_audit(db_path=DEFAULT_DB_PATH)})
-            except Exception as exc:  # noqa: BLE001
-                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
-            return
         if parsed.path == "/api/rule-shadow-reports":
             if not self.require_auth():
                 return
@@ -2233,16 +2212,6 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 self.send_json(rule_shadow_reports_payload(report_date))
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
-            except Exception as exc:  # noqa: BLE001
-                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
-            return
-        if parsed.path == "/api/investment-bank-theme-rules":
-            if not self.require_auth():
-                return
-            try:
-                payload = investment_bank_theme_config_payload()
-                payload["ok"] = True
-                self.send_json(payload)
             except Exception as exc:  # noqa: BLE001
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
@@ -2285,31 +2254,6 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 )
                 saved.pop("backup_path", None)
                 saved["ok"] = True
-                self.send_json(saved)
-                return
-            if parsed.path == "/api/rule-center":
-                response = save_rule_center_config(payload, db_path=DEFAULT_DB_PATH)
-                response["ok"] = True
-                self.send_json(response)
-                return
-            if parsed.path == "/api/rule-center/simulate":
-                response = simulate_rules(
-                    db_path=DEFAULT_DB_PATH,
-                    days=int(payload.get("days") or 7),
-                    limit=int(payload.get("limit") or 120),
-                )
-                response["ok"] = True
-                self.send_json(response)
-                return
-            if parsed.path == "/api/investment-bank-theme-rules":
-                saved = save_investment_bank_theme_config(payload)
-                saved.update(
-                    {
-                        "path": str(investment_bank_theme_config_payload()["path"]),
-                        "has_local_override": True,
-                        "ok": True,
-                    }
-                )
                 self.send_json(saved)
                 return
             if parsed.path == "/api/settings":

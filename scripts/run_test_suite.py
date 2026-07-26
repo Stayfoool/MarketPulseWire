@@ -15,23 +15,18 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 
 CI_SAFE_TESTS = (
-    "test_ai_compute_supply_demand.py",
-    "test_ai_credit_risk.py",
     "test_alphabstract_monitor.py",
     "test_analysis.py",
     "test_architecture_invariants.py",
     "test_attributed_research.py",
     "test_china_finance_media_monitor.py",
     "test_cninfo_disclosure_provider.py",
-    "test_collector_direct_shadow.py",
     "test_collector_runtime.py",
     "test_collector_shadow_digest.py",
     "test_company_disclosures.py",
     "test_company_event_dedup.py",
     "test_content_flow.py",
     "test_decision_audit_integration.py",
-    "test_decision_engine.py",
-    "test_event_direct_dry_run.py",
     "test_event_normalization.py",
     "test_event_pipeline_convergence.py",
     "test_event_runtime.py",
@@ -40,9 +35,7 @@ CI_SAFE_TESTS = (
     "test_holdings_web.py",
     "test_http_utils.py",
     "test_industry_fact_dedup.py",
-    "test_industry_hardline.py",
     "test_international_bank_fed.py",
-    "test_investment_bank_theme_config.py",
     "test_jygs_actions.py",
     "test_link_enrichment.py",
     "test_llm_analysis.py",
@@ -70,29 +63,21 @@ CI_SAFE_TESTS = (
     "test_official_collector.py",
     "test_portfolio_monitor.py",
     "test_production_admission.py",
-    "test_push_rules.py",
     "test_research_collector.py",
     "test_rss_monitor_fetch.py",
     "test_rule_alert_dedup.py",
     "test_rule_center.py",
-    "test_rule_core_v1.py",
-    "test_rule_core_integration_v1.py",
-    "test_rule_core_shadow.py",
     "test_rule_core_shadow_combined.py",
     "test_rule_core_shadow_daily.py",
-    "test_rule_core_shadow_report.py",
-    "test_rule_core_runtime_shadow.py",
     "test_rule_core_batch.py",
     "test_signals_extract.py",
     "test_sina_stock_news.py",
     "test_sina_zy_client.py",
-    "test_skeptic_evaluator.py",
     "test_thin_push_cards.py",
     "test_time_utils.py",
     "test_trade_friction.py",
     "test_trade_policy_monitor.py",
     "test_trendforce_page_monitor.py",
-    "test_value_directory_flow.py",
     "test_value_directory_monitor.py",
     "test_wallstreetcn_monitor.py",
     "test_web_evidence.py",
@@ -172,7 +157,6 @@ def main() -> int:
 
     test_env = os.environ.copy()
     test_env["RULE_CORE_CONFIG"] = str(ROOT / "config" / "rule_core_v1.test.json")
-    test_env["RULE_CORE_SHADOW_CONFIG"] = str(ROOT / "config" / "rule_core_v1.test.json")
     test_env["LLM_DECISION_RULE_CONFIG"] = str(ROOT / "config" / "llm_decision_rules.test.json")
     for index, filename in enumerate(CI_SAFE_TESTS, start=1):
         print(f"[{index}/{len(CI_SAFE_TESTS)}] {filename}", flush=True)

@@ -16,7 +16,7 @@ from llm_rule_decision import LLMRulePrompt, resolve_input_text_scope
 from llm_rule_shadow import LLMRuleExecution, execute_llm_rule_decision
 from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem
 from market_store import application_revision
-from rule_core_v1 import PortfolioRuleConfig
+from admission_rules import PortfolioRuleConfig
 
 
 ROOT = Path(__file__).resolve().parents[1]

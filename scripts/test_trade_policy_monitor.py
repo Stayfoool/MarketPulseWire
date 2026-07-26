@@ -10,12 +10,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 import trade_policy_monitor as monitor
-from decision_engine import decide_market_item
-from market_item import decision_result_from_payload
-import market_delivery
-from market_content_adapter import save_review
 from market_db import init_db
-from market_review_store import article_review_exists
 from source_profiles import runtime_source_profile, save_source_profile_config, source_profile_enabled
 from trade_policy_sources import TRADE_POLICY_SOURCE_MAP, TradePolicySource
 
@@ -123,16 +118,6 @@ def test_normalized_item_and_source_profile_use_unified_article_runtime() -> Non
     assert profile["category"] == "official_policy"
     assert "trade_policy_monitor.py" in profile["fetcher"]
     assert profile["health_keys"] == [{"monitor": "trade_policy", "source": source.name}]
-
-    federal_source = TRADE_POLICY_SOURCE_MAP["federal_register_china_trade"]
-    federal_item = monitor.parse_federal_register_payload(FEDERAL_SAMPLE, federal_source)[0]
-    federal_decision = decide_market_item(
-        monitor.normalized_trade_policy_item(federal_item, federal_source),
-        holdings=[],
-    )
-    assert federal_decision.action == "push"
-    assert federal_decision.rule_hits[0]["rule_id"] == "trade_friction_escalation"
-
 
 def test_source_can_be_disabled_from_private_profile_config() -> None:
     with TemporaryDirectory() as tmpdir:
@@ -285,64 +270,6 @@ def test_parse_failure_updates_source_health() -> None:
     assert "parsed zero items" in row[1]
 
 
-def test_storage_audit_retains_final_trade_decision() -> None:
-    source = TRADE_POLICY_SOURCE_MAP["ustr_press_releases"]
-    item = monitor.parse_ustr_html(USTR_SAMPLE, source)[0]
-    review = {
-        "importance": "low",
-        "push_now": False,
-        "affected_targets": [],
-        "reason": "compatibility input",
-        "daily_summary": item["title"],
-        "confidence": "low",
-        "raw": {},
-    }
-    original_send = market_delivery.send_card
-    cards: list[dict] = []
-    with TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "surveil.sqlite3"
-        init_db(db_path).close()
-        conn = sqlite3.connect(db_path)
-        try:
-            save_review(conn, source.name, item, review)
-            row = conn.execute(
-                "SELECT push_now, gate_json FROM article_reviews WHERE source = ? AND item_id = ?",
-                (source.name, item["id"]),
-            ).fetchone()
-        finally:
-            conn.close()
-        with sqlite3.connect(db_path) as conn:
-            loaded = article_review_exists(conn, source.name, item["id"])
-        assert loaded is not None
-        decision = decision_result_from_payload(loaded)
-        assert decision is not None
-        try:
-            market_delivery.send_card = lambda card: cards.append(card) or True
-            delivery_status = market_delivery.deliver_article_review(
-                source.name,
-                item,
-                loaded,
-                decision=decision,
-                db_path=db_path,
-                use_rule_dedup=False,
-            )
-        finally:
-            market_delivery.send_card = original_send
-        with sqlite3.connect(db_path) as conn:
-            pushed_at = conn.execute(
-                "SELECT pushed_at FROM article_reviews WHERE source = ? AND item_id = ?",
-                (source.name, item["id"]),
-            ).fetchone()[0]
-    gate = json.loads(row[1])
-    assert row[0] == 0
-    assert gate["raw"]["decision_result"]["action"] == "push"
-    assert gate["raw"]["decision_result"]["rule_hits"][0]["rule_id"] == "trade_friction_escalation"
-    assert gate["raw"]["decision_final_fields"]["push_now"] is False
-    assert delivery_status == "sent"
-    assert len(cards) == 1
-    assert pushed_at
-
-
 def main() -> int:
     test_official_source_parsers()
     test_normalized_item_and_source_profile_use_unified_article_runtime()
@@ -351,7 +278,6 @@ def main() -> int:
     test_notify_item_uses_unified_process_market_item()
     test_baseline_duplicate_health_and_new_item_processing()
     test_parse_failure_updates_source_health()
-    test_storage_audit_retains_final_trade_decision()
     print("trade policy monitor checks passed")
     return 0
 

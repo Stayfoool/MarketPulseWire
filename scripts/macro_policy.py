@@ -513,45 +513,5 @@ def macro_policy_match(item: dict[str, Any]) -> dict[str, Any]:
     return {"matched": False, "tier": "", "reason": ""}
 
 
-def macro_prompt_note(item: dict[str, Any]) -> str:
-    match = macro_policy_match(item)
-    if not match.get("matched"):
-        return ""
-    return (
-        "宏观流动性/美联储政策线提示："
-        f"{match.get('reason')} 重点判断其对美债收益率、美元、纳指期货、人民币、"
-        "A 股风险偏好、成长股/半导体估值的影响；区分偏鸽利好、衰退恐慌、事件前避险和已定价。"
-    )
-
-
-def apply_macro_review_override(review: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
-    match = macro_policy_match(item)
-    if not match.get("matched"):
-        return review
-    updated = dict(review)
-    if match.get("tier") == "primary":
-        updated["importance"] = "high"
-        updated["push_now"] = True
-    elif str(updated.get("importance") or "").lower() == "high":
-        updated["push_now"] = True
-    updated["macro_policy_line"] = match
-    targets = list(updated.get("affected_targets") or [])
-    for target in ("美债收益率/美元", "A股风险偏好", "成长股估值"):
-        if target not in targets:
-            targets.append(target)
-    updated["affected_targets"] = targets[:5]
-    note = (
-        "宏观政策线覆盖：该条涉及美联储/FOMC/主席沃什、前主席鲍威尔或非农/CPI/PCE；"
-        "按对 A 股风险偏好和成长股估值的影响优先处理。"
-    )
-    reason = str(updated.get("reason") or "").strip()
-    if note not in reason:
-        updated["reason"] = f"{reason}\n{note}".strip()
-    raw = dict(updated.get("raw") or {})
-    raw["macro_policy_line"] = match
-    updated["raw"] = raw
-    return updated
-
-
 def is_macro_event(item: dict[str, Any]) -> bool:
     return bool(macro_policy_match(item).get("matched"))

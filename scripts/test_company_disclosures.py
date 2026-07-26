@@ -10,7 +10,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from company_disclosures import collect_disclosures, event_from_disclosure, fetch_records
-from decision_engine import decide_market_item
 from disclosure_document import parse_disclosure_pdf
 from disclosure_providers import DisclosurePage, DisclosureRecord, DisclosureSecurity
 from market_db import init_db
@@ -325,20 +324,16 @@ def test_event_preserves_provider_audit_but_uses_logical_source() -> None:
     assert event["full_text"] == "公告正文"
 
 
-def test_transport_provider_does_not_change_identity_or_decision() -> None:
+def test_transport_provider_does_not_change_identity() -> None:
     text = "HBM supply shortage will persist until 2028 and prices are projected to double."
     records = [record("1225409631", provider=name) for name in ("cninfo_public", "tushare")]
     items = []
-    decisions = []
     for disclosure in records:
         disclosure = replace(disclosure, title=text)
         event = event_from_disclosure(disclosure, text, {"status": "ok"})
         item = normalize_market_item("company_disclosures", event, store_kind="event")
         items.append(item)
-        decisions.append(decide_market_item(item, holdings=[]))
     assert {item.dedupe_key for item in items} == {"company_disclosures:announcement:1225409631"}
-    assert {decision.action for decision in decisions} == {"push"}
-    assert {decision.rule_hits[0]["rule_id"] for decision in decisions} == {"industry_quantified_hardline"}
 
 
 def test_malformed_pdf_is_a_bounded_metadata_failure() -> None:
@@ -364,7 +359,7 @@ def main() -> int:
     test_pagination_runs_to_completion_for_each_content_kind()
     test_stale_cached_security_mapping_is_refreshed_once()
     test_event_preserves_provider_audit_but_uses_logical_source()
-    test_transport_provider_does_not_change_identity_or_decision()
+    test_transport_provider_does_not_change_identity()
     test_malformed_pdf_is_a_bounded_metadata_failure()
     print("company disclosure checks passed")
     return 0

@@ -38,7 +38,6 @@ from db_utils import connect_sqlite, ensure_seen_tables, retry_on_locked, update
 from env_utils import load_env
 from http_utils import http_get
 from investment_universe import investment_universe_match, relevant_digest_for_mixed_item
-from international_bank_fed import fed_path_candidate
 from llm_analysis import llm_config
 from macro_policy import is_macro_event
 from market_flow import normalize_market_item, process_market_item
@@ -1270,8 +1269,6 @@ def current_admission_result(
     else:
         admission_item = item
         effective_source = source or str(item.get("source") or "")
-    if fed_path_candidate(admission_item):
-        return {"admitted": True, "reason": "fed_path_candidate", "matched_families": ("fed_policy",)}
     match = investment_universe_match(effective_source, admission_item)
     if isinstance(item, dict):
         item["_investment_universe_match"] = match

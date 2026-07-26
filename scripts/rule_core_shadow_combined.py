@@ -13,12 +13,10 @@ from typing import Any
 
 from llm_rule_catalog import CATALOG_VERSION
 from llm_rule_decision import ENGINE_VERSION as LLM_RULE_ENGINE_VERSION
-from rule_core_v1 import RULE_CORE_VERSION
-
-
 ROOT = Path(__file__).resolve().parents[1]
 REPORT_DIR = ROOT / "reports"
 CONTRACT_VERSION = "rule-core-shadow-combined-v2"
+RULE_CORE_VERSION = "retired-deterministic-rule-core"
 # PR #162 is the last rule-changing deployment before explicit rule versions
 # were added to comparison records. The completed workflow time is a
 # conservative compatibility boundary for already-retained reports.

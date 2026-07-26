@@ -10,7 +10,7 @@ from llm_analysis import ChatCompletionResponse
 from llm_rule_catalog import rules_for_families
 from llm_rule_shadow import compare_llm_rule_candidate
 from market_item import DecisionResult, NormalizedMarketItem, RuleFamily
-from rule_core_v1 import SourceAdmissionPolicy, parse_portfolio_config, parse_rule_config
+from admission_rules import SourceAdmissionPolicy, parse_portfolio_config, parse_rule_config
 
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any, Mapping
 
-from rule_core_v1 import parse_rule_config
+from rule_config_schema import parse_rule_config
 
 
 LEGACY_SCHEMA_VERSION = "legacy-rule-config-snapshot-v1"

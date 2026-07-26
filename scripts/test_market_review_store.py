@@ -8,9 +8,19 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import market_content_adapter
 import market_review_store
+from decision_engine import attach_decision_result_to_article_review, attach_decision_result_to_official_review
 from market_db import init_db
+from market_item import DecisionResult
+
+
+def decision(action: str = "daily", **audit) -> DecisionResult:
+    return DecisionResult(
+        action=action,
+        importance="high" if action == "push" else "medium",
+        reason="大模型程度决策结果。",
+        audit_json=audit,
+    )
 
 
 def test_article_review_store_round_trip_and_mark_pushed() -> None:
@@ -35,6 +45,7 @@ def test_article_review_store_round_trip_and_mark_pushed() -> None:
             "confidence": "中",
             "raw": {"core_content": "AI 机架功耗上行。"},
         }
+        review = attach_decision_result_to_article_review(decision(), review)
         market_review_store.save_article_review(conn, "semianalysis", item, review)
         loaded = market_review_store.article_review_exists(conn, "semianalysis", "article-1")
         assert loaded is not None
@@ -71,6 +82,7 @@ def test_official_review_store_round_trip_and_mark_pushed() -> None:
             "skeptic": {"skeptic_verdict": "pass"},
             "pre_skeptic_importance": "high",
         }
+        review = attach_decision_result_to_official_review(decision("push"), review)
         market_review_store.save_official_review(conn, "nvidia_blog", item, review)
         loaded = market_review_store.official_review_exists(conn, "nvidia_blog", "official-1")
         assert loaded is not None
@@ -220,7 +232,16 @@ def test_article_adapter_save_uses_normalized_market_item_audit() -> None:
             "confidence": "低",
             "raw": {},
         }
-        market_content_adapter.save_review(conn, "cls_telegraph_api", item, review)
+        review = attach_decision_result_to_article_review(
+            decision(
+                source_category="news_media",
+                content_type="article",
+                collector="news_collector.py",
+                dedupe_key="cls_telegraph_api:cls-ai-theme",
+            ),
+            review,
+        )
+        market_review_store.save_article_review(conn, "cls_telegraph_api", item, review)
         row = conn.execute(
             "SELECT gate_json FROM article_reviews WHERE source = ? AND item_id = ?",
             ("cls_telegraph_api", "cls-ai-theme"),
@@ -252,7 +273,16 @@ def test_official_adapter_save_uses_normalized_market_item_audit() -> None:
             "daily_summary": item["title"],
             "analysis": {"core_content": item["summary"]},
         }
-        market_content_adapter.save_official_review(conn, "nvidia_blog", item, review)
+        review = attach_decision_result_to_official_review(
+            decision(
+                source_category="official_company",
+                content_type="official_news",
+                collector="official_collector.py",
+                dedupe_key="nvidia_blog:nvidia-platform",
+            ),
+            review,
+        )
+        market_review_store.save_official_review(conn, "nvidia_blog", item, review)
         row = conn.execute(
             "SELECT analysis_json FROM official_news_reviews WHERE source = ? AND item_id = ?",
             ("nvidia_blog", "nvidia-platform"),
