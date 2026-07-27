@@ -42,6 +42,7 @@ from llm_analysis import llm_config
 from macro_policy import is_macro_event
 from market_flow import normalize_market_item, process_market_item
 from market_item import NormalizedMarketItem
+from market_store import processing_failure_status
 from media_keyword_config import is_media_focus_item
 from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from rss_monitor import DB_PATH, fetch_article_body, parse_date, strip_tags
@@ -1403,12 +1404,16 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
             deliver=deliver,
         )
     except Exception as exc:
+        status = processing_failure_status(exc)
         set_seen_item_lifecycle(
             source,
             item_id,
-            processing_status="failed_retryable",
+            processing_status=status,
             processing_error=f"{type(exc).__name__}: {str(exc)[:800]}",
         )
+        if status == "insufficient_evidence":
+            print(f"{source} 证据不足，当前条目终止处理：title={enriched.get('title', '')}", flush=True)
+            return
         raise
     set_seen_item_lifecycle(
         source,

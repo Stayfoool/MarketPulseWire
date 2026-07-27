@@ -657,7 +657,8 @@ async function loadEvents() {
 function llmDecisionStatusLabel(status) {
   return {
     completed: '已完成',
-    uncertain: 'uncertain',
+    insufficient_evidence: '证据不足',
+    uncertain: '历史 uncertain',
     model_unavailable: '大模型不可用',
     invalid_output: '输出无效',
     evidence_invalid: '证据无效',
@@ -752,9 +753,9 @@ async function loadLlmDecisions() {
       ['push', actions.push || 0],
       ['daily', actions.daily || 0],
       ['archive', actions.archive || 0],
-      ['uncertain 尝试', summary.uncertain_attempts || 0],
+      ['证据不足', summary.current_insufficient_evidence || 0],
       ['仍 failed_retryable', summary.current_failed_retryable || 0],
-      ['uncertain 后完成', summary.uncertain_then_completed || 0],
+      ['uncertain 评估记录', summary.uncertain_attempts || 0],
       ['模型状态', Object.entries(statuses).map(([key, value]) => `${llmDecisionStatusLabel(key)} ${value}`).join('；') || '-']
     ].map(item => `<section class="metric"><div class="label">${escapeHtml(item[0])}</div><div class="value">${escapeHtml(item[1])}</div></section>`).join('');
     document.getElementById('llmDecisionRows').innerHTML = (data.rows || []).map(item => {

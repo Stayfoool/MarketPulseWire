@@ -38,7 +38,7 @@ SEEN_ITEM_LIFECYCLE_VALUES = {
     "admission_status": {"pending", "admitted", "excluded", "not_applicable", "legacy_unclassified"},
     "processing_status": {
         "not_applicable", "pending", "succeeded",
-        "failed_retryable", "failed_terminal", "legacy_unclassified",
+        "failed_retryable", "failed_terminal", "insufficient_evidence", "legacy_unclassified",
     },
 }
 

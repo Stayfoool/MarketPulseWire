@@ -15,6 +15,7 @@ from db_utils import update_seen_item_lifecycle
 from market_item import NormalizedMarketItem
 from market_review_store import article_item_id, article_review_exists
 from market_runtime import normalize_market_item, process_market_item
+from market_store import processing_failure_status
 from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from rss_monitor import DB_PATH, connect_db, save_new_items_with_retry
 from source_health import record_source_failure, record_source_success
@@ -396,14 +397,18 @@ def review_and_maybe_push(
             market_review_id=admission_context.market_review_id,
         )
     except Exception as exc:
+        status = processing_failure_status(exc)
         set_seen_item_lifecycle_if_present(
             source.source_id,
             item_id,
-            processing_status="failed_retryable",
+            processing_status=status,
             processing_error=f"{type(exc).__name__}: {str(exc)[:400]}",
             processed_at=None,
             lifecycle_updated_at=utc_now(),
         )
+        if status == "insufficient_evidence":
+            print(f"{source.source_id} 证据不足，当前条目终止处理：title={item.get('title', '')}", flush=True)
+            return False
         raise
     set_seen_item_lifecycle_if_present(
         source.source_id,

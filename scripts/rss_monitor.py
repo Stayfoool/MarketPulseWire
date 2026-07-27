@@ -36,6 +36,7 @@ from db_utils import (
 from http_utils import http_get
 from llm_analysis import llm_config
 from market_flow import is_official_news_source, normalize_market_item, process_market_item
+from market_store import processing_failure_status
 from media_sources import is_overseas_media_source, overseas_media_access_note, overseas_media_module
 from media_keyword_config import is_media_focus_item
 from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
@@ -453,15 +454,17 @@ def _complete_seen_item(source: str, item_id: str, admission) -> None:
     )
 
 
-def _fail_seen_item(source: str, item_id: str, exc: Exception) -> None:
+def _fail_seen_item(source: str, item_id: str, exc: Exception) -> str:
+    status = processing_failure_status(exc)
     set_seen_item_lifecycle(
         source,
         item_id,
-        processing_status="failed_retryable",
+        processing_status=status,
         processing_error=f"{type(exc).__name__}: {str(exc)[:400]}",
         processed_at=None,
         lifecycle_updated_at=datetime.now(timezone.utc).isoformat(),
     )
+    return status
 
 
 def notify_item(source: str, item: dict) -> None:
@@ -499,7 +502,9 @@ def notify_item(source: str, item: dict) -> None:
         )
         _complete_seen_item(source, item_id, admission)
     except Exception as exc:
-        _fail_seen_item(source, item_id, exc)
+        if _fail_seen_item(source, item_id, exc) == "insufficient_evidence":
+            print(f"{source} 证据不足，当前条目终止处理：title={item.get('title', '')}", flush=True)
+            return
         raise
     item = enriched
     review = outcome.payload
@@ -547,7 +552,9 @@ def handle_official_news_item(source: str, item: dict) -> None:
         )
         _complete_seen_item(source, item_id, admission)
     except Exception as exc:
-        _fail_seen_item(source, item_id, exc)
+        if _fail_seen_item(source, item_id, exc) == "insufficient_evidence":
+            print(f"{source} 证据不足，当前条目终止处理：title={item.get('title', '')}", flush=True)
+            return
         raise
     review = outcome.payload
     print(

@@ -101,7 +101,8 @@
         <select id="llmDecisionStatus" aria-label="模型状态" style="width:180px" onchange="loadLlmDecisions()">
           <option value="">全部模型状态</option>
           <option value="completed">已完成</option>
-          <option value="uncertain">uncertain</option>
+          <option value="insufficient_evidence">证据不足</option>
+          <option value="uncertain">历史 uncertain</option>
           <option value="model_unavailable">大模型不可用</option>
           <option value="pending">等待判断</option>
         </select>

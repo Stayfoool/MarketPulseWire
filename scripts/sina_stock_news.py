@@ -26,6 +26,7 @@ from market_review_store import (
     event_row_by_id,
     load_enabled_holdings,
 )
+from market_store import processing_failure_status
 from portfolio_import import import_holdings
 from production_admission import persist_production_admission_context, production_admission_context
 from sina_zy_client import client_from_env, result_data
@@ -1235,8 +1236,9 @@ def run_once(
                         market_review_id=admission_context.market_review_id,
                     )
                 except Exception as exc:  # noqa: BLE001 - keep the remaining holdings runnable
+                    status = processing_failure_status(exc)
                     print(
-                        f"retryable event #{existing_event_id} remains failed_retryable: "
+                        f"retryable event #{existing_event_id} ended as {status}: "
                         f"{type(exc).__name__}: {exc}",
                         flush=True,
                     )
@@ -1276,8 +1278,9 @@ def run_once(
                     market_review_id=admission_context.market_review_id,
                 )
             except Exception as exc:  # noqa: BLE001 - one failed review must not abort the batch
+                status = processing_failure_status(exc)
                 print(
-                    f"event processing failed_retryable: {type(exc).__name__}: {exc} "
+                    f"event processing {status}: {type(exc).__name__}: {exc} "
                     f"title={event['title']}",
                     flush=True,
                 )

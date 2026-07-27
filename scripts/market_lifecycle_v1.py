@@ -39,6 +39,7 @@ ProcessingStatus = Literal[
     "succeeded",
     "failed_retryable",
     "failed_terminal",
+    "insufficient_evidence",
     "legacy_unclassified",
 ]
 RefetchMode = Literal["bounded_payload", "url", "source_item_id", "none"]
@@ -126,7 +127,7 @@ class LifecycleState:
             raise ValueError(f"invalid admission_status: {self.admission_status}")
         if self.processing_status not in {
             "not_applicable", "pending", "succeeded", "failed_retryable",
-            "failed_terminal", "legacy_unclassified",
+            "failed_terminal", "insufficient_evidence", "legacy_unclassified",
         }:
             raise ValueError(f"invalid processing_status: {self.processing_status}")
         for field, limit in (
@@ -246,6 +247,8 @@ class LifecycleProjection:
             return "处理失败 / 可重试"
         if self.lifecycle.processability_status == "failed_terminal" or self.lifecycle.processing_status == "failed_terminal":
             return "处理失败 / 终止"
+        if self.lifecycle.processing_status == "insufficient_evidence":
+            return "证据不足"
         if self.lifecycle.admission_status == "excluded":
             return "已采集 / 未准入"
         if not self.assessment:
@@ -339,7 +342,7 @@ def finish_admission(
 
 def finish_processing(
     state: LifecycleState,
-    status: Literal["succeeded", "failed_retryable", "failed_terminal"],
+    status: Literal["succeeded", "failed_retryable", "failed_terminal", "insufficient_evidence"],
     *,
     error: str = "",
 ) -> LifecycleState:

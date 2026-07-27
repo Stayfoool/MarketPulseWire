@@ -8,7 +8,7 @@ import os
 from dataclasses import dataclass
 
 import rss_monitor
-from db_utils import ensure_seen_tables
+from db_utils import ensure_seen_tables, update_seen_item_lifecycle
 from pipeline_health import record_pipeline_failure, record_pipeline_success
 from source_backoff import backoff_state_after_failure, clear_backoff_state, should_skip_by_backoff
 from source_health import format_error, record_source_failure, record_source_success, should_alert_failure, should_alert_recovery
@@ -134,6 +134,23 @@ def test_expanded_scope_baseline_and_retry_lifecycle() -> None:
         """
     ).fetchone()
     assert row == ("pending", "pending", "not_applicable")
+
+    update_seen_item_lifecycle(
+        conn,
+        "semianalysis",
+        "item-2",
+        processability_status="succeeded",
+        admission_status="admitted",
+        processing_status="insufficient_evidence",
+    )
+    assert rss_monitor.save_new_items(conn, "semianalysis", [live]) == []
+    row = conn.execute(
+        """
+        SELECT processability_status, admission_status, processing_status
+        FROM seen_items WHERE source = 'semianalysis' AND item_id = 'item-2'
+        """
+    ).fetchone()
+    assert row == ("succeeded", "admitted", "insufficient_evidence")
 
 
 def test_fetch_feed_uses_conditionals_and_skips_304() -> None:
