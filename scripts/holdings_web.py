@@ -187,6 +187,17 @@ RUN_ONCE_TARGETS = {
     "surveil-collector-shadow-digest.timer": "surveil-collector-shadow-digest.service",
 }
 
+SIGNAL_REVIEW_UNITS = {
+    "surveil-signals-extract.service",
+    "surveil-signals-extract.timer",
+    "surveil-signal-outcome.service",
+    "surveil-signal-outcome.timer",
+    "surveil-signal-review.service",
+    "surveil-signal-review.timer",
+    "surveil-signal-digest.service",
+    "surveil-signal-digest.timer",
+}
+
 ALLOWED_SYSTEMD_UNITS = set(SERVICE_UNITS) | set(TIMER_UNITS) | set(RUN_ONCE_TARGETS.values())
 
 LEGACY_CUTOVER_UNITS = {
@@ -243,10 +254,10 @@ UNIT_METADATA = {
     "surveil-collector-shadow-digest.service": {"group": "processing_scheduled", "type": "影子报告", "schedule": "timer 21:05"},
     "surveil-article-daily.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 20:50"},
     "surveil-llm-decision-audit-cleanup.service": {"group": "processing_scheduled", "type": "审计清理", "schedule": "每天 15:30 北京时间"},
-    "surveil-signals-extract.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 每 10 分钟"},
-    "surveil-signal-outcome.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 交易日 16:20"},
-    "surveil-signal-review.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 交易日 16:35"},
-    "surveil-signal-digest.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 20:35"},
+    "surveil-signals-extract.service": {"group": "signal_review", "type": "定时处理", "schedule": "默认关闭；启用后每 10 分钟", "health_alert": False},
+    "surveil-signal-outcome.service": {"group": "signal_review", "type": "定时处理", "schedule": "默认关闭；启用后交易日 16:20", "health_alert": False},
+    "surveil-signal-review.service": {"group": "signal_review", "type": "定时处理", "schedule": "默认关闭；启用后交易日 16:35", "health_alert": False},
+    "surveil-signal-digest.service": {"group": "signal_review", "type": "定时处理", "schedule": "默认关闭；启用后 20:35", "health_alert": False},
     "surveil-holdings-web.service": {"group": "infrastructure", "type": "基础设施", "schedule": "Web 工作台"},
     "surveil-feishu-feedback.service": {"group": "infrastructure", "type": "基础设施", "schedule": "飞书长连接"},
     "surveil-proxy.service": {"group": "infrastructure", "type": "基础设施", "schedule": "本地代理"},
@@ -270,10 +281,10 @@ UNIT_METADATA = {
     "surveil-collector-shadow-digest.timer": {"group": "processing_scheduled", "type": "影子报告定时器", "schedule": "21:05"},
     "surveil-article-daily.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "20:50"},
     "surveil-llm-decision-audit-cleanup.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "每天 15:30 北京时间"},
-    "surveil-signals-extract.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "每 10 分钟"},
-    "surveil-signal-outcome.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "交易日 16:20"},
-    "surveil-signal-review.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "交易日 16:35"},
-    "surveil-signal-digest.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "20:35"},
+    "surveil-signals-extract.timer": {"group": "signal_review", "type": "定时器", "schedule": "默认关闭；启用后每 10 分钟", "health_alert": False},
+    "surveil-signal-outcome.timer": {"group": "signal_review", "type": "定时器", "schedule": "默认关闭；启用后交易日 16:20", "health_alert": False},
+    "surveil-signal-review.timer": {"group": "signal_review", "type": "定时器", "schedule": "默认关闭；启用后交易日 16:35", "health_alert": False},
+    "surveil-signal-digest.timer": {"group": "signal_review", "type": "定时器", "schedule": "默认关闭；启用后 20:35", "health_alert": False},
 }
 
 UNIT_GROUP_LABELS = {
@@ -282,6 +293,7 @@ UNIT_GROUP_LABELS = {
     "fetching_shadow": "影子采集任务",
     "fetching_legacy": "历史兼容采集单元",
     "processing_scheduled": "非抓取处理/日报任务",
+    "signal_review": "投资信号复盘（默认关闭）",
     "infrastructure": "基础设施",
     "other": "其他",
 }
@@ -1416,7 +1428,7 @@ def systemctl_show(unit: str) -> dict[str, Any]:
 def unit_actions(unit: str) -> list[str]:
     if unit not in ALLOWED_SYSTEMD_UNITS:
         return []
-    if unit == "surveil-holdings-web.service":
+    if unit == "surveil-holdings-web.service" or unit in SIGNAL_REVIEW_UNITS:
         return ["status"]
     if unit.endswith(".timer"):
         actions = ["restart_timer"]

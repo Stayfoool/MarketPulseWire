@@ -325,7 +325,7 @@ def test_deployment_preserves_private_proxy_state_and_disables_shadows() -> None
         assert f"systemctl enable --now {timer}" not in installer
 
 
-def test_low_frequency_interval_timers_rearm_after_deployment() -> None:
+def test_interval_timer_activation_policy_after_deployment() -> None:
     expectations = {
         "surveil-sina-stock-news.timer": ("OnActiveSec=5min", "OnUnitActiveSec=30min"),
         "surveil-signals-extract.timer": ("OnActiveSec=8min", "OnUnitActiveSec=10min"),
@@ -340,12 +340,24 @@ def test_low_frequency_interval_timers_rearm_after_deployment() -> None:
         assert set(expected_lines) <= lines
 
     installer = (ROOT / "scripts" / "install_remote_systemd.sh").read_text(encoding="utf-8")
-    for unit in expectations:
+    for unit in ("surveil-sina-stock-news.timer",):
         enable = f"systemctl enable --now {unit}"
         restart = f"systemctl restart {unit}"
         assert installer.count(enable) == 1
         assert installer.count(restart) == 1
         assert installer.index(enable) < installer.index(restart)
+
+    signal_timers = (
+        "surveil-signals-extract.timer",
+        "surveil-signal-outcome.timer",
+        "surveil-signal-review.timer",
+        "surveil-signal-digest.timer",
+    )
+    for unit in signal_timers:
+        assert f"systemctl enable --now {unit}" not in installer
+        assert f"systemctl restart {unit}" not in installer
+        assert unit in installer
+    assert "投资信号复盘任务组默认关闭" in installer
 
 
 def test_source_profiles_have_complete_runtime_ownership() -> None:
@@ -386,7 +398,7 @@ def main() -> int:
     test_independent_routes_are_explicit_and_tested()
     test_direct_urllib_request_usage_is_explicit_and_bounded()
     test_deployment_preserves_private_proxy_state_and_disables_shadows()
-    test_low_frequency_interval_timers_rearm_after_deployment()
+    test_interval_timer_activation_policy_after_deployment()
     test_source_profiles_have_complete_runtime_ownership()
     print("architecture invariant checks passed")
     return 0

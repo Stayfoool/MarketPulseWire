@@ -444,15 +444,15 @@ systemctl status --no-pager \
   surveil-company-disclosures.timer
 ```
 
-`surveil-sina-stock-news.timer` and `surveil-signals-extract.timer` deliberately
-use `OnActiveSec` for their first run. The installer can restart these timers
+`surveil-sina-stock-news.timer` deliberately uses `OnActiveSec` for its first
+run. The installer can restart this timer
 many days after the host booted, so `OnBootSec` could already be expired and
-leave an enabled timer with no next trigger. Their existing subsequent periods
-remain controlled by `OnUnitActiveSec` (30 minutes and 10 minutes respectively).
-After installation, verify that both timers show a future `NEXT` value instead
-of only checking that they are enabled and active. The installer explicitly
-restarts both timers after enabling them because `enable --now` does not restart
-an already-active timer or reset its monotonic schedule.
+leave an enabled timer with no next trigger. Its subsequent period remains
+controlled by `OnUnitActiveSec` (30 minutes). After installation, verify that
+it shows a future `NEXT` value instead of only checking that it is enabled and
+active. The installer explicitly restarts it after enabling because
+`enable --now` does not restart an already-active timer or reset its monotonic
+schedule.
 
 The high-frequency persistent fetchers remain:
 
@@ -466,11 +466,14 @@ when each unit was already active. `systemctl enable --now` alone does not load
 new Python code into an existing long-running process. Verify their
 `ExecMainStartTimestamp` after deployment, in addition to enabled/active state.
 
-`surveil-signals-extract.timer` may continue scanning the configured lookback
-window every ten minutes, but unchanged derived signals, targets and evidence
-must produce zero SQLite writes. Check the `signals_unchanged` count in its
-summary when investigating database writer contention; do not shorten an
-unrelated collector transaction merely to make this derived task finish.
+The investment-signal review group is installed but disabled by default:
+`surveil-signals-extract.timer`, `surveil-signal-outcome.timer`,
+`surveil-signal-review.timer` and `surveil-signal-digest.timer` must all be
+disabled/inactive after deployment. Their services must also be inactive. Do
+not enable or run one step independently; a future rollout must review and
+enable all four together. Historical signal data is retained. When explicitly
+enabled for a reviewed rollout, unchanged derived signals, targets and evidence
+must still produce zero SQLite writes.
 
 `surveil-company-disclosures.timer` retains the former announcement schedule at
 08:00 and 20:00. Its source profile defaults to `provider=cninfo_public` and

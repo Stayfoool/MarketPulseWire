@@ -263,11 +263,17 @@ versions remain stored. Existing external ids are resolved through
 review link only to the item. Legacy writes and tables remain enabled for
 rollback in this stage, but readers do not use them as decision authority.
 
-Signal extraction still derives its rows from this unified current review and
-delivery projection. Each derived signal stores a SHA-256 fingerprint covering
-the complete signal, related targets and evidence. A scheduled re-scan performs
-no SQLite update when that fingerprint is unchanged; a changed decision,
-interpretation, relation mapping or evidence changes the fingerprint and uses
+The investment-signal review group is installed but disabled by default. Its
+four internal steps remain separate for diagnosis: signal extraction derives
+rows from the unified current review and delivery projection, outcome update
+loads later market prices, signal review compares the expected direction with
+those outcomes, and signal digest summarizes the reviews. Web Task Health shows
+the four steps together as one default-off group and does not expose per-step
+execution actions. Each derived signal stores a SHA-256 fingerprint covering
+the complete signal, related targets and evidence. When the whole group is
+explicitly enabled, a scheduled re-scan performs no SQLite update when that
+fingerprint is unchanged; a changed decision, interpretation, relation mapping
+or evidence changes the fingerprint and uses
 the existing idempotent upsert.
 
 For newly admitted production items, `market_reviews` is also the processed /

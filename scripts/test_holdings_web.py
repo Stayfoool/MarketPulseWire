@@ -16,6 +16,7 @@ import holdings_web
 from holdings_web import (
     RUN_ONCE_TARGETS,
     SERVICE_UNITS,
+    SIGNAL_REVIEW_UNITS,
     HoldingsHandler,
     active_source_health_keys,
     build_health_summary,
@@ -275,6 +276,7 @@ def test_health_page_exposes_service_action_controls() -> None:
     assert "runServiceAction" in html
     assert "renderHealthTasks" in html
     assert "fetching_persistent" in html
+    assert "signal_review" in html
     assert "showShadowUnits" in html
     assert "showLegacyUnits" in html
     assert "显示历史兼容单元" in html
@@ -1142,6 +1144,7 @@ def test_systemd_actions_are_whitelisted() -> None:
     assert RUN_ONCE_TARGETS["surveil-research-collector-shadow.timer"] == "surveil-research-collector-shadow.service"
     assert RUN_ONCE_TARGETS["surveil-china-media.timer"] == "surveil-china-media.service"
     assert unit_actions("surveil-holdings-web.service") == ["status"]
+    assert all(unit_actions(unit) == ["status"] for unit in SIGNAL_REVIEW_UNITS)
     assert unit_actions("ssh.service") == []
     assert "surveil-company-disclosures.service" in SERVICE_UNITS
 
@@ -1264,6 +1267,39 @@ def test_health_summary_excludes_shadow_legacy_and_default_disabled_jygs() -> No
         ),
     ]
     assert build_health_summary(build_health_tasks(units), [])["total_failures"] == 0
+
+
+def test_signal_review_tasks_are_grouped_and_default_disabled_without_alerts() -> None:
+    units: list[dict[str, object]] = []
+    timer_names = (
+        "surveil-signals-extract.timer",
+        "surveil-signal-outcome.timer",
+        "surveil-signal-review.timer",
+        "surveil-signal-digest.timer",
+    )
+    for timer_name in timer_names:
+        units.append(
+            systemd_fixture(
+                timer_name,
+                {"ActiveState": "inactive", "SubState": "dead", "Result": "success"},
+            )
+        )
+        units.append(
+            systemd_fixture(
+                RUN_ONCE_TARGETS[timer_name],
+                {
+                    "ActiveState": "inactive",
+                    "SubState": "dead",
+                    "Result": "success",
+                    "ExecMainStatus": "0",
+                },
+            )
+        )
+    tasks = [task for task in build_health_tasks(units) if task["group"] == "signal_review"]
+    assert [task["label"] for task in tasks] == ["信号提取", "信号结果更新", "信号复盘", "信号摘要"]
+    assert all(task["schedule_status"] == "定时器未启用" for task in tasks)
+    assert all(task["health_issue"] is None for task in tasks)
+    assert build_health_summary(tasks, [])["total_failures"] == 0
 
 
 def test_health_summary_counts_only_enabled_failing_sources() -> None:
@@ -1407,6 +1443,7 @@ def main() -> int:
     test_systemd_actions_are_whitelisted()
     test_health_tasks_pair_timer_with_service_and_prefer_execution_result()
     test_health_tasks_show_disabled_timer_and_last_success_separately()
+    test_signal_review_tasks_are_grouped_and_default_disabled_without_alerts()
     test_unit_display_metadata_translates_oneshot_success()
     test_unit_display_metadata_translates_waiting_timer()
     test_unit_display_metadata_groups_shadow_collectors()
