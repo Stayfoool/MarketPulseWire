@@ -29,7 +29,7 @@
 - 决策层返回有效 `DecisionResult` 后，解释、存储、去重和投递均不得创建、提升或降级 action。投递去重可以阻止重复发送，但必须保留原 `DecisionResult.action`。
 - 持仓/关联关键词、重点主题、硬变量、宏观政策、归因研究和去重规则应优先设计为跨来源内容规则。同一内容只改变来源元数据时，通用决策原则上保持一致。
 - `source_category`、`publisher_role`、`content_type` 只用于采集、存储、展示和审计，不得仅凭分类、内容形态或来源名称判定重要性。
-- LLM 在决策层内对已准入 `NormalizedMarketItem` 依据人工审定且当前启用的规则直接输出每条规则的 action 和最终 action，但不得新增规则、使用规则未定义的 action、修改规则含义或扩大来源/范围准入。所有产生 action 的 LLM 规则判断必须返回可逐字回验的原文证据和必要反证，并通过严格结构、规则适用范围、允许 action、版本和结果一致性校验；模型不可用、输出无效、证据不成立或结果冲突时不得生成 `DecisionResult`，当前 review 必须标记为 `failed_retryable`，且不得回退到旧决策规则。规则版本、prompt、模型、范围准入配置和代码版本必须可审计。决策后的 `market_interpreter` 仍只负责薄解读，不能另行创建或修改 action。
+- LLM 在决策层内对已准入 `NormalizedMarketItem` 依据人工审定且当前启用的规则直接输出每条规则的 action 和最终 action，但不得新增规则、使用规则未定义的 action、修改规则含义或扩大来源/范围准入。所有产生 action 的 LLM 规则判断必须返回可逐字回验的原文证据和必要反证，并通过严格结构、规则适用范围、允许 action、版本和结果一致性校验；模型不可用、输出无效、证据回验失败或结果冲突时不得生成 `DecisionResult`，当前 review 必须标记为 `failed_retryable`，且不得回退到旧决策规则。结构和证据均有效但因决定 action 所需事实缺失、截断或相互冲突而返回的 `uncertain` 必须记录为 `insufficient_evidence`（证据不足终态），不生成 `DecisionResult`、不进入解释、投递或去重，也不得自动重试；`insufficient_evidence` 不是第四种 action。规则版本、prompt、模型、范围准入配置和代码版本必须可审计。决策后的 `market_interpreter` 仍只负责薄解读，不能另行创建或修改 action。
 - 大模型决策规则的实际标题、action 条件、必需事实和排除条件不得进入 Git；只保存在本机项目目录内 Git 忽略且 mode `0600` 的私有规则文件和阿里云生产服务账号私有、mode `0600` 的对应文件中。Git 只保存规则格式、加载与严格校验代码以及不含生产规则语义的虚构测试配置。生产变更前必须核对本机与阿里云文件的规则版本和 SHA-256 摘要完全一致；部署不得上传、覆盖或删除该私有文件。
 - LLM 程度决策的每次实际模型请求、原始回答、响应元数据和校验明细只可保存在阿里云服务账号私有、mode `0600` 的单条审计文件中，保留30天后必须删除敏感内容但保留有界决策结果。历史每日/合并对比报告和 Web API 不得包含完整模型输入、文章正文或原始回答；这些私有审计内容不得进入 Git、生产 SQLite、飞书或本机报告副本。
 - 来源特殊性应限制在 API/RSS/浏览器、登录/WAF、thread/media、附件/OCR、基线、频率和展示等边界。独立路径必须在架构文档中记录原因、最小边界、测试和复核条件。
@@ -42,7 +42,7 @@
 - 优化单个范围准入或程度决策规则前，必须从当前代码、生产私有配置和测试核对其与其他独立规则或准入路径的既有“与/或”关系；除非用户明确批准对应架构变更，不得把独立路径改成共同前置条件，也不得改变既有组合关系。
 - 新增或实质修改生产 collector/provider 的普通有界 HTTP request/response 时，必须复用 `http_utils` 的线程隔离 client、代理、超时和重试语义；既有未迁移路径作为显式技术债登记，不得继续扩散。流式限长下载、长连接、官方 SDK 和独立运维工具可保留专用传输，但必须在架构不变量中登记具体边界和原因；不得为了形式统一而把流式安全边界改成整包内存缓冲。
 - 新增或调整通用规则时，至少提供两个不同来源元数据的同文回归样例，并验证 `DecisionResult.action` 一致。
-- 新增或调整由 LLM 输出 action 的规则判断时，必须使用固定假响应覆盖每个允许 action、未命中、不确定、模型不可用、无效 JSON、未知/遗漏/重复规则、未定义 action、原文证据回验失败、最终 action 不一致和提示词注入；普通 CI 不得调用真实 LLM。生产失败必须关闭式进入 `failed_retryable`，不得写入无效 `DecisionResult`、进入 delivery/dedup 或回退到旧决策规则。
+- 新增或调整由 LLM 输出 action 的规则判断时，必须使用固定假响应覆盖每个允许 action、未命中、不确定、模型不可用、无效 JSON、未知/遗漏/重复规则、未定义 action、原文证据回验失败、最终 action 不一致和提示词注入；普通 CI 不得调用真实 LLM。结构和证据均有效的 `uncertain` 必须关闭式进入 `insufficient_evidence`，其他生产失败必须关闭式进入 `failed_retryable`；两者都不得写入无效 `DecisionResult`、进入 delivery/dedup 或回退到旧决策规则。
 - 新来源至少验证规范化、停用、空内容/解析失败、重复、来源健康、最终 action、存储和投递审计。
 - 私有 `.env`、`LOCAL_COMMANDS.md`、`config/portfolio.json`、SQLite、browser profile、cookie/session 和生产 source override 不进入 Git，也不被部署覆盖。
 

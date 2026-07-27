@@ -28,6 +28,7 @@ from db_utils import (
 )
 from http_utils import http_get
 from market_flow import normalize_market_item, process_market_item
+from market_store import processing_failure_status
 from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from rss_monitor import DB_PATH, save_new_items, strip_tags
 from source_health import record_source_failure, record_source_success
@@ -558,14 +559,18 @@ def notify_item(item: dict[str, Any], *, source: AlphaAbstractSource = DEFAULT_S
             processed_at=datetime.now(timezone.utc).isoformat(),
         )
     except Exception as exc:
+        status = processing_failure_status(exc)
         set_seen_item_lifecycle(
             source.name,
             item_id,
-            processing_status="failed_retryable",
+            processing_status=status,
             processing_error=f"{type(exc).__name__}: {str(exc)[:400]}",
             processed_at=None,
             lifecycle_updated_at=datetime.now(timezone.utc).isoformat(),
         )
+        if status == "insufficient_evidence":
+            print(f"{source.name} 证据不足，当前条目终止处理：title={enriched.get('title', '')}", flush=True)
+            return
         raise
     decision = outcome.flow_result.decision
     print(

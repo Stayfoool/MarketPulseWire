@@ -12,10 +12,11 @@ import market_content_adapter
 import market_event_adapter
 import market_flow
 import market_runtime
+from llm_production_decision import ProductionLLMInsufficientEvidence
 from market_flow import evaluate_market_item
 from market_db import init_db
 from market_item import AdmissionEvidence, AdmissionResult, DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem
-from market_store import record_production_admission
+from market_store import processing_failure_status, record_production_admission
 
 
 def canonical_items() -> list[NormalizedMarketItem]:
@@ -853,6 +854,148 @@ def test_production_llm_failure_retries_same_review_without_delivery() -> None:
     assert calls == {"evaluate": 1}
 
 
+def test_production_uncertain_terminates_review_without_delivery() -> None:
+    original_decider = market_runtime.decide_market_item_with_llm
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "llm-insufficient.sqlite3"
+        init_db(db_path).close()
+        item = NormalizedMarketItem(
+            source="test_news",
+            source_category="news_media",
+            content_type="article",
+            title="证据不足的文章",
+            url="https://example.com/insufficient",
+            raw={"id": "llm-insufficient-1"},
+        )
+        raw_item = {"id": "llm-insufficient-1", "title": item.title, "url": item.url}
+        item_id, review_id = record_production_admission(item, admitted(), db_path=db_path)
+        market_runtime.decide_market_item_with_llm = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ProductionLLMInsufficientEvidence("valid uncertain result")
+        )
+        try:
+            market_runtime.process_market_item(
+                item,
+                raw_item,
+                store_kind="article",
+                db_path=db_path,
+                deliver=True,
+                production_admission=admitted(),
+                production_portfolio=object(),
+                market_item_id=item_id,
+                market_review_id=review_id,
+            )
+        except ProductionLLMInsufficientEvidence:
+            pass
+        else:
+            raise AssertionError("valid uncertain must stop before interpretation and delivery")
+        finally:
+            market_runtime.decide_market_item_with_llm = original_decider
+        assert record_production_admission(item, admitted(), db_path=db_path) == (item_id, review_id)
+        changed_admission = AdmissionResult(
+            status="admitted",
+            reason_code="holding_match",
+            matched_families=("holding",),
+            evidence=(AdmissionEvidence("holding", "entity", "测试公司"),),
+            config_version="changed-v2",
+        )
+        assert record_production_admission(item, changed_admission, db_path=db_path) == (item_id, review_id)
+        assert record_production_admission(
+            item,
+            changed_admission,
+            db_path=db_path,
+            force_new=True,
+        ) == (item_id, review_id)
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute(
+                "SELECT review_status,decision_action,decision_json,interpretation_json FROM market_reviews WHERE id=?",
+                (review_id,),
+            ).fetchone() == ("insufficient_evidence", None, None, None)
+            assert conn.execute(
+                "SELECT processing_status FROM market_items WHERE id=?", (item_id,)
+            ).fetchone()[0] == "insufficient_evidence"
+            assert conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
+        repeated_calls = 0
+
+        def unexpected_decider(*_args, **_kwargs):
+            nonlocal repeated_calls
+            repeated_calls += 1
+            raise AssertionError("terminal evidence insufficiency must not call the model again")
+
+        market_runtime.decide_market_item_with_llm = unexpected_decider
+        try:
+            market_runtime.process_market_item(
+                item,
+                raw_item,
+                store_kind="article",
+                db_path=db_path,
+                deliver=False,
+                production_admission=admitted(),
+                production_portfolio=object(),
+                market_item_id=item_id,
+                market_review_id=review_id,
+                reprocess_existing=True,
+            )
+        except Exception as exc:
+            assert processing_failure_status(exc) == "insufficient_evidence"
+        else:
+            raise AssertionError("terminal review must remain closed")
+        finally:
+            market_runtime.decide_market_item_with_llm = original_decider
+        assert repeated_calls == 0
+
+
+def test_event_uncertain_preserves_terminal_status_through_processing_wrapper() -> None:
+    original_decider = market_runtime.decide_market_item_with_llm
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "event-insufficient.sqlite3"
+        init_db(db_path).close()
+        item = NormalizedMarketItem(
+            source="sina_flash",
+            source_category="news_media",
+            content_type="flash",
+            title="证据不足的快讯",
+            raw={"source_event_id": "flash-insufficient-1"},
+        )
+        raw_item = {
+            "source": "sina_flash",
+            "source_event_id": "flash-insufficient-1",
+            "event_type": "flash",
+            "title": item.title,
+        }
+        item_id, review_id = record_production_admission(
+            item,
+            admitted(),
+            db_path=db_path,
+            task="sina_flash_portfolio",
+        )
+        market_runtime.decide_market_item_with_llm = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ProductionLLMInsufficientEvidence("valid uncertain result")
+        )
+        try:
+            market_runtime.process_market_item(
+                item,
+                raw_item,
+                store_kind="event",
+                task="sina_flash_portfolio",
+                db_path=db_path,
+                production_admission=admitted(),
+                production_portfolio=object(),
+                market_item_id=item_id,
+                market_review_id=review_id,
+            )
+        except market_runtime.MarketItemProcessingError as exc:
+            assert processing_failure_status(exc) == "insufficient_evidence"
+        else:
+            raise AssertionError("event uncertain must retain the terminal processing status")
+        finally:
+            market_runtime.decide_market_item_with_llm = original_decider
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute(
+                "SELECT review_status,decision_action FROM market_reviews WHERE id=?", (review_id,)
+            ).fetchone() == ("insufficient_evidence", None)
+            assert conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
+
+
 def main() -> int:
     test_five_content_types_share_one_decision_and_interpretation_contract()
     test_interpretation_failure_preserves_decision_action()
@@ -862,6 +1005,8 @@ def main() -> int:
     test_production_event_runtime_completes_unified_result_before_legacy_analysis()
     test_production_official_runtime_uses_unified_result_and_compatibility_copy()
     test_production_llm_failure_retries_same_review_without_delivery()
+    test_production_uncertain_terminates_review_without_delivery()
+    test_event_uncertain_preserves_terminal_status_through_processing_wrapper()
     print("market flow checks passed")
     return 0
 

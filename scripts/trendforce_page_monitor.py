@@ -22,6 +22,7 @@ from db_utils import ensure_trendforce_page_seen_table, retry_on_locked, update_
 from http_utils import http_get
 from llm_analysis import llm_config
 from market_flow import normalize_market_item, process_market_item
+from market_store import processing_failure_status
 from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from rss_monitor import DB_PATH, connect_db, fetch_article_body, parse_date, strip_tags
 from source_health import record_source_failure, record_source_success
@@ -532,14 +533,18 @@ def notify_item(item: dict) -> None:
         )
     except Exception as exc:
         profile_id = str(prepared.get("page_source") or PAGE_SOURCE_KEY)
+        status = processing_failure_status(exc)
         set_seen_item_lifecycle(
             profile_id,
             item_id,
-            processing_status="failed_retryable",
+            processing_status=status,
             processing_error=f"{type(exc).__name__}: {str(exc)[:400]}",
             processed_at=None,
             lifecycle_updated_at=datetime.now(timezone.utc).isoformat(),
         )
+        if status == "insufficient_evidence":
+            print(f"{profile_id} 证据不足，当前条目终止处理：title={prepared.get('title', '')}", flush=True)
+            return
         raise
     review = outcome.payload
     print(

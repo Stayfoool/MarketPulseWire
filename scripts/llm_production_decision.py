@@ -16,7 +16,7 @@ from llm_decision_web import build_web_projection
 from llm_rule_decision import LLMRulePrompt, resolve_input_text_scope
 from llm_rule_shadow import LLMRuleExecution, execute_llm_rule_decision
 from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem
-from market_store import application_revision
+from market_store import InsufficientEvidenceError, application_revision
 from admission_rules import PortfolioRuleConfig
 
 
@@ -30,6 +30,9 @@ PRODUCTION_MAX_OUTPUT_TOKENS = 6000
 class ProductionLLMDecisionError(RuntimeError):
     """Raised when an admitted item cannot produce an audited production decision."""
 
+
+class ProductionLLMInsufficientEvidence(InsufficientEvidenceError, ProductionLLMDecisionError):
+    """Raised for a valid uncertain result that must terminate without an action."""
 
 def _default_model_caller(deadline_monotonic: float):
     thinking = str(os.environ.get("RULE_COMPARISON_LLM_THINKING_TYPE") or "").strip() or None
@@ -155,6 +158,10 @@ def decide_production_market_item(
     if execution.decision is None:
         status = str(execution.candidate.get("evaluation_status") or "invalid_output")
         reason = str(execution.candidate.get("failure_reason") or "no valid DecisionResult")
+        if status == "uncertain":
+            raise ProductionLLMInsufficientEvidence(
+                f"LLM degree decision has insufficient evidence: {reason}"
+            )
         raise ProductionLLMDecisionError(f"LLM degree decision failed: {status}: {reason}")
     decision_audit = dict(execution.decision.audit_json)
     decision_audit.update(

@@ -24,6 +24,7 @@ from market_item import (
     item_from_event_mapping,
 )
 from market_store import (
+    InsufficientEvidenceError,
     complete_market_review,
     ensure_market_item_alias,
     fail_market_review,
@@ -73,9 +74,20 @@ class MarketProcessOutcome:
 
 
 class MarketItemProcessingError(RuntimeError):
-    def __init__(self, message: str, outcome: MarketProcessOutcome) -> None:
+    def __init__(
+        self,
+        message: str,
+        outcome: MarketProcessOutcome,
+        *,
+        cause: BaseException | None = None,
+    ) -> None:
         super().__init__(message)
         self.outcome = outcome
+        if cause is not None:
+            for field in ("review_status", "processing_status"):
+                value = getattr(cause, field, "")
+                if value:
+                    setattr(self, field, value)
 
 
 def is_official_news_source(source: str) -> bool:
@@ -216,6 +228,8 @@ def _process_content_item(
     decision_item = item
     item_id = official_news_item_id(raw_item) if store_kind == "official" else article_item_id(raw_item)
     snapshot = market_review_snapshot(market_review_id, db_path=db_path) if market_review_id is not None else None
+    if snapshot and snapshot["review_status"] == "insufficient_evidence":
+        raise InsufficientEvidenceError("market review is already terminal with insufficient evidence")
     canonical_existing = bool(snapshot and snapshot["review_status"] == "succeeded")
     legacy_existing: dict[str, Any] | None = None
     if canonical_existing and not reprocess_existing:
@@ -390,6 +404,8 @@ def _process_event_item(
             )
             conn.commit()
     snapshot = market_review_snapshot(market_review_id, db_path=db_path) if market_review_id is not None else None
+    if snapshot and snapshot["review_status"] == "insufficient_evidence":
+        raise InsufficientEvidenceError("market review is already terminal with insufficient evidence")
     canonical_existing = bool(snapshot and snapshot["review_status"] == "succeeded")
     inserted = not canonical_existing if market_review_id is not None else legacy_inserted
     empty_payload: dict[str, Any] = {}
@@ -464,7 +480,7 @@ def _process_event_item(
             decision=production_decision,
         )
     except Exception as exc:  # noqa: BLE001 - preserve the inserted event reference for batch recovery
-        raise MarketItemProcessingError(str(exc), partial) from exc
+        raise MarketItemProcessingError(str(exc), partial, cause=exc) from exc
     flow_result = _flow_result(decision_item, analysis, storage_ref)
     if market_review_id is not None and not flow_result.decision.audit_json.get("contract_error"):
         if market_item_id is None:

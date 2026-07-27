@@ -317,8 +317,11 @@ def llm_decision_rows(
         review_id = int(row["market_review_id"])
         attempts = audit_map.get(review_id, [])
         final_action = str(row["decision_action"] or "")
-        model_status = "completed" if str(row["review_status"] or "") == "succeeded" and final_action else "pending"
-        if attempts and model_status != "completed":
+        review_status = str(row["review_status"] or "")
+        model_status = "completed" if review_status == "succeeded" and final_action else "pending"
+        if review_status == "insufficient_evidence":
+            model_status = "insufficient_evidence"
+        elif attempts and model_status != "completed":
             model_status = str(attempts[-1].get("evaluation_status") or model_status)
         display_source = str(row["display_source"] or row["source"] or "")
         searchable = " ".join((display_source, str(row["title"] or ""), str(row["source_item_id"] or ""))).lower()
@@ -341,7 +344,7 @@ def llm_decision_rows(
                 "url": str(row["url"] or ""),
                 "published_at": str(row["published_at"] or ""),
                 "review_created_at": str(row["created_at"] or ""),
-                "review_status": str(row["review_status"] or ""),
+                "review_status": review_status,
                 "decision_action": final_action,
                 "importance": str(row["importance"] or ""),
                 "model_status": model_status,
@@ -363,6 +366,7 @@ def llm_decision_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     uncertain_attempts = sum(int(row.get("uncertain_attempts") or 0) for row in rows)
     recovered = sum(1 for row in rows if row.get("decision_action") and row.get("uncertain_attempts"))
     failed_retryable = sum(1 for row in rows if row.get("review_status") == "failed_retryable")
+    insufficient_evidence = sum(1 for row in rows if row.get("review_status") == "insufficient_evidence")
     return {
         "rows": len(rows),
         "actions": dict(actions),
@@ -370,4 +374,5 @@ def llm_decision_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "uncertain_attempts": uncertain_attempts,
         "uncertain_then_completed": recovered,
         "current_failed_retryable": failed_retryable,
+        "current_insufficient_evidence": insufficient_evidence,
     }

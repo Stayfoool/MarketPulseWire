@@ -19,6 +19,14 @@ from market_item import AdmissionResult, MarketFlowResult, NormalizedMarketItem
 
 
 ROOT = Path(__file__).resolve().parents[1]
+INSUFFICIENT_EVIDENCE_STATUS = "insufficient_evidence"
+
+
+class InsufficientEvidenceError(RuntimeError):
+    """Signals a terminal review that has no DecisionResult because evidence is insufficient."""
+
+    review_status = INSUFFICIENT_EVIDENCE_STATUS
+    processing_status = INSUFFICIENT_EVIDENCE_STATUS
 
 
 def utc_now() -> str:
@@ -255,18 +263,24 @@ def record_production_admission(
         ).fetchone()
         existing_status = str(existing[2]) if existing else ""
         same_admission = bool(existing and json_dict(existing[4]) == admission.to_dict())
-        if not force_new and existing and (
-            existing_status == "succeeded"
+        if existing and (
+            existing_status == INSUFFICIENT_EVIDENCE_STATUS
             or (
-                existing_status
-                in {
-                    "admitted_pending",
-                    "excluded",
-                    "not_applicable",
-                    "failed_retryable",
-                    "failed_terminal",
-                }
-                and same_admission
+                not force_new
+                and (
+                    existing_status == "succeeded"
+                    or (
+                        existing_status
+                        in {
+                            "admitted_pending",
+                            "excluded",
+                            "not_applicable",
+                            "failed_retryable",
+                            "failed_terminal",
+                        }
+                        and same_admission
+                    )
+                )
             )
         ):
             upsert_market_item(
@@ -484,19 +498,30 @@ def fail_market_review(
 ) -> None:
     now = utc_now()
     message = f"{type(error).__name__}: {str(error)[:400]}"
+    status = processing_failure_status(error)
     with connect_sqlite(db_path) as conn:
         row = conn.execute("SELECT market_item_id FROM market_reviews WHERE id = ?", (market_review_id,)).fetchone()
         if not row:
             return
         conn.execute(
-            "UPDATE market_reviews SET review_status = 'failed_retryable', completed_at = ? WHERE id = ?",
-            (now, market_review_id),
+            "UPDATE market_reviews SET review_status = ?, completed_at = ? WHERE id = ?",
+            (status, now, market_review_id),
         )
         conn.execute(
-            "UPDATE market_items SET processing_status = 'failed_retryable', processing_error = ?, updated_at = ? WHERE id = ?",
-            (message, now, int(row[0])),
+            "UPDATE market_items SET processing_status = ?, processing_error = ?, updated_at = ? WHERE id = ?",
+            (status, message, now, int(row[0])),
         )
         conn.commit()
+
+
+def processing_failure_status(error: BaseException) -> str:
+    """Map a processing exception to the shared retryable or terminal lifecycle status."""
+    if (
+        getattr(error, "review_status", "") == INSUFFICIENT_EVIDENCE_STATUS
+        and getattr(error, "processing_status", "") == INSUFFICIENT_EVIDENCE_STATUS
+    ):
+        return INSUFFICIENT_EVIDENCE_STATUS
+    return "failed_retryable"
 
 
 def record_article_delivery(

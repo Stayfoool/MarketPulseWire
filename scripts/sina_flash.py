@@ -21,6 +21,7 @@ from http_utils import http_get
 from macro_policy import macro_policy_match
 from market_db import DEFAULT_DB_PATH, init_db
 from market_flow import normalize_market_item, process_market_item
+from market_store import processing_failure_status
 from market_review_store import event_content_hash as content_hash, load_enabled_holdings
 from portfolio_import import import_holdings
 from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
@@ -439,13 +440,17 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
                 market_review_id=admission_context.market_review_id,
             )
         except Exception as exc:
+            status = processing_failure_status(exc)
             set_seen_item_lifecycle(
                 str(event["source_event_id"]),
-                processing_status="failed_retryable",
+                processing_status=status,
                 processing_error=f"{type(exc).__name__}: {str(exc)[:400]}",
                 processed_at=None,
                 lifecycle_updated_at=utc_now(),
             )
+            if status == "insufficient_evidence":
+                print(f"证据不足，当前快讯终止处理：{event['title']}", flush=True)
+                continue
             raise
         set_seen_item_lifecycle(
             str(event["source_event_id"]),

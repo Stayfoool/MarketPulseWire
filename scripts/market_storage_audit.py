@@ -331,6 +331,15 @@ def audit_storage(conn: sqlite3.Connection, *, since: str, until: str) -> dict[s
             """,
             article_params,
         ),
+        "current_insufficient_evidence": _scalar(
+            conn,
+            """
+            SELECT COUNT(*) FROM market_reviews
+            WHERE created_at>=? AND created_at<? AND is_current=1
+              AND review_status='insufficient_evidence'
+            """,
+            article_params,
+        ),
         "deliveries": _scalar(
             conn,
             """

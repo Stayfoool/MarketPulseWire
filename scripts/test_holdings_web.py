@@ -181,6 +181,8 @@ def test_llm_decision_view_is_read_only_and_distinguishes_uncertain() -> None:
     assert "大模型决策" in source
     assert "/api/llm-decisions" in source
     assert "未生成 action" in source
+    assert "证据不足" in source
+    assert "insufficient_evidence" in source
     assert "uncertain" in source
     assert "查看判断理由和证据" in source
     assert "打开原文" in source

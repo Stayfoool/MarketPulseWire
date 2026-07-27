@@ -223,6 +223,20 @@ def test_production_decision_boundary_is_llm_only() -> None:
     assert "def decide_market_item_with_llm(" in engine
     assert "def decide_market_item(" not in engine
     assert "from llm_production_decision import decide_production_market_item" in engine
+    assert "class ProductionLLMInsufficientEvidence" in production
+    assert 'if status == "uncertain"' in production
+    for collector in (
+        "rss_monitor.py",
+        "trendforce_page_monitor.py",
+        "alphabstract_monitor.py",
+        "china_finance_media_monitor.py",
+        "trade_policy_monitor.py",
+        "value_directory_monitor.py",
+        "sina_flash.py",
+        "sina_stock_news.py",
+        "company_disclosures.py",
+    ):
+        assert "processing_failure_status" in (SCRIPTS / collector).read_text(encoding="utf-8")
     assert "RULE_COMPARISON_CANDIDATE" not in production
     for forbidden in (
         "first_matching_push_rule",

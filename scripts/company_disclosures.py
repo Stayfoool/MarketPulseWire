@@ -18,6 +18,7 @@ from env_utils import load_env
 from market_db import DEFAULT_DB_PATH, init_db
 from market_flow import normalize_market_item, process_market_item
 from market_review_store import event_content_hash, load_enabled_holdings
+from market_store import processing_failure_status
 from portfolio_import import import_holdings
 from production_admission import persist_production_admission_context, production_admission_context
 from source_health import record_source_failure, record_source_success
@@ -332,20 +333,26 @@ def collect_disclosures(
                     flush=True,
                 )
             else:
-                outcome = process_market_item(
-                    normalized,
-                    event,
-                    store_kind="event",
-                    source_profile_id=SOURCE_ID,
-                    db_path=db_path,
-                    analyze=analyze,
-                    deliver=deliver,
-                    production_admission=admission,
-                    production_portfolio=admission_context.portfolio,
-                    market_item_id=admission_context.market_item_id,
-                    market_review_id=admission_context.market_review_id,
-                )
-                stats["processed"] += 1 if outcome.inserted else 0
+                try:
+                    outcome = process_market_item(
+                        normalized,
+                        event,
+                        store_kind="event",
+                        source_profile_id=SOURCE_ID,
+                        db_path=db_path,
+                        analyze=analyze,
+                        deliver=deliver,
+                        production_admission=admission,
+                        production_portfolio=admission_context.portfolio,
+                        market_item_id=admission_context.market_item_id,
+                        market_review_id=admission_context.market_review_id,
+                    )
+                except Exception as exc:
+                    if processing_failure_status(exc) != "insufficient_evidence":
+                        raise
+                    print(f"[insufficient_evidence] {identity} {record.symbol} {record.title}", flush=True)
+                else:
+                    stats["processed"] += 1 if outcome.inserted else 0
         if not dry_run and not identity_known:
             known.add(identity)
             known_order.append(identity)

@@ -225,7 +225,10 @@ degree rules and returns the only production `DecisionResult`. There is no
 configuration selector or retained deterministic action code, and
 model failure does not fall back. A failed model request, invalid result or
 private-audit write marks the current review `failed_retryable` and creates no
-interpretation, delivery or dedup reservation.
+interpretation, delivery or dedup reservation. A structurally and evidentially
+valid no-match-plus-`uncertain` result instead records terminal
+`insufficient_evidence`; it creates no `DecisionResult` and is not automatically
+evaluated again.
 
 `RULE_CORE_CONFIG` is the persisted source for production five-group range
 admission and the Web workbench's `媒体关键词` page. The page edits only
@@ -306,7 +309,8 @@ resolves those ids to the original text. Each rule may cite at most three exact
 segments; response-wide evidence totals remain audit metrics rather than
 validity limits, and ellipsis punctuation does not invalidate a segment. The
 private file contains only reviewed degree-decision rules. All `not_matched` results
-produce `archive`; no match plus any `uncertain` result produces no decision.
+produce `archive`; no match plus any valid `uncertain` result produces no decision
+and records terminal `insufficient_evidence`.
 A structurally invalid, evidence-invalid or conflicting response may receive
 one correction request containing the validation errors. Network retries and
 that correction share one hard 120-second total wall-clock budget.
@@ -314,6 +318,22 @@ The production LLM HTTP client connects to `LLM_BASE_URL` directly and does not
 inherit collector `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` variables. Source
 fetching continues to use `proxy.env`; no SOCKS dependency is required for the
 model provider request.
+
+After first deploying this lifecycle, preview current retryable reviews whose
+latest bounded private-audit projection is valid `uncertain`:
+
+```bash
+sudo -u surveil /opt/surveil/.venv/bin/python \
+  /opt/surveil/scripts/backfill_llm_insufficient_evidence.py \
+  --db /opt/surveil/data/surveil.sqlite3 \
+  --audit-dir /opt/surveil/reports/llm-decision-audits
+```
+
+Create and verify a mode-`0600` online SQLite backup, review the redacted counts,
+then apply explicitly with `--apply`. The command changes only current
+`failed_retryable` reviews with no decision whose latest private projection is
+`uncertain`, plus the matching canonical item and `seen_items` lifecycle. It is
+idempotent, makes no model request and sends no message.
 
 Each production decision audit stores exact requests, raw responses, response
 metadata and validation details for all calls under
