@@ -19,6 +19,10 @@ from feishu import send_card, send_card_with_response
 from feishu_app import configured as feishu_app_configured
 from feishu_app import feedback_enabled, send_interactive_card
 from industry_fact_dedup import INDUSTRY_FACT_RULE_ID, industry_fact_dedup_hit
+from investment_bank_report_dedup import (
+    INVESTMENT_BANK_REPORT_RULE_ID,
+    investment_bank_report_dedup_hit,
+)
 from market_card_view import decision_basis_reasons, interpretation_core
 from market_db import DEFAULT_DB_PATH
 from macro_event_dedup import MACRO_DEDUP_RULE_IDS, macro_event_dedup_hit
@@ -125,6 +129,11 @@ def _duplicate_article_review(
             "同一产业事实跨来源去重：已由 "
             f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
         )
+    elif rule_id == INVESTMENT_BANK_REPORT_RULE_ID:
+        note = (
+            "同一投行个股评级/目标价报告跨来源去重：已由 "
+            f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
+        )
     elif rule_id == COMPANY_EVENT_RULE_ID:
         note = (
             "同一公司事件事实跨来源去重：已由 "
@@ -165,6 +174,8 @@ def _duplicate_official_review(
         label = "同一美国宏观/政策催化事件跨来源去重"
     elif rule_id == INDUSTRY_FACT_RULE_ID:
         label = "同一产业事实跨来源去重"
+    elif rule_id == INVESTMENT_BANK_REPORT_RULE_ID:
+        label = "同一投行个股评级/目标价报告跨来源去重"
     elif rule_id == COMPANY_EVENT_RULE_ID:
         label = "同一公司事件事实跨来源去重"
     else:
@@ -196,6 +207,7 @@ def _reserve_delivery_alert(
         macro_event_dedup_hit(item, decision)
         or intraday_market_move_dedup_hit(item, decision)
         or industry_fact_dedup_hit(item, decision)
+        or investment_bank_report_dedup_hit(item, decision)
     )
     reservation = reserve_rule_alert(
         payload,
@@ -441,8 +453,15 @@ def deliver_event(
         market_move_duplicate = rule_id == MARKET_MOVE_RULE_ID
         macro_duplicate = rule_id in MACRO_DEDUP_RULE_IDS
         industry_fact_duplicate = rule_id == INDUSTRY_FACT_RULE_ID
+        investment_bank_report_duplicate = rule_id == INVESTMENT_BANK_REPORT_RULE_ID
         company_event_duplicate = rule_id == COMPANY_EVENT_RULE_ID
-        duplicate_status = market_move_duplicate or macro_duplicate or industry_fact_duplicate or company_event_duplicate
+        duplicate_status = (
+            market_move_duplicate
+            or macro_duplicate
+            or industry_fact_duplicate
+            or investment_bank_report_duplicate
+            or company_event_duplicate
+        )
         if market_move_duplicate:
             reason = "同一盘中行情事件跨来源去重"
             dedup_kind = "intraday_market_move"
@@ -452,6 +471,9 @@ def deliver_event(
         elif industry_fact_duplicate:
             reason = "同一产业事实跨来源去重"
             dedup_kind = "industry_fact"
+        elif investment_bank_report_duplicate:
+            reason = "同一投行个股评级/目标价报告跨来源去重"
+            dedup_kind = "investment_bank_report"
         elif company_event_duplicate:
             reason = "同一公司事件事实跨来源去重"
             dedup_kind = "company_event_fact_set"

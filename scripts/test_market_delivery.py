@@ -102,6 +102,30 @@ def industry_rule() -> dict:
     return {"rule_id": "industry_quantified_hardline"}
 
 
+def rating_report_rule(text: str) -> dict:
+    return {
+        "rule_id": "holding_rating_revision",
+        "decision_action": "push",
+        "evidence": [{"evidence_id": "B1", "field": "full_text", "quote": text}],
+    }
+
+
+def install_test_rating_report_extractor():
+    original = market_delivery.investment_bank_report_dedup_hit
+
+    def extract(item: dict, decision: DecisionResult):
+        from investment_bank_report_dedup import investment_bank_report_dedup_hit
+
+        return investment_bank_report_dedup_hit(
+            item,
+            decision,
+            institutions=(("nomura", ("野村", "野村证券", "Nomura")),),
+        )
+
+    market_delivery.investment_bank_report_dedup_hit = extract
+    return original
+
+
 def required_decision(payload: dict) -> DecisionResult:
     decision = decision_result_from_payload(payload)
     assert decision is not None
@@ -498,6 +522,132 @@ def test_article_delivery_dedup_skips_without_changing_decision_action() -> None
         assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
     finally:
         market_delivery.send_card = original_send
+
+
+def test_investment_bank_report_cross_source_article_dedup_preserves_push_decision() -> None:
+    original_send = market_delivery.send_card
+    original_extractor = install_test_rating_report_extractor()
+    calls: list[dict] = []
+    first_text = "野村证券首次覆盖长鑫科技，给予买入评级和116元目标价。"
+    second_text = "野村对长鑫科技给出目标价为人民币116元，属于首次覆盖并给予买入评级。"
+    try:
+        market_delivery.send_card = lambda card: calls.append(card) or True
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            first_item = {
+                "id": "nomura-report-1",
+                "title": first_text,
+                "published_at": "2026-07-27T02:41:20+00:00",
+            }
+            second_item = {
+                "id": "nomura-report-2",
+                "title": second_text,
+                "published_at": "2026-07-27T03:12:00+00:00",
+            }
+            first_review = content_review("push", rule_hits=[rating_report_rule(first_text)])
+            second_review = content_review("push", rule_hits=[rating_report_rule(second_text)])
+            with sqlite3.connect(db_path) as conn:
+                save_article_review(conn, "source_a", first_item, first_review)
+                save_article_review(conn, "source_b", second_item, second_review)
+            first_status = market_delivery.deliver_article_review(
+                "source_a", first_item, first_review,
+                decision=required_decision(first_review), db_path=db_path,
+            )
+            second_status = market_delivery.deliver_article_review(
+                "source_b", second_item, second_review,
+                decision=required_decision(second_review), db_path=db_path,
+            )
+            with sqlite3.connect(db_path) as conn:
+                stored = article_review_exists(conn, "source_b", "nomura-report-2")
+        assert [first_status, second_status] == ["sent", "duplicate"]
+        assert len(calls) == 1
+        assert stored is not None
+        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
+        assert stored["raw"]["raw"]["rule_alert_dedup"]["rule_id"] == "investment_bank_report_dedup"
+    finally:
+        market_delivery.send_card = original_send
+        market_delivery.investment_bank_report_dedup_hit = original_extractor
+
+
+def test_investment_bank_report_official_and_event_paths_share_identity() -> None:
+    original_webhook = os.environ.get("FEISHU_WEBHOOK")
+    original_send = market_delivery.send_card
+    original_event_send = market_delivery.send_card_with_response
+    original_extractor = install_test_rating_report_extractor()
+    text = "野村证券首次覆盖长鑫科技，给予买入评级和116元目标价。"
+    rewrite = "野村对长鑫科技首次覆盖，评级买入，目标价人民币116元。"
+    try:
+        os.environ["FEISHU_WEBHOOK"] = "https://example.invalid/webhook"
+        market_delivery.send_card = lambda card: True
+        market_delivery.send_card_with_response = lambda card: FeishuResponse(True, 0, "ok", '{"code":0}')
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            official_item = {
+                "id": "nomura-official-1", "title": text,
+                "published_at": "2026-07-27T02:41:20+00:00",
+            }
+            official_review = content_review("push", rule_hits=[rating_report_rule(text)], official=True)
+            with sqlite3.connect(db_path) as conn:
+                save_official_review(conn, "research_wire", official_item, official_review)
+            assert market_delivery.deliver_official_review(
+                "research_wire", official_item, official_review,
+                decision=required_decision(official_review), analysis_lines=["核心内容：测试。"], db_path=db_path,
+            ) == "sent"
+            event_id = insert_event(
+                db_path, "nomura-event-2", rewrite, source="news_wire",
+                summary=rewrite, published_at="2026-07-27T03:12:00+00:00",
+            )
+            analysis = decision_analysis(rule_hits=[rating_report_rule(rewrite)])
+            assert market_delivery.deliver_event(
+                event_id, analysis, decision=required_decision(analysis), db_path=db_path,
+            ) == "duplicate"
+            rows = delivery_rows(db_path)
+        assert rows[0][0] == "duplicate"
+        payload = json.loads(rows[0][2])
+        assert payload["dedup_kind"] == "investment_bank_report"
+        assert payload["first_source"] == "research_wire"
+    finally:
+        market_delivery.send_card = original_send
+        market_delivery.send_card_with_response = original_event_send
+        market_delivery.investment_bank_report_dedup_hit = original_extractor
+        if original_webhook is None:
+            os.environ.pop("FEISHU_WEBHOOK", None)
+        else:
+            os.environ["FEISHU_WEBHOOK"] = original_webhook
+
+
+def test_investment_bank_report_send_failure_releases_reservation() -> None:
+    original_send = market_delivery.send_card
+    original_extractor = install_test_rating_report_extractor()
+    text = "野村证券首次覆盖长鑫科技，给予买入评级和116元目标价。"
+    review = content_review("push", rule_hits=[rating_report_rule(text)])
+    try:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "surveil.sqlite3"
+            init_db(db_path).close()
+            failed_item = {"id": "nomura-failed", "title": text, "published_at": "2026-07-27T02:41:20+00:00"}
+            retry_item = {**failed_item, "id": "nomura-retry"}
+            market_delivery.send_card = lambda card: False
+            assert market_delivery.deliver_article_review(
+                "source_a", failed_item, review,
+                decision=required_decision(review), db_path=db_path, update_compatibility=False,
+            ) == "skipped"
+            market_delivery.send_card = lambda card: True
+            assert market_delivery.deliver_article_review(
+                "source_b", retry_item, review,
+                decision=required_decision(review), db_path=db_path, update_compatibility=False,
+            ) == "sent"
+            with sqlite3.connect(db_path) as conn:
+                status = conn.execute(
+                    "SELECT status FROM rule_alert_dedup WHERE rule_id=?",
+                    ("investment_bank_report_dedup",),
+                ).fetchone()[0]
+        assert status == "sent"
+    finally:
+        market_delivery.send_card = original_send
+        market_delivery.investment_bank_report_dedup_hit = original_extractor
 
 
 def test_intraday_market_move_cross_source_dedup_preserves_push_decision() -> None:
@@ -1204,6 +1354,9 @@ def main() -> int:
     test_content_delivery_uses_decision_action_and_marks_legacy_rows()
     test_reloaded_article_review_still_uses_nested_decision_action()
     test_article_delivery_dedup_skips_without_changing_decision_action()
+    test_investment_bank_report_cross_source_article_dedup_preserves_push_decision()
+    test_investment_bank_report_official_and_event_paths_share_identity()
+    test_investment_bank_report_send_failure_releases_reservation()
     test_intraday_market_move_cross_source_dedup_preserves_push_decision()
     test_distinct_concepts_are_not_intraday_market_move_duplicates()
     test_intraday_market_move_send_failure_releases_reservation()

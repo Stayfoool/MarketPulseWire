@@ -36,6 +36,7 @@ CI_SAFE_TESTS = (
     "test_holdings_web.py",
     "test_http_utils.py",
     "test_industry_fact_dedup.py",
+    "test_investment_bank_report_dedup.py",
     "test_international_bank_fed.py",
     "test_jygs_actions.py",
     "test_link_enrichment.py",
