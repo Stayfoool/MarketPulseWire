@@ -10,12 +10,21 @@ from market_item import DecisionResult
 INDUSTRY_DECISION = DecisionResult(
     action="push",
     importance="high",
-    rule_hits=[{"rule_id": "industry_quantified_hardline"}],
+    rule_hits=[{"rule_id": "industry_price_supply_change"}],
+)
+LEGACY_INDUSTRY_DECISION = DecisionResult(
+    action="push",
+    importance="high",
+    rule_hits=[{"rule_id": "semiconductor_price_supply_change"}],
 )
 
 
-def hit(title: str, summary: str = "") -> dict | None:
-    return industry_fact_dedup_hit({"title": title, "summary": summary}, INDUSTRY_DECISION)
+def hit(
+    title: str,
+    summary: str = "",
+    decision: DecisionResult = INDUSTRY_DECISION,
+) -> dict | None:
+    return industry_fact_dedup_hit({"title": title, "summary": summary}, decision)
 
 
 def test_ibm_cross_source_rewordings_share_one_fact_identity() -> None:
@@ -31,6 +40,11 @@ def test_ibm_cross_source_rewordings_share_one_fact_identity() -> None:
     assert chinese["rule_id"] == INDUSTRY_FACT_RULE_ID
     assert chinese["dedup_key"] == english["dedup_key"]
     assert chinese["dedup_lookback_minutes"] == 36 * 60
+    assert hit(
+        "IBM称客户将资本支出转向服务器、存储和内存采购",
+        "企业为在涨价前锁定供应紧张的基础设施而调整预算。",
+        LEGACY_INDUSTRY_DECISION,
+    ) is not None
 
 
 def test_coreweave_cross_source_rewordings_share_one_fact_identity() -> None:

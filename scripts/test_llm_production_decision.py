@@ -69,7 +69,7 @@ def response(action: str = "push") -> ChatCompletionResponse:
                     "evidence_ids": ["B2"],
                     "reason": "原文确认产能扩张进入执行阶段。",
                 }
-                if rule.rule_id == "semiconductor_material_change"
+                if rule.rule_id == "company_industry_execution_change"
                 else {"rule_id": rule.rule_id, "judgement": "not_matched"}
             )
             for rule in rules_for_families(("semiconductor_ai",))
@@ -97,7 +97,7 @@ def uncertain_response() -> ChatCompletionResponse:
                     "counterevidence_ids": ["T1"],
                     "reason": "现有标题缺少决定 action 所需的阶段和量级。",
                 }
-                if rule.rule_id == "semiconductor_material_change"
+                if rule.rule_id == "company_industry_execution_change"
                 else {"rule_id": rule.rule_id, "judgement": "not_matched"}
             )
             for rule in rules

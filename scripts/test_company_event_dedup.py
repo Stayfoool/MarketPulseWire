@@ -13,6 +13,13 @@ COMBINED_DECISION = DecisionResult(
     action="push",
     rule_hits=[{"rule_id": "holding_keyword_immediate_alert"}, {"rule_id": "industry_quantified_hardline"}],
 )
+SHARED_RULE_IDS = (
+    "capital_control_share_change",
+    "company_credit_financing_constraint",
+    "company_industry_execution_change",
+    "company_performance_change",
+    "industry_price_supply_change",
+)
 
 
 def hits(
@@ -46,6 +53,14 @@ def test_earnings_forecasts_converge_for_any_explicit_company() -> None:
     assert matches[0]["dedup_alias_keys"] == [
         "company_event:biwin_storage:earnings_forecast:2026-H1:net_profit"
     ]
+
+
+def test_active_shared_rule_ids_and_retired_ids_keep_company_event_eligibility() -> None:
+    title = "测试科技：预计2026年半年度净利润4.8亿元-5.6亿元"
+    for rule_id in SHARED_RULE_IDS:
+        decision = DecisionResult(action="push", rule_hits=[{"rule_id": rule_id}])
+        assert hit(title, decision) is not None
+    assert hit(title, INDUSTRY_DECISION) is not None
 
 
 def test_xianfeng_joint_venture_rewrites_converge_without_allowlist() -> None:
@@ -142,6 +157,7 @@ def test_event_priority_and_subject_noise_do_not_create_wrong_identities() -> No
 
 def main() -> int:
     test_earnings_forecasts_converge_for_any_explicit_company()
+    test_active_shared_rule_ids_and_retired_ids_keep_company_event_eligibility()
     test_xianfeng_joint_venture_rewrites_converge_without_allowlist()
     test_multi_company_roundups_extract_the_same_fact_set_regardless_of_order()
     test_versions_periods_and_distinct_events_remain_independent()

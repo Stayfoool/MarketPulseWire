@@ -14,7 +14,13 @@ from market_item import DecisionResult
 COMPANY_EVENT_RULE_ID = "company_event_dedup"
 COMPANY_EVENT_LOOKBACK_DAYS = 90
 BEIJING_TIMEZONE = timezone(timedelta(hours=8))
+# Active shared-rule IDs and retired IDs are both accepted so stored decisions
+# keep the same delivery-only identities across the private-rule cut-over.
 ELIGIBLE_RULE_IDS = {
+    "capital_control_share_change",
+    "company_credit_financing_constraint",
+    "company_industry_execution_change",
+    "company_performance_change",
     "holding_keyword_immediate_alert",
     "industry_quantified_hardline",
     "holding_immediate_alert",
@@ -25,6 +31,7 @@ ELIGIBLE_RULE_IDS = {
     "industry_forecast_revision",
     "ai_compute_constraint",
     "ai_credit_constraint",
+    "industry_price_supply_change",
 }
 
 # These ids only preserve reservations created by the bounded predecessor. They

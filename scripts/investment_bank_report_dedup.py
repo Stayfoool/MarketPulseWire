@@ -11,7 +11,11 @@ from market_item import DecisionResult
 
 
 INVESTMENT_BANK_REPORT_RULE_ID = "investment_bank_report_dedup"
-RATING_RULE_IDS = {"holding_rating_revision", "investment_bank_allocation_change"}
+RATING_RULE_IDS = {
+    "equity_rating_revision",
+    "holding_rating_revision",
+    "investment_bank_allocation_change",
+}
 _COVERAGE_MARKERS = (
     "首次覆盖",
     "初次覆盖",

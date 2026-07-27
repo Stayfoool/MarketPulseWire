@@ -96,7 +96,7 @@ def test_completed_comparison_records_usage_and_private_model_audit() -> None:
     def caller(prompt):
         captured["prompt"] = prompt
         return _model_response(
-            _response("semiconductor_ai", "semiconductor_material_change", "push")
+            _response("semiconductor_ai", "company_industry_execution_change", "push")
         )
 
     item = _item()
@@ -117,7 +117,7 @@ def test_completed_comparison_records_usage_and_private_model_audit() -> None:
     assert candidate["usage"]["total_tokens"] == 150
     assert candidate["attempts"] == 1
     assert candidate["elapsed_seconds"] == 0.25
-    assert candidate["rule_ids"] == ["semiconductor_material_change"]
+    assert candidate["rule_ids"] == ["company_industry_execution_change"]
     assert "source_metadata" not in captured["prompt"].user_payload
     assert "current_decision" not in json.dumps(captured["prompt"].user_payload, ensure_ascii=False)
     audit = comparison["candidate"]["model_audit"]
@@ -147,7 +147,7 @@ def test_invalid_output_model_failure_and_missing_body_behavior() -> None:
     assert unavailable["candidate"]["model_audit"]["calls"][0]["response"] is None
 
     calls = []
-    response = json.loads(_response("semiconductor_ai", "semiconductor_material_change", "push"))
+    response = json.loads(_response("semiconductor_ai", "company_industry_execution_change", "push"))
     matched = next(result for result in response["rule_results"] if result["judgement"] == "matched")
     matched["evidence_ids"] = ["T1"]
 
@@ -215,7 +215,7 @@ def test_no_match_with_uncertain_does_not_retry_or_create_candidate() -> None:
                         "counterevidence_ids": ["B1"],
                         "reason": "决定 action 所需事实仍有冲突。",
                     }
-                    if rule.rule_id == "semiconductor_material_change"
+                    if rule.rule_id == "company_industry_execution_change"
                     else {"rule_id": rule.rule_id, "judgement": "not_matched"}
                 )
                 for rule in rules
@@ -253,7 +253,7 @@ def test_company_disclosure_receives_only_holding_rules_and_minimal_matched_cont
 
     def caller(prompt):
         captured["prompt"] = prompt
-        return _model_response(_response("holding", "holding_material_event", "daily"))
+        return _model_response(_response("holding", "company_industry_execution_change", "daily"))
 
     comparison = _compare(
         _item(

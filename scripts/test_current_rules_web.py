@@ -89,12 +89,20 @@ def test_current_rules_projection_uses_strict_current_sources() -> None:
         "exclusions",
         "version",
     }
-    cross_family = {
+    shared_rules = {
         rule["rule_id"]: rule for rule in llm["rules"]
-        if rule["rule_id"] in {"holding_rating_revision", "investment_bank_allocation_change"}
+        if set(rule["applicable_families"]) == {"holding", "semiconductor_ai"}
     }
-    assert set(cross_family) == {"holding_rating_revision", "investment_bank_allocation_change"}
-    for rule in cross_family.values():
+    assert set(shared_rules) == {
+        "equity_rating_revision",
+        "capital_control_share_change",
+        "industry_price_supply_change",
+        "company_industry_execution_change",
+        "company_performance_change",
+        "company_credit_financing_constraint",
+        "investment_bank_allocation_change",
+    }
+    for rule in shared_rules.values():
         assert rule["applicable_families"] == ["holding", "semiconductor_ai"]
         assert rule["applicable_family_labels"] == ["持仓", "半导体/AI"]
 
