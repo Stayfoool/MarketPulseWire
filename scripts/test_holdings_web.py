@@ -726,6 +726,7 @@ def test_event_center_does_not_duplicate_seen_item_projected_to_event() -> None:
 def test_event_center_source_filter_uses_grouped_dropdown() -> None:
     html = frontend_source()
     assert '<select id="eventSource"' in html
+    assert 'id="eventQueryButton"' in html
     assert '全部来源' in html
     assert 'loadEventSourceOptions' in html
     assert 'eventSourceFilterValue' in html
@@ -733,6 +734,10 @@ def test_event_center_source_filter_uses_grouped_dropdown() -> None:
     assert 'eventFromDate' in html
     assert 'eventToDate' in html
     assert "params.set('from', startDate)" in html
+    assert "eventAbortController?.abort()" in html
+    assert "operationId !== eventOperationId" in html
+    assert "正在查询..." in html
+    assert "queryButton.disabled = true" in html
     assert "params.set('to', endDate)" in html
     assert 'eventIncludeBaseline' in html
     assert '显示基线条目' in html
