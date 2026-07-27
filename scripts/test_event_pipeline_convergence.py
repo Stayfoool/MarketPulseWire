@@ -46,10 +46,8 @@ def test_analyze_event_writes_interpretation_result_and_legacy_fields() -> None:
         assert decision.rule_hits[0]["rule_id"] == "macro_policy_line"
         return InterpretationResult(
             core_content="美国 CPI 大幅低于预期，美债收益率下行。",
-            brief_reason="宏观政策线硬规则命中。",
-            related_targets=[{"name": "A股风险偏好", "relation": "宏观线"}],
             model="fake-model",
-            prompt_version="market_interpreter_v1",
+            prompt_version="market_interpreter_v2",
         )
 
     with TemporaryDirectory() as tmpdir:
@@ -93,11 +91,14 @@ def test_analyze_event_writes_interpretation_result_and_legacy_fields() -> None:
             conn.close()
     assert analysis["_decision_result"]["action"] == "push"
     assert analysis["core_content"].startswith("美国 CPI")
-    assert analysis["related_holdings"][0]["name"] == "A股风险偏好"
+    assert "brief_reason" not in analysis
+    assert "related_holdings" not in analysis
     assert analysis["_interpretation_result"]["model"] == "fake-model"
+    assert analysis["_interpretation_result"]["brief_reason"] == ""
+    assert analysis["_interpretation_result"]["related_targets"] == []
     assert row[:3] == ("fake-model", "high", 1)
     stored = json.loads(row[3])
-    assert stored["_interpretation_result"]["prompt_version"] == "market_interpreter_v1"
+    assert stored["_interpretation_result"]["prompt_version"] == "market_interpreter_v2"
 
 
 def test_event_entry_without_decision_fails_closed() -> None:

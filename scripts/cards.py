@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from feishu_image import image_key_from_url
 from link_enrichment import analysis_text_with_links, display_url
-from market_card_view import card_push_reason, card_targets, interpretation_core
+from market_card_view import decision_basis_reasons, interpretation_core
 from media_sources import is_overseas_media_source, overseas_media_access_note, overseas_media_module
 from post_analysis import analyze_post, company_label, extract_tickers
 
@@ -89,82 +88,11 @@ def as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
-def thin_article_card_enabled() -> bool:
-    return os.getenv("SURVEIL_THIN_ARTICLE_CARD", "1").strip() != "0"
-
-
 def review_analysis(review: dict[str, Any]) -> dict[str, Any]:
     analysis = review.get("analysis")
     if isinstance(analysis, dict):
         return analysis
     return review
-
-
-def target_names_from_review(review: dict[str, Any]) -> list[str]:
-    fallback = [str(item).strip() for item in as_list(review.get("affected_targets")) if str(item).strip()]
-    unified = card_targets(review, fallback_targets=fallback)
-    if unified:
-        return unified
-    targets = list(fallback)
-    analysis = review_analysis(review)
-    for item in as_list(analysis.get("related_targets")):
-        if isinstance(item, dict):
-            name = str(item.get("name") or "").strip()
-            code = str(item.get("code") or "").strip()
-            label = " ".join(part for part in (name, code) if part)
-        else:
-            label = str(item).strip()
-        if label:
-            targets.append(label)
-    for section_key in ("a_share", "global_equity"):
-        section = analysis.get(section_key)
-        if not isinstance(section, dict):
-            continue
-        for direction in ("positive", "negative"):
-            for item in as_list(section.get(direction)):
-                if isinstance(item, dict):
-                    name = str(item.get("name") or "").strip()
-                    code = str(item.get("code") or "").strip()
-                    label = " ".join(part for part in (name, code) if part)
-                else:
-                    label = str(item).strip()
-                if label:
-                    targets.append(label)
-    result: list[str] = []
-    seen: set[str] = set()
-    for target in targets:
-        key = target.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(target)
-        if len(result) >= 5:
-            break
-    return result
-
-
-def compact_notes_from_review(review: dict[str, Any]) -> list[str]:
-    notes: list[str] = []
-    reason = str(review.get("reason") or "").strip()
-    skeptic = review.get("skeptic") if isinstance(review.get("skeptic"), dict) else {}
-    skeptic_verdict = str(skeptic.get("skeptic_verdict") or "").strip()
-    final_push = str(skeptic.get("final_push_suggestion") or "").strip()
-    combined = f"{reason} {jsonish_compact(skeptic)}".lower()
-    if any(word in combined for word in ("待确认", "预告", "rumor", "unconfirmed")):
-        notes.append("待确认")
-    if any(word in combined for word in ("旧闻", "已定价", "price", "priced")):
-        notes.append("旧闻/已定价风险")
-    if skeptic_verdict and skeptic_verdict not in {"pass", "allow"}:
-        notes.append(f"Skeptic：{skeptic_verdict}")
-    if final_push in {"daily", "ignore"}:
-        notes.append(f"复核建议：{final_push}")
-    return notes[:3]
-
-
-def jsonish_compact(value: Any) -> str:
-    if isinstance(value, dict):
-        return " ".join(str(item) for item in value.values())
-    return str(value or "")
 
 
 def thin_core_content(item: dict[str, Any], review: dict[str, Any]) -> str:
@@ -254,28 +182,13 @@ def cls_metadata_lines(item: dict[str, Any], review: dict[str, Any] | None = Non
     return lines
 
 
-def thin_push_reason(item: dict[str, Any], review: dict[str, Any]) -> str:
-    unified = card_push_reason(item, review)
-    if unified:
-        return unified
-    raw = review.get("raw") if isinstance(review.get("raw"), dict) else {}
-    if review.get("mandatory_push") == "yicai_morning_brief":
-        return "每日固定栏目：第一财经券商晨会观点速递。"
-    macro = review.get("macro_policy_line") if isinstance(review.get("macro_policy_line"), dict) else raw.get("macro_policy_line")
-    if isinstance(macro, dict) and macro.get("matched"):
-        return "美国核心宏观/Fed 政策线，可能影响美债、美元、风险偏好和成长股估值。"
-    return ""
-
-
 def build_thin_article_card(source: str, item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
     title = str(item.get("title") or "")
     url = str(item.get("url") or "")
     text = str(item.get("full_text") or item.get("summary") or "")
     body_source = str(item.get("body_source") or "RSS")
     source_label = str(item.get("source_module") or source_module(source, url))
-    push_reason = thin_push_reason(item, review)
-    targets = target_names_from_review(review)
-    notes = compact_notes_from_review(review)
+    push_basis, omitted_basis = decision_basis_reasons(review)
     core = thin_core_content(item, review)
     preview_lines = value_directory_preview_lines(item)
     cls_lines = cls_metadata_lines(item, review)
@@ -292,15 +205,14 @@ def build_thin_article_card(source: str, item: dict[str, Any], review: dict[str,
         elements.append(div_markdown("**第一页提取**\n" + md_escape("\n".join(preview_lines))))
     if cls_lines:
         elements.append(div_markdown("**财联社元数据**\n" + md_escape("\n".join(cls_lines))))
-    if push_reason:
-        elements.append(div_markdown(f"**为什么推送**\n{md_escape(truncate(push_reason, 260))}"))
-    if targets:
-        elements.append(div_markdown("**相关标的/环节**\n" + md_escape("；".join(targets))))
-    if notes:
-        elements.append(div_markdown("**备注**\n" + md_escape("；".join(notes))))
+    if push_basis:
+        basis_lines = [f"- {truncate(reason, 180)}" for reason in push_basis]
+        if omitted_basis:
+            basis_lines.append(f"- 另命中 {omitted_basis} 项同级决策规则")
+        elements.append(div_markdown("**推送依据**\n" + md_escape("\n".join(basis_lines))))
     if text:
         elements.append(div_markdown(f"**原文/摘要**\n{md_escape(truncate(text, 900))}"))
-    elements.append(note_text(f"正文来源：{body_source}；完整门控和模型 JSON 已写入后台。"))
+    elements.append(note_text(f"正文来源：{body_source}；完整决策审计已写入后台。"))
     if url:
         elements.append(
             {
@@ -552,7 +464,7 @@ def access_note(source: str, url: str, body_source: str) -> str:
 
 def build_article_card(source: str, item: dict[str, Any]) -> dict[str, Any]:
     review = item.get("article_review") or item.get("review")
-    if thin_article_card_enabled() and isinstance(review, dict):
+    if isinstance(review, dict):
         return build_thin_article_card(source, item, review)
     title = item.get("title", "")
     url = item.get("url", "")

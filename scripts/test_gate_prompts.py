@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression checks for investment gate prompt guardrails."""
+"""Regression checks for core-only market interpretation prompts."""
 
 from __future__ import annotations
 
@@ -16,18 +16,14 @@ def main() -> int:
     official_prompt = market_content_adapter.OFFICIAL_SYSTEM_PROMPT + "\n" + market_content_adapter.OFFICIAL_USER_PROMPT
 
     for prompt in (article_prompt, official_prompt):
-        assert_contains(prompt, "星际之门/Stargate-like")
-        assert_contains(prompt, "超大资本开支")
-        assert_contains(prompt, "待确认/预告性质")
-        assert_contains(prompt, "设备、材料、存储、光通信、PCB、先进封装、电力、液冷")
+        assert_contains(prompt, '"core_content"')
         assert_contains(prompt, "不要输出")
-        assert_contains(prompt, "规则层决定")
-        assert_contains(prompt, "不要把自己当成最终裁判")
+        assert_contains(prompt, "只由输入中的 DecisionResult 决定")
+        assert_contains(prompt, "不要输出推送原因、风险提示")
+        assert_contains(prompt, "不要总结规则、风险、估值或相关标的")
         assert_contains(prompt, "只输出 JSON")
 
-    assert_contains(article_prompt, "是否即时推送由规则层决定")
     assert_contains(article_prompt, "push_now")
-    assert_contains(official_prompt, "是否即时推送由规则层决定")
     assert_contains(official_prompt, "should_push_now")
     print("gate prompt guardrail checks passed")
     return 0

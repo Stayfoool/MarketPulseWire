@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from market_item import DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem
-from market_interpreter import interpret_market_item
+from market_interpreter import INTERPRETER_VERSION, interpret_market_item
 from market_runtime import (
     MarketItemProcessingError,
     MarketProcessOutcome,
@@ -16,7 +16,6 @@ from market_runtime import (
 
 
 FLOW_VERSION = "market_flow_v1"
-RelationMode = Literal["targets", "holdings"]
 ForbiddenFieldMode = Literal["article", "official", "event"]
 
 
@@ -27,7 +26,7 @@ def interpretation_failure(error: Exception) -> InterpretationResult:
         notes=[reason] if reason else [],
         llm_judgement="failed",
         model="interpretation_failed",
-        prompt_version="market_interpreter_v1",
+        prompt_version=INTERPRETER_VERSION,
     )
 
 
@@ -38,7 +37,7 @@ def rule_only_interpretation(item: NormalizedMarketItem, decision: DecisionResul
         related_targets=[],
         llm_judgement="not_needed",
         model="rule_only",
-        prompt_version="market_interpreter_v1",
+        prompt_version=INTERPRETER_VERSION,
     )
 
 
@@ -50,7 +49,6 @@ def evaluate_market_item(
     content: str = "",
     task: str = "为一条已完成规则决策的市场信息生成极简实时摘要。",
     intro: str = "请解读以下市场信息",
-    mode: RelationMode = "targets",
     forbidden_mode: ForbiddenFieldMode = "article",
     extra_notes: list[str] | None = None,
     user_agent: str = "surveil-market-flow/0.1",
@@ -79,7 +77,6 @@ def evaluate_market_item(
                 content=content,
                 task=task,
                 intro=intro,
-                mode=mode,
                 forbidden_mode=forbidden_mode,
                 extra_notes=extra_notes,
                 user_agent=user_agent,

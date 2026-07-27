@@ -18,13 +18,10 @@ from settings_store import FIELDS_BY_KEY
 
 
 def fake_interpretation(*args, **kwargs) -> InterpretationResult:
-    decision = args[1]
     return InterpretationResult(
         core_content="统一薄解读核心内容。",
-        brief_reason=decision.brief_reason or decision.reason or "规则上下文解读。",
-        related_targets=[{"name": "A股风险偏好", "relation": "规则给定关系"}],
         model="fake-model",
-        prompt_version="market_interpreter_v1",
+        prompt_version="market_interpreter_v2",
     )
 
 
@@ -53,6 +50,8 @@ def test_article_interpretation_cannot_override_decision_action() -> None:
     assert review["push_now"] is True
     assert review["raw"]["decision_result"]["action"] == "push"
     assert review["raw"]["_interpretation_result"]["model"] == "fake-model"
+    assert review["raw"]["_interpretation_result"]["brief_reason"] == ""
+    assert review["raw"]["_interpretation_result"]["related_targets"] == []
     assert "should_push" not in review["raw"]["_interpretation_result"]
 
 

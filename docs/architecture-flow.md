@@ -37,6 +37,8 @@ flowchart LR
 
 `DecisionResult.action` is the only push-eligibility input accepted by delivery. Delivery execution may still produce `sent`, `duplicate`, `skipped`, or `failed`. Missing decisions cannot fall back to legacy push fields. For a push-eligible intraday Chinese equity market move, delivery may derive a conservative source-neutral fact identity from the Beijing market date, direction, literal concept, and an already matched holding/keyword target; the first reservation sends and later matching source retransmissions are recorded as duplicates without changing the decision.
 
+After a valid `DecisionResult` exists, `market_interpreter` generates only `core_content`: a one-to-two-sentence summary of the decision-relevant facts. It does not generate a push reason, risk commentary, related targets or a second action judgement. Unified Feishu article, official-news and event cards render `核心内容` from this interpretation and render `推送依据` as a read-only projection of the persisted final `DecisionResult`: only rule-hit reasons whose `decision_action` equals the final action are shown, in rule order, with at most four distinct reasons and a bounded omitted-count line. For legacy decisions without rule-hit reasons, the final decision reason is the fallback. Collector `push_reason`, interpretation text and compatibility push fields cannot contribute to `推送依据`. These cards do not render interpretation risks or related-target sections; historical Web readers may still project fields stored by older interpreter versions.
+
 The production range admission is the logical OR of `holding`,
 `semiconductor_ai`, `macro_data`, `fed_policy`, and `trade_policy`. Ordinary
 article, research, official-company and Sina 7x24 items may enter through any
@@ -105,11 +107,11 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `company_disclosures.py` | One logical portfolio-disclosure collector, provider selection, baseline, source state and health |
 | `disclosure_providers.py` / `cninfo_disclosure_provider.py` | Provider-neutral disclosure contract and CNINFO public-query transport |
 | `disclosure_document.py` | Shared bounded PDF download, SHA-256 and `pypdf` text extraction |
-| `market_interpreter.py` | Thin interpretation and bounded LLM output normalization |
+| `market_interpreter.py` | Decision-downstream generation and strict normalization of the single `core_content` field; it cannot generate reasons, risks, targets or action judgements |
 | `market_content_adapter.py` | Article and official-news compatibility payload/store shape |
 | `market_event_adapter.py` | Event compatibility payload/store shape |
 | `market_review_store.py` | SQLite review/event persistence and historical row loading |
-| `market_delivery.py` | Rule/fact dedup reservation, Feishu execution, delivery status, pushed markers |
+| `market_delivery.py` | Rule/fact dedup reservation, DecisionResult-based Feishu push-basis projection and execution, delivery status, pushed markers |
 | `market_feedback.py` | Cross-source append-only human feedback, signed item identity, last-click-wins projection and quality aggregates |
 | `llm_decision_web.py` | Read-only Web projection of current SQLite `DecisionResult` plus bounded private-audit attempt summaries; it cannot create, change or restore an action |
 | `feishu_app.py` / `feishu_feedback_service.py` | Feedback-enabled application-bot send and official long-connection card callbacks |

@@ -28,7 +28,6 @@ from source_profiles import runtime_source_profile
 ARTICLE_SYSTEM_PROMPT = thin_system_prompt(task="为一条已完成规则决策的资讯/报告生成极简实时摘要。")
 ARTICLE_USER_PROMPT = thin_user_prompt_template(
     intro="请解读以下资讯/报告",
-    mode="targets",
     forbidden_mode="article",
     include_source_module=True,
 )
@@ -38,7 +37,6 @@ OFFICIAL_SYSTEM_PROMPT = thin_system_prompt(
 )
 OFFICIAL_USER_PROMPT = thin_user_prompt_template(
     intro="请解读以下核心产业链公司官网新闻",
-    mode="targets",
     forbidden_mode="official",
 )
 
@@ -149,20 +147,8 @@ def _source_enrichment_interpretation(normalized: NormalizedMarketItem) -> Inter
     facts = preview.get("facts") if isinstance(preview.get("facts"), dict) else {}
     if facts.get("status") != "ok":
         return None
-    targets = [
-        {"name": str(target), "code": "", "relation": "价值目录第一页可见信息", "direction": "uncertain"}
-        for target in facts.get("targets") or []
-        if str(target).strip()
-    ]
-    notes = [str(point) for point in facts.get("key_points") or [] if str(point).strip()]
-    preview_basis = str(facts.get("preview_basis") or "").strip()
-    if preview_basis:
-        notes.append(f"可见范围：{preview_basis}")
     return InterpretationResult(
         core_content=str(facts.get("core_content") or normalized.summary or normalized.title),
-        related_targets=targets[:5],
-        notes=notes,
-        llm_judgement="not_needed",
         model=str(facts.get("model") or "value_directory_preview"),
         prompt_version="value_directory_preview_v1",
     )
@@ -189,7 +175,6 @@ def _evaluate_content_item(
             else "为一条已完成规则决策的资讯/报告生成极简实时摘要。"
         ),
         intro="请解读以下核心产业链公司官网新闻" if official else "请解读以下资讯/报告",
-        mode="targets",
         forbidden_mode="official" if official else "article",
         extra_notes=["只可围绕 DecisionResult 的规则上下文解释，不得输出或改写推送开关。"],
         user_agent="surveil-official-content-flow/0.1" if official else "surveil-article-content-flow/0.1",
@@ -237,12 +222,7 @@ def _article_review_from_results(
         for rule in decision.rule_hits
         if rule.get("rule_id") and rule.get("protected_from_llm_downgrade")
     ]
-    interpretation_failed = interpretation.model == "interpretation_failed"
-    reason = (
-        decision.brief_reason or decision.reason
-        if interpretation_failed
-        else interpretation.brief_reason or decision.brief_reason or decision.reason
-    )
+    reason = decision.brief_reason or decision.reason
     return {
         "importance": decision.importance,
         "push_now": decision.should_push,
@@ -269,12 +249,7 @@ def _official_review_from_results(
     decision: DecisionResult,
     interpretation: InterpretationResult,
 ) -> dict[str, Any]:
-    interpretation_failed = interpretation.model == "interpretation_failed"
-    reason = (
-        decision.brief_reason or decision.reason
-        if interpretation_failed
-        else interpretation.brief_reason or decision.brief_reason or decision.reason
-    )
+    reason = decision.brief_reason or decision.reason
     analysis = {
         **interpretation.to_dict(),
         "_interpretation_result": interpretation.to_dict(),
@@ -353,7 +328,6 @@ def failed_review(item: dict[str, Any], error: Exception) -> dict[str, Any]:
 
 
 def gate_lines(review: dict[str, Any]) -> list[str]:
-    targets = review.get("affected_targets") or []
     lines = [
         f"重要性：{review.get('importance', 'low')}",
         f"是否即时推送：{'是' if review.get('push_now') else '否'}",
@@ -361,8 +335,6 @@ def gate_lines(review: dict[str, Any]) -> list[str]:
     reason = str(review.get("reason") or "").strip()
     if reason:
         lines.append(f"分流理由：{reason}")
-    if targets:
-        lines.append("相关标的：" + "、".join(str(item) for item in targets[:5]))
     return lines
 
 

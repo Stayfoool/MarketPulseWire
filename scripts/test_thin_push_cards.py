@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 
 from cards import build_article_card
+from market_card_view import decision_basis_reasons
 from market_delivery import compact_event_analysis_lines
 
 
@@ -52,13 +53,14 @@ def test_thin_article_card_keeps_llm_gate_reason_out_of_default_push_reason() ->
     text = flatten_card_text(card)
     assert "核心内容" in text
     assert "AI PCB需求放量" in text
-    assert "相关标的/环节" in text
-    assert "沪电股份" in text
+    assert "相关标的/环节" not in text
+    assert "沪电股份" not in text
+    assert "推送依据" not in text
     assert "重要性门控" not in text
     assert "门控理由" not in text
 
 
-def test_thin_article_card_shows_deterministic_push_reason_when_present() -> None:
+def test_thin_article_card_ignores_collector_push_reason() -> None:
     card = build_article_card(
         "cls_telegraph_api",
         {
@@ -66,12 +68,41 @@ def test_thin_article_card_shows_deterministic_push_reason_when_present() -> Non
             "summary": "市场关注美联储降息路径。",
             "published_at": "2026-07-09T08:00:00+00:00",
             "push_reason": "美国核心宏观/Fed 政策线。",
-            "article_review": {"daily_summary": "美国CPI今晚公布。", "affected_targets": ["A股风险偏好"]},
+            "article_review": {
+                "daily_summary": "美国CPI今晚公布。",
+                "affected_targets": ["A股风险偏好"],
+                "raw": {
+                    "_decision_result": {
+                        "action": "push",
+                        "reason": "最终决策依据。",
+                        "rule_hits": [],
+                    }
+                },
+            },
         },
     )
     text = flatten_card_text(card)
-    assert "为什么推送" in text
-    assert "美国核心宏观/Fed 政策线" in text
+    assert "推送依据" in text
+    assert "最终决策依据" in text
+    assert "美国核心宏观/Fed 政策线" not in text
+    assert "相关标的/环节" not in text
+
+
+def test_decision_basis_reads_persisted_raw_decision_only() -> None:
+    reasons, omitted = decision_basis_reasons(
+        {
+            "brief_reason": "解读风险不得展示。",
+            "raw": {
+                "_decision_result": {
+                    "action": "push",
+                    "reason": "最终决策依据。",
+                    "rule_hits": [],
+                }
+            },
+        }
+    )
+    assert reasons == ["最终决策依据。"]
+    assert omitted == 0
 
 
 def test_thin_article_card_prefers_unified_decision_and_interpretation_metadata() -> None:
@@ -85,12 +116,16 @@ def test_thin_article_card_prefers_unified_decision_and_interpretation_metadata(
                 "daily_summary": "旧 daily summary",
                 "analysis": {
                     "core_content": "统一解读：Rubin 机架级平台强调液冷与高速互联。",
+                    "brief_reason": "需关注估值和执行风险。",
                     "related_targets": [{"name": "液冷", "relation": "产业链环节"}],
                     "_decision_result": {
+                        "action": "push",
                         "brief_reason": "公司官网硬变量规则命中。",
                         "rule_hits": [
                             {
                                 "rule_id": "official_company_hard_variable",
+                                "decision_action": "push",
+                                "reason": "Rubin 平台已正式更新。",
                                 "affected_targets": ["AI/半导体产业链"],
                             }
                         ],
@@ -101,10 +136,34 @@ def test_thin_article_card_prefers_unified_decision_and_interpretation_metadata(
     )
     text = flatten_card_text(card)
     assert "统一解读：Rubin 机架级平台强调液冷与高速互联。" in text
-    assert "公司官网硬变量规则命中。" in text
-    assert "液冷" in text
-    assert "AI/半导体产业链" in text
+    assert "Rubin 平台已正式更新。" in text
+    assert "需关注估值和执行风险" not in text
+    assert "相关标的/环节" not in text
     assert "旧 daily summary" not in text
+
+
+def test_thin_article_card_bounds_winning_decision_reasons() -> None:
+    hits = [
+        {"rule_id": f"push_{index}", "decision_action": "push", "reason": f"强推依据 {index}"}
+        for index in range(1, 6)
+    ]
+    hits.insert(2, {"rule_id": "daily", "decision_action": "daily", "reason": "日报候选不得展示"})
+    card = build_article_card(
+        "wallstreetcn_news",
+        {
+            "title": "多规则命中",
+            "summary": "核心摘要",
+            "article_review": {
+                "raw": {"_decision_result": {"action": "push", "reason": "总理由", "rule_hits": hits}}
+            },
+        },
+    )
+    text = flatten_card_text(card)
+    for index in range(1, 5):
+        assert f"强推依据 {index}" in text
+    assert "强推依据 5" not in text
+    assert "另命中 1 项同级决策规则" in text
+    assert "日报候选不得展示" not in text
 
 
 def test_thin_article_card_shows_cls_vip_product_metadata_and_author_targets() -> None:
@@ -170,21 +229,26 @@ def test_full_article_card_shows_cls_metadata() -> None:
     assert "罗博特科 300757.SZ" in text
 
 
-def test_compact_event_analysis_lines_only_keep_core_and_targets() -> None:
+def test_compact_event_analysis_lines_only_keep_core_and_decision_basis() -> None:
     lines = compact_event_analysis_lines(
         {
             "core_content": "某公司上调AI服务器PCB订单指引。",
             "incremental_view": {"classification": "增量利好", "priced_in": "部分定价"},
             "price_impact": {"direction": "上涨", "reason": "可能带动板块情绪。"},
             "a_share": {"positive": [{"name": "沪电股份", "code": "002463.SZ"}], "negative": []},
-            "push_decision": {"reason": "模型认为应该推送。"},
+            "_decision_result": {
+                "action": "push",
+                "reason": "模型认为应该推送。",
+                "rule_hits": [],
+            },
             "_model": "deepseek-v4-pro",
         }
     )
     joined = "\n".join(lines)
     assert "核心内容：某公司上调AI服务器PCB订单指引。" in joined
-    assert "为什么推送：模型认为应该推送。" in joined
-    assert "相关标的：沪电股份 002463.SZ" in joined
+    assert "推送依据：" in joined
+    assert "模型认为应该推送。" in joined
+    assert "相关标的" not in joined
     assert "增量/定价" not in joined
     assert "初步影响" not in joined
     assert "模型：" not in joined
@@ -196,10 +260,13 @@ def test_compact_event_analysis_lines_prefers_unified_metadata_reason_and_target
             "core_content": "美国CPI大幅低于预期。",
             "related_holdings": [{"name": "A股风险偏好"}],
             "_decision_result": {
+                "action": "push",
                 "brief_reason": "宏观政策线规则命中。",
                 "rule_hits": [
                     {
                         "rule_id": "macro_policy_line",
+                        "decision_action": "push",
+                        "reason": "美国 CPI 大幅低于预期。",
                         "affected_targets": ["成长股估值"],
                     }
                 ],
@@ -208,17 +275,20 @@ def test_compact_event_analysis_lines_prefers_unified_metadata_reason_and_target
     )
     joined = "\n".join(lines)
     assert "核心内容：美国CPI大幅低于预期。" in joined
-    assert "为什么推送：宏观政策线规则命中。" in joined
-    assert "相关标的：A股风险偏好；成长股估值" in joined
+    assert "推送依据：" in joined
+    assert "美国 CPI 大幅低于预期。" in joined
+    assert "相关标的" not in joined
 
 
 def main() -> int:
     test_thin_article_card_keeps_llm_gate_reason_out_of_default_push_reason()
-    test_thin_article_card_shows_deterministic_push_reason_when_present()
+    test_thin_article_card_ignores_collector_push_reason()
+    test_decision_basis_reads_persisted_raw_decision_only()
     test_thin_article_card_prefers_unified_decision_and_interpretation_metadata()
+    test_thin_article_card_bounds_winning_decision_reasons()
     test_thin_article_card_shows_cls_vip_product_metadata_and_author_targets()
     test_full_article_card_shows_cls_metadata()
-    test_compact_event_analysis_lines_only_keep_core_and_targets()
+    test_compact_event_analysis_lines_only_keep_core_and_decision_basis()
     test_compact_event_analysis_lines_prefers_unified_metadata_reason_and_targets()
     print("thin push card checks passed")
     return 0
