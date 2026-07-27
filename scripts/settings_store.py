@@ -71,7 +71,7 @@ SETTING_GROUPS: list[dict[str, Any]] = [
             SettingField("VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT", "第一页提取重试次数", "value_directory", placeholder="1"),
             SettingField("VALUE_DIRECTORY_PREVIEW_VISION_FALLBACK_ENABLED", "启用视觉模型兜底", "value_directory", placeholder="0"),
             SettingField("VALUE_DIRECTORY_PUSH_ON_PREVIEW_FAILURE", "提取失败仍推送硬规则", "value_directory", placeholder="1"),
-            SettingField("VALUE_DIRECTORY_RECHECK_UNPUSHED", "复核未推送旧条目", "value_directory", placeholder="1"),
+            SettingField("VALUE_DIRECTORY_RECHECK_UNPUSHED", "复核未推送旧条目", "value_directory", placeholder="0", help="默认关闭；pending/failed_retryable 条目仍会自动重试。"),
             SettingField("VALUE_DIRECTORY_RECHECK_UNPUSHED_LIMIT", "单次复核旧条数", "value_directory", placeholder="30"),
             SettingField("VALUE_DIRECTORY_BROWSER_TIMEOUT_MS", "浏览器超时毫秒", "value_directory", placeholder="45000"),
         ],

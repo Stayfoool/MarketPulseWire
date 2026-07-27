@@ -458,10 +458,12 @@ def test_source_profile_registers_value_directory() -> None:
     assert profile is not None
     assert profile["category"] == "research_industry_media"
     assert "surveil-value-directory.timer" in profile["service_units"]
+    assert "05:00 / 21:00" in profile["frequency"]
     assert profile["skeptic_enabled"] is False
     macro = runtime_source_profile("value_directory_ib_industry_macro")
     assert macro is not None
     assert macro["name"] == "价值目录 / 国际投行-行业宏观"
+    assert "05:00 / 21:00" in macro["frequency"]
     assert "第一页预览" in macro["fetch_range"]
 
 
@@ -916,6 +918,109 @@ def test_collected_preview_does_not_launch_another_browser() -> None:
     assert enriched["summary"] == "preview content"
 
 
+def test_production_preview_selector_limits_work_to_processable_entries() -> None:
+    source = source_config("value_directory_ib_stocks")
+    original_states = value_directory_monitor.load_seen_item_states
+    original_unpushed = value_directory_monitor.load_unpushed_review_ids
+    original_recheck = os.environ.get("VALUE_DIRECTORY_RECHECK_UNPUSHED")
+    original_preview = os.environ.get("VALUE_DIRECTORY_PREVIEW_ENABLED")
+    try:
+        os.environ["VALUE_DIRECTORY_PREVIEW_ENABLED"] = "1"
+        os.environ["VALUE_DIRECTORY_RECHECK_UNPUSHED"] = "0"
+        value_directory_monitor.load_seen_item_states = lambda _source_id: {
+            "done": ("succeeded", "succeeded"),
+            "retry": ("succeeded", "failed_retryable"),
+            "pending": ("pending", "not_applicable"),
+        }
+        value_directory_monitor.load_unpushed_review_ids = lambda _source_id: {"done"}
+        selected = value_directory_monitor.production_preview_selector(
+            [source.source_id],
+            notify_baseline=False,
+        )
+        assert selected(source, {"id": "new"}) is True
+        assert selected(source, {"id": "retry"}) is True
+        assert selected(source, {"id": "pending"}) is True
+        assert selected(source, {"id": "done"}) is False
+
+        explicit = value_directory_monitor.production_preview_selector(
+            [source.source_id],
+            notify_baseline=False,
+            recheck_item_id="done",
+        )
+        assert explicit(source, {"id": "done"}) is True
+
+        os.environ["VALUE_DIRECTORY_RECHECK_UNPUSHED"] = "1"
+        opt_in = value_directory_monitor.production_preview_selector(
+            [source.source_id],
+            notify_baseline=False,
+        )
+        assert opt_in(source, {"id": "done"}) is True
+        os.environ["VALUE_DIRECTORY_RECHECK_UNPUSHED"] = "0"
+
+        value_directory_monitor.load_seen_item_states = lambda _source_id: {}
+        baseline = value_directory_monitor.production_preview_selector(
+            [source.source_id],
+            notify_baseline=False,
+        )
+        assert baseline(source, {"id": "baseline-old"}) is False
+    finally:
+        value_directory_monitor.load_seen_item_states = original_states
+        value_directory_monitor.load_unpushed_review_ids = original_unpushed
+        if original_recheck is None:
+            os.environ.pop("VALUE_DIRECTORY_RECHECK_UNPUSHED", None)
+        else:
+            os.environ["VALUE_DIRECTORY_RECHECK_UNPUSHED"] = original_recheck
+        if original_preview is None:
+            os.environ.pop("VALUE_DIRECTORY_PREVIEW_ENABLED", None)
+        else:
+            os.environ["VALUE_DIRECTORY_PREVIEW_ENABLED"] = original_preview
+
+
+def test_collect_production_automatically_retries_retryable_lifecycle() -> None:
+    source = source_config("value_directory_ib_stocks")
+    entry = {
+        "id": "retry-1",
+        "url": "https://www.valuelist.cn/retry-1.html",
+        "title": "Retryable report",
+        "summary": "title only",
+        "published_at": "2026-07-27T00:00:00+00:00",
+    }
+    calls: list[tuple[str, bool]] = []
+    original_retryable = value_directory_monitor.retryable_item_ids
+    original_save_new = value_directory_monitor.save_new_items_with_retry
+    original_review = value_directory_monitor.review_and_maybe_push
+    original_recheck = os.environ.get("VALUE_DIRECTORY_RECHECK_UNPUSHED")
+    try:
+        os.environ["VALUE_DIRECTORY_RECHECK_UNPUSHED"] = "0"
+        value_directory_monitor.retryable_item_ids = lambda _source_id: {"retry-1"}
+        value_directory_monitor.save_new_items_with_retry = lambda *_args, **_kwargs: []
+
+        def fake_review(item, *, recheck_rules=False, **_kwargs):
+            calls.append((item["id"], recheck_rules))
+            return False
+
+        value_directory_monitor.review_and_maybe_push = fake_review
+        payload = value_directory_monitor.collect_production(
+            [entry],
+            source=source,
+            notify_baseline=False,
+            started_at="2026-07-27T00:00:00+00:00",
+        )
+    finally:
+        value_directory_monitor.retryable_item_ids = original_retryable
+        value_directory_monitor.save_new_items_with_retry = original_save_new
+        value_directory_monitor.review_and_maybe_push = original_review
+        if original_recheck is None:
+            os.environ.pop("VALUE_DIRECTORY_RECHECK_UNPUSHED", None)
+        else:
+            os.environ["VALUE_DIRECTORY_RECHECK_UNPUSHED"] = original_recheck
+
+    assert calls == [("retry-1", True)]
+    assert payload["counts"]["new_items"] == 0
+    assert payload["counts"]["retryable_items"] == 1
+    assert payload["counts"]["reviewed_items"] == 1
+
+
 def test_collect_production_rechecks_current_unpushed_reviews() -> None:
     source = source_config("value_directory_ib_stocks")
     entries = [
@@ -1013,6 +1118,8 @@ def main() -> int:
     test_value_directory_monitor_does_not_own_store_dedup_or_delivery()
     test_run_finishes_browser_collection_before_source_processing()
     test_collected_preview_does_not_launch_another_browser()
+    test_production_preview_selector_limits_work_to_processable_entries()
+    test_collect_production_automatically_retries_retryable_lifecycle()
     test_collect_production_rechecks_current_unpushed_reviews()
     print("value directory monitor checks passed")
     return 0

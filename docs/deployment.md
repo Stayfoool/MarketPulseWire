@@ -575,10 +575,15 @@ model files. The service-account `.paddleocr/` model cache and runtime `reports/
 are excluded from rsync deletion, retained across normal deploys and never copied
 back into Git. The model cache is populated on the first approved OCR run.
 
-ValueList browser launches retain bounded Playwright error and profile-lock
+ValueList runs at 05:00 and 21:00 Beijing time. The installer restarts the timer
+to load those times only when the timer was already enabled; it does not enable
+a deliberately disabled ValueList timer. Browser launches retain bounded Playwright error and profile-lock
 diagnostics without page content, cookies or browser storage. One timer run uses
-one persistent context to collect every enabled ValueList list page and visible
-first-page preview, then closes that context before starting OCR, admission,
+one persistent context to collect every enabled ValueList list page, then
+collects visible first-page previews only for new, `pending`/`failed_retryable`
+or explicitly rechecked entries. Completed-but-unpushed entries are not
+automatically reprocessed unless `VALUE_DIRECTORY_RECHECK_UNPUSHED=1` is
+explicitly configured. The context closes before starting OCR, admission,
 decision, storage or delivery. The collector waits briefly for a live
 same-profile owner to exit. A launch or shutdown timeout fails the shared browser
 stage rather than starting another browser against a profile that is still in

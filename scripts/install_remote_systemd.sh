@@ -141,6 +141,9 @@ systemctl daemon-reload
 systemctl enable --now surveil-company-disclosures.timer
 systemctl enable --now surveil-sina-stock-news.timer
 systemctl restart surveil-sina-stock-news.timer
+if systemctl is-enabled --quiet surveil-value-directory.timer; then
+  systemctl restart surveil-value-directory.timer
+fi
 if grep -Eq '^DISABLE_LEGACY_RESEARCH_MONITORS=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
   systemctl disable --now surveil-overseas-media.timer >/dev/null 2>&1 || true
   systemctl stop surveil-overseas-media.service >/dev/null 2>&1 || true
