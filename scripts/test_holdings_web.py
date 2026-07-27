@@ -1028,6 +1028,29 @@ def test_source_profile_local_config_roundtrip() -> None:
     assert payload["config_exists"] is True
 
 
+def test_source_profile_local_config_stays_private_across_replacement() -> None:
+    with TemporaryDirectory() as tmpdir:
+        config_path = Path(tmpdir) / "source_profiles.local.json"
+        previous_umask = os.umask(0)
+        try:
+            save_source_profile_config(
+                {"profiles": [{"id": "semianalysis", "enabled": False}]},
+                path=config_path,
+            )
+            assert config_path.stat().st_mode & 0o777 == 0o600
+
+            os.chmod(config_path, 0o644)
+            save_source_profile_config(
+                {"profiles": [{"id": "semianalysis", "enabled": True}]},
+                path=config_path,
+            )
+            assert config_path.stat().st_mode & 0o777 == 0o600
+            assert load_source_profile_config(config_path)["disabled_sources"] == []
+            assert not config_path.with_suffix(config_path.suffix + ".tmp").exists()
+        finally:
+            os.umask(previous_umask)
+
+
 def test_source_profile_runtime_filters_and_flags() -> None:
     with TemporaryDirectory() as tmpdir:
         config_path = Path(tmpdir) / "source_profiles.local.json"
@@ -1438,6 +1461,7 @@ def main() -> int:
     test_source_profiles_group_six_categories()
     test_source_profiles_aggregate_wildcard_health()
     test_source_profile_local_config_roundtrip()
+    test_source_profile_local_config_stays_private_across_replacement()
     test_source_profile_runtime_filters_and_flags()
     test_company_disclosure_provider_and_mode_are_private_runtime_overrides()
     test_company_disclosure_source_can_be_disabled_privately()

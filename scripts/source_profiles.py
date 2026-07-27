@@ -530,8 +530,21 @@ def config_exists(path: Path = SOURCE_PROFILE_CONFIG_PATH) -> bool:
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(tmp_path, flags, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(serialized)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     os.replace(tmp_path, path)
+    os.chmod(path, 0o600)
 
 
 def source_profile_local_rows_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
