@@ -600,6 +600,7 @@ def fetch_events_rows(
                 end_utc=end_utc,
                 time_basis=time_basis,
                 include_baseline=include_baseline,
+                source=source.strip(),
             ):
                 identity = item.pop("feedback_identity", None)
                 item["published_at"] = normalize_time(item.get("published_at"))

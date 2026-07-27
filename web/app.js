@@ -13,6 +13,8 @@ let signalRowsCache = [];
 let editingSignalFeedback = null;
 let sourceProfileCache = {categories: [], profiles: []};
 let eventSourceOptionsLoaded = false;
+let eventOperationId = 0;
+let eventAbortController = null;
 let ruleShadowReportCache = {items: []};
 let currentRulesCache = null;
 
@@ -570,6 +572,10 @@ async function loadOverview() {
 }
 
 async function loadEvents() {
+  let operationId = 0;
+  let controller = null;
+  const rows = document.getElementById('eventRows');
+  const queryButton = document.getElementById('eventQueryButton');
   try {
     const params = new URLSearchParams();
     const startDate = document.getElementById('eventFromDate').value;
@@ -595,7 +601,15 @@ async function loadEvents() {
     if (feedback) params.set('feedback', feedback);
     if (q) params.set('q', q);
     if (document.getElementById('eventIncludeBaseline').checked) params.set('include_baseline', '1');
-    const data = await api('/api/events?' + params.toString());
+    eventAbortController?.abort();
+    controller = new AbortController();
+    eventAbortController = controller;
+    operationId = ++eventOperationId;
+    rows.innerHTML = '<tr><td colspan="7">正在查询...</td></tr>';
+    queryButton.disabled = true;
+    queryButton.textContent = '查询中';
+    const data = await api('/api/events?' + params.toString(), {signal: controller.signal});
+    if (operationId !== eventOperationId) return;
     document.getElementById('eventTimeHeader').textContent = timeBasis === 'published' ? '原文发布时间' : '采集/处理时间';
     const feedbackSummary = data.feedback_summary || {};
     document.getElementById('eventFeedbackSummary').innerHTML = [
@@ -605,7 +619,6 @@ async function loadEvents() {
       `重复 ${feedbackSummary.duplicate || 0}`,
       `无效 ${feedbackSummary.invalid || 0}`,
     ].map(text => `<span>${escapeHtml(text)}</span>`).join('');
-    const rows = document.getElementById('eventRows');
     rows.innerHTML = (data.events || []).map(item => `
       <tr>
         <td>${formatTime(timeBasis === 'published' ? (item.published_at || item.seen_at) : (item.seen_at || item.published_at))}${item.published_at && timeBasis !== 'published' ? `<div class="hint">原文：${formatTime(item.published_at)}</div>` : ''}${item.seen_at && timeBasis === 'published' ? `<div class="hint">采集：${formatTime(item.seen_at)}</div>` : ''}</td>
@@ -621,7 +634,15 @@ async function loadEvents() {
       </tr>
     `).join('') || '<tr><td colspan="7">没有匹配事件。</td></tr>';
   } catch (err) {
+    if (err.name === 'AbortError' || operationId !== eventOperationId) return;
+    rows.innerHTML = '<tr><td colspan="7">查询失败，请稍后重试。</td></tr>';
     showStatus(err.message, 'err');
+  } finally {
+    if (operationId && operationId === eventOperationId) {
+      if (eventAbortController === controller) eventAbortController = null;
+      queryButton.disabled = false;
+      queryButton.textContent = '查询';
+    }
   }
 }
 

@@ -241,6 +241,19 @@ def test_canonical_readers_preserve_behavior_and_identity() -> None:
             assert baseline["id"] == str(ids["baseline"])
             assert baseline["baseline_only"] is True
 
+            event_source_rows = canonical_event_rows(
+                conn,
+                start_utc="2026-07-23T00:00:00+00:00",
+                end_utc="2026-07-24T00:00:00+00:00",
+                time_basis="seen",
+                include_baseline=True,
+                source="event_source",
+            )
+            assert event_source_rows
+            assert {row["source_id"] for row in event_source_rows} == {"event_source"}
+            assert any(row["title"] == "事件基线" for row in event_source_rows)
+            assert not any(row["title"] == "文章推送条目" for row in event_source_rows)
+
             article_daily = canonical_digest_rows(
                 conn,
                 item_kind="article",

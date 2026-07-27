@@ -128,6 +128,7 @@ def _selected_item_rows(
     end_utc: str,
     time_basis: str,
     include_baseline: bool,
+    source: str = "",
 ) -> list[sqlite3.Row]:
     """Return one display result per item while retaining all result versions in storage."""
     seen_time = (
@@ -139,6 +140,11 @@ def _selected_item_rows(
         if time_basis == "published"
         else seen_time
     )
+    source_clause = "AND m.source = ?" if source else ""
+    params: list[Any] = [start_utc, end_utc]
+    if source:
+        params.append(source)
+    params.append(int(include_baseline))
     return list(
         conn.execute(
             f"""
@@ -165,6 +171,7 @@ def _selected_item_rows(
             )
             WHERE datetime({display_time}) >= datetime(?)
               AND datetime({display_time}) < datetime(?)
+              {source_clause}
               AND (
                   r.id IS NOT NULL
                   OR EXISTS (
@@ -181,7 +188,7 @@ def _selected_item_rows(
             ORDER BY datetime({display_time}) DESC, m.id DESC
             LIMIT 5000
             """,
-            (start_utc, end_utc, int(include_baseline)),
+            params,
         )
     )
 
@@ -207,6 +214,7 @@ def canonical_event_rows(
     end_utc: str,
     time_basis: str,
     include_baseline: bool,
+    source: str = "",
 ) -> list[dict[str, Any]]:
     rows = _selected_item_rows(
         conn,
@@ -214,6 +222,7 @@ def canonical_event_rows(
         end_utc=end_utc,
         time_basis=time_basis,
         include_baseline=include_baseline,
+        source=source,
     )
     alias_map = _aliases(conn, [int(row["id"]) for row in rows])
     result: list[dict[str, Any]] = []
