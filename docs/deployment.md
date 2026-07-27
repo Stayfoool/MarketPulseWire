@@ -58,6 +58,10 @@ the production service account and mode `0600`. `deploy_remote.sh` explicitly
 excludes this path, so normal deployment neither uploads, deletes nor replaces
 the private rules. Git contains only `config/llm_decision_rules.test.json`, whose
 synthetic text is for CI and must never be used in production.
+Schema v2 lets a rule declare multiple applicable range-admission groups. The
+loader retains v1 support for ordered rollout, but either schema selects a rule
+only by intersection with the item's already matched and source-allowed groups;
+it cannot expand range admission.
 
 Before restarting production after a rule change, validate both files through
 the loader and compare their SHA-256 digests without printing their content:
@@ -72,6 +76,11 @@ ssh surveil-alibaba "sudo -u surveil env PYTHONPATH=/opt/surveil/scripts LLM_DEC
 The version, rule count and SHA-256 digest must match. Missing, unreadable,
 wrong-permission or invalid private rules stop systemd installation and fail
 production decisions closed; they never fall back to tracked test rules.
+When advancing the private file from v1 to v2, deploy and verify the
+backward-compatible code first, then stage the reviewed private file, restore
+production-service ownership and mode `0600`, compare version/count/SHA-256,
+and only then restart affected Alibaba collectors. Never deploy the private
+file before the running code supports its schema.
 
 The Web process requires the repository `web/` directory alongside `scripts/`.
 `deploy_remote.sh` already synchronizes both directories; do not deploy

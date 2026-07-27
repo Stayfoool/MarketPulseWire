@@ -169,12 +169,20 @@ def llm_decision_rules_payload(*, env: Mapping[str, str] | None = None) -> dict[
         "status": "loaded",
         "version": version,
         "rule_count": len(rules),
-        "families": [family for family in FAMILY_ORDER if any(rule.family == family for rule in rules)],
+        "families": [
+            family
+            for family in FAMILY_ORDER
+            if any(family in rule.applicable_families for rule in rules)
+        ],
         "rules": [
             {
                 "rule_id": rule.rule_id,
                 "family": rule.family,
                 "family_label": FAMILY_LABELS[rule.family],
+                "applicable_families": list(rule.applicable_families),
+                "applicable_family_labels": [
+                    FAMILY_LABELS[family] for family in rule.applicable_families
+                ],
                 "title": rule.title,
                 "allowed_actions": list(rule.allowed_actions),
                 "action_conditions": dict(rule.action_conditions),

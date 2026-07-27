@@ -112,6 +112,11 @@ def _catalog_payload() -> dict:
         "rules": [
             {
                 "family": rule.family,
+                **(
+                    {"applicable_families": list(rule.applicable_families)}
+                    if len(rule.applicable_families) > 1
+                    else {}
+                ),
                 **rule.to_prompt_dict(),
             }
             for rule in RULES
@@ -128,6 +133,7 @@ def test_private_catalog_loader_validates_structure_and_duplicates() -> None:
         assert rule.allowed_actions
         assert set(rule.allowed_actions) <= set(MODEL_ACTIONS)
         assert rule.required_facts
+        assert rule.family in rule.applicable_families
 
     with TemporaryDirectory() as tmp:
         path = Path(tmp) / "rules.json"
@@ -135,6 +141,34 @@ def test_private_catalog_loader_validates_structure_and_duplicates() -> None:
         version, loaded = load_rule_catalog(path)
         assert version == LLM_DECISION_RULE_VERSION
         assert tuple(rule.rule_id for rule in loaded) == tuple(rule.rule_id for rule in RULES)
+
+        legacy = _catalog_payload()
+        legacy["schema_version"] = "llm-decision-rule-config-v1"
+        for rule in legacy["rules"]:
+            rule.pop("applicable_families", None)
+        path.write_text(json.dumps(legacy), encoding="utf-8")
+        _, loaded_legacy = load_rule_catalog(path)
+        assert all(rule.applicable_families == (rule.family,) for rule in loaded_legacy)
+
+        invalid_applicability = _catalog_payload()
+        invalid_applicability["rules"][0]["applicable_families"] = ["semiconductor_ai"]
+        path.write_text(json.dumps(invalid_applicability), encoding="utf-8")
+        try:
+            load_rule_catalog(path)
+        except LLMRuleCatalogError as exc:
+            assert "primary family missing" in str(exc)
+        else:
+            raise AssertionError("applicable families must include the primary family")
+
+        duplicate_applicability = _catalog_payload()
+        duplicate_applicability["rules"][0]["applicable_families"] = ["holding", "holding"]
+        path.write_text(json.dumps(duplicate_applicability), encoding="utf-8")
+        try:
+            load_rule_catalog(path)
+        except LLMRuleCatalogError as exc:
+            assert "duplicate applicable_families" in str(exc)
+        else:
+            raise AssertionError("duplicate applicable families must fail closed")
 
         duplicate = _catalog_payload()
         duplicate["rules"].append(copy.deepcopy(duplicate["rules"][0]))
@@ -193,13 +227,69 @@ def test_source_applicability_is_independent_of_private_rule_content() -> None:
         _item(source="sina_stock_news", source_category="portfolio_stock_news", content_type="stock_news"),
     ):
         assert source_allowed_families(item) == ("holding",)
-        assert {rule.family for rule in applicable_rules(item, admission)} == {"holding"}
+        assert {
+            rule.rule_id for rule in applicable_rules(item, admission)
+        } == {
+            rule.rule_id for rule in rules_for_families(("holding",))
+        }
         assert apply_source_admission_boundary(item, admission).matched_families == ("holding",)
 
     ordinary = _item(source="synthetic_research", source_category="research_industry_media")
     assert {rule.rule_id for rule in applicable_rules(ordinary, admission)} == {
         rule.rule_id for rule in RULES
     }
+
+
+def test_cross_family_rules_apply_only_to_reviewed_admission_groups() -> None:
+    cross_family_ids = {
+        "holding_rating_revision",
+        "investment_bank_allocation_change",
+    }
+    ordinary = _item(source="synthetic_research", source_category="research_industry_media")
+    for family in ("holding", "semiconductor_ai"):
+        applicable_ids = {
+            rule.rule_id for rule in applicable_rules(ordinary, _admission((family,)))
+        }
+        assert cross_family_ids <= applicable_ids
+    for family in ("macro_data", "fed_policy", "trade_policy"):
+        applicable_ids = {
+            rule.rule_id for rule in applicable_rules(ordinary, _admission((family,)))
+        }
+        assert cross_family_ids.isdisjoint(applicable_ids)
+
+    mixed_ids = {
+        rule.rule_id
+        for rule in applicable_rules(
+            ordinary,
+            _admission(("macro_data", "semiconductor_ai", "trade_policy")),
+        )
+    }
+    assert cross_family_ids <= mixed_ids
+
+    combined_rules = rules_for_families(("holding", "semiconductor_ai"))
+    combined_ids = [rule.rule_id for rule in combined_rules]
+    assert len(combined_ids) == len(set(combined_ids))
+
+    by_id = {rule.rule_id: rule for rule in RULES}
+    for family in ("holding", "semiconductor_ai"):
+        for rule_id in cross_family_ids:
+            rule = by_id[rule_id]
+            for action in rule.allowed_actions:
+                result = validate_llm_rule_response(
+                    _response(family, rule_id, action),
+                    ordinary,
+                    _admission((family,)),
+                    model="fixed-test-model",
+                )
+                assert result.evaluation_status == "completed", result.validation_errors
+                assert result.candidate_action == action
+                assert result.applicable_families == (family,)
+                assert result.decision is not None
+                hit = next(
+                    item for item in result.decision.rule_hits
+                    if item["rule_id"] == rule_id
+                )
+                assert hit["applicable_families"] == ["holding", "semiconductor_ai"]
 
 
 def test_prompt_is_bounded_and_treats_article_instructions_as_data() -> None:
@@ -256,12 +346,28 @@ def test_uncertain_and_model_unavailable_cannot_create_action() -> None:
 
 
 def test_highest_model_action_wins_across_admitted_families() -> None:
-    holding = rules_for_families(("holding",))[1]
-    industry = rules_for_families(("semiconductor_ai",))[0]
+    holding = next(
+        rule for rule in RULES
+        if rule.family == "holding" and "daily" in rule.allowed_actions
+    )
+    industry = next(rule for rule in RULES if rule.family == "semiconductor_ai")
+    rules = rules_for_families(("holding", "semiconductor_ai"))
     response = {
         "rule_results": [
-            *(_response("holding", holding.rule_id, "daily")["rule_results"]),
-            *(_response("semiconductor_ai", industry.rule_id, "push")["rule_results"]),
+            _assessment(
+                rule.rule_id,
+                judgement=(
+                    "matched"
+                    if rule.rule_id in {holding.rule_id, industry.rule_id}
+                    else "not_matched"
+                ),
+                action=(
+                    "daily"
+                    if rule.rule_id == holding.rule_id
+                    else "push" if rule.rule_id == industry.rule_id else None
+                ),
+            )
+            for rule in rules
         ]
     }
     result = validate_llm_rule_response(
@@ -368,6 +474,7 @@ def main() -> int:
     test_private_catalog_loader_validates_structure_and_duplicates()
     test_every_allowed_action_projects_to_decision_result()
     test_source_applicability_is_independent_of_private_rule_content()
+    test_cross_family_rules_apply_only_to_reviewed_admission_groups()
     test_prompt_is_bounded_and_treats_article_instructions_as_data()
     test_uncertain_and_model_unavailable_cannot_create_action()
     test_highest_model_action_wins_across_admitted_families()

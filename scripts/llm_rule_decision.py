@@ -621,6 +621,7 @@ def _candidate_decision(
         return {
             "rule_id": rule.rule_id,
             "rule_family": rule.family,
+            "applicable_families": list(rule.applicable_families),
             "decision_action": assessment["selected_action"],
             "evidence": list(assessment["evidence"]),
             "counterevidence": list(assessment["counterevidence"]),
@@ -686,7 +687,10 @@ def validate_llm_rule_response(
             model=model,
             rule_config_version=admission.config_version,
         )
-    families = tuple(dict.fromkeys(rule.family for rule in rules))
+    allowed_families = set(source_allowed_families(item))
+    families = tuple(
+        family for family in admission.matched_families if family in allowed_families
+    )
     rules_by_id = {rule.rule_id: rule for rule in rules}
     evidence_segments = _article_segments(article)
     segments_by_id = {segment["id"]: segment for segment in evidence_segments}
