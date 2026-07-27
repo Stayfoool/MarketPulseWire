@@ -40,6 +40,8 @@ def decision_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(payload.get("_decision_result"), dict):
         return payload["_decision_result"]
     raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
+    if isinstance(raw.get("_decision_result"), dict):
+        return raw["_decision_result"]
     if isinstance(raw.get("decision_result"), dict):
         return raw["decision_result"]
     analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}
@@ -64,6 +66,27 @@ def decision_reason(payload: dict[str, Any]) -> str:
     if hits:
         return str(hits[0].get("brief_reason") or hits[0].get("reason") or "").strip()
     return ""
+
+
+def decision_basis_reasons(payload: dict[str, Any], *, limit: int = 4) -> tuple[list[str], int]:
+    decision = decision_payload(payload)
+    action = str(decision.get("action") or "").strip()
+    reasons: list[str] = []
+    seen: set[str] = set()
+    for hit in decision_rule_hits(payload):
+        if str(hit.get("decision_action") or "").strip() != action:
+            continue
+        reason = " ".join(str(hit.get("brief_reason") or hit.get("reason") or "").split())
+        key = reason.casefold()
+        if not reason or key in seen:
+            continue
+        seen.add(key)
+        reasons.append(reason)
+    if not reasons:
+        fallback = " ".join(decision_reason(payload).split())
+        if fallback:
+            reasons.append(fallback)
+    return reasons[:limit], max(0, len(reasons) - limit)
 
 
 def _target_label(item: Any) -> str:
@@ -104,6 +127,14 @@ def interpretation_payload(review_or_analysis: dict[str, Any]) -> dict[str, Any]
         "llm_judgement": source_base.get("llm_judgement"),
     }
     result = normalize_interpretation_payload(source).to_dict()
+    # Historical review/Web readers retain fields written by older interpreter versions.
+    result["brief_reason"] = str(source_base.get("brief_reason") or source_base.get("reason") or "").strip()
+    legacy_targets = source_base.get("related_targets")
+    if not isinstance(legacy_targets, list):
+        legacy_targets = source_base.get("related_holdings") if isinstance(source_base.get("related_holdings"), list) else []
+    result["related_targets"] = [item for item in legacy_targets if isinstance(item, dict)]
+    result["notes"] = source_base.get("notes") if isinstance(source_base.get("notes"), list) else []
+    result["llm_judgement"] = str(source_base.get("llm_judgement") or "not_needed")
     if not result["core_content"] and review_or_analysis.get("daily_summary"):
         result["core_content"] = str(review_or_analysis.get("daily_summary") or "").strip()
     if not result["brief_reason"] and review_or_analysis.get("brief_reason"):
@@ -122,19 +153,6 @@ def interpretation_reason(review_or_analysis: dict[str, Any]) -> str:
 def interpretation_targets(review_or_analysis: dict[str, Any]) -> list[str]:
     payload = interpretation_payload(review_or_analysis)
     return unique_strings(_target_label(item) for item in as_list(payload.get("related_targets")))
-
-
-def card_push_reason(item: dict[str, Any], review_or_analysis: dict[str, Any]) -> str:
-    explicit = str(item.get("push_reason") or "").strip()
-    if explicit:
-        return explicit
-    reason = interpretation_reason(review_or_analysis)
-    if reason:
-        return reason
-    reason = decision_reason(review_or_analysis)
-    if reason:
-        return reason
-    return ""
 
 
 def card_targets(review_or_analysis: dict[str, Any], *, fallback_targets: list[str] | None = None) -> list[str]:

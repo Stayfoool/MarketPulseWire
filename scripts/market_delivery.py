@@ -19,8 +19,7 @@ from feishu import send_card, send_card_with_response
 from feishu_app import configured as feishu_app_configured
 from feishu_app import feedback_enabled, send_interactive_card
 from industry_fact_dedup import INDUSTRY_FACT_RULE_ID, industry_fact_dedup_hit
-from llm_analysis import format_llm_analysis
-from market_card_view import card_targets, decision_reason, interpretation_core, interpretation_reason
+from market_card_view import decision_basis_reasons, interpretation_core
 from market_db import DEFAULT_DB_PATH
 from macro_event_dedup import MACRO_DEDUP_RULE_IDS, macro_event_dedup_hit
 from market_item import DecisionResult
@@ -39,10 +38,6 @@ from market_review_store import (
 from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert, reserve_rule_alert_set
 
 
-def thin_event_card_enabled() -> bool:
-    return os.getenv("SURVEIL_THIN_EVENT_CARD", "1").strip() != "0"
-
-
 def compact_text(value: str, limit: int = 900) -> str:
     cleaned = " ".join(str(value or "").split())
     if len(cleaned) <= limit:
@@ -50,66 +45,17 @@ def compact_text(value: str, limit: int = 900) -> str:
     return cleaned[: limit - 3] + "..."
 
 
-def compact_targets(parsed: dict[str, Any]) -> list[str]:
-    targets: list[str] = []
-    for key in ("related_targets", "related_holdings"):
-        values = parsed.get(key)
-        if not isinstance(values, list):
-            continue
-        for item in values:
-            if isinstance(item, dict):
-                name = str(item.get("name") or "").strip()
-                code = str(item.get("code") or "").strip()
-                label = " ".join(part for part in (name, code) if part)
-            else:
-                label = str(item).strip()
-            if label:
-                targets.append(label)
-    for section_key in ("a_share", "global_equity"):
-        section = parsed.get(section_key)
-        if not isinstance(section, dict):
-            continue
-        for direction in ("positive", "negative"):
-            values = section.get(direction)
-            if not isinstance(values, list):
-                continue
-            for item in values:
-                if not isinstance(item, dict):
-                    continue
-                name = str(item.get("name") or "").strip()
-                code = str(item.get("code") or "").strip()
-                label = " ".join(part for part in (name, code) if part)
-                if label:
-                    targets.append(label)
-    result: list[str] = []
-    seen: set[str] = set()
-    for target in targets:
-        key = target.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(target)
-        if len(result) >= 5:
-            break
-    return result
-
-
 def compact_event_analysis_lines(parsed: dict[str, Any]) -> list[str]:
     lines: list[str] = []
     core = interpretation_core(parsed) or str(parsed.get("core_content") or "").strip()
     if core:
         lines.append(f"核心内容：{core}")
-    reason = interpretation_reason(parsed) or str(parsed.get("brief_reason") or "").strip()
-    push_decision = parsed.get("push_decision")
-    if not reason and isinstance(push_decision, dict):
-        reason = str(push_decision.get("reason") or "").strip()
-    if not reason:
-        reason = decision_reason(parsed)
-    if reason:
-        lines.append("为什么推送：" + compact_text(reason, 260))
-    targets = card_targets(parsed, fallback_targets=compact_targets(parsed))
-    if targets:
-        lines.append("相关标的：" + "；".join(targets))
+    push_basis, omitted_basis = decision_basis_reasons(parsed)
+    if push_basis:
+        lines.append("推送依据：")
+        lines.extend(f"- {compact_text(reason, 180)}" for reason in push_basis)
+        if omitted_basis:
+            lines.append(f"- 另命中 {omitted_basis} 项同级决策规则")
     if not lines:
         fallback = str(parsed.get("initial_impact") or "模型未给出明确核心内容。")
         lines.append("核心内容：" + compact_text(fallback, 260))
@@ -537,12 +483,8 @@ def deliver_event(
         persist_delivery("skipped", {"reason": "FEISHU_WEBHOOK 未配置"})
         return "skipped"
 
-    if thin_event_card_enabled():
-        lines = compact_event_analysis_lines(analysis)
-        display_text = compact_text(summary or full_text, 1000)
-    else:
-        lines = format_llm_analysis(analysis, str(analysis.get("_model") or "llm"))
-        display_text = summary or full_text
+    lines = compact_event_analysis_lines(analysis)
+    display_text = compact_text(summary or full_text, 1000)
     card = simple_event_card(source, title, display_text, url, published_at, lines)
     try:
         if feedback_enabled():

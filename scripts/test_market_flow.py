@@ -60,13 +60,10 @@ def canonical_items() -> list[NormalizedMarketItem]:
 
 
 def fake_interpretation(*args, **kwargs) -> InterpretationResult:
-    decision = args[1]
     return InterpretationResult(
         core_content="统一市场流解读。",
-        brief_reason=decision.brief_reason or decision.reason,
-        related_targets=[{"name": "测试标的", "relation": "规则上下文"}],
         model="fake-model",
-        prompt_version="market_interpreter_v1",
+        prompt_version="market_interpreter_v2",
     )
 
 

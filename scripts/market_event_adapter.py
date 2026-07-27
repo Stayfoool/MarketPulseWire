@@ -124,7 +124,6 @@ def analyze_event(
         content=build_portfolio_event_input(event_row, db_path=db_path),
         task="为一条已完成规则决策的公告、研报、快讯或异动信息生成极简实时摘要。",
         intro="请解读以下持仓事件",
-        mode="holdings",
         forbidden_mode="event",
         extra_notes=["输入包含直接相关持仓和全部已配置持仓；只可使用给定关系，不要自行扩展股票映射。"],
         user_agent="surveil-portfolio-event-llm/0.2",
@@ -135,10 +134,6 @@ def analyze_event(
     parsed = {
         **decision_fields,
         "core_content": interpretation.core_content,
-        "brief_reason": interpretation.brief_reason,
-        "related_holdings": list(interpretation.related_targets),
-        "notes": list(interpretation.notes),
-        "llm_judgement": interpretation.llm_judgement,
         "_interpretation_result": interpretation.to_dict(),
         "_model": interpretation.model,
         "_market_flow_result": flow_result.audit_payload(),
