@@ -238,5 +238,5 @@ systemctl --no-pager --full status surveil-research-collector-shadow.timer || tr
 systemctl --no-pager --full status surveil-official-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-news-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-x-stream.service || true
-echo '已安装 surveil-db-init.service，启用公司公告、Sina 个股新闻、生产 collector timers（按 DISABLE_LEGACY_* 切换生产/历史入口）、文章日报、大模型审计清理、信号抽取/outcome/复盘/复盘日报、持仓 Web UI，并启动新浪快讯常驻服务；新旧规则对比日报和 report-only collector shadow timers 停用。公司公告默认 report_only，可在来源配置审阅后切换 live。'
+echo '已安装 surveil-db-init.service，启用公司公告、Sina 个股新闻、生产 collector timers（按 DISABLE_LEGACY_* 切换生产/历史入口）、文章日报、大模型审计清理和持仓 Web UI，并启动新浪快讯常驻服务；投资信号复盘任务组、新旧规则对比日报和 report-only collector shadow timers 默认停用。公司公告默认 report_only，可在来源配置审阅后切换 live。'
 "
