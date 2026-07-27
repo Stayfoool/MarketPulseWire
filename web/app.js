@@ -318,13 +318,16 @@ function renderRangeAdmissionRules(section) {
 }
 
 function llmRuleMatches(rule, family, action, query) {
-  if (family && rule.family !== family) return false;
+  const applicableFamilies = rule.applicable_families || [rule.family];
+  if (family && !applicableFamilies.includes(family)) return false;
   if (action && !(rule.allowed_actions || []).includes(action)) return false;
   if (!query) return true;
   const searchable = [
     rule.rule_id,
     rule.family,
     rule.family_label,
+    ...(rule.applicable_families || []),
+    ...(rule.applicable_family_labels || []),
     rule.title,
     ...Object.values(rule.action_conditions || {}),
     ...(rule.required_facts || []),
@@ -368,6 +371,7 @@ function renderLlmRules() {
     ruleMetric('规则族', String((section.families || []).length))
   ].join('');
   list.innerHTML = filtered.map(rule => {
+    const applicableLabels = rule.applicable_family_labels || [rule.family_label || rule.family || ''];
     const actionConditions = ['push', 'daily', 'archive']
       .filter(value => Object.prototype.hasOwnProperty.call(rule.action_conditions || {}, value))
       .map(value => `<div class="rule-action-condition"><span class="badge">${escapeHtml(value)}</span><p>${escapeHtml(rule.action_conditions[value])}</p></div>`)
@@ -376,7 +380,7 @@ function renderLlmRules() {
       <details class="rule-definition">
         <summary>
           <span><strong>${escapeHtml(rule.title || '')}</strong><code>${escapeHtml(rule.rule_id || '')}</code></span>
-          <span class="rule-summary-badges"><span class="badge">${escapeHtml(rule.family_label || rule.family || '')}</span>${(rule.allowed_actions || []).map(value => `<span class="badge">${escapeHtml(value)}</span>`).join('')}</span>
+          <span class="rule-summary-badges">${applicableLabels.map(value => `<span class="badge">${escapeHtml(value)}</span>`).join('')}${(rule.allowed_actions || []).map(value => `<span class="badge">${escapeHtml(value)}</span>`).join('')}</span>
         </summary>
         <div class="rule-definition-body">
           <div class="rule-field-label">action 条件</div>
@@ -393,7 +397,11 @@ function populateLlmRuleFamilies(section) {
   const select = document.getElementById('llmRuleFamily');
   const selected = select.value;
   const labels = {};
-  (section.rules || []).forEach(rule => { labels[rule.family] = rule.family_label || rule.family; });
+  (section.rules || []).forEach(rule => {
+    const families = rule.applicable_families || [rule.family];
+    const familyLabels = rule.applicable_family_labels || [rule.family_label || rule.family];
+    families.forEach((family, index) => { labels[family] = familyLabels[index] || family; });
+  });
   select.innerHTML = '<option value="">全部规则族</option>' + (section.families || []).map(family => `<option value="${escapeHtml(family)}">${escapeHtml(labels[family] || family)}</option>`).join('');
   if ([...select.options].some(option => option.value === selected)) select.value = selected;
 }

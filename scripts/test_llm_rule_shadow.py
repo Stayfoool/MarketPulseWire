@@ -268,7 +268,9 @@ def test_company_disclosure_receives_only_holding_rules_and_minimal_matched_cont
         portfolio=portfolio,
     )
     prompt = captured["prompt"]
-    assert {rule_id.split("_")[0] for rule_id in prompt.rule_ids} == {"holding"}
+    assert prompt.rule_ids == tuple(
+        rule.rule_id for rule in rules_for_families(("holding",))
+    )
     assert "admission" not in prompt.user_payload
     assert prompt.user_payload["matched_context"] == {
         "holding_subjects": ["甲公司"],

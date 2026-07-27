@@ -80,6 +80,8 @@ def test_current_rules_projection_uses_strict_current_sources() -> None:
         "rule_id",
         "family",
         "family_label",
+        "applicable_families",
+        "applicable_family_labels",
         "title",
         "allowed_actions",
         "action_conditions",
@@ -87,6 +89,14 @@ def test_current_rules_projection_uses_strict_current_sources() -> None:
         "exclusions",
         "version",
     }
+    cross_family = {
+        rule["rule_id"]: rule for rule in llm["rules"]
+        if rule["rule_id"] in {"holding_rating_revision", "investment_bank_allocation_change"}
+    }
+    assert set(cross_family) == {"holding_rating_revision", "investment_bank_allocation_change"}
+    for rule in cross_family.values():
+        assert rule["applicable_families"] == ["holding", "semiconductor_ai"]
+        assert rule["applicable_family_labels"] == ["持仓", "半导体/AI"]
 
 
 def test_current_rules_projection_fails_closed_without_leaking_paths() -> None:

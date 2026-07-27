@@ -17,7 +17,12 @@ from typing import Any, Mapping, cast
 from market_item import RuleFamily
 
 
-RULE_CONFIG_SCHEMA_VERSION = "llm-decision-rule-config-v1"
+LEGACY_RULE_CONFIG_SCHEMA_VERSION = "llm-decision-rule-config-v1"
+RULE_CONFIG_SCHEMA_VERSION = "llm-decision-rule-config-v2"
+SUPPORTED_RULE_CONFIG_SCHEMA_VERSIONS = {
+    LEGACY_RULE_CONFIG_SCHEMA_VERSION,
+    RULE_CONFIG_SCHEMA_VERSION,
+}
 RULE_CONFIG_ENV = "LLM_DECISION_RULE_CONFIG"
 DEFAULT_RULE_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "llm_decision_rules.json"
 MAX_RULE_CONFIG_BYTES = 256_000
@@ -44,6 +49,7 @@ class LLMRuleDefinition:
     required_facts: tuple[str, ...]
     exclusions: tuple[str, ...]
     version: str
+    applicable_families: tuple[RuleFamily, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.rule_id or not self.title or not self.version:
@@ -55,7 +61,15 @@ class LLMRuleDefinition:
             raise ValueError(f"empty action condition for {self.rule_id}")
         if not self.required_facts:
             raise ValueError(f"required facts missing for {self.rule_id}")
+        applicable = self.applicable_families or (self.family,)
+        if self.family not in applicable:
+            raise ValueError(f"primary family missing from applicable_families for {self.rule_id}")
+        if len(set(applicable)) != len(applicable):
+            raise ValueError(f"duplicate applicable_families for {self.rule_id}")
+        if any(family not in RULE_FAMILIES for family in applicable):
+            raise ValueError(f"unsupported applicable_families for {self.rule_id}")
         object.__setattr__(self, "action_conditions", MappingProxyType(conditions))
+        object.__setattr__(self, "applicable_families", tuple(applicable))
 
     @property
     def allowed_actions(self) -> tuple[str, ...]:
@@ -92,11 +106,11 @@ def _string_tuple(value: Any, path: str, *, required: bool) -> tuple[str, ...]:
     return result
 
 
-def _parse_rule(payload: Any, index: int, version: str) -> LLMRuleDefinition:
+def _parse_rule(payload: Any, index: int, version: str, schema_version: str) -> LLMRuleDefinition:
     path = f"rules[{index}]"
     if not isinstance(payload, dict):
         raise LLMRuleCatalogError(f"{path} must be an object")
-    expected = {
+    required_fields = {
         "rule_id",
         "family",
         "title",
@@ -104,11 +118,15 @@ def _parse_rule(payload: Any, index: int, version: str) -> LLMRuleDefinition:
         "required_facts",
         "exclusions",
     }
-    if set(payload) != expected:
-        raise LLMRuleCatalogError(f"{path} fields must be exactly {sorted(expected)}")
+    optional_fields = {"applicable_families"} if schema_version == RULE_CONFIG_SCHEMA_VERSION else set()
+    if not required_fields <= set(payload) or set(payload) - required_fields - optional_fields:
+        allowed = sorted(required_fields | optional_fields)
+        raise LLMRuleCatalogError(f"{path} fields must match {allowed}")
     family = _required_string(payload["family"], f"{path}.family")
     if family not in RULE_FAMILIES:
         raise LLMRuleCatalogError(f"{path}.family is unsupported: {family}")
+    raw_applicable = payload.get("applicable_families", [family])
+    applicable = _string_tuple(raw_applicable, f"{path}.applicable_families", required=True)
     raw_conditions = payload["action_conditions"]
     if not isinstance(raw_conditions, dict) or not raw_conditions:
         raise LLMRuleCatalogError(f"{path}.action_conditions must be a non-empty object")
@@ -129,6 +147,7 @@ def _parse_rule(payload: Any, index: int, version: str) -> LLMRuleDefinition:
             required_facts=_string_tuple(payload["required_facts"], f"{path}.required_facts", required=True),
             exclusions=_string_tuple(payload["exclusions"], f"{path}.exclusions", required=False),
             version=version,
+            applicable_families=cast(tuple[RuleFamily, ...], applicable),
         )
     except ValueError as exc:
         raise LLMRuleCatalogError(f"{path} is invalid: {exc}") from exc
@@ -148,13 +167,17 @@ def load_rule_catalog(path: Path | None = None) -> tuple[str, tuple[LLMRuleDefin
         raise LLMRuleCatalogError(f"private LLM decision-rule file is not valid JSON: {selected}") from exc
     if not isinstance(payload, dict) or set(payload) != {"schema_version", "version", "rules"}:
         raise LLMRuleCatalogError("private LLM decision-rule file has invalid top-level fields")
-    if payload["schema_version"] != RULE_CONFIG_SCHEMA_VERSION:
+    schema_version = payload["schema_version"]
+    if schema_version not in SUPPORTED_RULE_CONFIG_SCHEMA_VERSIONS:
         raise LLMRuleCatalogError("private LLM decision-rule schema_version is unsupported")
     version = _required_string(payload["version"], "version")
     raw_rules = payload["rules"]
     if not isinstance(raw_rules, list) or not raw_rules or len(raw_rules) > MAX_RULES:
         raise LLMRuleCatalogError(f"rules must contain between 1 and {MAX_RULES} entries")
-    rules = tuple(_parse_rule(rule, index, version) for index, rule in enumerate(raw_rules))
+    rules = tuple(
+        _parse_rule(rule, index, version, schema_version)
+        for index, rule in enumerate(raw_rules)
+    )
     ids = [rule.rule_id for rule in rules]
     if len(set(ids)) != len(ids):
         raise LLMRuleCatalogError("private LLM decision-rule file contains duplicate rule IDs")
@@ -167,4 +190,4 @@ RULES_BY_ID: Mapping[str, LLMRuleDefinition] = MappingProxyType({rule.rule_id: r
 
 def rules_for_families(families: tuple[RuleFamily, ...]) -> tuple[LLMRuleDefinition, ...]:
     wanted = set(families)
-    return tuple(rule for rule in RULES if rule.family in wanted)
+    return tuple(rule for rule in RULES if wanted.intersection(rule.applicable_families))
