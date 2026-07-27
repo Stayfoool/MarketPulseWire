@@ -240,9 +240,14 @@ def test_source_applicability_is_independent_of_private_rule_content() -> None:
     }
 
 
-def test_cross_family_rules_apply_only_to_reviewed_admission_groups() -> None:
-    cross_family_ids = {
-        "holding_rating_revision",
+def test_shared_rules_apply_only_to_reviewed_admission_groups() -> None:
+    shared_rule_ids = {
+        "equity_rating_revision",
+        "capital_control_share_change",
+        "industry_price_supply_change",
+        "company_industry_execution_change",
+        "company_performance_change",
+        "company_credit_financing_constraint",
         "investment_bank_allocation_change",
     }
     ordinary = _item(source="synthetic_research", source_category="research_industry_media")
@@ -250,12 +255,12 @@ def test_cross_family_rules_apply_only_to_reviewed_admission_groups() -> None:
         applicable_ids = {
             rule.rule_id for rule in applicable_rules(ordinary, _admission((family,)))
         }
-        assert cross_family_ids <= applicable_ids
+        assert applicable_ids == shared_rule_ids
     for family in ("macro_data", "fed_policy", "trade_policy"):
         applicable_ids = {
             rule.rule_id for rule in applicable_rules(ordinary, _admission((family,)))
         }
-        assert cross_family_ids.isdisjoint(applicable_ids)
+        assert shared_rule_ids.isdisjoint(applicable_ids)
 
     mixed_ids = {
         rule.rule_id
@@ -264,7 +269,7 @@ def test_cross_family_rules_apply_only_to_reviewed_admission_groups() -> None:
             _admission(("macro_data", "semiconductor_ai", "trade_policy")),
         )
     }
-    assert cross_family_ids <= mixed_ids
+    assert shared_rule_ids <= mixed_ids
 
     combined_rules = rules_for_families(("holding", "semiconductor_ai"))
     combined_ids = [rule.rule_id for rule in combined_rules]
@@ -272,7 +277,7 @@ def test_cross_family_rules_apply_only_to_reviewed_admission_groups() -> None:
 
     by_id = {rule.rule_id: rule for rule in RULES}
     for family in ("holding", "semiconductor_ai"):
-        for rule_id in cross_family_ids:
+        for rule_id in shared_rule_ids:
             rule = by_id[rule_id]
             for action in rule.allowed_actions:
                 result = validate_llm_rule_response(
@@ -290,6 +295,22 @@ def test_cross_family_rules_apply_only_to_reviewed_admission_groups() -> None:
                     if item["rule_id"] == rule_id
                 )
                 assert hit["applicable_families"] == ["holding", "semiconductor_ai"]
+
+
+def test_shared_rules_are_source_neutral_after_admission() -> None:
+    admission = _admission(("holding",))
+    for rule in rules_for_families(("holding",)):
+        response = _response("holding", rule.rule_id, rule.allowed_actions[0])
+        decisions = []
+        for item in (
+            _item(source="synthetic_news", source_category="news_media"),
+            _item(source="synthetic_research", source_category="research_industry_media"),
+        ):
+            result = validate_llm_rule_response(response, item, admission, model="fixed-test-model")
+            assert result.evaluation_status == "completed", result.validation_errors
+            assert result.decision is not None
+            decisions.append(result.decision.action)
+        assert decisions == [rule.allowed_actions[0], rule.allowed_actions[0]]
 
 
 def test_prompt_is_bounded_and_treats_article_instructions_as_data() -> None:
@@ -474,7 +495,8 @@ def main() -> int:
     test_private_catalog_loader_validates_structure_and_duplicates()
     test_every_allowed_action_projects_to_decision_result()
     test_source_applicability_is_independent_of_private_rule_content()
-    test_cross_family_rules_apply_only_to_reviewed_admission_groups()
+    test_shared_rules_apply_only_to_reviewed_admission_groups()
+    test_shared_rules_are_source_neutral_after_admission()
     test_prompt_is_bounded_and_treats_article_instructions_as_data()
     test_uncertain_and_model_unavailable_cannot_create_action()
     test_highest_model_action_wins_across_admitted_families()

@@ -10,7 +10,12 @@ from market_item import DecisionResult
 
 INDUSTRY_FACT_RULE_ID = "industry_fact_dedup"
 INDUSTRY_FACT_LOOKBACK_MINUTES = 36 * 60
+# Retired IDs remain bounded compatibility inputs for already stored decisions.
 INDUSTRY_HARDLINE_RULE_IDS = {
+    "company_credit_financing_constraint",
+    "company_industry_execution_change",
+    "company_performance_change",
+    "industry_price_supply_change",
     "industry_quantified_hardline",
     "semiconductor_price_supply_change",
     "semiconductor_material_change",

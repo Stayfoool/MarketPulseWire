@@ -13,7 +13,7 @@ from market_item import DecisionResult
 INSTITUTIONS = (("nomura", ("野村", "野村证券", "Nomura")),)
 
 
-def decision(*quotes: str, rule_ids: tuple[str, ...] = ("holding_rating_revision",)) -> DecisionResult:
+def decision(*quotes: str, rule_ids: tuple[str, ...] = ("equity_rating_revision",)) -> DecisionResult:
     return DecisionResult(
         action="push",
         importance="high",
@@ -107,13 +107,17 @@ def test_short_subject_alias_expands_from_the_same_article() -> None:
 def test_mixed_independent_push_fact_fails_open() -> None:
     mixed = decision(
         "野村证券首次覆盖长鑫科技，给予买入评级和116元目标价。",
-        rule_ids=("holding_rating_revision", "holding_material_event"),
+        rule_ids=("equity_rating_revision", "capital_control_share_change"),
     )
     item = {"title": "野村首次覆盖；苹果开始验证长鑫DRAM", "published_at": "2026-07-27T02:41:20+00:00"}
     assert investment_bank_report_dedup_hit(item, mixed, institutions=INSTITUTIONS) is None
 
 
 def test_legacy_rating_id_is_bounded_by_rating_evidence() -> None:
+    old_rating = decision(
+        "野村对长鑫科技给出116元目标价，属于首次覆盖。",
+        rule_ids=("holding_rating_revision",),
+    )
     legacy = decision(
         "野村对长鑫科技给出116元目标价，属于首次覆盖。",
         rule_ids=("investment_bank_allocation_change",),
@@ -123,6 +127,7 @@ def test_legacy_rating_id_is_bounded_by_rating_evidence() -> None:
         rule_ids=("investment_bank_allocation_change",),
     )
     item = {"published_at": "2026-07-27T02:41:20+00:00"}
+    assert investment_bank_report_dedup_hit(item, old_rating, institutions=INSTITUTIONS) is not None
     assert investment_bank_report_dedup_hit(item, legacy, institutions=INSTITUTIONS) is not None
     assert investment_bank_report_dedup_hit(item, theme, institutions=INSTITUTIONS) is None
 
@@ -132,7 +137,7 @@ def test_missing_local_identity_or_push_eligibility_fails_open() -> None:
     no_subject = hit("野村证券首次覆盖该公司，给予116元目标价。")
     archive = DecisionResult(
         action="archive",
-        rule_hits=[{"rule_id": "holding_rating_revision", "decision_action": "archive"}],
+        rule_hits=[{"rule_id": "equity_rating_revision", "decision_action": "archive"}],
     )
     assert no_institution is None
     assert no_subject is None
