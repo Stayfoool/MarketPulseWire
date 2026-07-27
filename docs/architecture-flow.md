@@ -218,9 +218,19 @@ For a Value Directory first-page preview, the existing bounded extraction expose
 the structured fields required by the private rules without exposing the full OCR
 page to the degree-decision model.
 
-Within the production `fed_policy` decision group, a separately reported material view from a configured trusted international bank's explicitly identified chief executive or chair can use `fed_policy_material_exception`. It requires local leader attribution and at least two independently supported signals across an explicit stocks/long-Treasuries stance, a directional or quantified rate/yield view, and a material cross-asset risk judgment. A bank name, analyst comment, generic leadership interview or single-asset valuation view cannot create `push`.
+Within the production `fed_policy` group, content with configured Federal
+Reserve policy terms uses ordinary range admission. The existing trusted-bank
+leader classifier is only a narrow supplementary admission path for locally
+attributed cross-asset content that would otherwise miss those terms. Its
+leader and multiple-signal checks can admit an item but cannot create an action;
+the selected private LLM rules remain the only degree decision. Identifiable
+institution reports that contain configured Federal Reserve policy terms do not
+need this supplementary path.
 
-The production `ai_credit_constraint` and `ai_compute_constraint` rules are source-neutral private LLM decision-rule entries. Their model findings require exact local evidence and pass the same strict action/evidence validation as every other rule. No deterministic AI credit/compute action implementation remains.
+The production private semiconductor/AI LLM decision rules are source-neutral.
+Their model findings require exact local evidence and pass the same strict
+action/evidence validation as every other rule. No deterministic AI credit or
+compute action implementation remains.
 
 ## Storage
 

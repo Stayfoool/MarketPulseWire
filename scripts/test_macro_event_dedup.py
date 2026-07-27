@@ -137,6 +137,20 @@ def test_cross_asset_fed_policy_reactions_share_one_catalyst_identity() -> None:
     quantified_repricing = hit("交易员将美联储降息概率从40%上调至65%，黄金上涨1.2%。")
     assert quantified_repricing is None
 
+    institution_decision = DecisionResult(
+        action="push",
+        rule_hits=[{"rule_id": "financial_institution_fed_policy_judgement"}],
+    )
+    institution_reaction = macro_event_dedup_hit(
+        {
+            "title": "重要金融机构判断美联储降息将推动黄金上涨1.5%。",
+            "published_at": "2026-07-14T12:32:47+00:00",
+        },
+        institution_decision,
+    )
+    assert institution_reaction is not None
+    assert institution_reaction["rule_id"] == FED_POLICY_REACTION_RULE_ID
+
 
 def test_pce_nonfarm_and_year_rollover_are_supported() -> None:
     pce = hit("美国6月PCE物价指数同比增长2.4%，环比增长0.2%。")

@@ -20,7 +20,7 @@ def test_trusted_financial_leader_material_judgement_is_structured() -> None:
         allowed_banks={"摩根大通"},
     )
     assert classification is not None
-    assert classification["rule_id"] == "fed_policy_material_exception"
+    assert classification["rule_id"] == "financial_institution_fed_policy_judgement"
     assert classification["institutions"] == ["摩根大通"]
     assert set(classification["material_signals"]) == {
         "cross_asset_allocation_stance",
