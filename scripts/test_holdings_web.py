@@ -1143,6 +1143,7 @@ def test_systemd_actions_are_whitelisted() -> None:
     assert "run_once" in unit_actions("surveil-research-collector-shadow.timer")
     assert RUN_ONCE_TARGETS["surveil-research-collector-shadow.timer"] == "surveil-research-collector-shadow.service"
     assert RUN_ONCE_TARGETS["surveil-china-media.timer"] == "surveil-china-media.service"
+    assert "05:00 / 21:00" in holdings_web.UNIT_METADATA["surveil-value-directory.timer"]["schedule"]
     assert unit_actions("surveil-holdings-web.service") == ["status"]
     assert all(unit_actions(unit) == ["status"] for unit in SIGNAL_REVIEW_UNITS)
     assert unit_actions("ssh.service") == []

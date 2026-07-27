@@ -360,6 +360,18 @@ def test_interval_timer_activation_policy_after_deployment() -> None:
     assert "投资信号复盘任务组默认关闭" in installer
 
 
+def test_value_directory_runs_twice_daily_without_enabling_a_disabled_timer() -> None:
+    timer = (ROOT / "systemd" / "surveil-value-directory.timer").read_text(encoding="utf-8")
+    assert "OnCalendar=*-*-* 05:00:00 Asia/Shanghai" in timer
+    assert "OnCalendar=*-*-* 21:00:00 Asia/Shanghai" in timer
+    assert "OnCalendar=*-*-* 08:00:00" not in timer
+
+    installer = (ROOT / "scripts" / "install_remote_systemd.sh").read_text(encoding="utf-8")
+    assert "systemctl is-enabled --quiet surveil-value-directory.timer" in installer
+    assert installer.count("systemctl restart surveil-value-directory.timer") == 1
+    assert "systemctl enable --now surveil-value-directory.timer" not in installer
+
+
 def test_source_profiles_have_complete_runtime_ownership() -> None:
     profiles = build_profiles()
     ids = [profile.id for profile in profiles]
@@ -399,6 +411,7 @@ def main() -> int:
     test_direct_urllib_request_usage_is_explicit_and_bounded()
     test_deployment_preserves_private_proxy_state_and_disables_shadows()
     test_interval_timer_activation_policy_after_deployment()
+    test_value_directory_runs_twice_daily_without_enabling_a_disabled_timer()
     test_source_profiles_have_complete_runtime_ownership()
     print("architecture invariant checks passed")
     return 0

@@ -1,8 +1,9 @@
 [Unit]
-Description=Run MarketPulseWire ValueList investment-bank research collector at 08:00
+Description=Run MarketPulseWire ValueList investment-bank research collector at 05:00 and 21:00
 
 [Timer]
-OnCalendar=*-*-* 08:00:00
+OnCalendar=*-*-* 05:00:00 Asia/Shanghai
+OnCalendar=*-*-* 21:00:00 Asia/Shanghai
 Persistent=true
 Unit=surveil-value-directory.service
 

@@ -9,7 +9,7 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from db_utils import update_seen_item_lifecycle
 from market_item import NormalizedMarketItem
@@ -37,6 +37,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 REPORT_DIR = ROOT / "reports"
 MONITOR = "value_directory"
+RETRYABLE_LIFECYCLE_STATUSES = {"pending", "failed_retryable"}
 
 
 def utc_now() -> str:
@@ -60,6 +61,58 @@ def load_seen_item_ids(source_id: str = SOURCE_ID, db_path: Path | None = None) 
                 str(row[0] or "")
                 for row in conn.execute(
                     "SELECT item_id FROM seen_items WHERE source = ?",
+                    (source_id,),
+                )
+            }
+    except sqlite3.Error:
+        return set()
+
+
+def load_seen_item_states(
+    source_id: str = SOURCE_ID,
+    db_path: Path | None = None,
+) -> dict[str, tuple[str, str]]:
+    db_path = db_path or DB_PATH
+    if not db_path.exists():
+        return {}
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+            if not table_exists(conn, "seen_items"):
+                return {}
+            return {
+                str(row[0] or ""): (str(row[1] or ""), str(row[2] or ""))
+                for row in conn.execute(
+                    """
+                    SELECT item_id,processability_status,processing_status
+                    FROM seen_items
+                    WHERE source = ?
+                    """,
+                    (source_id,),
+                )
+            }
+    except sqlite3.Error:
+        return {}
+
+
+def load_unpushed_review_ids(
+    source_id: str = SOURCE_ID,
+    db_path: Path | None = None,
+) -> set[str]:
+    db_path = db_path or DB_PATH
+    if not db_path.exists():
+        return set()
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+            if not table_exists(conn, "article_reviews"):
+                return set()
+            return {
+                str(row[0] or "")
+                for row in conn.execute(
+                    """
+                    SELECT item_id
+                    FROM article_reviews
+                    WHERE source = ? AND COALESCE(pushed_at, '') = ''
+                    """,
                     (source_id,),
                 )
             }
@@ -137,7 +190,7 @@ def push_on_preview_failure() -> bool:
 
 
 def recheck_unpushed_enabled() -> bool:
-    return os.getenv("VALUE_DIRECTORY_RECHECK_UNPUSHED", "1").strip() != "0"
+    return os.getenv("VALUE_DIRECTORY_RECHECK_UNPUSHED", "0").strip() == "1"
 
 
 def recheck_unpushed_limit() -> int:
@@ -146,6 +199,49 @@ def recheck_unpushed_limit() -> int:
         return max(0, min(100, int(raw))) if raw else 30
     except ValueError:
         return 30
+
+
+def retryable_item_ids(source_id: str) -> set[str]:
+    return {
+        item_id
+        for item_id, statuses in load_seen_item_states(source_id).items()
+        if RETRYABLE_LIFECYCLE_STATUSES.intersection(statuses)
+    }
+
+
+def production_preview_selector(
+    source_ids: list[str],
+    *,
+    notify_baseline: bool,
+    recheck_item_id: str = "",
+) -> Callable[[ValueDirectorySource, dict[str, Any]], bool]:
+    states_by_source = {source_id: load_seen_item_states(source_id) for source_id in source_ids}
+    unpushed_by_source = (
+        {source_id: load_unpushed_review_ids(source_id) for source_id in source_ids}
+        if recheck_unpushed_enabled()
+        else {source_id: set() for source_id in source_ids}
+    )
+    recheck_counts = {source_id: 0 for source_id in source_ids}
+    target_id = recheck_item_id.strip()
+
+    def selected(source: ValueDirectorySource, item: dict[str, Any]) -> bool:
+        if not preview_enabled():
+            return False
+        item_id = article_item_id(item)
+        states = states_by_source.get(source.source_id, {})
+        if target_id and item_id == target_id:
+            return True
+        if item_id in states:
+            if RETRYABLE_LIFECYCLE_STATUSES.intersection(states[item_id]):
+                return True
+            if item_id in unpushed_by_source.get(source.source_id, set()):
+                if recheck_counts[source.source_id] < recheck_unpushed_limit():
+                    recheck_counts[source.source_id] += 1
+                    return True
+            return False
+        return notify_baseline or bool(states)
+
+    return selected
 
 
 def enrich_item_with_preview(item: dict[str, Any], preview: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -338,6 +434,7 @@ def collect_production(
     browser_collection_complete: bool = False,
 ) -> dict[str, Any]:
     source = source or source_config()
+    retryable_ids = retryable_item_ids(source.source_id)
     new_items = save_new_items_with_retry(
         source.source_id,
         entries,
@@ -346,11 +443,18 @@ def collect_production(
     )
     pushed = 0
     reviewed = 0
-    for item in new_items:
+    new_item_ids = {article_item_id(item) for item in new_items}
+    retryable_items = [
+        item
+        for item in entries
+        if article_item_id(item) in retryable_ids and article_item_id(item) not in new_item_ids
+    ]
+    for item in [*new_items, *retryable_items]:
         reviewed += 1
         if review_and_maybe_push(
             item,
             source=source,
+            recheck_rules=article_item_id(item) in retryable_ids,
             collected_previews=collected_previews,
             preview_errors=preview_errors,
             browser_collection_complete=browser_collection_complete,
@@ -358,14 +462,14 @@ def collect_production(
             pushed += 1
     rechecked = 0
     rechecked_item_ids: set[str] = set()
-    new_item_ids = {article_item_id(item) for item in new_items}
+    retryable_item_id_set = {article_item_id(item) for item in retryable_items}
     if recheck_unpushed_enabled():
         limit = recheck_unpushed_limit()
         for item in entries:
             if rechecked >= limit:
                 break
             item_id = article_item_id(item)
-            if item_id in new_item_ids:
+            if item_id in new_item_ids or item_id in retryable_item_id_set:
                 continue
             with connect_db() as conn:
                 existing = article_review_exists(conn, source.source_id, item_id)
@@ -384,7 +488,12 @@ def collect_production(
             ):
                 pushed += 1
     target_id = recheck_item_id.strip()
-    if target_id and target_id not in new_item_ids and target_id not in rechecked_item_ids:
+    if (
+        target_id
+        and target_id not in new_item_ids
+        and target_id not in retryable_item_id_set
+        and target_id not in rechecked_item_ids
+    ):
         for item in entries:
             if article_item_id(item) != target_id:
                 continue
@@ -415,6 +524,7 @@ def collect_production(
             "raw_items": len(entries),
             "new_items": len(new_items),
             "reviewed_items": reviewed,
+            "retryable_items": len(retryable_items),
             "rechecked_items": rechecked,
             "pushed_items": pushed,
         },
@@ -437,6 +547,7 @@ def print_summary(payload: dict[str, Any]) -> None:
         f"value_directory {payload.get('mode')}: "
         f"raw={counts.get('raw_items', 0)} "
         f"new={counts.get('new_items', '-')} "
+        f"retryable={counts.get('retryable_items', '-')} "
         f"reviewed={counts.get('reviewed_items', '-')} "
         f"pushed={counts.get('pushed_items', '-')}",
         flush=True,
@@ -449,7 +560,8 @@ def print_summary(payload: dict[str, Any]) -> None:
         child_counts = child.get("counts", {})
         print(
             f"  {child.get('source')}: raw={child_counts.get('raw_items', 0)} "
-            f"new={child_counts.get('new_items', '-')} reviewed={child_counts.get('reviewed_items', '-')} "
+            f"new={child_counts.get('new_items', '-')} retryable={child_counts.get('retryable_items', '-')} "
+            f"reviewed={child_counts.get('reviewed_items', '-')} "
             f"pushed={child_counts.get('pushed_items', '-')}",
             flush=True,
         )
@@ -547,7 +659,15 @@ def run(
             collection = collect_sources_with_previews(
                 enabled_sources,
                 limit=limit,
-                preview_selector=lambda _source, _item: production and preview_enabled(),
+                preview_selector=(
+                    production_preview_selector(
+                        enabled_sources,
+                        notify_baseline=notify_baseline,
+                        recheck_item_id=recheck_item_id,
+                    )
+                    if production
+                    else lambda _source, _item: False
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - one browser session owns all enabled sources.
             collection_error = exc
@@ -609,6 +729,7 @@ def run(
     counts = {
         "raw_items": sum(int(payload.get("counts", {}).get("raw_items") or 0) for payload in payloads),
         "new_items": sum(int(payload.get("counts", {}).get("new_items") or 0) for payload in payloads),
+        "retryable_items": sum(int(payload.get("counts", {}).get("retryable_items") or 0) for payload in payloads),
         "reviewed_items": sum(int(payload.get("counts", {}).get("reviewed_items") or 0) for payload in payloads),
         "rechecked_items": sum(int(payload.get("counts", {}).get("rechecked_items") or 0) for payload in payloads),
         "pushed_items": sum(int(payload.get("counts", {}).get("pushed_items") or 0) for payload in payloads),
