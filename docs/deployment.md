@@ -515,6 +515,22 @@ baselines its first successful result before processing later records. The
 systemd installer disables and removes the expired
 `surveil-ifind-notice.timer`/service and never starts them again.
 
+The Web-managed private source-profile override remains at
+`config/source_profiles.local.json`. It is Git-ignored, excluded by
+`deploy_remote.sh`, owned by the production service account and mode `0600`.
+Every Web save creates the temporary file as `0600` before writing and preserves
+that mode across the atomic replacement. For an installation created by older
+code, migrate only its permission without changing content:
+
+```bash
+chown surveil:surveil /opt/surveil/config/source_profiles.local.json
+chmod 600 /opt/surveil/config/source_profiles.local.json
+```
+
+Then verify the authenticated source-profile API still reports the same
+disabled and override counts. Ordinary deployment must not upload or replace
+this production-private file.
+
 Open the Web workbench through an SSH tunnel:
 
 ```bash

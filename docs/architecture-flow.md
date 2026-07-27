@@ -119,7 +119,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `industry_fact_dedup.py` | Bounded delivery-only industry fact identities and material-update exclusions |
 | `company_event_dedup.py` | Generic claim-local company-event fact sets, lifecycle versions and legacy reservation aliases |
 | `market_view.py` | Read-only unified projection across existing stores |
-| `source_profiles.py` | Source catalog, runtime ownership, health keys and editable source settings |
+| `source_profiles.py` | Source catalog, runtime ownership, health keys and editable source settings; Web-managed private overrides are atomically replaced as mode `0600` |
 | `rule_config_schema.py` | Side-effect-free parser for the production five-group range-admission configuration and Web configuration path |
 | `media_keyword_config.py` | Shared loader and atomic Web save path for the private rule configuration's `semiconductor_ai_keywords`, title-only subset and `exclude_keywords`; validates the complete rule file and preserves every unrelated rule section |
 | `migrate_media_keywords.py` | Operator-only preview/apply migration from the retired private base/include media-keyword fields into the reviewed `semiconductor_ai_keywords`; preview redacts values and apply creates a private backup |
