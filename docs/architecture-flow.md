@@ -117,6 +117,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `feishu_app.py` / `feishu_feedback_service.py` | Feedback-enabled application-bot send and official long-connection card callbacks |
 | `macro_event_dedup.py` | Delivery-only US macro preview/release/reaction and Fed policy cross-asset reaction identities, including mixed-Warsh handling |
 | `industry_fact_dedup.py` | Bounded delivery-only industry fact identities and material-update exclusions |
+| `investment_bank_report_dedup.py` | Delivery-only, source-neutral individual-equity investment-bank report identities derived from validated winning-rule evidence |
 | `company_event_dedup.py` | Generic claim-local company-event fact sets, lifecycle versions and legacy reservation aliases |
 | `market_view.py` | Read-only unified projection across existing stores |
 | `source_profiles.py` | Source catalog, runtime ownership, health keys and editable source settings; Web-managed private overrides are atomically replaced as mode `0600` |
@@ -205,6 +206,19 @@ in `docs/deployment.md`.
 The `international_bank_fed_rate_path_revision` rule is also source-neutral. It requires local attributed evidence that an audited major international bank changed its expected Federal Reserve hike/cut direction, count, timing, cumulative basis points or terminal rate. Material revisions produce `push`; a concrete current forecast without a provable revision produces `daily`. WallstreetCN identity and category metadata cannot create eligibility. Same-report reposts use the existing `rule_alert_dedup` reservation, while a later genuine path revision remains eligible.
 
 Attributed-research delivery identities normally use the validated institution, topic, event family and locally retained horizon. The feedback-confirmed SEMI 2026 equipment-sales forecast uses a bounded canonical report identity anchored by institution, equipment-sales subject, 2026 horizon and normalized USD 165.9 billion metric; Chinese and English rewrites converge while each rewrite carries its prior generic hash as a migration alias. Other SEMI reports continue using the generic attributed-research identity.
+
+Individual-equity investment-bank reports use a separate delivery-only identity
+after a valid `DecisionResult.action=push`. The identity uses exact winning-rule
+evidence and, only for missing local identity details, the same delivered article
+to bind one trusted institution, covered company and normalized target price.
+Publisher, URL, article publication date, current share price and derived upside
+do not participate. The identity has a seven-day lookback and applies only when
+every winning `push` rule is an individual-equity rating/target rule. Explicit
+rating/target revisions and recommendation changes bypass it. An item with
+another independent winning `push` fact also bypasses it and remains deliverable.
+Missing or ambiguous institution, company, target price or currency fails open.
+The identity can suppress delivery through the existing `rule_alert_dedup`
+reservation lifecycle but cannot alter the original `DecisionResult.action`.
 
 The ordered `investment_bank_rating_target_direct_holding` rule requires one local evidence window to bind a recognized institution, one directly mentioned holding and an actual rating, target-price or coverage action. An attached collector symbol, a generic earnings-estimate revision or institution/holding/action terms scattered across a multi-company article cannot create this rule hit. Bounded adjacent-sentence attribution is accepted only when the second sentence explicitly continues with `该行` / `其` / `the bank` or an equivalent report reference.
 
@@ -322,7 +336,7 @@ The project keeps the existing physical stores:
 - `official_news_reviews`
 - `events` / `event_analyses`
 - `seen_items`, `seen_posts`, `source_state`
-- `rule_alert_dedup`, `deliveries` (`rule_alert_dedup` also records delivery-only intraday market-move, US macro event, bounded industry-fact and generic company-event fact-set reservations)
+- `rule_alert_dedup`, `deliveries` (`rule_alert_dedup` also records delivery-only intraday market-move, US macro event, bounded industry-fact, individual-equity investment-bank report and generic company-event fact-set reservations)
 - `market_feedback` (append-only Feishu feedback events; the latest valid operator/item click is the current projection)
 - `source_health`, `x_stream_health`
 - portfolio, relation, evidence and signal tables
