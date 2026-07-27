@@ -202,6 +202,7 @@ def _macro_rule_matched(decision: DecisionResult) -> bool:
         "fed_path_change",
         "fed_official_stance_change",
         "fed_policy_material_exception",
+        "financial_institution_fed_policy_judgement",
     }
     return any(str(hit.get("rule_id") or "") in eligible_rule_ids for hit in decision.rule_hits)
 

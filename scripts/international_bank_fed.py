@@ -522,7 +522,7 @@ def classify_trusted_financial_leader_macro_judgement(
         )
         return {
             "matched": True,
-            "rule_id": "fed_policy_material_exception",
+            "rule_id": "financial_institution_fed_policy_judgement",
             "reason": reason,
             "brief_reason": reason,
             "event_type": "trusted_financial_leader_material_judgement",
