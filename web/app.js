@@ -146,7 +146,7 @@ function renderHealthTasks(tasks, groupLabels) {
     if (!showLegacy && hiddenLegacy) parts.push(`隐藏历史兼容任务 ${hiddenLegacy} 个`);
     summary.textContent = parts.join('；');
   }
-  const order = ['fetching_persistent', 'fetching_scheduled', 'processing_scheduled', 'infrastructure', 'fetching_shadow', 'fetching_legacy', 'other'];
+  const order = ['fetching_persistent', 'fetching_scheduled', 'processing_scheduled', 'signal_review', 'infrastructure', 'fetching_shadow', 'fetching_legacy', 'other'];
   const byGroup = {};
   visibleTasks.forEach(task => {
     const group = task.group || 'other';

@@ -87,10 +87,6 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-sina-stock-news.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-article-daily.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-llm-decision-audit-cleanup.service, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-signals-extract.service, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-signal-outcome.service, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-signal-review.service, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-signal-digest.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-news-collector.service, \\
@@ -105,10 +101,6 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-china-media.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-article-daily.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-llm-decision-audit-cleanup.timer, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-signals-extract.timer, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-signal-outcome.timer, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-signal-review.timer, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-signal-digest.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-company-disclosures.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-jygs-actions.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector.timer, \\
@@ -124,10 +116,6 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block start surveil-china-media.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-article-daily.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-llm-decision-audit-cleanup.service, \\
-    \$SYSTEMCTL_BIN --no-block start surveil-signals-extract.service, \\
-    \$SYSTEMCTL_BIN --no-block start surveil-signal-outcome.service, \\
-    \$SYSTEMCTL_BIN --no-block start surveil-signal-review.service, \\
-    \$SYSTEMCTL_BIN --no-block start surveil-signal-digest.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-company-disclosures.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-jygs-actions.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-research-collector.service, \\
@@ -174,11 +162,17 @@ systemctl disable --now surveil-rule-shadow-daily.timer >/dev/null 2>&1 || true
 systemctl stop surveil-rule-shadow-daily.service >/dev/null 2>&1 || true
 systemctl enable --now surveil-llm-decision-audit-cleanup.timer
 echo '已停用新旧规则对比日报；保留每日 30 天敏感审计清理。'
-systemctl enable --now surveil-signals-extract.timer
-systemctl restart surveil-signals-extract.timer
-systemctl enable --now surveil-signal-outcome.timer
-systemctl enable --now surveil-signal-review.timer
-systemctl enable --now surveil-signal-digest.timer
+systemctl disable --now \
+  surveil-signals-extract.timer \
+  surveil-signal-outcome.timer \
+  surveil-signal-review.timer \
+  surveil-signal-digest.timer >/dev/null 2>&1 || true
+systemctl stop \
+  surveil-signals-extract.service \
+  surveil-signal-outcome.service \
+  surveil-signal-review.service \
+  surveil-signal-digest.service >/dev/null 2>&1 || true
+echo '投资信号复盘任务组默认关闭；信号提取、结果更新、复盘和摘要均未启动。'
 systemctl disable --now surveil-research-collector-shadow.timer >/dev/null 2>&1 || true
 systemctl disable --now surveil-official-collector-shadow.timer >/dev/null 2>&1 || true
 systemctl disable --now surveil-news-collector-shadow.timer >/dev/null 2>&1 || true
