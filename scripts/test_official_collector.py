@@ -3,12 +3,16 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import official_collector
 from source_profiles import save_source_profile_config
+
+ROOT = Path(__file__).resolve().parents[1]
+TEST_RULE_CONFIG = ROOT / "config" / "rule_core_v1.test.json"
 
 
 def test_official_sources_include_expected_company_feeds() -> None:
@@ -75,25 +79,6 @@ def test_shadow_collect_rss_does_not_write_prod_seen_or_reviews() -> None:
             )
             """
         )
-        conn.execute(
-            """
-            CREATE TABLE official_news_reviews (
-                source TEXT NOT NULL,
-                item_id TEXT NOT NULL,
-                url TEXT,
-                title TEXT NOT NULL,
-                published_at TEXT,
-                importance TEXT NOT NULL,
-                should_push_now INTEGER NOT NULL DEFAULT 0,
-                reason TEXT,
-                daily_summary TEXT,
-                analysis_json TEXT NOT NULL,
-                pushed_at TEXT,
-                created_at TEXT NOT NULL,
-                PRIMARY KEY (source, item_id)
-            )
-            """
-        )
         conn.commit()
         conn.close()
 
@@ -113,11 +98,13 @@ def test_shadow_collect_rss_does_not_write_prod_seen_or_reviews() -> None:
 
         conn = sqlite3.connect(db_path)
         seen_count = conn.execute("SELECT COUNT(*) FROM seen_items").fetchone()[0]
-        review_count = conn.execute("SELECT COUNT(*) FROM official_news_reviews").fetchone()[0]
+        legacy_table_count = conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='official_news_reviews'"
+        ).fetchone()[0]
         conn.close()
 
     assert calls == [{"source": "nvidia_blog", "url": "https://example.com/feed.xml", "state": {}}]
-    assert payload["ok"] is True
+    assert payload["ok"] is True, payload
     assert payload["sent_feishu"] is False
     assert payload["ran_llm_review"] is False
     assert payload["wrote_production_seen_items"] is False
@@ -126,7 +113,7 @@ def test_shadow_collect_rss_does_not_write_prod_seen_or_reviews() -> None:
     assert payload["rss"][0]["candidates"][0]["pipeline"] == "official_company shadow -> decision layer / thin interpretation planned"
     assert payload["rss"][0]["candidates"][0]["already_reviewed"] is False
     assert seen_count == 0
-    assert review_count == 0
+    assert legacy_table_count == 0
 
 
 def test_json_report_shape() -> None:
@@ -172,11 +159,19 @@ def test_production_collect_delegates_to_existing_rss_pipeline() -> None:
 
 
 def main() -> int:
-    test_official_sources_include_expected_company_feeds()
-    test_disabled_source_is_filtered()
-    test_shadow_collect_rss_does_not_write_prod_seen_or_reviews()
-    test_json_report_shape()
-    test_production_collect_delegates_to_existing_rss_pipeline()
+    previous = os.environ.get("RULE_CORE_CONFIG")
+    os.environ["RULE_CORE_CONFIG"] = str(TEST_RULE_CONFIG)
+    try:
+        test_official_sources_include_expected_company_feeds()
+        test_disabled_source_is_filtered()
+        test_shadow_collect_rss_does_not_write_prod_seen_or_reviews()
+        test_json_report_shape()
+        test_production_collect_delegates_to_existing_rss_pipeline()
+    finally:
+        if previous is None:
+            os.environ.pop("RULE_CORE_CONFIG", None)
+        else:
+            os.environ["RULE_CORE_CONFIG"] = previous
     print("official collector checks passed")
     return 0
 

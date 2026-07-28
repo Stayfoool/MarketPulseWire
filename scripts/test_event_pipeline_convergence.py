@@ -77,10 +77,10 @@ def test_analyze_event_returns_interpretation_without_writing_legacy_tables() ->
             market_flow.interpret_market_item = original
 
         with sqlite3.connect(db_path) as conn:
-            legacy_counts = (
-                conn.execute("SELECT COUNT(*) FROM events").fetchone()[0],
-                conn.execute("SELECT COUNT(*) FROM event_analyses").fetchone()[0],
-            )
+            legacy_tables = {
+                str(row[0])
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
     assert analysis["_decision_result"]["action"] == "push"
     assert analysis["core_content"].startswith("美国 CPI")
     assert "brief_reason" not in analysis
@@ -88,7 +88,7 @@ def test_analyze_event_returns_interpretation_without_writing_legacy_tables() ->
     assert analysis["_interpretation_result"]["model"] == "fake-model"
     assert analysis["_interpretation_result"]["brief_reason"] == ""
     assert analysis["_interpretation_result"]["related_targets"] == []
-    assert legacy_counts == (0, 0)
+    assert not legacy_tables.intersection({"events", "event_analyses"})
 
 
 def test_event_entry_without_decision_fails_closed() -> None:

@@ -83,6 +83,10 @@ REMOVED_COMPATIBILITY_MODULES = (
     "market_content_flow.py",
     "market_event_flow.py",
     "event_pipeline.py",
+    "market_lifecycle_v1.py",
+    "market_review_store.py",
+    "market_storage_audit.py",
+    "market_storage_migration.py",
 )
 
 INDEPENDENT_ROUTE_EXCEPTIONS = {

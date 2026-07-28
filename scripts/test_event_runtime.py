@@ -186,7 +186,9 @@ def test_sina_flash_reserves_all_discoveries_before_current_admission() -> None:
                     (sina_flash.SOURCE,),
                 ).fetchall()
                 assert baseline == [("old-related", "baseline"), ("old-unrelated", "baseline")]
-                assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='events'"
+                ).fetchone()[0] == 0
 
             rows.extend(
                 [

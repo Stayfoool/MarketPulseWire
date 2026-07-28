@@ -29,7 +29,7 @@ flowchart LR
     Admission -->|excluded| Seen["seen_items admission audit only"]
     Runtime --> Decision["decision_engine: LLM DecisionResult"]
     Decision --> Interpretation["InterpretationResult"]
-    Interpretation --> Store["Existing review store adapter"]
+    Interpretation --> Store["market_reviews"]
     Store --> Delivery["market_delivery"]
     Store --> View["Web / digest / signals"]
     Delivery --> Outcome["DeliveryOutcome"]
@@ -104,7 +104,6 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `llm_rule_shadow.py` | Shared side-effect-free LLM execution used by production and retained historical comparison tools. It builds one prompt, performs strict validation and permits one correction request containing only the original response and validation errors |
 | `llm_production_decision.py` | Production deadline and private-audit wrapper. It enforces one 120-second total budget across retries and correction, writes one mode-`0600` audit linked by market item/review ids, and fails closed when no valid audited decision exists |
 | `rule_core_fixture.py` | Strict loader for the sanitized public v1 behavior corpus; test/spec support only |
-| `market_lifecycle_v1.py` | Inactive lifecycle/source-integration contract, bounded discovery shape, legal transitions and honest read-only projections over the current article/event physical stores |
 | `rule_config_migration_v1.py` | Inactive redacted preview of explicitly supplied legacy keyword origins versus a reviewed v1 target configuration; never writes configuration or prints keyword values |
 | `rule_core_shadow_combined.py` | Report-only combiner for existing comparison reports; separates action comparisons, both-not-admitted items, admission differences and model/validation failures; preserves candidate engine/version, bounded resolved rule evidence, body-source label, model metadata, token usage and elapsed time; and refreshes one latest Markdown/JSON view across research, official and news production batches. Combined reports never copy the private model request, article body or raw response, and non-action-comparison rows are not counted as action upgrades or downgrades |
 | `rule_core_shadow_daily.py` | Report-only daily review job; removes sensitive model request/response payloads from private per-item audits after 30 days while retaining bounded comparison metadata, freezes one 15:30-to-15:30 Beijing Markdown/JSON report, and sends at most one Feishu reminder when the interval has comparable or unable-to-compare items. Daily reports never copy private model requests, article bodies or raw responses. An explicit historical rebuild only re-aggregates retained comparisons, records that the candidate was not re-evaluated and preserves any prior sent reminder |
@@ -120,8 +119,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `market_content_adapter.py` | Article and official-news payload projection for cards and unified storage |
 | `market_event_adapter.py` | Event payload projection for cards and unified storage |
 | `market_store.py` | Current `market_items`, `market_reviews`, aliases and linked delivery persistence |
-| `market_review_store.py` | Historical result-table helpers plus shared portfolio/delivery helpers pending the separate old-schema removal |
-| `market_delivery.py` | Rule/fact dedup reservation and DecisionResult-based Feishu push execution; it does not write old result tables |
+| `market_delivery.py` | Rule/fact dedup reservation and DecisionResult-based Feishu push execution; it writes only unified delivery audits |
 | `market_feedback.py` | Cross-source append-only human feedback, signed item identity, last-click-wins projection and quality aggregates |
 | `llm_decision_web.py` | Read-only Web projection of current SQLite `DecisionResult` plus bounded private-audit attempt summaries; it cannot create, change or restore an action |
 | `feishu_app.py` / `feishu_feedback_service.py` | Feedback-enabled application-bot send and official long-connection card callbacks |
@@ -129,7 +127,7 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `industry_fact_dedup.py` | Bounded delivery-only industry fact identities and material-update exclusions |
 | `investment_bank_report_dedup.py` | Delivery-only, source-neutral individual-equity investment-bank report identities derived from validated winning-rule evidence |
 | `company_event_dedup.py` | Generic claim-local company-event fact sets, lifecycle versions and legacy reservation aliases |
-| `market_view.py` | Read-only unified projection across existing stores |
+| `market_view.py` | Read-only projection from unified market items, reviews and deliveries |
 | `source_profiles.py` | Source catalog, runtime ownership, health keys and editable source settings; Web-managed private overrides are atomically replaced as mode `0600` |
 | `rule_config_schema.py` | Side-effect-free parser for the production five-group range-admission configuration and Web configuration path |
 | `media_keyword_config.py` | Shared loader and atomic Web save path for the private rule configuration's `semiconductor_ai_keywords`, title-only subset and `exclude_keywords`; validates the complete rule file and preserves every unrelated rule section |
@@ -277,18 +275,18 @@ New production items also use the canonical storage contract:
   signal source ids and Web links therefore remain valid during the storage
   transition.
 - `deliveries` remains an execution audit, independent from decision
-  authority. Additive `market_item_id`, `market_review_id`, `decision_action`
-  and `attempted_at` columns link article, official-news and event delivery
-  outcomes to the same item/review contract.
+  authority. `market_item_id`, nullable `market_review_id`, `decision_action`
+  and `attempted_at` link article, official-news and event delivery outcomes to
+  the same item/review contract. Historical deliveries whose originating
+  review could not be proven keep a null `market_review_id`.
 
-The first deployment backfills historical `seen_items` identities. The second
-additive migration, run explicitly with `market_storage_migration.py --apply`
-after a preview and SQLite backup, copies historical article/official results,
-every event-analysis version and every event identity into the unified tables.
-Only a valid stored `DecisionResult` is copied as an action; legacy push flags,
-importance and delivery history cannot create an action. Missing body text,
-admission evidence and decisions remain missing and are labelled
-`legacy_unclassified`.
+The completed historical migrations copied `seen_items`, article/official
+results, every event-analysis version and every event identity into the
+unified tables. Historical `legacy_store_kind`, `legacy_store_id` and
+`market_item_aliases` values remain as provenance and stable external identity
+metadata; they do not imply that a separate physical result table still
+exists. Missing body text, admission evidence and review links remain missing
+instead of being inferred.
 
 Web Event Center, article/official daily output, feedback lookup/quality metrics
 and signal extraction read the unified tables through
@@ -296,7 +294,7 @@ and signal extraction read the unified tables through
 display and signal readers use the latest result while all versions remain
 stored. Existing external ids are resolved through `market_item_aliases`;
 historical deliveries without a provable originating review link only to the
-item. New production processing does not read or write the old result tables.
+item. New production processing reads and writes only unified result storage.
 
 The investment-signal review group is installed but disabled by default. Its
 four internal steps remain separate for diagnosis: signal extraction derives
@@ -313,8 +311,7 @@ the existing idempotent upsert.
 
 For newly admitted production items, `market_reviews` is also the processed /
 retry/current-result authority. `market_runtime.py` reuses a completed current
-result without consulting `article_reviews`, `official_news_reviews` or
-`event_analyses`; a retryable result is completed in place, while an explicit
+result directly; a retryable result is completed in place, while an explicit
 reprocess creates a new current result version. A retryable result is reused
 only when its stored `AdmissionResult` exactly matches the current one; changed
 admission evidence or configuration creates a new current result and preserves
@@ -326,16 +323,9 @@ links at insertion. Feedback, Web overview, daily output, collector
 reviewed-state checks and operational tools do not recover processing or
 delivery state from old rows.
 
-`market_storage_migration.py` and `market_storage_audit.py` remain available
-only for the completed historical migration and its records during this stage.
-They are not called by normal production processing. Removing those tools,
-old-table schema and historical tables is a separately approved change.
+The project keeps these current physical stores:
 
-The project keeps the existing physical stores:
-
-- `article_reviews`
-- `official_news_reviews`
-- `events` / `event_analyses`
+- `market_items`, `market_reviews`, `market_item_aliases`
 - `seen_items`, `seen_posts`, `source_state`
 - `rule_alert_dedup`, `deliveries` (`rule_alert_dedup` also records delivery-only intraday market-move, US macro event, bounded industry-fact, individual-equity investment-bank report and generic company-event fact-set reservations)
 - `market_feedback` (append-only Feishu feedback events; the latest valid operator/item click is the current projection)
@@ -344,12 +334,10 @@ The project keeps the existing physical stores:
 
 `article`, `official` and `event` are external display/feedback identities, not
 separate storage or decision paths. All three arrive through the unified runtime
-above and resolve through `market_item_aliases`. `article_reviews`,
-`official_news_reviews`, `events` and `event_analyses` remain physically present
-with historical data but receive no new production reads or writes. Supported
-rollback begins with a revision that already uses unified storage; old-table
-completeness is not rebuilt. Removing the retained schema, migration/audit code
-and physical tables requires a separate approved PR and production backup.
+above and resolve through `market_item_aliases`. The former article, official
+news, event and event-analysis result tables have been retired after explicit
+mapping verification and a production backup. Supported rollback begins with a
+revision that already uses unified storage and does not require those tables.
 
 `seen_items` keeps discovery identity as its primary responsibility. Additive
 compatibility columns record `collection_class`, processability, admission and

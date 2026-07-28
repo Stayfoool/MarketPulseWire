@@ -48,6 +48,19 @@ VALID_RULE_FAMILIES: set[str] = {
     "fed_policy",
     "trade_policy",
 }
+
+
+def article_item_id(item: dict[str, Any]) -> str:
+    return str(item.get("id") or item.get("url") or item.get("title") or "")
+
+
+def official_news_item_id(item: dict[str, Any]) -> str:
+    return article_item_id(item)
+
+
+def event_content_hash(*parts: str) -> str:
+    joined = "\n".join(part.strip() for part in parts if part and part.strip())
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 VALID_EVIDENCE_SCOPES: set[str] = {*VALID_RULE_FAMILIES, "global"}
 
 

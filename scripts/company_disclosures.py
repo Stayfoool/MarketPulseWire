@@ -17,7 +17,8 @@ from disclosure_providers import DisclosureProvider, DisclosureRecord, Disclosur
 from env_utils import load_env
 from market_db import DEFAULT_DB_PATH, init_db
 from market_flow import normalize_market_item, process_market_item
-from market_review_store import event_content_hash, load_enabled_holdings
+from holdings_store import load_enabled_holdings
+from market_item import event_content_hash
 from market_store import processing_failure_status
 from portfolio_import import import_holdings
 from production_admission import persist_production_admission_context, production_admission_context

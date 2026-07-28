@@ -14,12 +14,6 @@ import market_delivery
 from feishu import FeishuResponse
 from market_db import init_db
 from market_item import AdmissionEvidence, AdmissionResult, DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem, decision_result_from_payload
-from market_review_store import (
-    article_review_exists,
-    official_review_exists,
-    save_article_review,
-    save_official_review,
-)
 from market_store import complete_market_review, record_production_admission
 
 
@@ -215,9 +209,9 @@ def test_event_delivery_records_unified_item_and_result_directly() -> None:
         ) == "skipped"
         with sqlite3.connect(db_path) as conn:
             row = conn.execute(
-                "SELECT event_id,market_item_id,market_review_id,status,decision_action FROM deliveries"
+                "SELECT market_item_id,market_review_id,status,decision_action FROM deliveries"
             ).fetchone()
-        assert row == (None, market_item_id, market_review_id, "skipped", "archive")
+        assert row == (market_item_id, market_review_id, "skipped", "archive")
 
 
 def test_send_failure_releases_reservation_and_records_failure() -> None:
@@ -291,7 +285,7 @@ def test_success_confirms_rule_dedup_and_duplicate_skips_second_send() -> None:
             os.environ["FEISHU_WEBHOOK"] = original_webhook
 
 
-def test_content_delivery_uses_decision_action_without_updating_legacy_rows() -> None:
+def test_content_delivery_uses_decision_action() -> None:
     original_send = market_delivery.send_card
     try:
         market_delivery.send_card = lambda card: True
@@ -303,9 +297,6 @@ def test_content_delivery_uses_decision_action_without_updating_legacy_rows() ->
             push_review = content_review("push")
             official_item = {"id": "official-1", "title": "测试官网新闻"}
             official_push = content_review("push", official=True)
-            with sqlite3.connect(db_path) as conn:
-                save_article_review(conn, "cls_telegraph_api", article_item, push_review)
-                save_official_review(conn, "nvidia_blog", official_item, official_push)
             assert (
                 market_delivery.deliver_article_review(
                     "cls_telegraph_api",
@@ -339,11 +330,6 @@ def test_content_delivery_uses_decision_action_without_updating_legacy_rows() ->
                 )
                 == "sent"
             )
-            with sqlite3.connect(db_path) as conn:
-                stored_article = article_review_exists(conn, "cls_telegraph_api", "article-1")
-                stored_official = official_review_exists(conn, "nvidia_blog", "official-1")
-        assert stored_article is not None and not stored_article["pushed_at"]
-        assert stored_official is not None and not stored_official["pushed_at"]
     finally:
         market_delivery.send_card = original_send
 
@@ -476,9 +462,6 @@ def test_article_delivery_dedup_skips_without_changing_decision_action() -> None
             first_item = {"id": "article-dedup-1", "title": "高盛做多 AI 价值链"}
             second_item = {"id": "article-dedup-2", "title": "同一报告再次传播"}
             review = content_review("push", rule_hits=[rule_hit])
-            with sqlite3.connect(db_path) as conn:
-                save_article_review(conn, "cls_telegraph_api", first_item, review)
-                save_article_review(conn, "jin10_rsshub_important", second_item, review)
             assert (
                 market_delivery.deliver_article_review(
                     "cls_telegraph_api",
@@ -529,9 +512,6 @@ def test_investment_bank_report_cross_source_article_dedup_preserves_push_decisi
             }
             first_review = content_review("push", rule_hits=[rating_report_rule(first_text)])
             second_review = content_review("push", rule_hits=[rating_report_rule(second_text)])
-            with sqlite3.connect(db_path) as conn:
-                save_article_review(conn, "source_a", first_item, first_review)
-                save_article_review(conn, "source_b", second_item, second_review)
             first_status = market_delivery.deliver_article_review(
                 "source_a", first_item, first_review,
                 decision=required_decision(first_review), db_path=db_path,
@@ -568,8 +548,6 @@ def test_investment_bank_report_official_and_event_paths_share_identity() -> Non
                 "published_at": "2026-07-27T02:41:20+00:00",
             }
             official_review = content_review("push", rule_hits=[rating_report_rule(text)], official=True)
-            with sqlite3.connect(db_path) as conn:
-                save_official_review(conn, "research_wire", official_item, official_review)
             assert market_delivery.deliver_official_review(
                 "research_wire", official_item, official_review,
                 decision=required_decision(official_review), analysis_lines=["核心内容：测试。"], db_path=db_path,
@@ -649,9 +627,6 @@ def test_intraday_market_move_cross_source_dedup_preserves_push_decision() -> No
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
             review = content_review("push", rule_hits=[rule_hit])
-            with sqlite3.connect(db_path) as conn:
-                save_article_review(conn, "yicai_brief", first_item, review)
-                save_article_review(conn, "jin10_rsshub_important", second_item, review)
             assert required_decision(review).action == "push"
             assert (
                 market_delivery.deliver_article_review(
@@ -826,9 +801,6 @@ def test_macro_release_and_reaction_each_send_once_while_warsh_speech_is_retaine
                 "sina_finance_articles",
                 "jin10_rsshub_important",
             )
-            with sqlite3.connect(db_path) as conn:
-                for source, item in zip(sources, items, strict=True):
-                    save_article_review(conn, source, item, review)
             statuses = [
                 market_delivery.deliver_article_review(
                     source, item, review, decision=required_decision(review), db_path=db_path
@@ -867,9 +839,6 @@ def test_cross_asset_fed_policy_reactions_deliver_once() -> None:
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
-            with sqlite3.connect(db_path) as conn:
-                save_article_review(conn, "cls_telegraph_api", gold, review)
-                save_article_review(conn, "wallstreetcn_news", bitcoin, review)
             statuses = [
                 market_delivery.deliver_article_review(
                     source, item, review, decision=required_decision(review), db_path=db_path
@@ -904,9 +873,6 @@ def test_company_event_cross_rule_article_dedup_preserves_push_decision() -> Non
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
-            with sqlite3.connect(db_path) as conn:
-                save_article_review(conn, "cls_telegraph_api", first, first_review)
-                save_article_review(conn, "wallstreetcn_news", second, second_review)
             statuses = [
                 market_delivery.deliver_article_review(
                     "cls_telegraph_api",
@@ -986,9 +952,6 @@ def test_multi_company_event_fact_set_is_order_independent() -> None:
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
-            with sqlite3.connect(db_path) as conn:
-                save_article_review(conn, "sina_stock_news", first, review)
-                save_article_review(conn, "yicai_brief", second, review)
             first_status = market_delivery.deliver_article_review(
                 "sina_stock_news", first, review, decision=required_decision(review), db_path=db_path
             )
@@ -1070,9 +1033,6 @@ def test_official_company_event_dedup_uses_the_same_fact_set() -> None:
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
-            with sqlite3.connect(db_path) as conn:
-                save_official_review(conn, "company_site_a", first, review)
-                save_official_review(conn, "company_site_b", second, review)
             first_status = market_delivery.deliver_official_review(
                 "company_site_a",
                 first,
@@ -1206,9 +1166,6 @@ def test_ibm_industry_fact_cross_source_article_dedup_preserves_push_decision() 
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
-            with sqlite3.connect(db_path) as conn:
-                save_article_review(conn, "cls_telegraph_api", first, review)
-                save_article_review(conn, "wallstreetcn_news", second, review)
             first_status = market_delivery.deliver_article_review(
                 "cls_telegraph_api", first, review, decision=required_decision(review), db_path=db_path
             )
@@ -1288,9 +1245,6 @@ def test_coreweave_hedge_cross_source_article_dedup_preserves_push_decision() ->
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
-            with sqlite3.connect(db_path) as conn:
-                save_article_review(conn, "sina_finance_articles", first, review)
-                save_article_review(conn, "jin10_rsshub_important", second, review)
             first_status = market_delivery.deliver_article_review(
                 "sina_finance_articles", first, review, decision=required_decision(review), db_path=db_path
             )
@@ -1314,7 +1268,7 @@ def main() -> int:
     test_event_delivery_records_unified_item_and_result_directly()
     test_send_failure_releases_reservation_and_records_failure()
     test_success_confirms_rule_dedup_and_duplicate_skips_second_send()
-    test_content_delivery_uses_decision_action_without_updating_legacy_rows()
+    test_content_delivery_uses_decision_action()
     test_article_review_uses_nested_decision_action()
     test_article_delivery_dedup_skips_without_changing_decision_action()
     test_investment_bank_report_cross_source_article_dedup_preserves_push_decision()

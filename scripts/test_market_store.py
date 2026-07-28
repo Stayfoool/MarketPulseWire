@@ -22,7 +22,6 @@ from market_item import (
     MarketFlowResult,
     NormalizedMarketItem,
 )
-from market_review_store import ensure_article_reviews_table, ensure_official_news_table
 from market_store import (
     complete_market_review,
     fail_market_review,
@@ -75,15 +74,6 @@ def flow(item_value: NormalizedMarketItem, action: str = "push") -> MarketFlowRe
     )
 
 
-def legacy_result_counts(conn: sqlite3.Connection) -> dict[str, int]:
-    ensure_article_reviews_table(conn, commit=False)
-    ensure_official_news_table(conn, commit=False)
-    return {
-        table: int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-        for table in ("article_reviews", "official_news_reviews", "events", "event_analyses")
-    }
-
-
 def test_excluded_has_no_decision() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "db.sqlite3"
@@ -110,10 +100,6 @@ def test_result_alias_and_delivery_use_only_unified_storage() -> None:
         path = Path(tmp) / "db.sqlite3"
         init_db(path).close()
         normalized = item("source-b")
-        with sqlite3.connect(path) as conn:
-            before = legacy_result_counts(conn)
-            conn.commit()
-
         market_item_id, review_id = record_production_admission(
             normalized, admission("admitted"), db_path=path
         )
@@ -150,16 +136,14 @@ def test_result_alias_and_delivery_use_only_unified_storage() -> None:
                 "FROM market_item_aliases"
             ).fetchone()
             delivery = conn.execute(
-                "SELECT id,event_id,market_item_id,market_review_id,status,decision_action "
+                "SELECT id,market_item_id,market_review_id,status,decision_action "
                 "FROM deliveries WHERE id=?",
                 (delivery_id,),
             ).fetchone()
-            after = legacy_result_counts(conn)
 
         assert review == ("admitted", "push", "high", "succeeded", None, None)
         assert alias == (market_item_id, "article", normalized.source, "a-1", "market_items")
-        assert delivery == (delivery_id, None, market_item_id, review_id, "sent", "push")
-        assert after == before
+        assert delivery == (delivery_id, market_item_id, review_id, "sent", "push")
 
 
 def test_admission_reuses_current_unified_result() -> None:
@@ -255,15 +239,6 @@ def test_unified_views_work_when_legacy_result_tables_are_absent() -> None:
             kind: record_production_admission(value, admission("admitted"), db_path=path)
             for kind, value in items.items()
         }
-        with sqlite3.connect(path) as conn:
-            ensure_article_reviews_table(conn, commit=False)
-            ensure_official_news_table(conn, commit=False)
-            conn.execute("DROP TABLE event_analyses")
-            conn.execute("DROP TABLE events")
-            conn.execute("DROP TABLE official_news_reviews")
-            conn.execute("DROP TABLE article_reviews")
-            conn.commit()
-
         for kind, normalized in items.items():
             market_item_id, review_id = identities[kind]
             action = "push" if kind == "event" else "daily"

@@ -7,14 +7,9 @@ import sqlite3
 from typing import Any
 
 from market_card_view import card_targets
-from market_db import MARKET_RESULTS_MIGRATION_VERSION
 
 
-STORE_FOR_KIND = {
-    "article": "article_reviews",
-    "official": "official_news_reviews",
-    "event": "event_analyses",
-}
+ITEM_KINDS = ("article", "official", "event")
 
 
 def _json_dict(value: Any) -> dict[str, Any]:
@@ -60,17 +55,6 @@ def _with_unified_results(payload: dict[str, Any], row: sqlite3.Row) -> dict[str
     return result
 
 
-def migration_ready(conn: sqlite3.Connection) -> bool:
-    if conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_state'"
-    ).fetchone() is None:
-        return False
-    return conn.execute(
-        "SELECT 1 FROM source_state WHERE source = ? LIMIT 1",
-        (MARKET_RESULTS_MIGRATION_VERSION,),
-    ).fetchone() is not None
-
-
 def _aliases(conn: sqlite3.Connection, item_ids: list[int]) -> dict[int, list[dict[str, str]]]:
     if not item_ids:
         return {}
@@ -99,14 +83,13 @@ def _aliases(conn: sqlite3.Connection, item_ids: list[int]) -> dict[int, list[di
     return result
 
 
-def _preferred_alias(
-    aliases: list[dict[str, str]], review_store: str, content_type: str
-) -> dict[str, str]:
-    expected_kind = {
-        "article_reviews": "article",
-        "official_news_reviews": "official",
-        "event_analyses": "event",
-    }.get(review_store, "")
+def _preferred_alias(aliases: list[dict[str, str]], content_type: str) -> dict[str, str]:
+    if content_type == "official_news":
+        expected_kind = "official"
+    elif content_type in {"article", "research_index", "unknown"}:
+        expected_kind = "article"
+    else:
+        expected_kind = "event"
     for alias in aliases:
         if alias["item_kind"] == expected_kind:
             return alias
@@ -153,7 +136,7 @@ def _selected_item_rows(
             SELECT m.*, r.id AS review_id, r.review_status, r.admission_status,
                    r.decision_action, r.importance, r.decision_json,
                    r.interpretation_json, r.legacy_payload_json,
-                   r.legacy_store_kind AS review_store_kind,
+                   r.legacy_store_id AS review_legacy_store_id,
                    r.created_at AS review_created_at,
                    r.completed_at AS review_completed_at,
                    (SELECT d.status FROM deliveries d
@@ -185,7 +168,7 @@ def _selected_item_rows(
               AND (
                   r.id IS NULL
                   OR r.admission_status IN ('admitted','legacy_unclassified')
-                  OR r.legacy_store_kind IN ('article_reviews','official_news_reviews','event_analyses')
+                  OR r.legacy_store_id IS NOT NULL
               )
             ORDER BY datetime({display_time}) DESC, m.id DESC
             LIMIT 5000
@@ -230,11 +213,7 @@ def canonical_event_rows(
     result: list[dict[str, Any]] = []
     for row in rows:
         aliases = alias_map.get(int(row["id"]), [])
-        item_alias = _preferred_alias(
-            aliases,
-            str(row["review_store_kind"] or ""),
-            str(row["content_type"] or ""),
-        )
+        item_alias = _preferred_alias(aliases, str(row["content_type"] or ""))
         item_kind = item_alias["item_kind"]
         payload, legacy = _payload_parts(row)
         review_status = str(row["review_status"] or "")
@@ -244,11 +223,11 @@ def canonical_event_rows(
             alias["item_kind"] == "event" for alias in aliases
         )
 
-        compatibility_result = str(row["review_store_kind"] or "") in set(STORE_FOR_KIND.values())
+        historical_result = bool(str(row["review_legacy_store_id"] or ""))
         if (
             review_status
             and admission_status not in {"admitted", "legacy_unclassified"}
-            and not compatibility_result
+            and not historical_result
         ):
             continue
         if not review_status and not is_legacy_event_without_review:
@@ -366,7 +345,6 @@ def _review_rows_for_kind(
                    r.id AS review_id, r.review_status, r.admission_status,
                    r.decision_action, r.importance, r.decision_json,
                    r.interpretation_json, r.legacy_payload_json,
-                   r.legacy_store_kind AS review_store_kind,
                    r.created_at AS review_created_at,
                    r.completed_at AS review_completed_at,
                    (SELECT d.status FROM deliveries d WHERE d.market_item_id=m.id
@@ -533,7 +511,7 @@ def canonical_signal_rows(
     item_kind: str,
     since: str,
 ) -> list[dict[str, Any]]:
-    if item_kind not in STORE_FOR_KIND:
+    if item_kind not in ITEM_KINDS:
         raise ValueError(f"unsupported signal item kind: {item_kind}")
     result: list[dict[str, Any]] = []
     for row in _review_rows_for_kind(conn, item_kind, since=since):
@@ -550,7 +528,7 @@ def canonical_signal_rows(
 def canonical_feedback_snapshot(
     conn: sqlite3.Connection, item_kind: str, source: str, item_id: str
 ) -> dict[str, Any] | None:
-    if item_kind not in STORE_FOR_KIND:
+    if item_kind not in ITEM_KINDS:
         return None
     row = conn.execute(
         """
@@ -588,7 +566,7 @@ def canonical_feedback_snapshot(
 def canonical_delivered_items(conn: sqlite3.Connection, cutoff: str) -> list[dict[str, Any]]:
     conn.row_factory = sqlite3.Row
     items: list[dict[str, Any]] = []
-    for item_kind in STORE_FOR_KIND:
+    for item_kind in ITEM_KINDS:
         for row in _review_rows_for_kind(conn, item_kind):
             payload, legacy = _payload_parts(row)
             sent_at = _sent_at(row, legacy)

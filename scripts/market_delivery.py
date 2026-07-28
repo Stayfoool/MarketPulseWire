@@ -25,15 +25,15 @@ from investment_bank_report_dedup import (
 from market_card_view import decision_basis_reasons, interpretation_core
 from market_db import DEFAULT_DB_PATH
 from macro_event_dedup import MACRO_DEDUP_RULE_IDS, macro_event_dedup_hit
-from market_item import DecisionResult, NormalizedMarketItem
-from market_feedback import FeedbackIdentity, append_feedback_actions
-from market_store import source_item_id
-from market_move_dedup import MARKET_MOVE_RULE_ID, intraday_market_move_dedup_hit
-from market_review_store import (
+from market_item import (
+    DecisionResult,
+    NormalizedMarketItem,
     article_item_id,
     official_news_item_id,
-    record_event_delivery,
 )
+from market_feedback import FeedbackIdentity, append_feedback_actions
+from market_store import record_event_delivery, source_item_id
+from market_move_dedup import MARKET_MOVE_RULE_ID, intraday_market_move_dedup_hit
 from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert, reserve_rule_alert_set
 
 
@@ -69,7 +69,6 @@ def feishu_webhook_fingerprint() -> str:
 
 
 def record_delivery(
-    event_id: int | None,
     channel: str,
     status: str,
     payload: dict[str, Any],
@@ -81,7 +80,6 @@ def record_delivery(
     db_path: Path = DEFAULT_DB_PATH,
 ) -> None:
     record_event_delivery(
-        event_id,
         channel,
         status,
         payload,
@@ -373,7 +371,6 @@ def deliver_event(
     event_row = item.to_dict()
     def persist_delivery(status: str, payload: dict[str, Any], *, error: str = "") -> None:
         record_delivery(
-            None,
             "feishu",
             status,
             payload,

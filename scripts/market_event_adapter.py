@@ -11,10 +11,13 @@ from market_flow import evaluate_market_item
 from market_flow_adapters import event_with_ingestion_audit, normalized_item_audit_payload
 from market_db import DEFAULT_DB_PATH
 from market_delivery import deliver_event, record_delivery
-from market_item import DecisionResult, NormalizedMarketItem, decision_result_from_payload, item_from_event_mapping
-from market_review_store import (
+from holdings_store import load_enabled_holdings as store_load_enabled_holdings
+from market_item import (
+    DecisionResult,
+    NormalizedMarketItem,
+    decision_result_from_payload,
     event_content_hash,
-    load_enabled_holdings as store_load_enabled_holdings,
+    item_from_event_mapping,
 )
 from source_profiles import runtime_source_profile
 
@@ -207,7 +210,6 @@ def maybe_deliver_event(
     decision = decision or decision_result_from_payload(updated)
     if decision is None:
         record_delivery(
-            None,
             "feishu",
             "skipped",
             {"reason": "缺少统一 DecisionResult", "contract_error": "missing_decision_result"},
