@@ -200,7 +200,18 @@ Install services and timers:
 
 ```bash
 ./scripts/install_remote_systemd.sh
+./scripts/prune_remote_code.sh
 ```
+
+Code deployment deliberately uses three ordered stages. `deploy_remote.sh`
+first overlays the new checkout without deleting paths that may still be used
+by the installed systemd units. `install_remote_systemd.sh` then installs and
+reloads the new units and records the installed revision. Only
+`prune_remote_code.sh` uses rsync deletion, and it refuses to run unless the
+installed-systemd revision matches the deployed code revision. This prevents a
+timer from invoking a renamed executable after the old path has been deleted
+but before the replacement unit is installed. GitHub Deploy runs these three
+commands in this order.
 
 The installer copies but keeps these standalone report-only collector timers disabled:
 

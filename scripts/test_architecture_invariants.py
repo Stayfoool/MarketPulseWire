@@ -389,13 +389,16 @@ def test_direct_urllib_request_usage_is_explicit_and_bounded() -> None:
 def test_deployment_preserves_private_proxy_state_and_disables_shadows() -> None:
     deploy = (SCRIPTS / "deploy_remote.sh").read_text(encoding="utf-8")
     installer = (SCRIPTS / "install_remote_systemd.sh").read_text(encoding="utf-8")
-    assert 'PRIVATE_PROXY_PREFIX="shadowsocks_"' in deploy
-    assert 'PRIVATE_PROXY_YAML_PATTERN="${PRIVATE_PROXY_PREFIX}*.yaml"' in deploy
-    assert '--exclude "$PRIVATE_PROXY_YAML_PATTERN"' in deploy
-    assert "--exclude '.git/'" in deploy
-    assert "--exclude '.paddleocr/'" in deploy
-    assert "--exclude 'reports/'" in deploy
-    assert "--exclude 'config/llm_decision_rules.json'" in deploy
+    sync = (SCRIPTS / "remote_code_sync.sh").read_text(encoding="utf-8")
+    assert 'local private_proxy_prefix="shadowsocks_"' in sync
+    assert 'local private_proxy_yaml_pattern="${private_proxy_prefix}*.yaml"' in sync
+    assert '--exclude "$private_proxy_yaml_pattern"' in sync
+    assert "--exclude '.git/'" in sync
+    assert "--exclude '.paddleocr/'" in sync
+    assert "--exclude 'reports/'" in sync
+    assert "--exclude 'config/llm_decision_rules.json'" in sync
+    assert "remote_code_sync overlay" in deploy
+    assert "--delete" not in deploy
     assert "RULE_CORE_CONFIG_PATH=" in installer
     assert "RULE_CORE_CONFIG 未配置或文件不存在" in installer
     assert "RULE_CORE_CONFIG 对生产服务账号不可读" in installer

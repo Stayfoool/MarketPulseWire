@@ -28,6 +28,7 @@ CI_SAFE_TESTS = (
     "test_content_flow.py",
     "test_current_rules_web.py",
     "test_decision_audit_integration.py",
+    "test_deployment_order.py",
     "test_event_normalization.py",
     "test_event_pipeline_convergence.py",
     "test_event_runtime.py",

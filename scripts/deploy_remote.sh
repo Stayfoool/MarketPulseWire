@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=remote_env.sh
 source "$SCRIPT_DIR/remote_env.sh"
+# shellcheck source=remote_code_sync.sh
+source "$SCRIPT_DIR/remote_code_sync.sh"
 require_remote_host
 
 SSH=(ssh -i "$REMOTE_SSH_KEY" -o IdentitiesOnly=yes "$REMOTE_USER@$REMOTE_HOST")
@@ -30,36 +32,8 @@ chown -R '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' '$REMOTE_DIR'
 python3 --version
 "
 
-echo "==> sync code"
-PRIVATE_PROXY_PREFIX="shadowsocks_"
-PRIVATE_PROXY_YAML_PATTERN="${PRIVATE_PROXY_PREFIX}*.yaml"
-rsync -az --delete \
-  --include '.env.example' \
-  --exclude '.env' \
-  --exclude '.env.*' \
-  --exclude '.git/' \
-  --exclude 'proxy.env' \
-  --exclude "$PRIVATE_PROXY_YAML_PATTERN" \
-  --exclude 'config/portfolio.json' \
-  --exclude 'config/media_keywords.json' \
-  --exclude 'config/investment_bank_theme_rules.json' \
-  --exclude 'config/llm_decision_rules.json' \
-  --exclude 'config/push_rules.local.json' \
-  --exclude 'config/source_profiles.local.json' \
-  --exclude 'config/stock_relations.json' \
-  --exclude 'config/market_skill/' \
-  --exclude '.venv' \
-  --exclude '.cache/' \
-  --exclude '.paddleocr/' \
-  --exclude '__pycache__' \
-  --exclude '*.pyc' \
-  --exclude 'data/' \
-  --exclude 'logs/' \
-  --exclude 'reports/' \
-  --exclude 'docs/monitoring-plan.md' \
-  --exclude '.DS_Store' \
-  -e "$RSYNC_RSH" \
-  ./ "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
+echo "==> overlay code without deleting paths used by installed systemd units"
+remote_code_sync overlay
 
 REVISION_FILE="$(mktemp)"
 cleanup_revision() {
@@ -96,4 +70,4 @@ if [ -f '$REMOTE_DIR/config/llm_decision_rules.json' ]; then chmod 600 '$REMOTE_
 if [ -f '$REMOTE_DIR/REVISION' ]; then chmod 644 '$REMOTE_DIR/REVISION'; fi
 "
 
-echo "部署完成。下一步写入 $REMOTE_ENV 后再安装 systemd services/timers。"
+echo "代码覆盖同步完成。安装 systemd units 后再运行 prune_remote_code.sh 删除旧路径。"
