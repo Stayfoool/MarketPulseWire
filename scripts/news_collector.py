@@ -25,7 +25,7 @@ import china_finance_media_monitor as china_media
 import trade_policy_monitor as trade_policy
 from china_media_sources import CHINA_MEDIA_FEEDS, CHINA_MEDIA_LABELS
 from collector_runtime import filter_enabled_mapping_for_run
-from market_review_store import article_item_id
+from market_item import article_item_id
 from rss_monitor import DB_PATH, strip_tags
 from source_profiles import SOURCE_PROFILE_CONFIG_PATH, runtime_profile_map
 from trade_policy_sources import TRADE_POLICY_SOURCES, TradePolicySource

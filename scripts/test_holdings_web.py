@@ -130,9 +130,9 @@ def insert_unified_result(
         conn.execute(
             """
             INSERT INTO deliveries (
-                event_id,market_item_id,market_review_id,channel,status,
+                market_item_id,market_review_id,channel,status,
                 decision_action,attempted_at,sent_at,payload_json
-            ) VALUES (NULL, ?, ?, 'feishu', 'sent', ?, ?, ?, '{}')
+            ) VALUES (?, ?, 'feishu', 'sent', ?, ?, ?, '{}')
             """,
             (market_item_id, review_id, action, seen_at, seen_at),
         )

@@ -24,7 +24,8 @@ from feishu import send_card
 from llm_analysis import call_chat_completion_with_prompts
 from market_db import DEFAULT_DB_PATH, init_db
 from market_event_adapter import normalize_importance
-from market_review_store import event_content_hash as content_hash, json_dumps, utc_now
+from market_item import event_content_hash as content_hash
+from market_store import json_dumps, utc_now
 
 
 ROOT = Path(__file__).resolve().parents[1]

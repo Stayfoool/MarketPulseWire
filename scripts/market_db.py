@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,7 +13,13 @@ from db_utils import SEEN_ITEM_LIFECYCLE_COLUMNS, connect_sqlite
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = ROOT / "data" / "surveil.sqlite3"
-MARKET_RESULTS_MIGRATION_VERSION = "market-storage-results-v1"
+LEGACY_RESULTS_RETIREMENT_MARKER = "market_legacy_results_retired_v1"
+LEGACY_RESULT_TABLES = (
+    "article_reviews",
+    "official_news_reviews",
+    "event_analyses",
+    "events",
+)
 
 
 SCHEMA = """
@@ -223,46 +231,8 @@ CREATE TABLE IF NOT EXISTS portfolio_holdings (
     updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source TEXT NOT NULL,
-    source_event_id TEXT NOT NULL,
-    event_type TEXT NOT NULL,
-    title TEXT NOT NULL,
-    summary TEXT,
-    full_text TEXT,
-    url TEXT,
-    published_at TEXT,
-    first_seen_at TEXT NOT NULL,
-    symbols_json TEXT,
-    themes_json TEXT,
-    raw_json TEXT,
-    content_hash TEXT NOT NULL,
-    baseline_only INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(source, source_event_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_events_seen ON events(first_seen_at);
-CREATE INDEX IF NOT EXISTS idx_events_source_type ON events(source, event_type);
-
-CREATE TABLE IF NOT EXISTS event_analyses (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id INTEGER NOT NULL,
-    task TEXT NOT NULL,
-    model TEXT,
-    importance TEXT,
-    classification TEXT,
-    direction TEXT,
-    impact_duration TEXT,
-    should_push INTEGER NOT NULL DEFAULT 0,
-    analysis_json TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY(event_id) REFERENCES events(id)
-);
-
 CREATE TABLE IF NOT EXISTS deliveries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    event_id INTEGER,
     market_item_id INTEGER,
     market_review_id INTEGER,
     channel TEXT NOT NULL,
@@ -272,7 +242,6 @@ CREATE TABLE IF NOT EXISTS deliveries (
     sent_at TEXT,
     error TEXT,
     payload_json TEXT,
-    FOREIGN KEY(event_id) REFERENCES events(id),
     FOREIGN KEY(market_item_id) REFERENCES market_items(id),
     FOREIGN KEY(market_review_id) REFERENCES market_reviews(id)
 );
@@ -691,20 +660,6 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     }
     for column, definition in stock_relation_columns.items():
         add_column_if_missing(conn, "stock_relations", column, definition)
-    article_review_columns = {
-        "skeptic_json": "TEXT",
-        "pre_skeptic_importance": "TEXT",
-    }
-    if db_table_exists(conn, "article_reviews"):
-        for column, definition in article_review_columns.items():
-            add_column_if_missing(conn, "article_reviews", column, definition)
-    official_review_columns = {
-        "skeptic_json": "TEXT",
-        "pre_skeptic_importance": "TEXT",
-    }
-    if db_table_exists(conn, "official_news_reviews"):
-        for column, definition in official_review_columns.items():
-            add_column_if_missing(conn, "official_news_reviews", column, definition)
     delivery_columns = {
         "market_item_id": "INTEGER",
         "market_review_id": "INTEGER",
@@ -717,10 +672,6 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     add_column_if_missing(conn, "signal_reviews", "target_id", "INTEGER")
     add_column_if_missing(conn, "signal_reviews", "symbol", "TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_seen_items_first_seen ON seen_items(first_seen_at)")
-    if db_table_exists(conn, "article_reviews"):
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_article_reviews_created ON article_reviews(created_at)")
-    if db_table_exists(conn, "official_news_reviews"):
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_official_news_created ON official_news_reviews(created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_relations_symbol ON stock_relations(symbol, enabled)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_relations_related ON stock_relations(related_symbol, enabled)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_relation_suggestions_status ON relation_suggestions(status, updated_at)")
@@ -821,8 +772,273 @@ def init_db(path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     return conn
 
 
+def _scalar(conn: sqlite3.Connection, query: str, params: tuple[object, ...] = ()) -> int:
+    return int(conn.execute(query, params).fetchone()[0])
+
+
+def preview_legacy_results_retirement(conn: sqlite3.Connection) -> dict[str, object]:
+    """Fail closed unless every retired result row and delivery has a unified link."""
+    existing = [table for table in LEGACY_RESULT_TABLES if db_table_exists(conn, table)]
+    delivery_has_event_id = "event_id" in table_columns(conn, "deliveries")
+    marker = conn.execute(
+        "SELECT state_json FROM source_state WHERE source=?",
+        (LEGACY_RESULTS_RETIREMENT_MARKER,),
+    ).fetchone()
+    if not existing:
+        if delivery_has_event_id:
+            raise RuntimeError("legacy result tables are absent but deliveries.event_id still exists")
+        return {
+            "status": "already_retired",
+            "marker_present": marker is not None,
+            "table_counts": {},
+            "delivery_event_links": 0,
+            "delivery_missing_review_links": _scalar(
+                conn, "SELECT COUNT(*) FROM deliveries WHERE market_review_id IS NULL"
+            ),
+        }
+    if set(existing) != set(LEGACY_RESULT_TABLES):
+        missing = sorted(set(LEGACY_RESULT_TABLES) - set(existing))
+        raise RuntimeError(f"legacy result tables are only partially present; missing={missing}")
+    if not delivery_has_event_id:
+        raise RuntimeError("legacy result tables remain but deliveries.event_id is absent")
+
+    checks = {
+        "article_item_mapping_missing": """
+            SELECT COUNT(*) FROM article_reviews old
+            LEFT JOIN market_item_aliases alias
+              ON alias.item_kind='article' AND alias.source=old.source
+             AND alias.legacy_item_id=old.item_id
+            LEFT JOIN market_items item
+              ON item.id=alias.market_item_id AND item.source=old.source
+             AND item.source_item_id=old.item_id
+            WHERE item.id IS NULL
+        """,
+        "article_review_mapping_missing": """
+            SELECT COUNT(*) FROM article_reviews old
+            LEFT JOIN market_item_aliases alias
+              ON alias.item_kind='article' AND alias.source=old.source
+             AND alias.legacy_item_id=old.item_id
+            LEFT JOIN market_reviews review
+              ON review.legacy_store_kind='article_reviews'
+             AND review.legacy_store_id=old.source || ':' || old.item_id
+             AND review.market_item_id=alias.market_item_id
+            WHERE review.id IS NULL
+        """,
+        "official_item_mapping_missing": """
+            SELECT COUNT(*) FROM official_news_reviews old
+            LEFT JOIN market_item_aliases alias
+              ON alias.item_kind='official' AND alias.source=old.source
+             AND alias.legacy_item_id=old.item_id
+            LEFT JOIN market_items item
+              ON item.id=alias.market_item_id AND item.source=old.source
+             AND item.source_item_id=old.item_id
+            WHERE item.id IS NULL
+        """,
+        "official_review_mapping_missing": """
+            SELECT COUNT(*) FROM official_news_reviews old
+            LEFT JOIN market_item_aliases alias
+              ON alias.item_kind='official' AND alias.source=old.source
+             AND alias.legacy_item_id=old.item_id
+            LEFT JOIN market_reviews review
+              ON review.legacy_store_kind='official_news_reviews'
+             AND review.legacy_store_id=old.source || ':' || old.item_id
+             AND review.market_item_id=alias.market_item_id
+            WHERE review.id IS NULL
+        """,
+        "event_item_mapping_missing": """
+            SELECT COUNT(*) FROM events old
+            LEFT JOIN market_item_aliases alias
+              ON alias.item_kind='event' AND alias.source=old.source
+             AND alias.legacy_item_id=CAST(old.id AS TEXT)
+            LEFT JOIN market_items item
+              ON item.id=alias.market_item_id AND item.source=old.source
+             AND item.source_item_id=old.source_event_id
+            WHERE item.id IS NULL
+        """,
+        "event_analysis_mapping_missing": """
+            SELECT COUNT(*) FROM event_analyses old
+            JOIN events event ON event.id=old.event_id
+            LEFT JOIN market_item_aliases alias
+              ON alias.item_kind='event' AND alias.source=event.source
+             AND alias.legacy_item_id=CAST(event.id AS TEXT)
+            LEFT JOIN market_reviews review
+              ON review.legacy_store_kind='event_analyses'
+             AND review.legacy_store_id=CAST(old.id AS TEXT)
+             AND review.market_item_id=alias.market_item_id
+            WHERE review.id IS NULL
+        """,
+        "delivery_event_without_market_item": """
+            SELECT COUNT(*) FROM deliveries
+            WHERE event_id IS NOT NULL AND market_item_id IS NULL
+        """,
+        "delivery_market_item_orphan": """
+            SELECT COUNT(*) FROM deliveries delivery
+            LEFT JOIN market_items item ON item.id=delivery.market_item_id
+            WHERE delivery.market_item_id IS NOT NULL AND item.id IS NULL
+        """,
+        "delivery_market_review_orphan": """
+            SELECT COUNT(*) FROM deliveries delivery
+            LEFT JOIN market_reviews review ON review.id=delivery.market_review_id
+            WHERE delivery.market_review_id IS NOT NULL AND review.id IS NULL
+        """,
+        "delivery_item_review_mismatch": """
+            SELECT COUNT(*) FROM deliveries delivery
+            JOIN market_reviews review ON review.id=delivery.market_review_id
+            WHERE delivery.market_item_id IS NULL
+               OR review.market_item_id != delivery.market_item_id
+        """,
+        "feedback_delivery_orphan": """
+            SELECT COUNT(*) FROM market_feedback feedback
+            LEFT JOIN deliveries delivery ON delivery.id=feedback.delivery_id
+            WHERE feedback.delivery_id IS NOT NULL AND delivery.id IS NULL
+        """,
+    }
+    differences = {name: _scalar(conn, query) for name, query in checks.items()}
+    foreign_key_errors = len(conn.execute("PRAGMA foreign_key_check").fetchall())
+    differences["foreign_key_errors"] = foreign_key_errors
+    failed = {name: count for name, count in differences.items() if count}
+    if failed:
+        raise RuntimeError(f"legacy result retirement preview failed: {failed}")
+    return {
+        "status": "ready",
+        "marker_present": marker is not None,
+        "table_counts": {
+            table: _scalar(conn, f"SELECT COUNT(*) FROM {table}")
+            for table in LEGACY_RESULT_TABLES
+        },
+        "delivery_event_links": _scalar(
+            conn, "SELECT COUNT(*) FROM deliveries WHERE event_id IS NOT NULL"
+        ),
+        "delivery_missing_review_links": _scalar(
+            conn, "SELECT COUNT(*) FROM deliveries WHERE market_review_id IS NULL"
+        ),
+        "checks": differences,
+    }
+
+
+def _rebuild_deliveries_without_event_id(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE deliveries_unified_only (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            market_item_id INTEGER,
+            market_review_id INTEGER,
+            channel TEXT NOT NULL,
+            status TEXT NOT NULL,
+            decision_action TEXT,
+            attempted_at TEXT,
+            sent_at TEXT,
+            error TEXT,
+            payload_json TEXT,
+            FOREIGN KEY(market_item_id) REFERENCES market_items(id),
+            FOREIGN KEY(market_review_id) REFERENCES market_reviews(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO deliveries_unified_only (
+            id,market_item_id,market_review_id,channel,status,decision_action,
+            attempted_at,sent_at,error,payload_json
+        )
+        SELECT id,market_item_id,market_review_id,channel,status,decision_action,
+               attempted_at,sent_at,error,payload_json
+        FROM deliveries
+        ORDER BY id
+        """
+    )
+    conn.execute("DROP TABLE deliveries")
+    conn.execute("ALTER TABLE deliveries_unified_only RENAME TO deliveries")
+    conn.execute(
+        "CREATE INDEX idx_deliveries_market_item ON deliveries(market_item_id, attempted_at)"
+    )
+    conn.execute(
+        "CREATE INDEX idx_deliveries_market_review ON deliveries(market_review_id, attempted_at)"
+    )
+
+
+def retire_legacy_results(conn: sqlite3.Connection) -> dict[str, object]:
+    """Transactionally remove retired result tables after a complete preview."""
+    preview = preview_legacy_results_retirement(conn)
+    if preview["status"] == "already_retired":
+        return preview
+    foreign_keys = int(conn.execute("PRAGMA foreign_keys").fetchone()[0])
+    conn.execute("PRAGMA foreign_keys=OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        preview = preview_legacy_results_retirement(conn)
+        delivery_count = _scalar(conn, "SELECT COUNT(*) FROM deliveries")
+        feedback_links = _scalar(
+            conn, "SELECT COUNT(*) FROM market_feedback WHERE delivery_id IS NOT NULL"
+        )
+        _rebuild_deliveries_without_event_id(conn)
+        for table in LEGACY_RESULT_TABLES:
+            conn.execute(f"DROP TABLE {table}")
+        if _scalar(conn, "SELECT COUNT(*) FROM deliveries") != delivery_count:
+            raise RuntimeError("delivery count changed while removing deliveries.event_id")
+        if _scalar(conn, "SELECT COUNT(*) FROM market_feedback WHERE delivery_id IS NOT NULL") != feedback_links:
+            raise RuntimeError("feedback delivery links changed while removing legacy result tables")
+        foreign_key_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if foreign_key_errors:
+            raise RuntimeError(f"foreign key check failed after legacy retirement: {foreign_key_errors[:5]}")
+        integrity = str(conn.execute("PRAGMA integrity_check").fetchone()[0])
+        if integrity != "ok":
+            raise RuntimeError(f"integrity check failed after legacy retirement: {integrity}")
+        now = datetime.now(timezone.utc).isoformat()
+        marker = {
+            "status": "completed",
+            "completed_at": now,
+            "removed_table_counts": preview["table_counts"],
+            "delivery_count": delivery_count,
+            "delivery_missing_review_links": preview["delivery_missing_review_links"],
+        }
+        conn.execute(
+            """
+            INSERT INTO source_state(source,state_json,updated_at) VALUES (?,?,?)
+            ON CONFLICT(source) DO UPDATE SET state_json=excluded.state_json,updated_at=excluded.updated_at
+            """,
+            (LEGACY_RESULTS_RETIREMENT_MARKER, json.dumps(marker, sort_keys=True), now),
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.execute(f"PRAGMA foreign_keys={foreign_keys}")
+    return {
+        **preview,
+        "status": "completed",
+        "marker_present": True,
+        "marker": marker,
+    }
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
+    parser.add_argument(
+        "--retire-legacy-results",
+        choices=("preview", "apply"),
+        help="explicitly preview or apply removal of retired result tables",
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
-    with init_db() as conn:
+    args = parse_args()
+    if args.retire_legacy_results:
+        if not args.db.is_file():
+            raise FileNotFoundError(f"SQLite database does not exist: {args.db}")
+        with connect_sqlite(args.db) as conn:
+            result = (
+                retire_legacy_results(conn)
+                if args.retire_legacy_results == "apply"
+                else preview_legacy_results_retirement(conn)
+            )
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
+        return 0
+    with init_db(args.db) as conn:
         tables = conn.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
         ).fetchall()

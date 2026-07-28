@@ -126,70 +126,59 @@ deployed_at=<UTC timestamp>
 deployed_by=deploy_remote.sh
 ```
 
-`surveil-db-init.service` applies additive canonical-storage migrations before
-collectors start. The first migration creates `market_items` and
-`market_reviews`, extends `deliveries`, and copies existing `seen_items`
-identities once. It does not delete or rewrite legacy review/event tables and
-does not infer missing historical full text, admission evidence or decisions.
-Back up `data/surveil.sqlite3` before deploying a revision that first contains
-this migration, then verify `PRAGMA quick_check`, canonical row counts and
-foreign-key references under the `surveil` service account.
+`surveil-db-init.service` applies additive unified-storage migrations before
+collectors start. Fresh databases create only `market_items`, `market_reviews`,
+`market_item_aliases` and unified `deliveries` for market results. Normal
+initialization and deployment never delete data.
 
-The historical result migration is deliberately not run by
-`surveil-db-init.service`. An installation that has old result rows but has not
-yet created the `market-storage-results-v1` marker must complete this migration
-before deploying a revision whose runtime reads only unified storage. First
-create a mode-`0600` SQLite backup and preview the migration under the service
-account:
+Removal of the four historical result tables is a one-time explicit operation.
+It is valid only after a unified-only runtime has been deployed and verified.
+Record the exact enabled/active state of every Alibaba service and timer that
+writes the SQLite database, pause those writers, then create a server-only
+mode-`0600` online backup and verify it:
+
+```bash
+BACKUP="/opt/surveil/data/surveil.sqlite3.pre-legacy-retirement-$(date -u +%Y%m%dT%H%M%SZ).bak"
+sudo -u surveil env BACKUP="$BACKUP" /opt/surveil/.venv/bin/python -c \
+  'import os,sqlite3; source=sqlite3.connect("/opt/surveil/data/surveil.sqlite3"); target=sqlite3.connect(os.environ["BACKUP"]); source.backup(target); target.close(); source.close()'
+sudo chown surveil:surveil "$BACKUP"
+sudo chmod 600 "$BACKUP"
+sudo -u surveil env BACKUP="$BACKUP" /opt/surveil/.venv/bin/python -c \
+  'import os,sqlite3; c=sqlite3.connect("file:"+os.environ["BACKUP"]+"?mode=ro",uri=True); print(c.execute("PRAGMA quick_check").fetchone()[0]); print(c.execute("PRAGMA integrity_check").fetchone()[0]); print(len(c.execute("PRAGMA foreign_key_check").fetchall()))'
+sha256sum "$BACKUP"
+```
+
+Preview without changing the production database:
 
 ```bash
 sudo -u surveil /opt/surveil/.venv/bin/python \
-  /opt/surveil/scripts/market_storage_migration.py \
-  --db /opt/surveil/data/surveil.sqlite3
+  /opt/surveil/scripts/market_db.py \
+  --db /opt/surveil/data/surveil.sqlite3 \
+  --retire-legacy-results preview
 ```
 
-Compare preview counts with `article_reviews`, `official_news_reviews`,
-`events` and `event_analyses`. After review, apply it explicitly:
+The preview must report zero missing article, official-news, event and
+event-analysis mappings; every delivery with the old event link must already
+have `market_item_id`; all unified delivery/review/feedback links and foreign
+keys must be valid. A partial schema or any missing mapping stops the operation.
+After reviewing the counts and backup, apply explicitly:
 
 ```bash
 sudo -u surveil /opt/surveil/.venv/bin/python \
-  /opt/surveil/scripts/market_storage_migration.py \
-  --db /opt/surveil/data/surveil.sqlite3 --apply
+  /opt/surveil/scripts/market_db.py \
+  --db /opt/surveil/data/surveil.sqlite3 \
+  --retire-legacy-results apply
 ```
 
-The apply is idempotent: when the completion marker already exists it returns
-the retained first-run statistics without scanning or rewriting the database.
-The first apply runs inside one explicit SQLite write transaction;
-any exception rolls back all item, alias, result and delivery-link changes. It
-writes the `market-storage-results-v1` marker only after the transaction
-succeeds. Verify old-to-new counts, preserved article/official/event ids,
-current result selection, daily dry runs, feedback resolution, signal dry run,
-foreign keys and SQLite integrity before deploying the unified-only runtime.
-The old tables remain physically present with historical data but receive no
-new production reads or writes after that deployment.
-
-Before retiring compatibility-copy writes, compare unified results with the
-retained old-table copies. The command is read-only, defaults to the migration
-completion time and prints counts only:
-
-```bash
-sudo -u surveil /opt/surveil/.venv/bin/python \
-  /opt/surveil/scripts/market_storage_audit.py \
-  --db /opt/surveil/data/surveil.sqlite3 --fail-on-difference
-```
-
-Use `--since <UTC ISO timestamp>` and `--until <UTC ISO timestamp>` to audit a
-deployment or observation window. Any missing identity/result, action mismatch,
-delivery without unified item/result, duplicate current result, orphan
-reference, current result blocked by the compatibility-reference unique
-constraint, foreign-key error or failed `quick_check` blocks rollout. Current
-retryable and terminal failures are reported as counts; failures unrelated to
-the compatibility-reference constraint do not by themselves make this storage
-comparison fail. After the unified-only revision is deployed, this historical
-comparison is retained only as a migration/audit tool; it is not a production
-health check because new old-table copies are intentionally no longer created.
-The deployed unified-only revision is the earliest supported rollback point.
-Do not roll back to a revision that requires complete old-table copies.
+Apply runs in one transaction, rebuilds `deliveries` without the old
+`event_id`, preserves delivery ids and `market_feedback.delivery_id`, then
+removes the four old result tables. Historical null `market_review_id` values
+remain null. Repeating apply is idempotent. Restore exactly the prior service
+and timer state, then verify Web Event Center, article/official daily dry runs,
+feedback resolution, natural article/official/event processing, `quick_check`,
+`integrity_check` and `foreign_key_check`. The unified-only revision deployed
+before this operation is the earliest supported rollback point; never roll
+back to code that requires the deleted tables.
 
 Use it to verify whether your Mac, GitHub, and server are aligned:
 

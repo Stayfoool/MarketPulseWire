@@ -19,9 +19,11 @@ from market_item import (
     InterpretationResult,
     MarketFlowResult,
     NormalizedMarketItem,
+    article_item_id,
     decision_result_from_payload,
     item_from_article_mapping,
     item_from_event_mapping,
+    official_news_item_id,
 )
 from market_store import (
     InsufficientEvidenceError,
@@ -33,10 +35,6 @@ from market_store import (
     record_production_admission,
     market_review_snapshot,
     source_item_id,
-)
-from market_review_store import (
-    article_item_id,
-    official_news_item_id,
 )
 from source_profiles import runtime_source_profile
 

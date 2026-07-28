@@ -506,9 +506,9 @@ def record_article_delivery(
         cur = conn.execute(
             """
             INSERT INTO deliveries (
-                event_id, market_item_id, market_review_id, channel, status,
-                decision_action, attempted_at, sent_at, error, payload_json
-            ) VALUES (NULL, ?, ?, 'feishu', ?, ?, ?, ?, ?, ?)
+                market_item_id, market_review_id, channel, status, decision_action,
+                attempted_at, sent_at, error, payload_json
+            ) VALUES (?, ?, 'feishu', ?, ?, ?, ?, ?, ?)
             """,
             (
                 market_item_id,
@@ -529,6 +529,43 @@ def record_article_delivery(
         conn.commit()
         delivery_id = int(cur.lastrowid)
     return delivery_id
+
+
+def record_event_delivery(
+    channel: str,
+    status: str,
+    payload: dict[str, Any],
+    *,
+    error: str = "",
+    market_item_id: int | None = None,
+    market_review_id: int | None = None,
+    decision_action: str = "",
+    db_path: Path = DEFAULT_DB_PATH,
+) -> int:
+    """Persist an event-shaped item's delivery using only unified identities."""
+    now = utc_now()
+    with connect_sqlite(db_path) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO deliveries (
+                market_item_id, market_review_id, channel, status, decision_action,
+                attempted_at, sent_at, error, payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                market_item_id,
+                market_review_id,
+                channel,
+                status,
+                decision_action or None,
+                now,
+                now if status == "sent" else "",
+                error,
+                json_dumps(payload),
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
 
 
 def market_ids_for_review(market_review_id: int, *, db_path: Path = DEFAULT_DB_PATH) -> tuple[int, int]:

@@ -3,12 +3,16 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import news_collector
 from source_profiles import save_source_profile_config
+
+ROOT = Path(__file__).resolve().parents[1]
+TEST_RULE_CONFIG = ROOT / "config" / "rule_core_v1.test.json"
 
 
 def test_news_sources_include_expected_batch_and_exclude_sina_flash() -> None:
@@ -95,30 +99,6 @@ def test_shadow_collect_does_not_write_prod_seen_reviews_or_source_state() -> No
             )
             """
         )
-        conn.execute(
-            """
-            CREATE TABLE article_reviews (
-                source TEXT NOT NULL,
-                item_id TEXT NOT NULL,
-                url TEXT,
-                title TEXT NOT NULL,
-                source_module TEXT,
-                published_at TEXT,
-                importance TEXT NOT NULL,
-                push_now INTEGER NOT NULL DEFAULT 0,
-                market_impact TEXT,
-                incremental_classification TEXT,
-                affected_targets_json TEXT NOT NULL,
-                reason TEXT,
-                daily_summary TEXT,
-                confidence TEXT,
-                gate_json TEXT NOT NULL,
-                pushed_at TEXT,
-                created_at TEXT NOT NULL,
-                PRIMARY KEY (source, item_id)
-            )
-            """
-        )
         conn.execute("CREATE TABLE source_state (source TEXT PRIMARY KEY, state_json TEXT, updated_at TEXT NOT NULL)")
         conn.commit()
         conn.close()
@@ -139,12 +119,14 @@ def test_shadow_collect_does_not_write_prod_seen_reviews_or_source_state() -> No
 
         conn = sqlite3.connect(db_path)
         seen_count = conn.execute("SELECT COUNT(*) FROM seen_items").fetchone()[0]
-        review_count = conn.execute("SELECT COUNT(*) FROM article_reviews").fetchone()[0]
+        legacy_table_count = conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='article_reviews'"
+        ).fetchone()[0]
         state_count = conn.execute("SELECT COUNT(*) FROM source_state").fetchone()[0]
         conn.close()
 
     assert calls == [{"source": "cls_telegraph_api", "persist_state": False, "force": True}]
-    assert payload["ok"] is True
+    assert payload["ok"] is True, payload
     assert payload["sent_feishu"] is False
     assert payload["ran_llm_review"] is False
     assert payload["wrote_production_seen_items"] is False
@@ -153,7 +135,7 @@ def test_shadow_collect_does_not_write_prod_seen_reviews_or_source_state() -> No
     assert payload["counts"]["candidates"] == 1
     assert payload["sources"][0]["candidates"][0]["pipeline"] == "news_media shadow -> decision layer / thin interpretation planned"
     assert seen_count == 0
-    assert review_count == 0
+    assert legacy_table_count == 0
     assert state_count == 0
 
 
@@ -253,14 +235,22 @@ def test_production_collect_runs_official_trade_policy_family() -> None:
 
 
 def main() -> int:
-    test_news_sources_include_expected_batch_and_exclude_sina_flash()
-    test_official_trade_policy_sources_join_news_collector_timer()
-    test_disabled_source_is_filtered()
-    test_shadow_collect_does_not_write_prod_seen_reviews_or_source_state()
-    test_respect_prod_cls_state_passes_force_false()
-    test_json_report_shape()
-    test_production_collect_delegates_to_existing_china_media_pipeline()
-    test_production_collect_runs_official_trade_policy_family()
+    previous = os.environ.get("RULE_CORE_CONFIG")
+    os.environ["RULE_CORE_CONFIG"] = str(TEST_RULE_CONFIG)
+    try:
+        test_news_sources_include_expected_batch_and_exclude_sina_flash()
+        test_official_trade_policy_sources_join_news_collector_timer()
+        test_disabled_source_is_filtered()
+        test_shadow_collect_does_not_write_prod_seen_reviews_or_source_state()
+        test_respect_prod_cls_state_passes_force_false()
+        test_json_report_shape()
+        test_production_collect_delegates_to_existing_china_media_pipeline()
+        test_production_collect_runs_official_trade_policy_family()
+    finally:
+        if previous is None:
+            os.environ.pop("RULE_CORE_CONFIG", None)
+        else:
+            os.environ["RULE_CORE_CONFIG"] = previous
     print("news collector checks passed")
     return 0
 

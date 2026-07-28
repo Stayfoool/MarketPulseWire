@@ -675,8 +675,12 @@ def test_production_event_runtime_completes_only_unified_result() -> None:
                 unified = conn.execute(
                     "SELECT review_status,decision_action,legacy_store_kind FROM market_reviews"
                 ).fetchone()
-                assert conn.execute("SELECT COUNT(*) FROM event_analyses").fetchone()[0] == 0
-                assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='event_analyses'"
+                ).fetchone()[0] == 0
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='events'"
+                ).fetchone()[0] == 0
                 assert conn.execute("SELECT COUNT(*) FROM market_item_aliases").fetchone()[0] == 1
             assert unified == ("succeeded", "daily", None)
             assert first.inserted is True

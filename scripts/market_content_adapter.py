@@ -11,9 +11,15 @@ from decision_engine import (
 )
 from llm_analysis import format_llm_analysis
 from market_flow import evaluate_market_item
-from market_item import DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem, item_from_article_mapping
+from market_item import (
+    DecisionResult,
+    InterpretationResult,
+    MarketFlowResult,
+    NormalizedMarketItem,
+    article_item_id,
+    item_from_article_mapping,
+)
 from market_interpreter import thin_system_prompt, thin_user_prompt_template
-from market_review_store import article_item_id
 from source_profiles import runtime_source_profile
 
 

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from market_item import AdmissionResult, NormalizedMarketItem
-from market_review_store import load_enabled_holdings
+from holdings_store import load_enabled_holdings
 from rule_config_schema import RuleConfig, parse_rule_config
 from admission_rules import (
     HoldingRule,

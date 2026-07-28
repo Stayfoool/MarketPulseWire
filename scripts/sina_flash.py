@@ -22,7 +22,8 @@ from macro_policy import macro_policy_match
 from market_db import DEFAULT_DB_PATH, init_db
 from market_flow import normalize_market_item, process_market_item
 from market_store import processing_failure_status
-from market_review_store import event_content_hash as content_hash, load_enabled_holdings
+from holdings_store import load_enabled_holdings
+from market_item import event_content_hash as content_hash
 from portfolio_import import import_holdings
 from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from rss_monitor import save_new_items

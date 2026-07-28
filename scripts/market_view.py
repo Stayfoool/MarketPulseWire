@@ -1,4 +1,4 @@
-"""Unified read-only view over legacy market item review tables."""
+"""Read-only projections over unified market item reviews."""
 
 from __future__ import annotations
 
@@ -132,7 +132,7 @@ def article_view_from_row(row: Any) -> MarketViewItem:
     fields = _payload_fields(gate, fallback_targets=fallback_targets)
     summary = str(_row_value(row, "daily_summary") or _row_value(row, "reason") or "")
     return MarketViewItem(
-        source_table="article_reviews",
+        source_table="market_reviews",
         source_id=str(_row_value(row, "item_id")),
         kind="article",
         source=str(_row_value(row, "source")),
@@ -167,7 +167,7 @@ def official_view_from_row(row: Any) -> MarketViewItem:
     fields = _payload_fields(analysis)
     summary = str(_row_value(row, "daily_summary") or _row_value(row, "reason") or "")
     return MarketViewItem(
-        source_table="official_news_reviews",
+        source_table="market_reviews",
         source_id=str(_row_value(row, "item_id")),
         kind="official_news",
         source=str(_row_value(row, "source")),
@@ -209,7 +209,7 @@ def event_view_from_row(row: Any) -> MarketViewItem:
     pushed_at = str(_row_value(row, "pushed_at") or "")
     delivery_status = str(_row_value(row, "delivery_status") or "")
     return MarketViewItem(
-        source_table="events",
+        source_table="market_reviews",
         source_id=str(_row_value(row, "id")),
         kind=str(_row_value(row, "event_type") or "event"),
         source=str(_row_value(row, "source")),

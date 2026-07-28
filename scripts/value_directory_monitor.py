@@ -12,8 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from db_utils import update_seen_item_lifecycle
-from market_item import NormalizedMarketItem
-from market_review_store import article_item_id
+from market_item import NormalizedMarketItem, article_item_id
 from market_runtime import normalize_market_item, process_market_item
 from market_store import processing_failure_status, source_item_review_snapshot
 from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context

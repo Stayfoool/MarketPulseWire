@@ -17,8 +17,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from db_utils import connect_sqlite
 from http_utils import http_get
-from market_db import DEFAULT_DB_PATH
+from market_db import DEFAULT_DB_PATH, init_db
 from portfolio_import import import_holdings
 
 
@@ -48,6 +49,57 @@ class HoldingsValidationError(HoldingsError):
 
 class HoldingsConflictError(HoldingsError):
     """Raised when a preview no longer matches the live portfolio revision."""
+
+
+def load_enabled_holdings(
+    db_path: Path = DEFAULT_DB_PATH,
+    *,
+    read_only: bool = False,
+) -> list[dict[str, Any]]:
+    """Read enabled holdings and their configured related-news keywords."""
+    if read_only:
+        if not db_path.is_file():
+            raise FileNotFoundError(f"SQLite 数据库不存在：{db_path}")
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    else:
+        init_db(db_path).close()
+        conn = connect_sqlite(db_path)
+    with conn:
+        rows = conn.execute(
+            """
+            SELECT symbol, name, full_name, aliases_json, raw_json
+            FROM portfolio_holdings
+            WHERE enabled = 1
+            ORDER BY symbol
+            """
+        ).fetchall()
+    holdings: list[dict[str, Any]] = []
+    for symbol, name, full_name, aliases_json, raw_json in rows:
+        try:
+            aliases = json.loads(aliases_json or "[]")
+        except json.JSONDecodeError:
+            aliases = []
+        try:
+            raw = json.loads(raw_json or "{}")
+        except json.JSONDecodeError:
+            raw = {}
+        holdings.append(
+            {
+                "symbol": symbol,
+                "name": name,
+                "full_name": full_name or "",
+                "aliases": aliases,
+                "news_keywords": raw.get("news_keywords")
+                if isinstance(raw.get("news_keywords"), list)
+                else [],
+                "news_exclude_keywords": raw.get("news_exclude_keywords")
+                if isinstance(raw.get("news_exclude_keywords"), list)
+                else [],
+                "business_summary": str(raw.get("business_summary") or ""),
+                "raw": raw,
+            }
+        )
+    return holdings
 
 
 @contextmanager
