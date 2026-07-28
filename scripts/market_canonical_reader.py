@@ -538,7 +538,10 @@ def canonical_feedback_snapshot(
                 ORDER BY d.id DESC LIMIT 1) delivery_id,
                (SELECT d.status FROM deliveries d
                 WHERE d.market_item_id=m.id AND d.status='sent'
-                ORDER BY d.id DESC LIMIT 1) delivery_status
+                ORDER BY d.id DESC LIMIT 1) delivery_status,
+               (SELECT d.payload_json FROM deliveries d
+                WHERE d.market_item_id=m.id AND d.status='sent'
+                ORDER BY d.id DESC LIMIT 1) delivery_payload_json
         FROM market_item_aliases a
         JOIN market_items m ON m.id=a.market_item_id
         JOIN market_reviews r ON r.market_item_id=m.id
@@ -557,6 +560,7 @@ def canonical_feedback_snapshot(
     return {
         "decision": _json_dict(row[0]),
         "legacy_payload": payload,
+        "delivery_payload": _json_dict(row[5]),
         "application_revision": str(row[2] or ""),
         "delivery_id": row[3],
         "delivery_status": str(row[4] or ("sent" if historically_sent else "")),

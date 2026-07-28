@@ -30,7 +30,6 @@ FEEDBACK_LABELS = {
     "duplicate": "重复",
     "invalid": "无效",
 }
-CLEARED_FEEDBACK_LABEL = "cleared"
 FEEDBACK_REASON_LABELS = {
     "useful_not_urgent": "有用但不紧急",
     "stale": "旧闻",
@@ -128,29 +127,52 @@ def _reason_tags_from_json(value: Any) -> list[str]:
     return [str(tag) for tag in parsed if str(tag) in FEEDBACK_REASON_LABELS]
 
 
-def feedback_status_display(label: str, reason_tags: Iterable[str] = ()) -> str:
-    if label == CLEARED_FEEDBACK_LABEL:
+def _ordered_feedback_labels(labels: Iterable[str]) -> list[str]:
+    selected = {str(label) for label in labels}
+    return [label for label in FEEDBACK_LABELS if label in selected]
+
+
+def _active_labels_from_values(label: Any, active_labels_json: Any) -> list[str]:
+    if active_labels_json is None:
+        legacy_label = str(label or "")
+        return [legacy_label] if legacy_label in FEEDBACK_LABELS else []
+    try:
+        parsed = json.loads(str(active_labels_json))
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return _ordered_feedback_labels(parsed if isinstance(parsed, list) else [])
+
+
+def feedback_status_display(active_labels: Iterable[str], reason_tags: Iterable[str] = ()) -> str:
+    labels = _ordered_feedback_labels(active_labels)
+    if not labels:
         return "未选择"
-    display = FEEDBACK_LABELS.get(label, "已记录")
     reasons = [FEEDBACK_REASON_LABELS[tag] for tag in reason_tags if tag in FEEDBACK_REASON_LABELS]
-    return f"已标记为「{display}{'（' + '、'.join(reasons) + '）' if reasons else ''}」"
+    displays = []
+    for label in labels:
+        display = FEEDBACK_LABELS[label]
+        if label == "invalid" and reasons:
+            display += "（" + "、".join(reasons) + "）"
+        displays.append(display)
+    return f"已标记为「{'、'.join(displays)}」"
 
 
 def feedback_actions(
     identity: FeedbackIdentity,
     *,
     secret: str | None = None,
-    selected_label: str = "",
+    selected_labels: Iterable[str] = (),
     selected_reason_tags: Iterable[str] = (),
 ) -> dict[str, Any]:
     token = build_feedback_token(identity, secret=secret if secret is not None else feedback_token_secret())
+    selected_set = set(_ordered_feedback_labels(selected_labels))
     actions = []
     for label, title, button_type in (
         ("high_value", "特别有用", "primary"),
         ("duplicate", "重复", "default"),
         ("invalid", "无效", "danger"),
     ):
-        selected = label == selected_label
+        selected = label in selected_set
         actions.append(
             {
                 "tag": "button",
@@ -184,19 +206,20 @@ def append_feedback_actions(
     identity: FeedbackIdentity,
     *,
     secret: str | None = None,
-    selected_label: str = "",
+    selected_labels: Iterable[str] = (),
     selected_reason_tags: Iterable[str] = (),
 ) -> dict[str, Any]:
     updated = dict(card)
     elements = list(card.get("elements") or [])
     elements.append({"tag": "hr"})
-    if selected_label in FEEDBACK_LABELS:
-        elements.append(div_markdown(f"**反馈状态**：{feedback_status_display(selected_label, selected_reason_tags)}"))
+    ordered_labels = _ordered_feedback_labels(selected_labels)
+    if ordered_labels:
+        elements.append(div_markdown(f"**反馈状态**：{feedback_status_display(ordered_labels, selected_reason_tags)}"))
     elements.append(
         feedback_actions(
             identity,
             secret=secret,
-            selected_label=selected_label,
+            selected_labels=ordered_labels,
             selected_reason_tags=selected_reason_tags,
         )
     )
@@ -364,7 +387,7 @@ def _current_feedback_row(
 ) -> sqlite3.Row | tuple[Any, ...] | None:
     return conn.execute(
         """
-        SELECT id, label, clicked_at_us, reason_tags_json
+        SELECT id, label, clicked_at_us, reason_tags_json, active_labels_json
         FROM market_feedback
         WHERE item_kind = ? AND source = ? AND item_id = ? AND operator_id = ?
         ORDER BY clicked_at_us DESC, id DESC
@@ -403,13 +426,14 @@ def record_feedback(
         ).fetchone()
         if existing:
             current = _current_feedback_row(conn, identity, operator_id)
+            active_labels = _active_labels_from_values(current[1], current[4]) if current else []
             conn.rollback()
             return {
                 "id": int(existing[0]),
                 "label": str(existing[1]),
                 "duplicate_event": True,
                 "is_current": bool(current and int(current[0]) == int(existing[0])),
-                "current_label": str(current[1]) if current else str(existing[1]),
+                "active_labels": active_labels,
                 "current_reason_tags": _reason_tags_from_json(current[3]) if current else [],
             }
         snapshot = resolve_feedback_snapshot(conn, identity)
@@ -417,29 +441,44 @@ def record_feedback(
             conn.rollback()
             raise FeedbackError("对应信息没有已发送的飞书投递记录")
         current = _current_feedback_row(conn, identity, operator_id)
-        stored_label = (
-            CLEARED_FEEDBACK_LABEL
-            if current
-            and clicked_at_us >= int(current[2])
-            and str(current[1]) == label
-            else label
-        )
-        stored_reason_tags = [] if stored_label == CLEARED_FEEDBACK_LABEL else list(
-            dict.fromkeys(str(tag).strip() for tag in reason_tags if str(tag).strip())
-        )
-        supersedes_id = int(current[0]) if current and clicked_at_us >= int(current[2]) else None
+        is_current_event = not current or clicked_at_us >= int(current[2])
+        current_active_labels = _active_labels_from_values(current[1], current[4]) if current else []
+        active_labels = list(current_active_labels)
+        if is_current_event:
+            requested_reason_tags = list(
+                dict.fromkeys(str(tag).strip() for tag in reason_tags if str(tag).strip())
+            )
+            if label == "invalid" and requested_reason_tags:
+                if label not in active_labels:
+                    active_labels.append(label)
+            elif label in active_labels:
+                active_labels.remove(label)
+            else:
+                active_labels.append(label)
+            active_labels = _ordered_feedback_labels(active_labels)
+        current_reason_tags = _reason_tags_from_json(current[3]) if current else []
+        if is_current_event and label == "invalid":
+            stored_reason_tags = (
+                requested_reason_tags
+                if "invalid" in active_labels
+                else []
+            )
+        else:
+            stored_reason_tags = current_reason_tags if "invalid" in active_labels else []
+        supersedes_id = int(current[0]) if current and is_current_event else None
         received_at = datetime.now(timezone.utc).isoformat()
         raw_payload = dict(raw or {})
-        if stored_label == CLEARED_FEEDBACK_LABEL:
-            raw_payload.update({"toggle": "cancel", "requested_label": label})
+        raw_payload["toggle"] = (
+            "select" if label in active_labels else "cancel"
+        ) if is_current_event else "ignored_older"
         cursor = conn.execute(
             """
             INSERT INTO market_feedback (
-                feedback_event_id, item_kind, source, item_id, delivery_id, label,
+                feedback_event_id, item_kind, source, item_id, delivery_id, label, active_labels_json,
                 reason_tags_json, note, operator_id, message_id, chat_id,
                 decision_action, rule_ids_json, delivery_status, decision_version,
                 clicked_at_us, received_at, supersedes_id, raw_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 feedback_event_id,
@@ -447,7 +486,8 @@ def record_feedback(
                 identity.source,
                 identity.item_id,
                 snapshot.get("delivery_id"),
-                stored_label,
+                label,
+                json.dumps(active_labels, ensure_ascii=False),
                 json.dumps(stored_reason_tags, ensure_ascii=False),
                 note.strip(),
                 operator_id,
@@ -468,11 +508,10 @@ def record_feedback(
         current_after = _current_feedback_row(conn, identity, operator_id)
     return {
         "id": inserted_id,
-        "label": stored_label,
-        "requested_label": label,
+        "label": label,
         "duplicate_event": False,
         "is_current": bool(current_after and int(current_after[0]) == inserted_id),
-        "current_label": str(current_after[1]) if current_after else stored_label,
+        "active_labels": _active_labels_from_values(current_after[1], current_after[4]) if current_after else active_labels,
         "current_reason_tags": _reason_tags_from_json(current_after[3]) if current_after else [],
         "supersedes_id": supersedes_id,
     }
@@ -520,8 +559,10 @@ def feedback_projection_by_item(conn: sqlite3.Connection) -> dict[tuple[str, str
         item_kind = str(row.get("item_kind") or "")
         if item_kind == "test":
             continue
-        if str(row.get("label") or "") not in FEEDBACK_LABELS:
+        active_labels = _active_labels_from_values(row.get("label"), row.get("active_labels_json"))
+        if not active_labels:
             continue
+        row["active_labels"] = active_labels
         key = (item_kind, str(row.get("source") or ""), str(row.get("item_id") or ""))
         grouped.setdefault(key, []).append(row)
 
@@ -533,12 +574,12 @@ def feedback_projection_by_item(conn: sqlite3.Connection) -> dict[tuple[str, str
         latest_received_at = ""
         latest_clicked_at_us = 0
         for row in rows:
-            label = str(row.get("label") or "")
-            if label in counts:
+            for label in row.get("active_labels") or []:
                 counts[label] += 1
-            for tag in _reason_tags_from_json(row.get("reason_tags_json")):
-                if tag not in reason_tags:
-                    reason_tags.append(tag)
+            if "invalid" in (row.get("active_labels") or []):
+                for tag in _reason_tags_from_json(row.get("reason_tags_json")):
+                    if tag not in reason_tags:
+                        reason_tags.append(tag)
             clicked_at_us = int(row.get("clicked_at_us") or 0)
             if clicked_at_us >= latest_clicked_at_us:
                 latest_clicked_at_us = clicked_at_us
@@ -625,11 +666,15 @@ def handle_feedback_callback(
         db_path=db_path,
     )
     current_reason_tags = list(result.get("current_reason_tags") or [])
-    current_label = str(result.get("current_label") or result.get("label"))
-    current_display = feedback_status_display(current_label, current_reason_tags)
+    active_labels = _ordered_feedback_labels(result.get("active_labels") or [])
+    current_display = feedback_status_display(active_labels, current_reason_tags)
     suffix = "（当前选择）" if result.get("is_current", True) else "（较新的选择已保留）"
-    if result.get("is_current", True) and current_label == CLEARED_FEEDBACK_LABEL:
-        toast_content = "已取消选择"
+    clicked_label = str(result.get("label") or "")
+    if result.get("is_current", True) and clicked_label not in active_labels:
+        clicked_display = FEEDBACK_LABELS.get(clicked_label, "该标签")
+        toast_content = f"已取消「{clicked_display}」"
+        if active_labels:
+            toast_content += f"；{current_display}"
     else:
         toast_content = f"已记录：{current_display}{suffix}"
     return {
@@ -637,7 +682,7 @@ def handle_feedback_callback(
         "result": result,
         "card_state": {
             "identity": identity,
-            "label": current_label,
+            "active_labels": active_labels,
             "reason_tags": current_reason_tags,
         },
     }
@@ -654,19 +699,20 @@ def _feedback_card_base(conn: sqlite3.Connection, identity: FeedbackIdentity) ->
     payload = canonical["legacy_payload"]
     raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else payload
     card = raw.get("_feedback_card_base")
+    if not isinstance(card, dict):
+        card = canonical.get("delivery_payload", {}).get("_feedback_card_base")
     return card if isinstance(card, dict) else None
 
 
 def feedback_card_for_callback(
     identity: FeedbackIdentity,
-    label: str,
+    active_labels: Iterable[str],
     reason_tags: Iterable[str] = (),
     *,
     secret: str | None = None,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> dict[str, Any] | None:
-    if label not in {*FEEDBACK_LABELS, CLEARED_FEEDBACK_LABEL}:
-        return None
+    ordered_labels = _ordered_feedback_labels(active_labels)
     with connect_sqlite(db_path) as conn:
         base = _feedback_card_base(conn, identity)
     if base is None:
@@ -675,7 +721,7 @@ def feedback_card_for_callback(
         base,
         identity,
         secret=secret,
-        selected_label=label,
+        selected_labels=ordered_labels,
         selected_reason_tags=reason_tags,
     )
 
@@ -697,10 +743,11 @@ def _metric_rows(items: list[dict[str, Any]], key_fn: Any) -> list[dict[str, Any
                 {"key": label, "delivered": 0, "labelled": 0, "high_value": 0, "duplicate": 0, "invalid": 0},
             )
             bucket["delivered"] += 1
-            feedback_label = str(item.get("feedback_label") or "")
-            if feedback_label in FEEDBACK_LABELS:
+            feedback_labels = _ordered_feedback_labels(item.get("feedback_labels") or [])
+            if feedback_labels:
                 bucket["labelled"] += 1
-                bucket[feedback_label] += 1
+                for feedback_label in feedback_labels:
+                    bucket[feedback_label] += 1
     rows = []
     for bucket in grouped.values():
         delivered = int(bucket["delivered"])
@@ -718,21 +765,12 @@ def feedback_quality_payload(*, db_path: Path = DEFAULT_DB_PATH, days: int = 30)
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     with connect_sqlite(db_path) as conn:
         delivered = _delivered_items(conn, cutoff)
-        current = current_feedback_rows(db_path)
-    current_by_item: dict[tuple[str, str, str], dict[str, Any]] = {}
-    for row in current:
-        if str(row.get("label") or "") not in FEEDBACK_LABELS:
-            continue
-        key = (str(row["item_kind"]), str(row["source"]), str(row["item_id"]))
-        current_by_item.setdefault(key, row)
+        current_by_item = feedback_projection_by_item(conn)
     for item in delivered:
         feedback = current_by_item.get((item["item_kind"], item["source"], item["item_id"]))
-        item["feedback_label"] = str(feedback.get("label") or "") if feedback else ""
-        item["feedback_at_us"] = int(feedback.get("clicked_at_us") or 0) if feedback else 0
-        try:
-            reason_tags = json.loads(str(feedback.get("reason_tags_json") or "[]")) if feedback else []
-        except json.JSONDecodeError:
-            reason_tags = []
+        item["feedback_labels"] = _ordered_feedback_labels(feedback.get("labels") or []) if feedback else []
+        item["feedback_at"] = str(feedback.get("received_at") or "") if feedback else ""
+        reason_tags = list(feedback.get("reason_tags") or []) if feedback else []
         item["feedback_reasons"] = [
             FEEDBACK_REASON_LABELS.get(str(reason), str(reason)) for reason in reason_tags if str(reason)
         ]
@@ -749,12 +787,17 @@ def feedback_quality_payload(*, db_path: Path = DEFAULT_DB_PATH, days: int = 30)
         "duplicate_rate": 0.0,
         "invalid_rate": 0.0,
     }
-    examples = [item for item in delivered if item.get("feedback_label")]
-    examples.sort(key=lambda item: int(item.get("feedback_at_us") or 0), reverse=True)
+    examples = [item for item in delivered if item.get("feedback_labels")]
+    examples.sort(key=lambda item: str(item.get("feedback_at") or ""), reverse=True)
     for item in examples:
-        display = FEEDBACK_LABELS.get(str(item.get("feedback_label") or ""), "")
-        if item.get("feedback_reasons"):
-            display += "（" + "、".join(item["feedback_reasons"]) + "）"
+        labels = list(item.get("feedback_labels") or [])
+        display_parts = []
+        for label in labels:
+            part = FEEDBACK_LABELS[label]
+            if label == "invalid" and item.get("feedback_reasons"):
+                part += "（" + "、".join(item["feedback_reasons"]) + "）"
+            display_parts.append(part)
+        display = "、".join(display_parts)
         item["feedback_label_display"] = display
     return {
         "days": days,

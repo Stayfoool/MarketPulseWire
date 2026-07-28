@@ -254,6 +254,7 @@ CREATE TABLE IF NOT EXISTS market_feedback (
     item_id TEXT NOT NULL,
     delivery_id INTEGER,
     label TEXT NOT NULL,
+    active_labels_json TEXT,
     reason_tags_json TEXT NOT NULL DEFAULT '[]',
     note TEXT,
     operator_id TEXT NOT NULL,
@@ -669,6 +670,7 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     for column, definition in delivery_columns.items():
         add_column_if_missing(conn, "deliveries", column, definition)
     add_column_if_missing(conn, "market_reviews", "legacy_payload_json", "TEXT")
+    add_column_if_missing(conn, "market_feedback", "active_labels_json", "TEXT")
     add_column_if_missing(conn, "signal_reviews", "target_id", "INTEGER")
     add_column_if_missing(conn, "signal_reviews", "symbol", "TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_seen_items_first_seen ON seen_items(first_seen_at)")

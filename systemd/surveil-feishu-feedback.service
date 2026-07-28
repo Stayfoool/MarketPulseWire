@@ -11,6 +11,7 @@ EnvironmentFile=-/opt/surveil/.env
 ExecStart=/opt/surveil/.venv/bin/python -u /opt/surveil/scripts/feishu_feedback_service.py
 Restart=on-failure
 RestartSec=10
+UMask=0077
 StandardOutput=append:/opt/surveil/logs/feishu-feedback.log
 StandardError=append:/opt/surveil/logs/feishu-feedback.err.log
 
