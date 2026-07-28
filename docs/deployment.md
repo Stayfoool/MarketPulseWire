@@ -213,6 +213,9 @@ timer from invoking a renamed executable after the old path has been deleted
 but before the replacement unit is installed. GitHub Deploy runs these three
 commands in this order. Both sync stages preserve the server-generated
 `REVISION` marker as well as the private configuration, data, logs and reports.
+After pruning, `prune_remote_code.sh` restores the deployment root to the
+configured service account and mode `0700`, because rsync otherwise applies the
+checkout root metadata to that directory.
 
 The installer copies but keeps these standalone report-only collector timers disabled:
 
