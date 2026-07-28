@@ -25,6 +25,7 @@ remote_code_sync() {
     --exclude '.env' \
     --exclude '.env.*' \
     --exclude '.git/' \
+    --exclude 'REVISION' \
     --exclude 'proxy.env' \
     --exclude "$private_proxy_yaml_pattern" \
     --exclude 'config/portfolio.json' \

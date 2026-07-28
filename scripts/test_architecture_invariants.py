@@ -394,6 +394,7 @@ def test_deployment_preserves_private_proxy_state_and_disables_shadows() -> None
     assert 'local private_proxy_yaml_pattern="${private_proxy_prefix}*.yaml"' in sync
     assert '--exclude "$private_proxy_yaml_pattern"' in sync
     assert "--exclude '.git/'" in sync
+    assert "--exclude 'REVISION'" in sync
     assert "--exclude '.paddleocr/'" in sync
     assert "--exclude 'reports/'" in sync
     assert "--exclude 'config/llm_decision_rules.json'" in sync
