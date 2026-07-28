@@ -13,7 +13,7 @@ from typing import Any
 
 from db_utils import connect_sqlite
 from env_utils import load_env
-from market_canonical_reader import canonical_signal_rows, migration_ready as canonical_migration_ready
+from market_canonical_reader import canonical_signal_rows
 from market_db import DEFAULT_DB_PATH, init_db
 from market_view import article_view_from_row, event_view_from_row, official_view_from_row
 from pipeline_health import record_pipeline_failure, record_pipeline_success
@@ -417,8 +417,8 @@ def event_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple[d
     incremental = analysis.get("incremental_view") if isinstance(analysis.get("incremental_view"), dict) else {}
     price = analysis.get("price_impact") if isinstance(analysis.get("price_impact"), dict) else {}
     signal = {
-        "source_table": "events",
-        "source_id": str(row["id"]),
+        "source_table": "market_reviews",
+        "source_id": str(row["market_review_id"]),
         "source": source,
         "source_item_id": str(row["source_event_id"] or ""),
         "title": str(row["title"] or ""),
@@ -519,8 +519,8 @@ def article_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple
                 )
             )
     signal = {
-        "source_table": "article_reviews",
-        "source_id": f"{source}:{row['item_id']}",
+        "source_table": "market_reviews",
+        "source_id": str(row["market_review_id"]),
         "source": source,
         "source_item_id": str(row["item_id"] or ""),
         "title": str(row["title"] or ""),
@@ -588,8 +588,8 @@ def official_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tupl
         analysis = {}
     incremental = analysis.get("incremental_view") if isinstance(analysis.get("incremental_view"), dict) else {}
     signal = {
-        "source_table": "official_news_reviews",
-        "source_id": f"{source}:{row['item_id']}",
+        "source_table": "market_reviews",
+        "source_id": str(row["market_review_id"]),
         "source": source,
         "source_item_id": str(row["item_id"] or ""),
         "title": str(row["title"] or ""),
@@ -717,77 +717,6 @@ def x_signal_from_row(conn: sqlite3.Connection, row: sqlite3.Row) -> tuple[dict[
     return signal, expand_related_targets(conn, targets, context_text=text), evidence
 
 
-def latest_event_rows(conn: sqlite3.Connection, since: str) -> list[sqlite3.Row]:
-    if not table_exists(conn, "events") or not table_exists(conn, "event_analyses"):
-        return []
-    return list(
-        conn.execute(
-            """
-            WITH latest AS (
-                SELECT event_id, MAX(id) AS analysis_id
-                FROM event_analyses
-                GROUP BY event_id
-            ), pushed AS (
-                SELECT event_id, MAX(sent_at) AS pushed_at
-                FROM deliveries
-                WHERE channel = 'feishu' AND status = 'sent'
-                GROUP BY event_id
-            )
-            SELECT e.id, e.source, e.source_event_id, e.event_type, e.title, e.summary,
-                   e.full_text, e.url, e.published_at, e.first_seen_at, e.symbols_json,
-                   e.themes_json, a.model, a.importance, a.classification, a.direction,
-                   a.impact_duration, a.should_push, a.analysis_json, a.created_at AS analysis_created_at,
-                   COALESCE(p.pushed_at, '') AS pushed_at
-            FROM events e
-            JOIN latest l ON l.event_id = e.id
-            JOIN event_analyses a ON a.id = l.analysis_id
-            LEFT JOIN pushed p ON p.event_id = e.id
-            WHERE COALESCE(e.published_at, e.first_seen_at, a.created_at) >= ?
-               OR e.first_seen_at >= ?
-            ORDER BY e.id
-            """,
-            (since, since),
-        ).fetchall()
-    )
-
-
-def article_rows(conn: sqlite3.Connection, since: str) -> list[sqlite3.Row]:
-    if not table_exists(conn, "article_reviews"):
-        return []
-    return list(
-        conn.execute(
-            """
-            SELECT source, item_id, url, title, source_module, published_at,
-                   importance, push_now, market_impact, incremental_classification,
-                   affected_targets_json, reason, daily_summary, confidence,
-                   gate_json, pushed_at, created_at
-            FROM article_reviews
-            WHERE COALESCE(published_at, created_at) >= ? OR created_at >= ?
-            ORDER BY created_at
-            """,
-            (since, since),
-        ).fetchall()
-    )
-
-
-def official_rows(conn: sqlite3.Connection, since: str) -> list[sqlite3.Row]:
-    if not table_exists(conn, "official_news_reviews"):
-        return []
-    return list(
-        conn.execute(
-            """
-            SELECT source, item_id, url, title, published_at, importance,
-                   should_push_now, reason, daily_summary, analysis_json,
-                   pushed_at, created_at
-            FROM official_news_reviews
-            WHERE COALESCE(published_at, created_at) >= ? OR created_at >= ?
-            ORDER BY created_at
-            """,
-            (since, since),
-        ).fetchall()
-    )
-
-
 def x_rows(conn: sqlite3.Connection, since: str) -> list[sqlite3.Row]:
     if not table_exists(conn, "seen_posts"):
         return []
@@ -814,9 +743,9 @@ def extract_signals(*, db_path: Path, days: int, dry_run: bool = False) -> dict[
     init_db(db_path).close()
     since = cutoff_iso(days)
     counts = {
-        "events": 0,
-        "article_reviews": 0,
-        "official_news_reviews": 0,
+        "event": 0,
+        "article": 0,
+        "official": 0,
         "signals": 0,
         "signals_unchanged": 0,
         "targets": 0,
@@ -824,37 +753,24 @@ def extract_signals(*, db_path: Path, days: int, dry_run: bool = False) -> dict[
     with connect_sqlite(db_path) as conn:
         conn.row_factory = sqlite3.Row
         candidates: list[tuple[str, tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]]] = []
-        canonical_ready = canonical_migration_ready(conn)
-        event_source_rows = (
-            canonical_signal_rows(conn, item_kind="event", since=since)
-            if canonical_ready
-            else latest_event_rows(conn, since)
-        )
-        article_source_rows = (
-            canonical_signal_rows(conn, item_kind="article", since=since)
-            if canonical_ready
-            else article_rows(conn, since)
-        )
-        official_source_rows = (
-            canonical_signal_rows(conn, item_kind="official", since=since)
-            if canonical_ready
-            else official_rows(conn, since)
-        )
+        event_source_rows = canonical_signal_rows(conn, item_kind="event", since=since)
+        article_source_rows = canonical_signal_rows(conn, item_kind="article", since=since)
+        official_source_rows = canonical_signal_rows(conn, item_kind="official", since=since)
         for row in event_source_rows:
             extracted = event_signal_from_row(conn, row)
             if extracted:
-                counts["events"] += 1
-                candidates.append(("events", extracted))
+                counts["event"] += 1
+                candidates.append(("market_reviews", extracted))
         for row in article_source_rows:
             extracted = article_signal_from_row(conn, row)
             if extracted:
-                counts["article_reviews"] += 1
-                candidates.append(("article_reviews", extracted))
+                counts["article"] += 1
+                candidates.append(("market_reviews", extracted))
         for row in official_source_rows:
             extracted = official_signal_from_row(conn, row)
             if extracted:
-                counts["official_news_reviews"] += 1
-                candidates.append(("official_news_reviews", extracted))
+                counts["official"] += 1
+                candidates.append(("market_reviews", extracted))
         for row in x_rows(conn, since):
             extracted = x_signal_from_row(conn, row)
             if extracted:

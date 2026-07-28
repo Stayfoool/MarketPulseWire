@@ -8,19 +8,12 @@ from typing import Any
 
 from decision_engine import attach_decision_result_to_event_analysis
 from market_flow import evaluate_market_item
-from market_flow_adapters import (
-    event_with_ingestion_audit,
-    ingest_event_item,
-    normalized_item_audit_payload,
-    store_event_flow_analysis,
-)
+from market_flow_adapters import event_with_ingestion_audit, normalized_item_audit_payload
 from market_db import DEFAULT_DB_PATH
 from market_delivery import deliver_event, record_delivery
 from market_item import DecisionResult, NormalizedMarketItem, decision_result_from_payload, item_from_event_mapping
 from market_review_store import (
     event_content_hash,
-    event_row_by_id,
-    latest_event_analysis,
     load_enabled_holdings as store_load_enabled_holdings,
 )
 from source_profiles import runtime_source_profile
@@ -85,50 +78,33 @@ def load_enabled_holdings(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any
     return store_load_enabled_holdings(db_path)
 
 
-def upsert_event(
-    event: dict[str, Any],
-    db_path: Path = DEFAULT_DB_PATH,
-    *,
-    normalized_item: NormalizedMarketItem | None = None,
-) -> tuple[int, bool]:
-    """Insert a normalized event audit record and return (event_id, inserted)."""
-    updated = _event_without_normalized_audit(event)
-    return ingest_event_item(updated, normalized_item or normalized_event_item(updated), db_path)
-
-
 def analyze_event(
-    event_id: int,
+    normalized_item: NormalizedMarketItem,
     task: str = "portfolio_event",
     db_path: Path = DEFAULT_DB_PATH,
     *,
-    normalized_item: NormalizedMarketItem | None = None,
-    persist_legacy: bool = True,
     decision: DecisionResult | None = None,
 ) -> dict[str, Any]:
-    event_row = event_row_by_id(event_id, db_path)
-    if not event_row:
-        raise RuntimeError(f"事件不存在：{event_id}")
-    existing = latest_event_analysis(event_id, task, db_path) if persist_legacy else None
-    if existing:
-        return existing["analysis"]
-
-    event = event_mapping_from_row(event_row)
     if decision is None:
-        raise RuntimeError(f"事件决策结果缺失：{event_id}")
-    decision_item = normalized_item or normalized_event_item(event)
+        raise RuntimeError(f"事件决策结果缺失：{normalized_item.source}/{normalized_item.title}")
     decision_fields = attach_decision_result_to_event_analysis(decision, {})
-    resolved_decision = decision
     flow_result = evaluate_market_item(
-        decision_item,
-        decision=resolved_decision,
-        content=build_portfolio_event_input(event_row, db_path=db_path),
+        normalized_item,
+        decision=decision,
+        content=build_portfolio_event_input(normalized_item, db_path=db_path),
         task="为一条已完成规则决策的公告、研报、快讯或异动信息生成极简实时摘要。",
         intro="请解读以下持仓事件",
         forbidden_mode="event",
         extra_notes=["输入包含直接相关持仓和全部已配置持仓；只可使用给定关系，不要自行扩展股票映射。"],
         user_agent="surveil-portfolio-event-llm/0.2",
         force_interpretation=True,
-        storage_ref={"store_kind": "event_analyses", "event_id": event_id, "task": task},
+        storage_ref={
+            "store_kind": "market_reviews",
+            "item_kind": "event",
+            "source": normalized_item.source,
+            "item_id": str(normalized_item.raw.get("source_event_id") or ""),
+            "task": task,
+        },
     )
     interpretation = flow_result.interpretation
     parsed = {
@@ -139,20 +115,6 @@ def analyze_event(
         "_market_flow_result": flow_result.audit_payload(),
         "llm_mode": "thin",
     }
-    importance, classification, direction, impact_duration, should_push = analysis_record_fields(parsed)
-    if persist_legacy:
-        store_event_flow_analysis(
-            event_id,
-            task,
-            interpretation.model,
-            parsed,
-            importance=importance,
-            classification=classification,
-            direction=direction,
-            impact_duration=impact_duration,
-            should_push=should_push,
-            db_path=db_path,
-        )
     return parsed
 
 
@@ -175,45 +137,12 @@ def analysis_record_fields(parsed: dict[str, Any]) -> tuple[str, str, str, str, 
     return importance, classification, direction, impact_duration, should_push
 
 
-def event_mapping_from_row(event_row: dict[str, Any]) -> dict[str, Any]:
-    try:
-        symbols = json.loads(str(event_row.get("symbols_json") or "[]"))
-    except json.JSONDecodeError:
-        symbols = []
-    try:
-        raw = json.loads(str(event_row.get("raw_json") or "{}"))
-    except json.JSONDecodeError:
-        raw = {}
-    try:
-        themes = json.loads(str(event_row.get("themes_json") or "[]"))
-    except json.JSONDecodeError:
-        themes = []
-    return {
-        "source": event_row.get("source"),
-        "source_event_id": event_row.get("source_event_id")
-        or (raw.get("source_event_id") if isinstance(raw, dict) else ""),
-        "event_type": event_row.get("event_type"),
-        "title": event_row.get("title"),
-        "summary": event_row.get("summary"),
-        "full_text": event_row.get("full_text"),
-        "url": event_row.get("url"),
-        "published_at": event_row.get("published_at"),
-        "symbols": symbols if isinstance(symbols, list) else [],
-        "themes": themes if isinstance(themes, list) else [],
-        "raw": raw if isinstance(raw, dict) else {},
-    }
-
-
-def build_portfolio_event_input(event: dict[str, Any], db_path: Path = DEFAULT_DB_PATH) -> str:
-    try:
-        symbols = json.loads(str(event.get("symbols_json") or "[]"))
-    except json.JSONDecodeError:
-        symbols = []
-    symbol_set = {str(symbol).upper() for symbol in symbols if str(symbol).strip()}
+def build_portfolio_event_input(item: NormalizedMarketItem, db_path: Path = DEFAULT_DB_PATH) -> str:
+    symbol_set = {str(symbol).upper() for symbol in item.symbols if str(symbol).strip()}
     holdings = load_enabled_holdings(db_path)
     related_holdings = [holding for holding in holdings if str(holding.get("symbol", "")).upper() in symbol_set]
     context = {
-        "event": event,
+        "event": item.to_dict(),
         "event_symbols": sorted(symbol_set),
         "directly_related_holdings": related_holdings,
         "all_configured_holdings": [
@@ -265,7 +194,7 @@ def should_push_analysis(parsed: dict[str, Any], importance: str | None = None) 
 
 
 def maybe_deliver_event(
-    event_id: int,
+    item: NormalizedMarketItem,
     analysis: dict[str, Any],
     db_path: Path = DEFAULT_DB_PATH,
     *,
@@ -273,23 +202,22 @@ def maybe_deliver_event(
     market_item_id: int | None = None,
     market_review_id: int | None = None,
 ) -> str:
-    """Load the existing decision and delegate delivery execution."""
-    event_row = event_row_by_id(event_id, db_path)
-    if not event_row:
-        raise RuntimeError(f"事件不存在：{event_id}")
+    """Delegate delivery execution for an event already stored in unified storage."""
     updated = analysis
     decision = decision or decision_result_from_payload(updated)
     if decision is None:
         record_delivery(
-            event_id,
+            None,
             "feishu",
             "skipped",
             {"reason": "缺少统一 DecisionResult", "contract_error": "missing_decision_result"},
+            market_item_id=market_item_id,
+            market_review_id=market_review_id,
             db_path=db_path,
         )
         return "missing_decision"
     return deliver_event(
-        event_id,
+        item,
         updated,
         decision=decision,
         market_item_id=market_item_id,

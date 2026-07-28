@@ -8,11 +8,9 @@ from pathlib import Path
 
 from db_utils import connect_sqlite
 from market_db import init_db
-from market_event_adapter import event_mapping_from_row
 from market_flow import normalize_market_item
 from market_item import AdmissionEvidence, AdmissionResult
-from market_review_store import event_row_by_id, upsert_event_record
-from market_store import ensure_market_item_alias, record_production_admission
+from market_store import record_production_admission
 from sina_stock_news import (
     canonical_article_url,
     freshness_hint,
@@ -23,6 +21,7 @@ from sina_stock_news import (
     retryable_event_review,
     similar_news_title,
     source_event_id_for_item,
+    stored_market_event,
 )
 
 
@@ -43,8 +42,6 @@ def assert_retryable_review_uses_stored_event() -> None:
             "themes": ["测试主题"],
             "raw": {"source_event_id": "article:retry-test"},
         }
-        event_id, inserted = upsert_event_record(event, db_path)
-        assert inserted
         normalized = normalize_market_item("sina_stock_news", event, store_kind="event")
         admission = AdmissionResult(
             status="admitted",
@@ -59,37 +56,28 @@ def assert_retryable_review_uses_stored_event() -> None:
             db_path=db_path,
         )
         with connect_sqlite(db_path) as conn:
-            ensure_market_item_alias(
-                conn,
-                market_item_id,
-                item_kind="event",
-                source="sina_stock_news",
-                legacy_item_id=str(event_id),
-                legacy_store_kind="events",
-            )
             conn.execute(
                 "UPDATE market_reviews SET review_status='failed_retryable' WHERE id=?",
                 (review_id,),
             )
             conn.commit()
-        retry = retryable_event_review(event_id, db_path)
+        retry = retryable_event_review(market_item_id, db_path)
         assert retry is not None
         assert retry["market_item_id"] == market_item_id
         assert retry["market_review_id"] == review_id
         assert retry["admission"] == admission.to_dict()
-        stored = event_row_by_id(event_id, db_path)
+        stored = stored_market_event(market_item_id, db_path)
         assert stored is not None
-        mapped = event_mapping_from_row(stored)
-        assert mapped["source_event_id"] == event["source_event_id"]
-        assert mapped["full_text"] == event["full_text"]
-        assert mapped["themes"] == event["themes"]
+        assert stored["source_event_id"] == event["source_event_id"]
+        assert stored["full_text"] == event["full_text"]
+        assert stored["themes"] == event["themes"]
         with connect_sqlite(db_path) as conn:
             conn.execute(
                 "UPDATE market_reviews SET review_status='succeeded' WHERE id=?",
                 (review_id,),
             )
             conn.commit()
-        assert retryable_event_review(event_id, db_path) is None
+        assert retryable_event_review(market_item_id, db_path) is None
 
 
 def main() -> int:

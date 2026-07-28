@@ -36,7 +36,7 @@ from holdings_store import (
     validate_holdings,
 )
 from market_db import DEFAULT_DB_PATH
-from market_canonical_reader import canonical_event_rows, migration_ready as canonical_migration_ready
+from market_canonical_reader import canonical_event_rows
 from market_feedback import FEEDBACK_LABELS, feedback_projection_by_item, feedback_quality_payload
 from llm_decision_web import llm_decision_rows, llm_decision_summary
 from current_rules_web import current_rules_payload
@@ -604,270 +604,27 @@ def fetch_events_rows(
     with connect_sqlite(db_path) as conn:
         conn.row_factory = sqlite3.Row
         feedback_projection = feedback_projection_by_item(conn)
-        canonical_ready = canonical_migration_ready(conn)
-        if canonical_ready:
-            for item in canonical_event_rows(
-                conn,
-                start_utc=start_utc,
-                end_utc=end_utc,
-                time_basis=time_basis,
-                include_baseline=include_baseline,
-                source=source.strip(),
-            ):
-                identity = item.pop("feedback_identity", None)
-                item["published_at"] = normalize_time(item.get("published_at"))
-                item["seen_at"] = normalize_time(item.get("seen_at"))
-                if identity:
-                    apply_event_feedback(
-                        item,
-                        item_kind=str(identity["item_kind"]),
-                        source=str(identity["source"]),
-                        item_id=str(identity["item_id"]),
-                        delivered=bool(identity["delivered"]),
-                        projection=feedback_projection,
-                    )
-                rows.append(item)
-        if not canonical_ready and table_exists(conn, "events"):
-            where, params = event_center_where_clause(
-                time_field=event_time_field(
-                    basis=time_basis,
-                    seen_field="e.first_seen_at",
-                    published_field="e.published_at",
-                ),
-                start_utc=start_utc,
-                end_utc=end_utc,
-                source_lower=source_lower,
-                source_fields=("e.source",),
-                q_lower=q_lower,
-                q_fields=("e.title", "e.summary", "e.full_text", "e.url", "e.symbols_json", "e.themes_json"),
-            )
-            feedback_where, feedback_params = event_feedback_filter_clause(
-                conn,
-                feedback_filter=feedback_filter,
-                item_kind="event",
-                source_expr="e.source",
-                item_id_expr="e.id",
-                delivered_expr="EXISTS (SELECT 1 FROM deliveries fd WHERE fd.event_id = e.id AND fd.channel = 'feishu' AND fd.status = 'sent')",
-            )
-            for row in conn.execute(
-                f"""
-                SELECT e.id, e.source, e.event_type, e.title, e.summary, e.url, e.published_at,
-                       e.first_seen_at, e.baseline_only,
-                       (
-                         SELECT importance FROM event_analyses a
-                         WHERE a.event_id = e.id
-                         ORDER BY a.id DESC LIMIT 1
-                       ) AS importance,
-                       (
-                         SELECT classification FROM event_analyses a
-                         WHERE a.event_id = e.id
-                         ORDER BY a.id DESC LIMIT 1
-                       ) AS classification,
-                       (
-                         SELECT should_push FROM event_analyses a
-                         WHERE a.event_id = e.id
-                         ORDER BY a.id DESC LIMIT 1
-                       ) AS should_push,
-                       (
-                         SELECT analysis_json FROM event_analyses a
-                         WHERE a.event_id = e.id
-                         ORDER BY a.id DESC LIMIT 1
-                       ) AS analysis_json,
-                       (
-                         SELECT status FROM deliveries d
-                         WHERE d.event_id = e.id
-                         ORDER BY d.id DESC LIMIT 1
-                       ) AS delivery_status,
-                       (
-                         SELECT MAX(sent_at) FROM deliveries d
-                         WHERE d.event_id = e.id AND d.channel = 'feishu' AND d.status = 'sent'
-                       ) AS pushed_at,
-                       e.symbols_json,
-                       e.themes_json
-                FROM events e
-                WHERE {where}
-                  {feedback_where}
-                  {" " if include_baseline else "AND COALESCE(e.baseline_only, 0) = 0"}
-                ORDER BY e.first_seen_at DESC
-                LIMIT 300
-                """,
-                [*params, *feedback_params],
-            ):
-                view = event_view_from_row(row).to_web_row()
-                view["published_at"] = normalize_time(row["published_at"])
-                view["seen_at"] = normalize_time(row["first_seen_at"])
+        for item in canonical_event_rows(
+            conn,
+            start_utc=start_utc,
+            end_utc=end_utc,
+            time_basis=time_basis,
+            include_baseline=include_baseline,
+            source="",
+        ):
+            identity = item.pop("feedback_identity", None)
+            item["published_at"] = normalize_time(item.get("published_at"))
+            item["seen_at"] = normalize_time(item.get("seen_at"))
+            if identity:
                 apply_event_feedback(
-                    view,
-                    item_kind="event",
-                    source=str(row["source"] or ""),
-                    item_id=str(row["id"]),
-                    delivered=bool(row["pushed_at"]),
+                    item,
+                    item_kind=str(identity["item_kind"]),
+                    source=str(identity["source"]),
+                    item_id=str(identity["item_id"]),
+                    delivered=bool(identity["delivered"]),
                     projection=feedback_projection,
                 )
-                rows.append(view)
-        if not canonical_ready and table_exists(conn, "article_reviews"):
-            article_columns = table_columns(conn, "article_reviews")
-            gate_json_expr = "gate_json" if "gate_json" in article_columns else "'{}' AS gate_json"
-            affected_targets_expr = (
-                "affected_targets_json" if "affected_targets_json" in article_columns else "'[]' AS affected_targets_json"
-            )
-            where, params = event_center_where_clause(
-                time_field=event_time_field(
-                    basis=time_basis,
-                    seen_field="created_at",
-                    published_field="published_at",
-                ),
-                start_utc=start_utc,
-                end_utc=end_utc,
-                source_lower=source_lower,
-                source_fields=("source", "source_module"),
-                q_lower=q_lower,
-                q_fields=("title", "daily_summary", "reason", "affected_targets_json", "url"),
-            )
-            feedback_where, feedback_params = event_feedback_filter_clause(
-                conn,
-                feedback_filter=feedback_filter,
-                item_kind="article",
-                source_expr="article_reviews.source",
-                item_id_expr="article_reviews.item_id",
-                delivered_expr="COALESCE(pushed_at, '') <> ''",
-            )
-            for row in conn.execute(
-                f"""
-                SELECT source, item_id, url, title, source_module, published_at, importance,
-                       push_now, incremental_classification, daily_summary, reason, pushed_at, created_at,
-                       {affected_targets_expr}, {gate_json_expr}
-                FROM article_reviews
-                WHERE {where}
-                  {feedback_where}
-                ORDER BY created_at DESC
-                LIMIT 300
-                """,
-                [*params, *feedback_params],
-            ):
-                view = article_view_from_row(row).to_web_row()
-                view["published_at"] = normalize_time(row["published_at"])
-                view["seen_at"] = normalize_time(row["created_at"])
-                apply_event_feedback(
-                    view,
-                    item_kind="article",
-                    source=str(row["source"] or ""),
-                    item_id=str(row["item_id"]),
-                    delivered=bool(row["pushed_at"]),
-                    projection=feedback_projection,
-                )
-                rows.append(view)
-        if not canonical_ready and table_exists(conn, "official_news_reviews"):
-            official_columns = table_columns(conn, "official_news_reviews")
-            should_push_expr = "should_push_now" if "should_push_now" in official_columns else "0 AS should_push_now"
-            analysis_json_expr = "analysis_json" if "analysis_json" in official_columns else "'{}' AS analysis_json"
-            where, params = event_center_where_clause(
-                time_field=event_time_field(
-                    basis=time_basis,
-                    seen_field="created_at",
-                    published_field="published_at",
-                ),
-                start_utc=start_utc,
-                end_utc=end_utc,
-                source_lower=source_lower,
-                source_fields=("source",),
-                q_lower=q_lower,
-                q_fields=("title", "daily_summary", "reason", "url"),
-            )
-            feedback_where, feedback_params = event_feedback_filter_clause(
-                conn,
-                feedback_filter=feedback_filter,
-                item_kind="official",
-                source_expr="official_news_reviews.source",
-                item_id_expr="official_news_reviews.item_id",
-                delivered_expr="COALESCE(pushed_at, '') <> ''",
-            )
-            for row in conn.execute(
-                f"""
-                SELECT source, item_id, url, title, published_at, importance, daily_summary,
-                       reason, pushed_at, created_at, {should_push_expr}, {analysis_json_expr}
-                FROM official_news_reviews
-                WHERE {where}
-                  {feedback_where}
-                ORDER BY created_at DESC
-                LIMIT 200
-                """,
-                [*params, *feedback_params],
-            ):
-                view = official_view_from_row(row).to_web_row()
-                view["published_at"] = normalize_time(row["published_at"])
-                view["seen_at"] = normalize_time(row["created_at"])
-                apply_event_feedback(
-                    view,
-                    item_kind="official",
-                    source=str(row["source"] or ""),
-                    item_id=str(row["item_id"]),
-                    delivered=bool(row["pushed_at"]),
-                    projection=feedback_projection,
-                )
-                rows.append(view)
-        if not canonical_ready and include_baseline and not feedback_filter and table_exists(conn, "seen_items"):
-            where, params = event_center_where_clause(
-                time_field=event_time_field(
-                    basis=time_basis,
-                    seen_field="s.first_seen_at",
-                    published_field="s.published_at",
-                ),
-                start_utc=start_utc,
-                end_utc=end_utc,
-                source_lower=source_lower,
-                source_fields=("s.source",),
-                q_lower=q_lower,
-                q_fields=("s.title", "s.summary", "s.url"),
-            )
-            reviewed_clause = ""
-            if table_exists(conn, "article_reviews"):
-                reviewed_clause = """
-                    AND NOT EXISTS (
-                        SELECT 1
-                        FROM article_reviews r
-                        WHERE r.source = s.source AND r.item_id = s.item_id
-                    )
-                """
-            event_clause = ""
-            if table_exists(conn, "events"):
-                event_clause = """
-                    AND NOT EXISTS (
-                        SELECT 1
-                        FROM events e
-                        WHERE e.source = s.source AND e.source_event_id = s.item_id
-                    )
-                """
-            for row in conn.execute(
-                f"""
-                SELECT s.source, s.item_id, s.url, s.title, s.summary, s.published_at, s.first_seen_at
-                FROM seen_items s
-                WHERE {where}
-                  {reviewed_clause}
-                  {event_clause}
-                ORDER BY s.first_seen_at DESC
-                LIMIT 300
-                """,
-                params,
-            ):
-                rows.append(
-                    {
-                        "kind": "baseline",
-                        "source": row["source"],
-                        "source_id": row["source"],
-                        "id": row["item_id"],
-                        "title": row["title"],
-                        "summary": row["summary"] or "首次采集建立去重基线，未进入决策层。",
-                        "url": row["url"] or "",
-                        "published_at": normalize_time(row["published_at"]),
-                        "seen_at": normalize_time(row["first_seen_at"]),
-                        "importance": "",
-                        "classification": "仅建立去重基线",
-                        "push": False,
-                        "delivery_status": "baseline",
-                        "baseline_only": True,
-                    }
-                )
+            rows.append(item)
         if not feedback_filter and table_exists(conn, "seen_posts"):
             seen_columns = table_columns(conn, "seen_posts")
             delivery_expr = "delivery_status" if "delivery_status" in seen_columns else "'sent'"
@@ -1268,9 +1025,7 @@ def overview_payload(day: str = "") -> dict[str, Any]:
             "AND COALESCE(NULLIF(attempted_at, ''), sent_at) < ? AND status = 'failed'",
             (start_utc, end_utc),
         )
-        canonical_ready = canonical_migration_ready(conn)
-        if canonical_ready:
-            article_failures = int(
+        article_failures = int(
                 conn.execute(
                     """
                     SELECT COUNT(*)
@@ -1286,7 +1041,7 @@ def overview_payload(day: str = "") -> dict[str, Any]:
                     (start_utc, end_utc),
                 ).fetchone()[0]
             )
-            event_count = int(
+        event_count = int(
                 conn.execute(
                     """
                     SELECT COUNT(DISTINCT m.id)
@@ -1297,7 +1052,7 @@ def overview_payload(day: str = "") -> dict[str, Any]:
                     (start_utc, end_utc),
                 ).fetchone()[0]
             )
-            article_count = int(
+        article_count = int(
                 conn.execute(
                     """
                     SELECT COUNT(*)
@@ -1311,7 +1066,7 @@ def overview_payload(day: str = "") -> dict[str, Any]:
                     (start_utc, end_utc),
                 ).fetchone()[0]
             )
-            by_source = [
+        by_source = [
                 {"key": str(row[0] or "unknown"), "count": int(row[1])}
                 for row in conn.execute(
                     """
@@ -1324,7 +1079,7 @@ def overview_payload(day: str = "") -> dict[str, Any]:
                     (start_utc, end_utc),
                 )
             ]
-            article_importance = [
+        article_importance = [
                 {"key": str(row[0] or "unknown"), "count": int(row[1])}
                 for row in conn.execute(
                     """
@@ -1341,21 +1096,6 @@ def overview_payload(day: str = "") -> dict[str, Any]:
                     (start_utc, end_utc),
                 )
             ]
-        else:
-            article_failures = int(
-                conn.execute(
-                    """
-                    SELECT COUNT(*) FROM article_reviews
-                    WHERE created_at >= ? AND created_at < ?
-                      AND (reason LIKE '%失败%' OR gate_json LIKE '%error%')
-                    """,
-                    (start_utc, end_utc),
-                ).fetchone()[0]
-            )
-            event_count = count_rows(conn, "events", "first_seen_at >= ? AND first_seen_at < ?", (start_utc, end_utc))
-            article_count = count_rows(conn, "article_reviews", "created_at >= ? AND created_at < ?", (start_utc, end_utc))
-            by_source = grouped_counts(conn, "events", "source", "first_seen_at >= ? AND first_seen_at < ?", (start_utc, end_utc))
-            article_importance = grouped_counts(conn, "article_reviews", "importance", "created_at >= ? AND created_at < ?", (start_utc, end_utc))
         cards = [
             {"label": "统一事件", "value": event_count},
             {"label": "来源决策", "value": article_count},

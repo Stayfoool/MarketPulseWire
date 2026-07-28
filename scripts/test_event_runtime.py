@@ -20,6 +20,10 @@ from market_db import init_db
 from settings_store import FIELDS_BY_KEY
 
 
+ROOT = Path(__file__).resolve().parents[1]
+TEST_RULE_CONFIG = ROOT / "config" / "rule_core_v1.test.json"
+
+
 def test_runtime_selects_only_unified_adapters() -> None:
     assert market_runtime._selected_module("article").__name__ == "market_content_adapter"
     assert market_runtime._selected_module("official").__name__ == "market_content_adapter"
@@ -90,10 +94,15 @@ def test_unified_upsert_preserves_store_contract() -> None:
         assert first.delivery_status == "baseline"
         assert first.flow_result.decision.action == "baseline"
         with sqlite3.connect(db_path) as conn:
-            raw = json.loads(conn.execute("SELECT raw_json FROM events WHERE id = 1").fetchone()[0])
-        assert raw["_normalized_market_item"]["source_category"] == "news_media"
-        assert raw["_normalized_market_item"]["publisher_role"] == "news_media"
-        assert raw["_normalized_market_item"]["content_type"] == "flash"
+            row = conn.execute(
+                "SELECT source_category,publisher_role,content_type,raw_json FROM market_items WHERE id=1"
+            ).fetchone()
+            alias = conn.execute(
+                "SELECT item_kind,source,legacy_item_id FROM market_item_aliases WHERE market_item_id=1"
+            ).fetchone()
+        assert row[:3] == ("news_media", "news_media", "flash")
+        assert json.loads(row[3])["source_event_id"] == "runtime-contract-1"
+        assert alias == ("event", "sina_flash", "runtime-contract-1")
         second = market_runtime.process_market_item(
             normalized,
             event,
@@ -262,14 +271,22 @@ def test_sina_flash_empty_response_does_not_finish_expanded_scope_baseline() -> 
 
 
 def main() -> int:
-    test_runtime_selects_only_unified_adapters()
-    test_all_event_collectors_import_runtime_entrypoints()
-    test_ifind_batch_only_builds_notice_events()
-    test_unified_upsert_preserves_store_contract()
-    test_sina_flash_uses_news_media_flash_shape()
-    test_sina_flash_current_admission_reports_macro_and_fed_families()
-    test_sina_flash_reserves_all_discoveries_before_current_admission()
-    test_sina_flash_empty_response_does_not_finish_expanded_scope_baseline()
+    previous = os.environ.get("RULE_CORE_CONFIG")
+    os.environ["RULE_CORE_CONFIG"] = str(TEST_RULE_CONFIG)
+    try:
+        test_runtime_selects_only_unified_adapters()
+        test_all_event_collectors_import_runtime_entrypoints()
+        test_ifind_batch_only_builds_notice_events()
+        test_unified_upsert_preserves_store_contract()
+        test_sina_flash_uses_news_media_flash_shape()
+        test_sina_flash_current_admission_reports_macro_and_fed_families()
+        test_sina_flash_reserves_all_discoveries_before_current_admission()
+        test_sina_flash_empty_response_does_not_finish_expanded_scope_baseline()
+    finally:
+        if previous is None:
+            os.environ.pop("RULE_CORE_CONFIG", None)
+        else:
+            os.environ["RULE_CORE_CONFIG"] = previous
     print("event runtime checks passed")
     return 0
 

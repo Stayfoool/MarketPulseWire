@@ -19,7 +19,6 @@ from market_review_store import (
     official_review_exists,
     save_article_review,
     save_official_review,
-    upsert_event_record,
 )
 from market_store import complete_market_review, record_production_admission
 
@@ -32,20 +31,19 @@ def insert_event(
     source: str = "sina_flash",
     summary: str = "测试摘要。",
     published_at: str = "2026-07-12T12:00:00+00:00",
-) -> int:
-    event_id, _ = upsert_event_record(
-        {
-            "source": source,
-            "source_event_id": source_event_id,
-            "event_type": "flash_news",
-            "title": title,
-            "summary": summary,
-            "published_at": published_at,
-            "raw": {"source_event_id": source_event_id},
-        },
-        db_path,
+) -> NormalizedMarketItem:
+    del db_path
+    return NormalizedMarketItem(
+        source=source,
+        source_category="news_media",
+        publisher_role="news_media",
+        collector="test",
+        content_type="flash_news",
+        title=title,
+        summary=summary,
+        published_at=published_at,
+        raw={"source_event_id": source_event_id},
     )
-    return event_id
 
 
 def decision_analysis(action: str = "push", *, rule_hits: list[dict] | None = None) -> dict:
@@ -179,7 +177,7 @@ def test_event_delivery_records_unified_item_and_result_directly() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
-        event_id = insert_event(db_path, "linked-event")
+        event_item = insert_event(db_path, "linked-event")
         normalized = NormalizedMarketItem(
             source="sina_flash",
             source_category="news_media",
@@ -208,7 +206,7 @@ def test_event_delivery_records_unified_item_and_result_directly() -> None:
             db_path=db_path,
         )
         assert market_delivery.deliver_event(
-            event_id,
+            event_item,
             decision_analysis("archive"),
             decision=decision,
             market_item_id=market_item_id,
@@ -219,7 +217,7 @@ def test_event_delivery_records_unified_item_and_result_directly() -> None:
             row = conn.execute(
                 "SELECT event_id,market_item_id,market_review_id,status,decision_action FROM deliveries"
             ).fetchone()
-        assert row == (event_id, market_item_id, market_review_id, "skipped", "archive")
+        assert row == (None, market_item_id, market_review_id, "skipped", "archive")
 
 
 def test_send_failure_releases_reservation_and_records_failure() -> None:
@@ -293,7 +291,7 @@ def test_success_confirms_rule_dedup_and_duplicate_skips_second_send() -> None:
             os.environ["FEISHU_WEBHOOK"] = original_webhook
 
 
-def test_content_delivery_uses_decision_action_and_marks_legacy_rows() -> None:
+def test_content_delivery_uses_decision_action_without_updating_legacy_rows() -> None:
     original_send = market_delivery.send_card
     try:
         market_delivery.send_card = lambda card: True
@@ -344,8 +342,8 @@ def test_content_delivery_uses_decision_action_and_marks_legacy_rows() -> None:
             with sqlite3.connect(db_path) as conn:
                 stored_article = article_review_exists(conn, "cls_telegraph_api", "article-1")
                 stored_official = official_review_exists(conn, "nvidia_blog", "official-1")
-        assert stored_article is not None and stored_article["pushed_at"]
-        assert stored_official is not None and stored_official["pushed_at"]
+        assert stored_article is not None and not stored_article["pushed_at"]
+        assert stored_official is not None and not stored_official["pushed_at"]
     finally:
         market_delivery.send_card = original_send
 
@@ -395,7 +393,7 @@ def test_feedback_enabled_event_uses_application_card_actions() -> None:
                 os.environ[key] = value
 
 
-def test_feedback_enabled_article_and_official_store_card_base() -> None:
+def test_feedback_enabled_article_and_official_keep_card_base_in_result() -> None:
     keys = {
         "FEISHU_FEEDBACK_ENABLED": "1",
         "FEISHU_APP_ID": "cli_test",
@@ -418,9 +416,6 @@ def test_feedback_enabled_article_and_official_store_card_base() -> None:
             official_item = {"id": "feedback-official", "title": "反馈官网新闻", "summary": "正文"}
             article_review = content_review("push")
             official_review = content_review("push", official=True)
-            with sqlite3.connect(db_path) as conn:
-                save_article_review(conn, "cls_telegraph_api", article_item, article_review)
-                save_official_review(conn, "nvidia_blog", official_item, official_review)
             assert market_delivery.deliver_article_review(
                 "cls_telegraph_api", article_item, article_review,
                 decision=required_decision(article_review), db_path=db_path, use_rule_dedup=False,
@@ -429,15 +424,8 @@ def test_feedback_enabled_article_and_official_store_card_base() -> None:
                 "nvidia_blog", official_item, official_review,
                 decision=required_decision(official_review), analysis_lines=["核心内容：测试"], db_path=db_path,
             ) == "sent"
-            with sqlite3.connect(db_path) as conn:
-                article_gate = json.loads(conn.execute(
-                    "SELECT gate_json FROM article_reviews WHERE source='cls_telegraph_api' AND item_id='feedback-article'"
-                ).fetchone()[0])
-                official_analysis = json.loads(conn.execute(
-                    "SELECT analysis_json FROM official_news_reviews WHERE source='nvidia_blog' AND item_id='feedback-official'"
-                ).fetchone()[0])
-        assert article_gate["raw"]["_feedback_card_base"]["header"]["title"]["content"]
-        assert official_analysis["_feedback_card_base"]["header"]["title"]["content"]
+        assert article_review["raw"]["_feedback_card_base"]["header"]["title"]["content"]
+        assert official_review["analysis"]["_feedback_card_base"]["header"]["title"]["content"]
     finally:
         market_delivery.send_interactive_card = original_send
         for key, value in original_env.items():
@@ -447,7 +435,7 @@ def test_feedback_enabled_article_and_official_store_card_base() -> None:
                 os.environ[key] = value
 
 
-def test_reloaded_article_review_still_uses_nested_decision_action() -> None:
+def test_article_review_uses_nested_decision_action() -> None:
     original_send = market_delivery.send_card
     calls: list[dict] = []
     try:
@@ -458,15 +446,11 @@ def test_reloaded_article_review_still_uses_nested_decision_action() -> None:
             item = {"id": "nested-archive", "title": "兼容字段冲突测试"}
             review = content_review("archive")
             assert review["push_now"] is True
-            with sqlite3.connect(db_path) as conn:
-                save_article_review(conn, "value_directory_ib_stocks", item, review)
-                loaded = article_review_exists(conn, "value_directory_ib_stocks", "nested-archive")
-            assert loaded is not None and loaded["push_now"] is True
             status = market_delivery.deliver_article_review(
                 "value_directory_ib_stocks",
                 item,
-                loaded,
-                decision=required_decision(loaded),
+                review,
+                decision=required_decision(review),
                 db_path=db_path,
                 use_rule_dedup=False,
             )
@@ -515,11 +499,9 @@ def test_article_delivery_dedup_skips_without_changing_decision_action() -> None
                 )
                 == "duplicate"
             )
-            with sqlite3.connect(db_path) as conn:
-                stored = article_review_exists(conn, "jin10_rsshub_important", "article-dedup-2")
         assert len(calls) == 1
-        assert stored is not None and stored["push_now"] is False
-        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
+        assert review["push_now"] is False
+        assert review["raw"]["decision_result"]["action"] == "push"
     finally:
         market_delivery.send_card = original_send
 
@@ -558,13 +540,10 @@ def test_investment_bank_report_cross_source_article_dedup_preserves_push_decisi
                 "source_b", second_item, second_review,
                 decision=required_decision(second_review), db_path=db_path,
             )
-            with sqlite3.connect(db_path) as conn:
-                stored = article_review_exists(conn, "source_b", "nomura-report-2")
         assert [first_status, second_status] == ["sent", "duplicate"]
         assert len(calls) == 1
-        assert stored is not None
-        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
-        assert stored["raw"]["raw"]["rule_alert_dedup"]["rule_id"] == "investment_bank_report_dedup"
+        assert second_review["raw"]["decision_result"]["action"] == "push"
+        assert second_review["raw"]["rule_alert_dedup"]["rule_id"] == "investment_bank_report_dedup"
     finally:
         market_delivery.send_card = original_send
         market_delivery.investment_bank_report_dedup_hit = original_extractor
@@ -632,12 +611,12 @@ def test_investment_bank_report_send_failure_releases_reservation() -> None:
             market_delivery.send_card = lambda card: False
             assert market_delivery.deliver_article_review(
                 "source_a", failed_item, review,
-                decision=required_decision(review), db_path=db_path, update_compatibility=False,
+                decision=required_decision(review), db_path=db_path,
             ) == "skipped"
             market_delivery.send_card = lambda card: True
             assert market_delivery.deliver_article_review(
                 "source_b", retry_item, review,
-                decision=required_decision(review), db_path=db_path, update_compatibility=False,
+                decision=required_decision(review), db_path=db_path,
             ) == "sent"
             with sqlite3.connect(db_path) as conn:
                 status = conn.execute(
@@ -686,12 +665,9 @@ def test_intraday_market_move_cross_source_dedup_preserves_push_decision() -> No
                 )
                 == "duplicate"
             )
-            with sqlite3.connect(db_path) as conn:
-                stored = article_review_exists(conn, "jin10_rsshub_important", "jin10-cpo-1")
         assert len(calls) == 1
-        assert stored is not None
-        assert stored["raw"]["raw"]["rule_alert_dedup"]["rule_id"] == "intraday_market_move"
-        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
+        assert review["raw"]["rule_alert_dedup"]["rule_id"] == "intraday_market_move"
+        assert review["raw"]["decision_result"]["action"] == "push"
     finally:
         market_delivery.send_card = original_send
 
@@ -860,14 +836,13 @@ def test_macro_release_and_reaction_each_send_once_while_warsh_speech_is_retaine
                 for source, item in zip(sources, items, strict=True)
             ]
             with sqlite3.connect(db_path) as conn:
-                stored = article_review_exists(conn, "yicai_brief", "cpi-release-2")
                 dedup_rows = conn.execute(
                     "SELECT rule_id, status FROM rule_alert_dedup ORDER BY created_at"
                 ).fetchall()
         assert statuses == ["sent", "duplicate", "sent", "duplicate", "sent", "sent"]
         assert len(calls) == 4
-        assert stored is not None and stored["push_now"] is False
-        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
+        assert review["push_now"] is False
+        assert review["raw"]["decision_result"]["action"] == "push"
         assert dedup_rows == [("macro_data_release", "sent"), ("macro_market_reaction", "sent")]
     finally:
         market_delivery.send_card = original_send
@@ -901,13 +876,10 @@ def test_cross_asset_fed_policy_reactions_deliver_once() -> None:
                 )
                 for source, item in (("cls_telegraph_api", gold), ("wallstreetcn_news", bitcoin))
             ]
-            with sqlite3.connect(db_path) as conn:
-                stored = article_review_exists(conn, "wallstreetcn_news", "fed-bitcoin-reaction-1")
         assert statuses == ["sent", "duplicate"]
         assert len(calls) == 1
-        assert stored is not None
-        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
-        assert stored["raw"]["raw"]["rule_alert_dedup"]["rule_id"] == "fed_policy_market_reaction"
+        assert review["raw"]["decision_result"]["action"] == "push"
+        assert review["raw"]["rule_alert_dedup"]["rule_id"] == "fed_policy_market_reaction"
     finally:
         market_delivery.send_card = original_send
 
@@ -951,13 +923,11 @@ def test_company_event_cross_rule_article_dedup_preserves_push_decision() -> Non
                     db_path=db_path,
                 ),
             ]
-            with sqlite3.connect(db_path) as conn:
-                stored = article_review_exists(conn, "wallstreetcn_news", "shijia-placement-2")
         assert statuses == ["sent", "duplicate"]
         assert len(calls) == 1
-        assert stored is not None and stored["push_now"] is False
-        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
-        assert stored["raw"]["raw"]["rule_alert_dedup"]["rule_id"] == "company_event_dedup"
+        assert second_review["push_now"] is False
+        assert second_review["raw"]["decision_result"]["action"] == "push"
+        assert second_review["raw"]["rule_alert_dedup"]["rule_id"] == "company_event_dedup"
     finally:
         market_delivery.send_card = original_send
 
@@ -1030,16 +1000,15 @@ def test_multi_company_event_fact_set_is_order_independent() -> None:
                     "SELECT dedup_key, status FROM rule_alert_dedup WHERE rule_id=? ORDER BY dedup_key",
                     ("company_event_dedup",),
                 ).fetchall()
-                stored = article_review_exists(conn, "yicai_brief", "storage-roundup-2")
         assert [first_status, second_status] == ["sent", "duplicate"]
         assert len(calls) == 1
         assert len(reservations) == 2
         assert {row[1] for row in reservations} == {"sent"}
-        assert stored is not None and stored["push_now"] is False
-        dedup = stored["raw"]["raw"]["rule_alert_dedup"]
+        assert review["push_now"] is False
+        dedup = review["raw"]["rule_alert_dedup"]
         assert len(dedup["dedup_keys"]) == 2
         assert len(dedup["covered"]) == 2
-        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
+        assert review["raw"]["decision_result"]["action"] == "push"
     finally:
         market_delivery.send_card = original_send
 
@@ -1120,13 +1089,11 @@ def test_official_company_event_dedup_uses_the_same_fact_set() -> None:
                 analysis_lines=["核心内容：业绩预告"],
                 db_path=db_path,
             )
-            with sqlite3.connect(db_path) as conn:
-                stored = official_review_exists(conn, "company_site_b", "official-earnings-2")
         assert [first_status, second_status] == ["sent", "duplicate"]
         assert len(calls) == 1
-        assert stored is not None and stored["should_push_now"] is False
-        assert stored["analysis"]["_decision_result"]["action"] == "push"
-        assert stored["analysis"]["rule_alert_dedup"]["rule_id"] == "company_event_dedup"
+        assert review["should_push_now"] is False
+        assert review["analysis"]["_decision_result"]["action"] == "push"
+        assert review["analysis"]["rule_alert_dedup"]["rule_id"] == "company_event_dedup"
     finally:
         market_delivery.send_card = original_send
 
@@ -1248,13 +1215,11 @@ def test_ibm_industry_fact_cross_source_article_dedup_preserves_push_decision() 
             second_status = market_delivery.deliver_article_review(
                 "wallstreetcn_news", second, review, decision=required_decision(review), db_path=db_path
             )
-            with sqlite3.connect(db_path) as conn:
-                stored = article_review_exists(conn, "wallstreetcn_news", "ibm-thesis-2")
         assert [first_status, second_status] == ["sent", "duplicate"]
         assert len(calls) == 1
-        assert stored is not None and stored["push_now"] is False
-        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
-        assert stored["raw"]["raw"]["rule_alert_dedup"]["rule_id"] == "industry_fact_dedup"
+        assert review["push_now"] is False
+        assert review["raw"]["decision_result"]["action"] == "push"
+        assert review["raw"]["rule_alert_dedup"]["rule_id"] == "industry_fact_dedup"
     finally:
         market_delivery.send_card = original_send
 
@@ -1332,13 +1297,11 @@ def test_coreweave_hedge_cross_source_article_dedup_preserves_push_decision() ->
             second_status = market_delivery.deliver_article_review(
                 "jin10_rsshub_important", second, review, decision=required_decision(review), db_path=db_path
             )
-            with sqlite3.connect(db_path) as conn:
-                stored = article_review_exists(conn, "jin10_rsshub_important", "coreweave-hedge-2")
         assert [first_status, second_status] == ["sent", "duplicate"]
         assert len(calls) == 1
-        assert stored is not None and stored["push_now"] is False
-        assert stored["raw"]["raw"]["decision_result"]["action"] == "push"
-        assert stored["raw"]["raw"]["rule_alert_dedup"]["dedup_key"] == (
+        assert review["push_now"] is False
+        assert review["raw"]["decision_result"]["action"] == "push"
+        assert review["raw"]["rule_alert_dedup"]["dedup_key"] == (
             "industry_fact:coreweave:price_risk_hedge:exploring:storage_chip:down"
         )
     finally:
@@ -1351,8 +1314,8 @@ def main() -> int:
     test_event_delivery_records_unified_item_and_result_directly()
     test_send_failure_releases_reservation_and_records_failure()
     test_success_confirms_rule_dedup_and_duplicate_skips_second_send()
-    test_content_delivery_uses_decision_action_and_marks_legacy_rows()
-    test_reloaded_article_review_still_uses_nested_decision_action()
+    test_content_delivery_uses_decision_action_without_updating_legacy_rows()
+    test_article_review_uses_nested_decision_action()
     test_article_delivery_dedup_skips_without_changing_decision_action()
     test_investment_bank_report_cross_source_article_dedup_preserves_push_decision()
     test_investment_bank_report_official_and_event_paths_share_identity()
@@ -1374,7 +1337,7 @@ def main() -> int:
     test_event_delivery_records_ibm_industry_fact_duplicate()
     test_coreweave_hedge_cross_source_article_dedup_preserves_push_decision()
     test_feedback_enabled_event_uses_application_card_actions()
-    test_feedback_enabled_article_and_official_store_card_base()
+    test_feedback_enabled_article_and_official_keep_card_base_in_result()
     print("market delivery checks passed")
     return 0
 

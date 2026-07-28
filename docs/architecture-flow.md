@@ -117,10 +117,11 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `disclosure_providers.py` / `cninfo_disclosure_provider.py` | Provider-neutral disclosure contract and CNINFO public-query transport |
 | `disclosure_document.py` | Shared bounded PDF download, SHA-256 and `pypdf` text extraction |
 | `market_interpreter.py` | Decision-downstream generation and strict normalization of the single `core_content` field; it cannot generate reasons, risks, targets or action judgements |
-| `market_content_adapter.py` | Article and official-news compatibility payload/store shape |
-| `market_event_adapter.py` | Event compatibility payload/store shape |
-| `market_review_store.py` | SQLite review/event persistence and historical row loading |
-| `market_delivery.py` | Rule/fact dedup reservation, DecisionResult-based Feishu push-basis projection and execution, delivery status, pushed markers |
+| `market_content_adapter.py` | Article and official-news payload projection for cards and unified storage |
+| `market_event_adapter.py` | Event payload projection for cards and unified storage |
+| `market_store.py` | Current `market_items`, `market_reviews`, aliases and linked delivery persistence |
+| `market_review_store.py` | Historical result-table helpers plus shared portfolio/delivery helpers pending the separate old-schema removal |
+| `market_delivery.py` | Rule/fact dedup reservation and DecisionResult-based Feishu push execution; it does not write old result tables |
 | `market_feedback.py` | Cross-source append-only human feedback, signed item identity, last-click-wins projection and quality aggregates |
 | `llm_decision_web.py` | Read-only Web projection of current SQLite `DecisionResult` plus bounded private-audit attempt summaries; it cannot create, change or restore an action |
 | `feishu_app.py` / `feishu_feedback_service.py` | Feedback-enabled application-bot send and official long-connection card callbacks |
@@ -139,15 +140,15 @@ The former direct/compat route switch and these wrapper modules have been remove
 
 | Source group | Production entry | Item processing |
 |---|---|---|
-| Research and industry media | `research_collector.py` -> `rss_monitor.py` / `trendforce_page_monitor.py` / `alphabstract_monitor.py` | Unified runtime, article store |
-| Official company feeds | `official_collector.py` -> `rss_monitor.py` | Unified runtime, official-news store |
-| Domestic and overseas news media | `news_collector.py` -> `china_finance_media_monitor.py` / `wallstreetcn_monitor.py` / RSS helpers | Sina, Yicai, CLS, Jin10 and WallstreetCN public article/flash discovery; unified runtime, article store |
-| Official trade policy | `news_collector.py` -> `trade_policy_monitor.py` | Federal Register, USTR, European Commission and MOFCOM public sources; reserve `seen_items` before optional detail enrichment, then unified runtime and article store |
-| Sina 7x24 flash | `sina_flash.py` | Reserve every discovered flash in `seen_items`; five-group-admitted flashes continue through the unified runtime into the event store |
-| Sina portfolio stock news | `sina_stock_news.py` | Relevance enrichment, then unified runtime and event store. Rediscovery skips succeeded reviews but re-enters the same `failed_retryable` review with the complete stored event content; one repeated failure does not abort the remaining holdings batch |
+| Research and industry media | `research_collector.py` -> `rss_monitor.py` / `trendforce_page_monitor.py` / `alphabstract_monitor.py` | Unified runtime and unified storage with an `article` alias |
+| Official company feeds | `official_collector.py` -> `rss_monitor.py` | Unified runtime and unified storage with an `official` alias |
+| Domestic and overseas news media | `news_collector.py` -> `china_finance_media_monitor.py` / `wallstreetcn_monitor.py` / RSS helpers | Sina, Yicai, CLS, Jin10 and WallstreetCN public article/flash discovery; unified runtime and unified storage with an `article` alias |
+| Official trade policy | `news_collector.py` -> `trade_policy_monitor.py` | Federal Register, USTR, European Commission and MOFCOM public sources; reserve `seen_items` before optional detail enrichment, then unified runtime and storage |
+| Sina 7x24 flash | `sina_flash.py` | Reserve every discovered flash in `seen_items`; five-group-admitted flashes continue through the unified runtime with an `event` alias |
+| Sina portfolio stock news | `sina_stock_news.py` | Relevance enrichment, then unified runtime with an `event` alias. Rediscovery skips succeeded reviews but re-enters the same `failed_retryable` review with the complete `market_items` content; one repeated failure does not abort the remaining holdings batch |
 | Company disclosures | `company_disclosures.py` -> `cninfo_disclosure_provider.py` | Twice daily CNINFO fulltext/relation discovery and official-PDF enrichment; report-only writes baseline event audits, while live mode enables analysis and delivery |
-| AlphaAbstract research summaries | `alphabstract_monitor.py` through `research_collector.py` | Public sitemap discovery reserves `seen_items` identity before public-summary page enrichment, then unified runtime and article store |
-| ValueList research directory | `value_directory_monitor.py` | At 05:00 and 21:00 Beijing time, one private-browser session collects all enabled lists and only the previews needed for new, retryable or explicitly rechecked entries, then closes before OCR and unified runtime/article-store processing |
+| AlphaAbstract research summaries | `alphabstract_monitor.py` through `research_collector.py` | Public sitemap discovery reserves `seen_items` identity before public-summary page enrichment, then unified runtime and storage |
+| ValueList research directory | `value_directory_monitor.py` | At 05:00 and 21:00 Beijing time, one private-browser session collects all enabled lists and only the previews needed for new, retryable or explicitly rechecked entries, then closes before OCR and unified runtime/storage processing |
 
 Source-specific login, WAF, API, sitemap discovery, polling, browser profile, OCR and attachment behavior ends before the normalized runtime boundary.
 
@@ -185,11 +186,11 @@ admission audit. The first non-empty response after this ordering change is an
 expanded-scope baseline and creates no event or delivery. Later rows are
 normalized from the provider's complete flash text. The five production
 range-admission groups are evaluated there: excluded rows remain in `seen_items`,
-while admitted rows proceed to `events` / `event_analyses`. Existing
-Sina 7x24 events are projected into `seen_items` as historical identities, and an
-admitted row stores its resulting event id. Event Center suppresses the matching
-`seen_items` projection whenever the event exists, so one flash is displayed
-once. A retry can complete an existing event that has no analysis.
+while admitted rows proceed to `market_items` / `market_reviews` with an `event`
+alias in `market_item_aliases`. Existing historical Sina 7x24 event identities
+remain available through their migrated aliases. Event Center suppresses the
+matching `seen_items` projection whenever the unified event item exists, so one
+flash is displayed once. A retry completes the same current unified review.
 
 Synchronous HTTP connection pools are isolated per worker thread. A source retry or timeout-key change may close only that thread's client; concurrent collectors cannot close another thread's in-flight TLS connection or leave a stale network writer targeting a reused SQLite file descriptor.
 
@@ -271,8 +272,8 @@ New production items also use the canonical storage contract:
   compatibility payload needed to reproduce existing Web, digest, feedback and
   signal views; private production LLM requests/responses remain outside
   SQLite.
-- `market_item_aliases` maps the unified item identity to the existing
-  `article`, `official` and numeric `event` identities. Feishu feedback tokens,
+- `market_item_aliases` maps the unified item identity to stable
+  `article`, `official` and `event` source identities. Feishu feedback tokens,
   signal source ids and Web links therefore remain valid during the storage
   transition.
 - `deliveries` remains an execution audit, independent from decision
@@ -289,14 +290,13 @@ importance and delivery history cannot create an action. Missing body text,
 admission evidence and decisions remain missing and are labelled
 `legacy_unclassified`.
 
-After the second migration marker exists, Web Event Center, article/official
-daily output, feedback lookup/quality metrics and signal extraction read the
-unified tables through `market_canonical_reader.py`. When an event has multiple
-current task results, display and signal readers use the latest result while all
-versions remain stored. Existing external ids are resolved through
-`market_item_aliases`; historical deliveries without a provable originating
-review link only to the item. Legacy writes and tables remain enabled for
-rollback in this stage, but readers do not use them as decision authority.
+Web Event Center, article/official daily output, feedback lookup/quality metrics
+and signal extraction read the unified tables through
+`market_canonical_reader.py`. When an item has multiple current task results,
+display and signal readers use the latest result while all versions remain
+stored. Existing external ids are resolved through `market_item_aliases`;
+historical deliveries without a provable originating review link only to the
+item. New production processing does not read or write the old result tables.
 
 The investment-signal review group is installed but disabled by default. Its
 four internal steps remain separate for diagnosis: signal extraction derives
@@ -318,26 +318,18 @@ result without consulting `article_reviews`, `official_news_reviews` or
 reprocess creates a new current result version. A retryable result is reused
 only when its stored `AdmissionResult` exactly matches the current one; changed
 admission evidence or configuration creates a new current result and preserves
-the prior version for audit. Decision and interpretation are first written to
-`market_reviews`, then the corresponding legacy result row and alias are
-generated from that exact payload in the same SQLite transaction. A legacy
-copy failure therefore rolls back the unified completion rather than leaving
-two completed results. The compatibility reference belongs to the current
-result version. When a new current version rewrites the same compatibility
-row, the same transaction clears the reference from the prior non-current
-version and assigns it to the new version, while preserving the prior decision,
-interpretation and bounded compatibility payload. A reference owned by another
-item, task or current version fails closed and rolls back the compatibility copy
-and unified completion. `deliveries` determines whether the item was already sent and event
-delivery records the unified item/result links at insertion; legacy `pushed_at`
-is only a compatibility projection. After the migration marker, feedback
-lookup and Web overview counts also fail closed on or read the unified records
-instead of recovering eligibility or counts from legacy rows.
-`market_storage_audit.py` compares new unified and compatibility records by
-time range without printing article bodies or private model payloads. It also
-fails when a current result is stuck on the compatibility-reference unique
-constraint; ordinary retryable processing failures remain counts rather than
-storage differences.
+the prior version for audit. Decision and interpretation are written only to
+`market_reviews`; external article/official/event identities are written to
+`market_item_aliases` with `legacy_store_kind=market_items`. `deliveries`
+determines whether the item was already sent and records the unified item/result
+links at insertion. Feedback, Web overview, daily output, collector
+reviewed-state checks and operational tools do not recover processing or
+delivery state from old rows.
+
+`market_storage_migration.py` and `market_storage_audit.py` remain available
+only for the completed historical migration and its records during this stage.
+They are not called by normal production processing. Removing those tools,
+old-table schema and historical tables is a separately approved change.
 
 The project keeps the existing physical stores:
 
@@ -350,13 +342,14 @@ The project keeps the existing physical stores:
 - `source_health`, `x_stream_health`
 - portfolio, relation, evidence and signal tables
 
-`article`, `official` and `event` are compatibility storage/audit identities,
-not decision-pipeline identities. All three arrive through the unified runtime
-above. `article_reviews`, `official_news_reviews`, and `events` /
-`event_analyses` remain compatibility writes for rollback after the unified
-read switch. They are derived copies, not processed-item, current-result or
-delivery-state inputs. Removing those writes or tables requires a separate
-production observation period, explicit approval and another migration.
+`article`, `official` and `event` are external display/feedback identities, not
+separate storage or decision paths. All three arrive through the unified runtime
+above and resolve through `market_item_aliases`. `article_reviews`,
+`official_news_reviews`, `events` and `event_analyses` remain physically present
+with historical data but receive no new production reads or writes. Supported
+rollback begins with a revision that already uses unified storage; old-table
+completeness is not rebuilt. Removing the retained schema, migration/audit code
+and physical tables requires a separate approved PR and production backup.
 
 `seen_items` keeps discovery identity as its primary responsibility. Additive
 compatibility columns record `collection_class`, processability, admission and

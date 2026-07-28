@@ -27,7 +27,6 @@ from market_feedback import (
     parse_feedback_token,
 )
 from market_db import init_db
-from market_review_store import ensure_article_reviews_table
 
 
 TEST_SIGNING_KEY = "feedback-test-key"
@@ -44,33 +43,67 @@ def insert_delivered_article(db_path: Path) -> None:
         "audit_json": {"decision_version": "test-v1"},
     }
     with sqlite3.connect(db_path) as conn:
-        ensure_article_reviews_table(conn)
+        item_id = int(conn.execute(
+            """
+            INSERT INTO market_items (
+                source,source_item_id,dedupe_key,source_category,publisher_role,
+                collector,content_type,title,summary,full_text,url,published_at,
+                first_seen_at,symbols_json,themes_json,raw_json,access_note,
+                content_hash,collection_class,processability_status,
+                processability_reason,processing_status,processing_error,
+                created_at,updated_at
+            ) VALUES ('cls_telegraph_api','item-1','cls_telegraph_api:item-1','','',
+                      'test','article','Feedback fixture','','','','',?,
+                      '[]','[]','{}','','fixture-hash','live','succeeded','',
+                      'succeeded','',?,?)
+            """,
+            ("2026-07-15T00:00:00+00:00",) * 3,
+        ).lastrowid)
         conn.execute(
             """
-            INSERT INTO article_reviews (
-                source, item_id, url, title, source_module, published_at,
-                importance, push_now, market_impact, incremental_classification,
-                affected_targets_json, reason, daily_summary, confidence,
-                gate_json, skeptic_json, pre_skeptic_importance, pushed_at, created_at
-            ) VALUES (?, ?, '', 'Feedback fixture', '', '', 'high', 1, '', '', '[]', '', '', '', ?, '{}', '', ?, ?)
+            INSERT INTO market_item_aliases (
+                market_item_id,item_kind,source,legacy_item_id,legacy_store_kind,created_at
+            ) VALUES (?, 'article', 'cls_telegraph_api', 'item-1', 'market_items', ?)
+            """,
+            (item_id, "2026-07-15T00:00:00+00:00"),
+        )
+        legacy_payload = {
+            "raw": {
+                "decision_result": decision,
+                "_feedback_card_base": {
+                    "header": {"title": {"tag": "plain_text", "content": "Feedback fixture"}},
+                    "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": "fixture"}}],
+                },
+            }
+        }
+        review_id = int(conn.execute(
+            """
+            INSERT INTO market_reviews (
+                market_item_id,task,run_key,is_current,review_status,
+                admission_status,admission_reason,admission_matched_families_json,
+                admission_evidence_json,admission_json,decision_action,importance,
+                decision_json,interpretation_json,legacy_payload_json,
+                application_revision,created_at,completed_at
+            ) VALUES (?, 'production', 'feedback-fixture', 1, 'succeeded', 'admitted',
+                      'test', '[]', '[]', '{}', 'push', 'high', ?, '{}', ?,
+                      'test-revision', ?, ?)
             """,
             (
-                "cls_telegraph_api",
-                "item-1",
-                json.dumps(
-                    {
-                        "raw": {
-                            "decision_result": decision,
-                            "_feedback_card_base": {
-                                "header": {"title": {"tag": "plain_text", "content": "Feedback fixture"}},
-                                "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": "fixture"}}],
-                            },
-                        }
-                    }
-                ),
+                item_id,
+                json.dumps(decision),
+                json.dumps(legacy_payload),
                 "2026-07-15T00:00:00+00:00",
                 "2026-07-15T00:00:00+00:00",
             ),
+        ).lastrowid)
+        conn.execute(
+            """
+            INSERT INTO deliveries (
+                event_id,market_item_id,market_review_id,channel,status,
+                decision_action,attempted_at,sent_at,payload_json
+            ) VALUES (NULL, ?, ?, 'feishu', 'sent', 'push', ?, ?, '{}')
+            """,
+            (item_id, review_id, "2026-07-15T00:00:00+00:00", "2026-07-15T00:00:00+00:00"),
         )
         conn.commit()
 
@@ -429,15 +462,15 @@ def test_more_reason_is_stored_with_invalid_feedback() -> None:
         assert stored == ("invalid", '["stale"]')
 
 
-def test_legacy_card_without_snapshot_keeps_toast_only() -> None:
+def test_unified_review_without_card_snapshot_keeps_toast_only() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "feedback.sqlite3"
         insert_delivered_article(db_path)
         with sqlite3.connect(db_path) as conn:
-            row = conn.execute("SELECT gate_json FROM article_reviews").fetchone()
+            row = conn.execute("SELECT legacy_payload_json FROM market_reviews").fetchone()
             payload = json.loads(row[0])
             payload["raw"].pop("_feedback_card_base")
-            conn.execute("UPDATE article_reviews SET gate_json = ?", (json.dumps(payload),))
+            conn.execute("UPDATE market_reviews SET legacy_payload_json = ?", (json.dumps(payload),))
             conn.commit()
         identity = FeedbackIdentity("article", "cls_telegraph_api", "item-1")
         assert feedback_card_for_callback(identity, "duplicate", secret=TEST_SIGNING_KEY, db_path=db_path) is None
@@ -520,7 +553,7 @@ def main() -> None:
     test_listener_only_mode_keeps_natural_feedback_delivery_disabled()
     test_test_card_feedback_is_audited_but_excluded_from_quality_metrics()
     test_more_reason_is_stored_with_invalid_feedback()
-    test_legacy_card_without_snapshot_keeps_toast_only()
+    test_unified_review_without_card_snapshot_keeps_toast_only()
     test_callback_response_replaces_card_when_snapshot_is_available()
     test_callback_response_keeps_successful_feedback_toast_when_card_projection_fails()
     test_overflow_callback_value_is_parsed()

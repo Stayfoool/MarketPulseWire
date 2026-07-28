@@ -6,9 +6,7 @@ import hashlib
 import json
 import os
 import sqlite3
-import sys
 import uuid
-from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -342,6 +340,29 @@ def market_review_snapshot(
     }
 
 
+def source_item_review_snapshot(
+    source: str,
+    item_id: str,
+    *,
+    task: str = "production",
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict[str, Any] | None:
+    """Return the current unified review for one collector identity."""
+    with connect_sqlite(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT r.id
+            FROM market_items m
+            JOIN market_reviews r
+              ON r.market_item_id=m.id AND r.task=? AND r.is_current=1
+            WHERE m.source=? AND m.source_item_id=?
+            LIMIT 1
+            """,
+            (task, source, item_id),
+        ).fetchone()
+    return market_review_snapshot(int(row[0]), db_path=db_path) if row else None
+
+
 def record_baseline_item(
     item: NormalizedMarketItem,
     *,
@@ -403,63 +424,14 @@ def _complete_market_review_in_conn(
     return int(row[0])
 
 
-CompatibilityWriter = Callable[[sqlite3.Connection], tuple[str, str] | None]
-
-
-def _assign_compatibility_reference(
-    conn: sqlite3.Connection,
-    market_review_id: int,
-    compatibility_ref: tuple[str, str],
-) -> None:
-    store_kind, store_id = (str(value or "").strip() for value in compatibility_ref)
-    if not store_kind or not store_id:
-        raise ValueError("compatibility reference requires store kind and store id")
-    target = conn.execute(
-        "SELECT market_item_id,task,is_current FROM market_reviews WHERE id=?",
-        (market_review_id,),
-    ).fetchone()
-    if not target:
-        raise RuntimeError(f"market review does not exist: {market_review_id}")
-    owner = conn.execute(
-        """
-        SELECT id,market_item_id,task,is_current
-        FROM market_reviews
-        WHERE legacy_store_kind=? AND legacy_store_id=?
-        """,
-        (store_kind, store_id),
-    ).fetchone()
-    if owner and int(owner[0]) != market_review_id:
-        same_item_and_task = int(owner[1]) == int(target[0]) and str(owner[2]) == str(target[1])
-        if not same_item_and_task or int(owner[3]) != 0 or int(target[2]) != 1:
-            raise RuntimeError(
-                "compatibility reference is owned by another current result, item, or task"
-            )
-        conn.execute(
-            "UPDATE market_reviews SET legacy_store_kind=NULL,legacy_store_id=NULL WHERE id=?",
-            (int(owner[0]),),
-        )
-    conn.execute(
-        "UPDATE market_reviews SET legacy_store_kind=?,legacy_store_id=? WHERE id=?",
-        (store_kind, store_id, market_review_id),
-    )
-
-
 def complete_market_review(
     market_review_id: int,
     flow_result: MarketFlowResult,
     *,
     db_path: Path = DEFAULT_DB_PATH,
-    legacy_store_kind: str | None = None,
-    legacy_store_id: str | None = None,
     legacy_payload: dict[str, Any] | None = None,
-    compatibility_writer: CompatibilityWriter | None = None,
     alias: tuple[str, str, str, str] | None = None,
 ) -> None:
-    direct_ref = None
-    if legacy_store_kind is not None or legacy_store_id is not None:
-        if not legacy_store_kind or not legacy_store_id:
-            raise ValueError("legacy compatibility reference requires both kind and id")
-        direct_ref = (legacy_store_kind, legacy_store_id)
     with connect_sqlite(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -469,12 +441,6 @@ def complete_market_review(
                 flow_result,
                 legacy_payload=legacy_payload,
             )
-            writer_ref = compatibility_writer(conn) if compatibility_writer else None
-            if writer_ref and direct_ref and tuple(writer_ref) != direct_ref:
-                raise RuntimeError("compatibility writer returned a conflicting reference")
-            compatibility_ref = writer_ref or direct_ref
-            if compatibility_ref:
-                _assign_compatibility_reference(conn, market_review_id, compatibility_ref)
             if alias:
                 ensure_market_item_alias(
                     conn,
@@ -532,11 +498,7 @@ def record_article_delivery(
     decision_action: str,
     payload: dict[str, Any] | None = None,
     error: str = "",
-    compatibility_kind: str = "",
-    compatibility_source: str = "",
-    compatibility_item_id: str = "",
     legacy_payload: dict[str, Any] | None = None,
-    compatibility_writer: CompatibilityWriter | None = None,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> int:
     now = utc_now()
@@ -566,59 +528,7 @@ def record_article_delivery(
             )
         conn.commit()
         delivery_id = int(cur.lastrowid)
-    if compatibility_writer is None and not compatibility_kind:
-        return delivery_id
-    try:
-        with connect_sqlite(db_path) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            if compatibility_writer is not None:
-                compatibility_writer(conn)
-            if status == "sent" and compatibility_kind:
-                table = {
-                    "article": "article_reviews",
-                    "official": "official_news_reviews",
-                }.get(compatibility_kind)
-                if not table:
-                    raise ValueError(f"unsupported compatibility delivery kind: {compatibility_kind}")
-                conn.execute(
-                    f"UPDATE {table} SET pushed_at=? WHERE source=? AND item_id=?",
-                    (now, compatibility_source, compatibility_item_id),
-                )
-            conn.commit()
-    except BaseException as exc:
-        message = f"compatibility projection failed: {type(exc).__name__}: {str(exc)[:300]}"
-        with connect_sqlite(db_path) as conn:
-            conn.execute("UPDATE deliveries SET error=? WHERE id=?", (message, delivery_id))
-            conn.commit()
-        print(message, file=sys.stderr, flush=True)
     return delivery_id
-
-
-def link_latest_event_delivery(
-    event_id: int,
-    market_item_id: int,
-    market_review_id: int,
-    *,
-    decision_action: str,
-    db_path: Path = DEFAULT_DB_PATH,
-) -> None:
-    with connect_sqlite(db_path) as conn:
-        row = conn.execute(
-            "SELECT id FROM deliveries WHERE event_id = ? ORDER BY id DESC LIMIT 1",
-            (event_id,),
-        ).fetchone()
-        if not row:
-            return
-        conn.execute(
-            """
-            UPDATE deliveries
-            SET market_item_id = ?, market_review_id = ?, decision_action = ?,
-                attempted_at = COALESCE(NULLIF(attempted_at, ''), sent_at, ?)
-            WHERE id = ?
-            """,
-            (market_item_id, market_review_id, decision_action, utc_now(), int(row[0])),
-        )
-        conn.commit()
 
 
 def market_ids_for_review(market_review_id: int, *, db_path: Path = DEFAULT_DB_PATH) -> tuple[int, int]:

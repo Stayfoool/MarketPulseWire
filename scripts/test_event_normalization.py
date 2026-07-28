@@ -8,7 +8,9 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from market_event_adapter import event_with_normalized_market_item_audit, normalized_event_item, upsert_event
+from market_db import init_db
+from market_event_adapter import event_with_normalized_market_item_audit, normalized_event_item
+from market_store import upsert_market_item
 
 
 def test_sina_flash_event_audit_preserves_raw_and_context() -> None:
@@ -75,7 +77,7 @@ def test_sina_stock_news_event_audit_uses_portfolio_category() -> None:
     assert audit["symbols"] == ["300308.SZ"]
 
 
-def test_upsert_event_writes_ifind_audit_without_duplicating_full_text() -> None:
+def test_unified_item_stores_ifind_context_without_duplicating_full_text() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         event = {
@@ -91,32 +93,39 @@ def test_upsert_event_writes_ifind_audit_without_duplicating_full_text() -> None
             "themes": [],
             "raw": {"pdfURL": "<ifind_notice_url_redacted>", "_pdf_parse": {"status": "ok"}},
         }
-        conn = sqlite3.connect(db_path)
-        try:
-            event_id, inserted = upsert_event(event, db_path=db_path)
-            assert inserted is True
-            row = conn.execute("SELECT raw_json FROM events WHERE id = ?", (event_id,)).fetchone()
-        finally:
-            conn.close()
+        init_db(db_path).close()
+        item = normalized_event_item(event)
+        with sqlite3.connect(db_path) as conn:
+            item_id = upsert_market_item(conn, item, collection_class="baseline")
+            conn.commit()
+            row = conn.execute(
+                """
+                SELECT source_category,collector,content_type,symbols_json,dedupe_key,
+                       length(full_text),raw_json
+                FROM market_items WHERE id=?
+                """,
+                (item_id,),
+            ).fetchone()
 
-    raw = json.loads(row[0])
-    audit = raw["_normalized_market_item"]
+    raw = json.loads(row[6])
     assert raw["pdfURL"] == "<ifind_notice_url_redacted>"
     assert raw["_pdf_parse"] == {"status": "ok"}
-    assert audit["source_category"] == "company_disclosures"
-    assert audit["collector"] == "ifind_batch"
-    assert audit["content_type"] == "announcement"
-    assert audit["symbols"] == ["688017.SH"]
-    assert audit["dedupe_key"] == "ifind_notice:688017.SH:notice-1"
-    assert audit["full_text_chars"] == len(event["full_text"])
-    assert "full_text" not in audit
-    assert "raw" not in audit
+    assert raw["source_event_id"] == "688017.SH:notice-1"
+    assert row[:6] == (
+        "company_disclosures",
+        "ifind_batch",
+        "announcement",
+        '["688017.SH"]',
+        "ifind_notice:688017.SH:notice-1",
+        len(event["full_text"]),
+    )
+    assert "_normalized_market_item" not in raw
 
 
 def main() -> int:
     test_sina_flash_event_audit_preserves_raw_and_context()
     test_sina_stock_news_event_audit_uses_portfolio_category()
-    test_upsert_event_writes_ifind_audit_without_duplicating_full_text()
+    test_unified_item_stores_ifind_context_without_duplicating_full_text()
     print("event normalization checks passed")
     return 0
 

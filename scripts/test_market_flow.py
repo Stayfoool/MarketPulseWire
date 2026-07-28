@@ -552,7 +552,6 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
         def fake_deliver(*_args, **kwargs):
             calls["deliver"] += 1
             assert kwargs["already_sent"] is False
-            assert kwargs["update_compatibility"] is False
             return "sent"
 
         market_runtime.deliver_article_review = fake_deliver
@@ -592,14 +591,14 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
             )
             with sqlite3.connect(db_path) as conn:
                 assert conn.execute("SELECT COUNT(*) FROM market_reviews").fetchone()[0] == 1
-                assert conn.execute("SELECT COUNT(*) FROM article_reviews").fetchone()[0] == 1
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='article_reviews'"
+                ).fetchone()[0] == 0
                 assert conn.execute("SELECT COUNT(*) FROM market_item_aliases").fetchone()[0] == 1
                 delivery = conn.execute(
                     "SELECT market_item_id,market_review_id,status,decision_action FROM deliveries"
                 ).fetchone()
-                pushed_at = conn.execute("SELECT pushed_at FROM article_reviews").fetchone()[0]
             assert delivery == (item_id, review_id, "sent", "push")
-            assert pushed_at
             assert first.inserted is True
             assert second.inserted is False
             assert second.delivery_status == "existing"
@@ -611,7 +610,7 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
     assert calls == {"evaluate": 1, "deliver": 1}
 
 
-def test_production_event_runtime_completes_unified_result_before_legacy_analysis() -> None:
+def test_production_event_runtime_completes_only_unified_result() -> None:
     original_module = market_runtime._selected_module
     original_prepare = market_runtime.prepare_item_for_decision
     original_decider = market_runtime.decide_market_item_with_llm
@@ -619,13 +618,11 @@ def test_production_event_runtime_completes_unified_result_before_legacy_analysi
     decision = DecisionResult(action="daily", importance="medium", reason="公告跟踪")
 
     class FakeEventModule:
-        upsert_event = staticmethod(market_event_adapter.upsert_event)
         analysis_record_fields = staticmethod(market_event_adapter.analysis_record_fields)
 
         @staticmethod
         def analyze_event(*_args, **kwargs):
             calls["analyze"] += 1
-            assert kwargs["persist_legacy"] is False
             assert kwargs["decision"] is decision
             return {
                 "core_content": "公告跟踪",
@@ -678,9 +675,10 @@ def test_production_event_runtime_completes_unified_result_before_legacy_analysi
                 unified = conn.execute(
                     "SELECT review_status,decision_action,legacy_store_kind FROM market_reviews"
                 ).fetchone()
-                assert conn.execute("SELECT COUNT(*) FROM event_analyses").fetchone()[0] == 1
+                assert conn.execute("SELECT COUNT(*) FROM event_analyses").fetchone()[0] == 0
+                assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
                 assert conn.execute("SELECT COUNT(*) FROM market_item_aliases").fetchone()[0] == 1
-            assert unified == ("succeeded", "daily", "event_analyses")
+            assert unified == ("succeeded", "daily", None)
             assert first.inserted is True
             assert second.inserted is False
             assert second.delivery_status == "existing"
@@ -691,7 +689,7 @@ def test_production_event_runtime_completes_unified_result_before_legacy_analysi
     assert calls == {"analyze": 1}
 
 
-def test_production_official_runtime_uses_unified_result_and_compatibility_copy() -> None:
+def test_production_official_runtime_uses_only_unified_result() -> None:
     original_module = market_runtime._selected_module
     original_prepare = market_runtime.prepare_item_for_decision
     original_decider = market_runtime.decide_market_item_with_llm
@@ -744,11 +742,13 @@ def test_production_official_runtime_uses_unified_result_and_compatibility_copy(
                 unified = conn.execute(
                     "SELECT review_status,decision_action,legacy_store_kind FROM market_reviews"
                 ).fetchone()
-                assert conn.execute("SELECT COUNT(*) FROM official_news_reviews").fetchone()[0] == 1
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='official_news_reviews'"
+                ).fetchone()[0] == 0
                 alias = conn.execute(
                     "SELECT item_kind,source,legacy_item_id FROM market_item_aliases"
                 ).fetchone()
-            assert unified == ("succeeded", "archive", "official_news_reviews")
+            assert unified == ("succeeded", "archive", None)
             assert alias == ("official", "nvidia_blog", "official-1")
             assert outcome.inserted is True
     finally:
@@ -999,8 +999,8 @@ def main() -> int:
     test_supplied_source_interpretation_skips_second_llm_call()
     test_value_directory_enrichment_is_preserved_in_review_audit()
     test_production_content_runtime_uses_unified_result_for_existing_and_delivery()
-    test_production_event_runtime_completes_unified_result_before_legacy_analysis()
-    test_production_official_runtime_uses_unified_result_and_compatibility_copy()
+    test_production_event_runtime_completes_only_unified_result()
+    test_production_official_runtime_uses_only_unified_result()
     test_production_llm_failure_retries_same_review_without_delivery()
     test_production_uncertain_terminates_review_without_delivery()
     test_event_uncertain_preserves_terminal_status_through_processing_wrapper()

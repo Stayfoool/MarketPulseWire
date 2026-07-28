@@ -228,35 +228,6 @@ def set_seen_item_lifecycle(item_id: str, **values: Any) -> None:
         conn.commit()
 
 
-def backfill_existing_events_to_seen_items() -> int:
-    """Project legacy Sina-flash identities into the shared discovery ledger."""
-    now = utc_now()
-    with connect_sqlite(DEFAULT_DB_PATH) as conn:
-        conn.execute(
-            "INSERT OR IGNORE INTO seen_sources (source, first_seen_at) VALUES (?, ?)",
-            (SOURCE, now),
-        )
-        cursor = conn.execute(
-            """
-            INSERT OR IGNORE INTO seen_items (
-                source, item_id, url, title, summary, published_at, first_seen_at,
-                collection_class, processability_status, processability_reason,
-                admission_status, admission_reason, processing_status,
-                processing_error, processed_at, lifecycle_updated_at, result_event_id
-            )
-            SELECT e.source, e.source_event_id, COALESCE(e.url, ''), e.title,
-                   COALESCE(e.summary, ''), COALESCE(e.published_at, ''), e.first_seen_at,
-                   'legacy_unclassified', 'succeeded', '', 'admitted',
-                   'legacy_event_projection', 'not_applicable', '', e.first_seen_at, ?, e.id
-            FROM events e
-            WHERE e.source = ?
-            """,
-            (now, SOURCE),
-        )
-        conn.commit()
-        return max(0, int(cursor.rowcount or 0))
-
-
 def save_new_seen_items(items: list[dict[str, Any]], *, expanded_scope_baseline: bool) -> list[dict[str, Any]]:
     def operation() -> list[dict[str, Any]]:
         with connect_sqlite(DEFAULT_DB_PATH) as conn:
@@ -391,9 +362,6 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
     excluded_count = 0
     discovered = [{**event, "id": event["source_event_id"]} for event in events.values()]
     if not dry_run:
-        projected = backfill_existing_events_to_seen_items()
-        if projected and verbose:
-            print(f"Sina flash projected {projected} legacy event ids into seen_items.", flush=True)
         new_items = save_new_seen_items(
             discovered,
             expanded_scope_baseline=bool(baseline_only or expanded_scope_baseline),

@@ -19,11 +19,9 @@ from env_utils import load_env
 from http_utils import http_get
 from llm_analysis import call_chat_completion_with_prompts
 from market_db import DEFAULT_DB_PATH, init_db
-from market_event_adapter import event_mapping_from_row
 from market_flow import normalize_market_item, process_market_item
 from market_review_store import (
     event_content_hash as content_hash,
-    event_row_by_id,
     load_enabled_holdings,
 )
 from market_store import processing_failure_status
@@ -841,15 +839,6 @@ def legacy_source_event_id_for_item(item: dict[str, str], holding: dict[str, Any
     return f"{symbol}:{source_id}"
 
 
-def event_exists(source_event_id: str) -> bool:
-    with connect_sqlite(DEFAULT_DB_PATH) as conn:
-        row = conn.execute(
-            "SELECT 1 FROM events WHERE source = ? AND source_event_id = ? LIMIT 1",
-            (SOURCE, source_event_id),
-        ).fetchone()
-    return bool(row)
-
-
 def find_existing_article_event(item: dict[str, str], holding: dict[str, Any]) -> int | None:
     source_event_id = source_event_id_for_item(item, holding)
     legacy_event_id = legacy_source_event_id_for_item(item, holding)
@@ -857,7 +846,7 @@ def find_existing_article_event(item: dict[str, str], holding: dict[str, Any]) -
     title = item.get("title", "").strip()
     with connect_sqlite(DEFAULT_DB_PATH) as conn:
         row = conn.execute(
-            "SELECT id FROM events WHERE source = ? AND source_event_id IN (?, ?) LIMIT 1",
+            "SELECT id FROM market_items WHERE source = ? AND source_item_id IN (?, ?) LIMIT 1",
             (SOURCE, source_event_id, legacy_event_id),
         ).fetchone()
         if row:
@@ -865,7 +854,7 @@ def find_existing_article_event(item: dict[str, str], holding: dict[str, Any]) -
         if canonical_url:
             row = conn.execute(
                 """
-                SELECT id FROM events
+                SELECT id FROM market_items
                 WHERE source = ? AND url IN (?, ?)
                 ORDER BY id ASC LIMIT 1
                 """,
@@ -876,9 +865,9 @@ def find_existing_article_event(item: dict[str, str], holding: dict[str, Any]) -
         if title:
             rows = conn.execute(
                 """
-                SELECT id, title, published_at FROM events
+                SELECT id, title, published_at FROM market_items
                 WHERE source = ?
-                  AND event_type = 'stock_news'
+                  AND content_type = 'stock_news'
                   AND substr(published_at, 1, 10) >= date(?, '-2 day')
                   AND substr(published_at, 1, 10) <= date(?, '+1 day')
                 ORDER BY id ASC
@@ -895,23 +884,22 @@ def find_existing_article_event(item: dict[str, str], holding: dict[str, Any]) -
 
 
 def retryable_event_review(
-    event_id: int,
+    market_item_id: int,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> dict[str, Any] | None:
-    """Return the current failed unified review linked to one stored event."""
+    """Return the current failed unified review linked to one market item."""
     with connect_sqlite(db_path) as conn:
         row = conn.execute(
             """
             SELECT m.id,r.id,r.review_status,r.admission_json
-            FROM market_item_aliases a
-            JOIN market_items m ON m.id=a.market_item_id
+            FROM market_items m
             JOIN market_reviews r
               ON r.market_item_id=m.id AND r.task='production'
              AND r.is_current=1
-            WHERE a.item_kind='event' AND a.source=? AND a.legacy_item_id=?
+            WHERE m.id=? AND m.source=?
             ORDER BY r.id DESC LIMIT 1
             """,
-            (SOURCE, str(event_id)),
+            (market_item_id, SOURCE),
         ).fetchone()
     if not row or str(row[2] or "") != "failed_retryable":
         return None
@@ -926,15 +914,21 @@ def retryable_event_review(
     }
 
 
-def merge_holding_into_event(event_id: int, holding: dict[str, Any], *, item: dict[str, str], reason: str) -> None:
+def merge_holding_into_market_item(
+    market_item_id: int,
+    holding: dict[str, Any],
+    *,
+    item: dict[str, str],
+    reason: str,
+) -> None:
     symbol = str(holding.get("symbol") or "").upper()
     name = str(holding.get("name") or "")
     if not symbol:
         return
     with connect_sqlite(DEFAULT_DB_PATH) as conn:
         row = conn.execute(
-            "SELECT symbols_json, raw_json FROM events WHERE id = ?",
-            (event_id,),
+            "SELECT symbols_json, raw_json FROM market_items WHERE id = ?",
+            (market_item_id,),
         ).fetchone()
         if not row:
             return
@@ -973,14 +967,58 @@ def merge_holding_into_event(event_id: int, holding: dict[str, Any], *, item: di
             return
         raw["related_holdings"] = related
         conn.execute(
-            "UPDATE events SET symbols_json = ?, raw_json = ? WHERE id = ?",
+            "UPDATE market_items SET symbols_json = ?, raw_json = ?, updated_at = ? WHERE id = ?",
             (
                 json.dumps(symbols, ensure_ascii=False, sort_keys=True),
                 json.dumps(raw, ensure_ascii=False, sort_keys=True),
-                event_id,
+                utc_now(),
+                market_item_id,
             ),
         )
         conn.commit()
+
+
+def stored_market_event(
+    market_item_id: int,
+    db_path: Path = DEFAULT_DB_PATH,
+) -> dict[str, Any] | None:
+    with connect_sqlite(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT source,source_item_id,content_type,title,summary,full_text,url,
+                   published_at,first_seen_at,symbols_json,themes_json,raw_json
+            FROM market_items WHERE id=?
+            """,
+            (market_item_id,),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        symbols = json.loads(str(row[9] or "[]"))
+    except json.JSONDecodeError:
+        symbols = []
+    try:
+        themes = json.loads(str(row[10] or "[]"))
+    except json.JSONDecodeError:
+        themes = []
+    try:
+        raw = json.loads(str(row[11] or "{}"))
+    except json.JSONDecodeError:
+        raw = {}
+    return {
+        "source": str(row[0] or ""),
+        "source_event_id": str(row[1] or ""),
+        "event_type": str(row[2] or "event"),
+        "title": str(row[3] or ""),
+        "summary": str(row[4] or ""),
+        "full_text": str(row[5] or ""),
+        "url": str(row[6] or ""),
+        "published_at": str(row[7] or ""),
+        "first_seen_at": str(row[8] or ""),
+        "symbols": symbols if isinstance(symbols, list) else [],
+        "themes": themes if isinstance(themes, list) else [],
+        "raw": raw if isinstance(raw, dict) else {},
+    }
 
 
 def relevance_cache_key(item: dict[str, str], holding: dict[str, Any]) -> str:
@@ -1140,8 +1178,8 @@ def run_once(
                 continue
             matched_count += 1
             source_event_id = source_event_id_for_item(item, holding)
-            existing_event_id = None if dry_run else find_existing_article_event(item, holding)
-            known_event = existing_event_id is not None
+            existing_item_id = None if dry_run else find_existing_article_event(item, holding)
+            known_event = existing_item_id is not None
             article_text = item.get("content", "")
             freshness = {"status": "unknown"}
             if fetch_articles and not article_text and not known_event and (not dry_run or fetch_articles_in_dry_run):
@@ -1182,32 +1220,31 @@ def run_once(
                     flush=True,
                 )
                 continue
-            if existing_event_id is not None:
-                merge_holding_into_event(
-                    existing_event_id,
+            if existing_item_id is not None:
+                merge_holding_into_market_item(
+                    existing_item_id,
                     holding,
                     item=item,
                     reason=relevance_reason,
                 )
-                retry = retryable_event_review(existing_event_id)
+                retry = retryable_event_review(existing_item_id)
                 if retry is None:
-                    print(f"seen article event #{existing_event_id}: {event['title']}", flush=True)
+                    print(f"seen market item #{existing_item_id}: {event['title']}", flush=True)
                     continue
-                stored_row = event_row_by_id(existing_event_id, DEFAULT_DB_PATH)
-                if not stored_row:
+                stored_event = stored_market_event(existing_item_id)
+                if not stored_event:
                     print(
-                        f"retryable event #{existing_event_id} missing stored content: {event['title']}",
+                        f"retryable market item #{existing_item_id} missing stored content: {event['title']}",
                         flush=True,
                     )
                     continue
-                stored_event = event_mapping_from_row(stored_row)
                 normalized = normalize_market_item(SOURCE, stored_event, store_kind="event")
                 admission_context = production_admission_context(
                     normalized, db_path=DEFAULT_DB_PATH
                 )
                 if admission_context.result.to_dict() != retry["admission"]:
                     print(
-                        f"retryable event #{existing_event_id} admission changed; keep existing review pending: "
+                        f"retryable market item #{existing_item_id} admission changed; keep existing review pending: "
                         f"{event['title']}",
                         flush=True,
                     )
@@ -1220,7 +1257,7 @@ def run_once(
                     or admission_context.market_review_id != retry["market_review_id"]
                 ):
                     raise RuntimeError(
-                        f"retry changed unified review identity for event {existing_event_id}"
+                        f"retry changed unified review identity for market item {existing_item_id}"
                     )
                 try:
                     outcome = process_market_item(
@@ -1238,13 +1275,13 @@ def run_once(
                 except Exception as exc:  # noqa: BLE001 - keep the remaining holdings runnable
                     status = processing_failure_status(exc)
                     print(
-                        f"retryable event #{existing_event_id} ended as {status}: "
+                        f"retryable market item #{existing_item_id} ended as {status}: "
                         f"{type(exc).__name__}: {exc}",
                         flush=True,
                     )
                     continue
                 print(
-                    f"retried event #{existing_event_id} review #{retry['market_review_id']}: "
+                    f"retried market item #{existing_item_id} review #{retry['market_review_id']}: "
                     f"delivery={outcome.delivery_status} {event['title']}",
                     flush=True,
                 )
@@ -1287,7 +1324,8 @@ def run_once(
                 continue
             event_id = outcome.event_id
             if not outcome.inserted:
-                merge_holding_into_event(event_id, holding, item=item, reason=relevance_reason)
+                if event_id is not None:
+                    merge_holding_into_market_item(event_id, holding, item=item, reason=relevance_reason)
                 print(f"seen event #{event_id}: {event['title']}", flush=True)
                 continue
             new_count += 1

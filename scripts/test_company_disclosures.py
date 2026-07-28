@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from dataclasses import replace
 from pathlib import Path
@@ -14,6 +15,10 @@ from disclosure_document import parse_disclosure_pdf
 from disclosure_providers import DisclosurePage, DisclosureRecord, DisclosureSecurity
 from market_db import init_db
 from market_runtime import normalize_market_item
+
+
+ROOT = Path(__file__).resolve().parents[1]
+TEST_RULE_CONFIG = ROOT / "config" / "rule_core_v1.test.json"
 
 
 def record(record_id: str, *, kind: str = "fulltext", provider: str = "cninfo_public") -> DisclosureRecord:
@@ -84,13 +89,13 @@ def test_report_only_baselines_then_live_processes_only_new_record() -> None:
         )
         with sqlite3.connect(db_path) as conn:
             baseline_rows = conn.execute(
-                "SELECT source, source_event_id, baseline_only FROM events ORDER BY source_event_id"
+                "SELECT source, source_item_id, collection_class FROM market_items ORDER BY source_item_id"
             ).fetchall()
-            assert conn.execute("SELECT COUNT(*) FROM event_analyses").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM market_reviews").fetchone()[0] == 0
             assert conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
         assert baseline_rows == [
-            ("company_disclosures", "announcement:1225286505", 1),
-            ("company_disclosures", "announcement:1225409631", 1),
+            ("company_disclosures", "announcement:1225286505", "baseline"),
+            ("company_disclosures", "announcement:1225409631", "baseline"),
         ]
         assert first["baseline"] == 2 and first["processed"] == 0
 
@@ -106,15 +111,17 @@ def test_report_only_baselines_then_live_processes_only_new_record() -> None:
             parse_documents=False,
         )
         with sqlite3.connect(db_path) as conn:
-            rows = conn.execute("SELECT source, source_event_id, baseline_only FROM events").fetchall()
+            rows = conn.execute(
+                "SELECT source, source_item_id, collection_class FROM market_items ORDER BY source_item_id"
+            ).fetchall()
             state_raw = conn.execute(
                 "SELECT state_json FROM source_state WHERE source = ?",
                 ("collector:company_disclosures",),
             ).fetchone()[0]
         assert rows == [
-            ("company_disclosures", "announcement:1225286505", 1),
-            ("company_disclosures", "announcement:1225409631", 1),
-            ("company_disclosures", "announcement:1226000000", 0),
+            ("company_disclosures", "announcement:1225286505", "baseline"),
+            ("company_disclosures", "announcement:1225409631", "baseline"),
+            ("company_disclosures", "announcement:1226000000", "live"),
         ]
         assert second["processed"] == 1 and second["existing"] == 2
         assert "cninfo_public" in json.loads(state_raw)["initialized_providers"]
@@ -146,15 +153,15 @@ def test_new_provider_is_baselined_before_live_processing() -> None:
         )
         with sqlite3.connect(db_path) as conn:
             rows = conn.execute(
-                "SELECT source_event_id, baseline_only FROM events ORDER BY source_event_id"
+                "SELECT source_item_id, collection_class FROM market_items ORDER BY source_item_id"
             ).fetchall()
-            assert conn.execute("SELECT COUNT(*) FROM event_analyses").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM market_reviews").fetchone()[0] == 0
             assert conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
-    assert rows == [("announcement:1225409631", 1), ("announcement:alternate-only", 1)]
+    assert rows == [("announcement:1225409631", "baseline"), ("announcement:alternate-only", "baseline")]
     assert result["baseline"] == 1 and result["processed"] == 0
 
 
-def test_excluded_live_record_advances_source_identity_without_creating_event() -> None:
+def test_excluded_live_record_advances_source_identity_and_records_unified_admission() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
@@ -201,12 +208,16 @@ def test_excluded_live_record_advances_source_identity_without_creating_event() 
                     ("collector:company_disclosures",),
                 ).fetchone()[0]
             )
-            event_count = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            item_count = conn.execute("SELECT COUNT(*) FROM market_items").fetchone()[0]
+            review = conn.execute(
+                "SELECT review_status,admission_status FROM market_reviews"
+            ).fetchone()
 
     assert first["excluded"] == 1 and first["processed"] == 0
     assert second["existing"] == 1 and second["excluded"] == 0
     assert saved["known_identities"] == ["announcement:excluded"]
-    assert event_count == 0
+    assert item_count == 1
+    assert review == ("excluded", "excluded")
 
 
 def test_known_identity_backfill_is_idempotent_and_never_analyzed_or_delivered() -> None:
@@ -238,12 +249,12 @@ def test_known_identity_backfill_is_idempotent_and_never_analyzed_or_delivered()
         second = collect_disclosures(**kwargs)
         with sqlite3.connect(db_path) as conn:
             rows = conn.execute(
-                "SELECT source_event_id, first_seen_at, baseline_only FROM events"
+                "SELECT source_item_id, first_seen_at, collection_class FROM market_items"
             ).fetchall()
-            analysis_count = conn.execute("SELECT COUNT(*) FROM event_analyses").fetchone()[0]
+            analysis_count = conn.execute("SELECT COUNT(*) FROM market_reviews").fetchone()[0]
             delivery_count = conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0]
 
-    assert rows == [("announcement:1225409631", "2026-07-16T11:41:48+00:00", 1)]
+    assert rows == [("announcement:1225409631", "2026-07-16T11:41:48+00:00", "baseline")]
     assert analysis_count == 0
     assert delivery_count == 0
     assert first["existing"] == 1 and first["backfilled"] == 1 and first["processed"] == 0
@@ -352,15 +363,23 @@ def test_malformed_pdf_is_a_bounded_metadata_failure() -> None:
 
 
 def main() -> int:
-    test_report_only_baselines_then_live_processes_only_new_record()
-    test_new_provider_is_baselined_before_live_processing()
-    test_excluded_live_record_advances_source_identity_without_creating_event()
-    test_known_identity_backfill_is_idempotent_and_never_analyzed_or_delivered()
-    test_pagination_runs_to_completion_for_each_content_kind()
-    test_stale_cached_security_mapping_is_refreshed_once()
-    test_event_preserves_provider_audit_but_uses_logical_source()
-    test_transport_provider_does_not_change_identity()
-    test_malformed_pdf_is_a_bounded_metadata_failure()
+    previous = os.environ.get("RULE_CORE_CONFIG")
+    os.environ["RULE_CORE_CONFIG"] = str(TEST_RULE_CONFIG)
+    try:
+        test_report_only_baselines_then_live_processes_only_new_record()
+        test_new_provider_is_baselined_before_live_processing()
+        test_excluded_live_record_advances_source_identity_and_records_unified_admission()
+        test_known_identity_backfill_is_idempotent_and_never_analyzed_or_delivered()
+        test_pagination_runs_to_completion_for_each_content_kind()
+        test_stale_cached_security_mapping_is_refreshed_once()
+        test_event_preserves_provider_audit_but_uses_logical_source()
+        test_transport_provider_does_not_change_identity()
+        test_malformed_pdf_is_a_bounded_metadata_failure()
+    finally:
+        if previous is None:
+            os.environ.pop("RULE_CORE_CONFIG", None)
+        else:
+            os.environ["RULE_CORE_CONFIG"] = previous
     print("company disclosure checks passed")
     return 0
 

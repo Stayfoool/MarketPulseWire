@@ -14,8 +14,17 @@ from tempfile import TemporaryDirectory
 import value_directory_preview
 import value_directory_browser
 import value_directory_monitor
-from market_item import AdmissionResult, DecisionResult, InterpretationResult, MarketFlowResult
+from market_db import init_db
+from market_item import (
+    AdmissionEvidence,
+    AdmissionResult,
+    DecisionResult,
+    InterpretationResult,
+    MarketFlowResult,
+    NormalizedMarketItem,
+)
 from market_runtime import MarketProcessOutcome
+from market_store import complete_market_review, record_production_admission
 from source_profiles import runtime_source_profile
 from value_directory_browser import (
     BrowserConfig,
@@ -391,33 +400,8 @@ def test_dedupe_entries_keeps_first_valid_url() -> None:
 def test_shadow_payload_marks_seen_and_reviewed_without_delivery() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
         with sqlite3.connect(db_path) as conn:
-            conn.execute(
-                """
-                CREATE TABLE seen_items (
-                    source TEXT NOT NULL,
-                    item_id TEXT NOT NULL,
-                    url TEXT,
-                    title TEXT,
-                    summary TEXT,
-                    published_at TEXT,
-                    first_seen_at TEXT,
-                    PRIMARY KEY (source, item_id)
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE article_reviews (
-                    source TEXT NOT NULL,
-                    item_id TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    gate_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    PRIMARY KEY (source, item_id)
-                )
-                """
-            )
             conn.execute(
                 """
                 INSERT INTO seen_items (
@@ -426,10 +410,35 @@ def test_shadow_payload_marks_seen_and_reviewed_without_delivery() -> None:
                 """,
                 ("value_directory_ib_stocks", "862550", "", "", "", "", "2026-07-10T00:00:00+00:00"),
             )
-            conn.execute(
-                "INSERT INTO article_reviews VALUES (?, ?, ?, ?, ?)",
-                ("value_directory_ib_stocks", "862550", "demo", "{}", "2026-07-10T00:00:00+00:00"),
-            )
+            conn.commit()
+        normalized = NormalizedMarketItem(
+            source="value_directory_ib_stocks",
+            source_category="research_industry_media",
+            content_type="research_index",
+            title="高盛-宁德时代：首次覆盖买入",
+            summary="高盛-宁德时代：首次覆盖买入",
+            url="https://www.valuelist.cn/862550.html",
+            published_at="2026-07-09T16:00:00+00:00",
+            raw={"id": "862550"},
+        )
+        admitted = AdmissionResult(
+            status="admitted",
+            reason_code="holding_match",
+            matched_families=("holding",),
+            evidence=(AdmissionEvidence("holding", "entity", "宁德时代"),),
+            config_version="test-v1",
+        )
+        _, review_id = record_production_admission(normalized, admitted, db_path=db_path)
+        complete_market_review(
+            review_id,
+            MarketFlowResult(
+                item=normalized,
+                decision=DecisionResult(action="daily", importance="medium", reason="测试"),
+                interpretation=InterpretationResult(core_content="测试统一结果"),
+            ),
+            alias=("article", normalized.source, "862550", "market_items"),
+            db_path=db_path,
+        )
         original_db = value_directory_monitor.DB_PATH
         try:
             value_directory_monitor.DB_PATH = db_path
@@ -718,16 +727,16 @@ def test_recheck_uses_enriched_item_without_a_preliminary_decision_gate() -> Non
         "summary": "Trade Idea",
         "published_at": "2026-07-09T16:00:00+00:00",
     }
-    existing = {"push_now": False, "pushed_at": "", "importance": "medium"}
+    existing = {"delivered": False, "review_status": "succeeded"}
     original_connect = value_directory_monitor.connect_db
-    original_existing = value_directory_monitor.article_review_exists
+    original_existing = value_directory_monitor.source_item_review_snapshot
     original_process = value_directory_monitor.process_market_item
     original_lifecycle = value_directory_monitor.set_seen_item_lifecycle_if_present
     original_admission = value_directory_monitor.production_admission_context
     calls: list[dict[str, object]] = []
     try:
         value_directory_monitor.connect_db = lambda: _DummyContext()
-        value_directory_monitor.article_review_exists = lambda *_: existing
+        value_directory_monitor.source_item_review_snapshot = lambda *_args, **_kwargs: existing
         value_directory_monitor.set_seen_item_lifecycle_if_present = lambda *_args, **_kwargs: None
         value_directory_monitor.production_admission_context = lambda *_args, **_kwargs: admitted_context()
 
@@ -741,14 +750,14 @@ def test_recheck_uses_enriched_item_without_a_preliminary_decision_gate() -> Non
                     interpretation=InterpretationResult(),
                 ),
                 inserted=False,
-                storage_ref={"store_kind": "article_reviews", "item_id": raw_item["id"]},
+                storage_ref={"store_kind": "market_reviews", "item_id": raw_item["id"]},
             )
 
         value_directory_monitor.process_market_item = fake_process
         assert value_directory_monitor.review_and_maybe_push(item, recheck_rules=True) is False
     finally:
         value_directory_monitor.connect_db = original_connect
-        value_directory_monitor.article_review_exists = original_existing
+        value_directory_monitor.source_item_review_snapshot = original_existing
         value_directory_monitor.process_market_item = original_process
         value_directory_monitor.set_seen_item_lifecycle_if_present = original_lifecycle
         value_directory_monitor.production_admission_context = original_admission
@@ -768,14 +777,14 @@ def test_new_item_uses_unified_market_runtime_after_preview_enrichment() -> None
     }
     calls: list[dict[str, object]] = []
     original_connect = value_directory_monitor.connect_db
-    original_existing = value_directory_monitor.article_review_exists
+    original_existing = value_directory_monitor.source_item_review_snapshot
     original_enrich = value_directory_monitor.enrich_item_with_preview
     original_process = value_directory_monitor.process_market_item
     original_lifecycle = value_directory_monitor.set_seen_item_lifecycle_if_present
     original_admission = value_directory_monitor.production_admission_context
     try:
         value_directory_monitor.connect_db = lambda: _DummyContext()
-        value_directory_monitor.article_review_exists = lambda *_: None
+        value_directory_monitor.source_item_review_snapshot = lambda *_args, **_kwargs: None
         value_directory_monitor.set_seen_item_lifecycle_if_present = lambda *_args, **_kwargs: None
         value_directory_monitor.production_admission_context = lambda *_args, **_kwargs: admitted_context()
         def fake_enrich(raw_item):
@@ -804,7 +813,7 @@ def test_new_item_uses_unified_market_runtime_after_preview_enrichment() -> None
                     interpretation=InterpretationResult(core_content=raw_item["summary"]),
                 ),
                 inserted=True,
-                storage_ref={"store_kind": "article_reviews", "item_id": raw_item["id"]},
+                storage_ref={"store_kind": "market_reviews", "item_id": raw_item["id"]},
                 delivery_status="sent",
             )
 
@@ -813,7 +822,7 @@ def test_new_item_uses_unified_market_runtime_after_preview_enrichment() -> None
         assert value_directory_monitor.review_and_maybe_push(item, source=source) is True
     finally:
         value_directory_monitor.connect_db = original_connect
-        value_directory_monitor.article_review_exists = original_existing
+        value_directory_monitor.source_item_review_snapshot = original_existing
         value_directory_monitor.enrich_item_with_preview = original_enrich
         value_directory_monitor.process_market_item = original_process
         value_directory_monitor.set_seen_item_lifecycle_if_present = original_lifecycle
@@ -1042,7 +1051,7 @@ def test_collect_production_rechecks_current_unpushed_reviews() -> None:
     calls: list[tuple[str, bool]] = []
     original_save_new = value_directory_monitor.save_new_items_with_retry
     original_connect = value_directory_monitor.connect_db
-    original_exists = value_directory_monitor.article_review_exists
+    original_unpushed = value_directory_monitor.load_unpushed_review_ids
     original_review = value_directory_monitor.review_and_maybe_push
     original_enabled = os.environ.get("VALUE_DIRECTORY_RECHECK_UNPUSHED")
     original_limit = os.environ.get("VALUE_DIRECTORY_RECHECK_UNPUSHED_LIMIT")
@@ -1052,16 +1061,11 @@ def test_collect_production_rechecks_current_unpushed_reviews() -> None:
         value_directory_monitor.save_new_items_with_retry = lambda *_args, **_kwargs: []
         value_directory_monitor.connect_db = lambda: _DummyContext()
 
-        def fake_exists(_conn, _source_id, item_id):
-            if item_id == "862591":
-                return {"push_now": False, "pushed_at": "", "importance": "medium"}
-            return None
-
         def fake_review(item, *, source=None, recheck_rules=False, **_kwargs):
             calls.append((item["id"], recheck_rules))
             return True
 
-        value_directory_monitor.article_review_exists = fake_exists
+        value_directory_monitor.load_unpushed_review_ids = lambda *_args, **_kwargs: {"862591"}
         value_directory_monitor.review_and_maybe_push = fake_review
         payload = value_directory_monitor.collect_production(
             entries,
@@ -1072,7 +1076,7 @@ def test_collect_production_rechecks_current_unpushed_reviews() -> None:
     finally:
         value_directory_monitor.save_new_items_with_retry = original_save_new
         value_directory_monitor.connect_db = original_connect
-        value_directory_monitor.article_review_exists = original_exists
+        value_directory_monitor.load_unpushed_review_ids = original_unpushed
         value_directory_monitor.review_and_maybe_push = original_review
         if original_enabled is None:
             os.environ.pop("VALUE_DIRECTORY_RECHECK_UNPUSHED", None)

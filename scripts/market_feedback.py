@@ -21,7 +21,6 @@ from market_db import DEFAULT_DB_PATH
 from market_canonical_reader import (
     canonical_delivered_items,
     canonical_feedback_snapshot,
-    migration_ready as canonical_migration_ready,
 )
 from market_item import decision_result_from_payload
 
@@ -343,72 +342,18 @@ def resolve_feedback_snapshot(
             "delivery_status": "sent",
             "delivery_id": None,
         }
-    if canonical_migration_ready(conn):
-        canonical = canonical_feedback_snapshot(
-            conn, identity.item_kind, identity.source, identity.item_id
-        )
-        if canonical is None:
-            raise FeedbackError("统一处理结果中未找到对应审计记录")
-        action, rule_ids, version = _decision_snapshot(canonical["decision"])
-        return {
-            "decision_action": action,
-            "rule_ids": rule_ids,
-            "decision_version": version or canonical.get("application_revision") or "",
-            "delivery_status": canonical["delivery_status"],
-            "delivery_id": canonical["delivery_id"],
-        }
-    if identity.item_kind == "article":
-        row = conn.execute(
-            "SELECT gate_json, pushed_at FROM article_reviews WHERE source = ? AND item_id = ?",
-            (identity.source, identity.item_id),
-        ).fetchone()
-        if not row:
-            raise FeedbackError("未找到对应文章审计记录")
-        payload = _load_json(row[0])
-        action, rule_ids, version = _decision_snapshot(payload)
-        return {
-            "decision_action": action,
-            "rule_ids": rule_ids,
-            "decision_version": version,
-            "delivery_status": "sent" if row[1] else "",
-            "delivery_id": None,
-        }
-    if identity.item_kind == "official":
-        row = conn.execute(
-            "SELECT analysis_json, pushed_at FROM official_news_reviews WHERE source = ? AND item_id = ?",
-            (identity.source, identity.item_id),
-        ).fetchone()
-        if not row:
-            raise FeedbackError("未找到对应官网新闻审计记录")
-        payload = _load_json(row[0])
-        action, rule_ids, version = _decision_snapshot(payload)
-        return {
-            "decision_action": action,
-            "rule_ids": rule_ids,
-            "decision_version": version,
-            "delivery_status": "sent" if row[1] else "",
-            "delivery_id": None,
-        }
-    row = conn.execute(
-        """
-        SELECT e.source,
-               (SELECT analysis_json FROM event_analyses a WHERE a.event_id = e.id ORDER BY a.id DESC LIMIT 1),
-               (SELECT id FROM deliveries d WHERE d.event_id = e.id AND d.channel='feishu' AND d.status='sent' ORDER BY d.id DESC LIMIT 1),
-               (SELECT status FROM deliveries d WHERE d.event_id = e.id AND d.channel='feishu' AND d.status='sent' ORDER BY d.id DESC LIMIT 1)
-        FROM events e WHERE e.id = ?
-        """,
-        (identity.item_id,),
-    ).fetchone()
-    if not row or str(row[0]) != identity.source:
-        raise FeedbackError("未找到对应事件审计记录")
-    payload = _load_json(row[1])
-    action, rule_ids, version = _decision_snapshot(payload)
+    canonical = canonical_feedback_snapshot(
+        conn, identity.item_kind, identity.source, identity.item_id
+    )
+    if canonical is None:
+        raise FeedbackError("统一处理结果中未找到对应审计记录")
+    action, rule_ids, version = _decision_snapshot(canonical["decision"])
     return {
         "decision_action": action,
         "rule_ids": rule_ids,
-        "decision_version": version,
-        "delivery_id": row[2],
-        "delivery_status": str(row[3] or ""),
+        "decision_version": version or canonical.get("application_revision") or "",
+        "delivery_status": canonical["delivery_status"],
+        "delivery_id": canonical["delivery_id"],
     }
 
 
@@ -701,40 +646,13 @@ def handle_feedback_callback(
 def _feedback_card_base(conn: sqlite3.Connection, identity: FeedbackIdentity) -> dict[str, Any] | None:
     if identity.item_kind == "test":
         return feedback_test_card_base()
-    if canonical_migration_ready(conn):
-        canonical = canonical_feedback_snapshot(
-            conn, identity.item_kind, identity.source, identity.item_id
-        )
-        if canonical is None:
-            return None
-        payload = canonical["legacy_payload"]
-        raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else payload
-        card = raw.get("_feedback_card_base")
-        return card if isinstance(card, dict) else None
-    if identity.item_kind == "article":
-        row = conn.execute(
-            "SELECT gate_json FROM article_reviews WHERE source = ? AND item_id = ?",
-            (identity.source, identity.item_id),
-        ).fetchone()
-        payload = _load_json(row[0]) if row else {}
-        raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
-    elif identity.item_kind == "official":
-        row = conn.execute(
-            "SELECT analysis_json FROM official_news_reviews WHERE source = ? AND item_id = ?",
-            (identity.source, identity.item_id),
-        ).fetchone()
-        raw = _load_json(row[0]) if row else {}
-    else:
-        row = conn.execute(
-            """
-            SELECT payload_json FROM deliveries d
-            JOIN events e ON e.id = d.event_id
-            WHERE e.id = ? AND e.source = ? AND d.channel = 'feishu' AND d.status = 'sent'
-            ORDER BY d.id DESC LIMIT 1
-            """,
-            (identity.item_id, identity.source),
-        ).fetchone()
-        raw = _load_json(row[0]) if row else {}
+    canonical = canonical_feedback_snapshot(
+        conn, identity.item_kind, identity.source, identity.item_id
+    )
+    if canonical is None:
+        return None
+    payload = canonical["legacy_payload"]
+    raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else payload
     card = raw.get("_feedback_card_base")
     return card if isinstance(card, dict) else None
 
@@ -763,82 +681,7 @@ def feedback_card_for_callback(
 
 
 def _delivered_items(conn: sqlite3.Connection, cutoff: str) -> list[dict[str, Any]]:
-    if canonical_migration_ready(conn):
-        return canonical_delivered_items(conn, cutoff)
-    items: list[dict[str, Any]] = []
-    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='article_reviews'").fetchone():
-        for row in conn.execute(
-            """
-            SELECT source, item_id, title, pushed_at, gate_json
-            FROM article_reviews
-            WHERE COALESCE(pushed_at, '') >= ?
-            """,
-            (cutoff,),
-        ):
-            action, rule_ids, version = _decision_snapshot(_load_json(row[4]))
-            items.append(
-                {
-                    "item_kind": "article",
-                    "source": str(row[0]),
-                    "item_id": str(row[1]),
-                    "title": str(row[2] or ""),
-                    "sent_at": str(row[3] or ""),
-                    "action": action,
-                    "rule_ids": rule_ids,
-                    "version": version,
-                }
-            )
-    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='official_news_reviews'").fetchone():
-        for row in conn.execute(
-            """
-            SELECT source, item_id, title, pushed_at, analysis_json
-            FROM official_news_reviews
-            WHERE COALESCE(pushed_at, '') >= ?
-            """,
-            (cutoff,),
-        ):
-            action, rule_ids, version = _decision_snapshot(_load_json(row[4]))
-            items.append(
-                {
-                    "item_kind": "official",
-                    "source": str(row[0]),
-                    "item_id": str(row[1]),
-                    "title": str(row[2] or ""),
-                    "sent_at": str(row[3] or ""),
-                    "action": action,
-                    "rule_ids": rule_ids,
-                    "version": version,
-                }
-            )
-    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
-        for row in conn.execute(
-            """
-            SELECT e.id, e.source, e.title, d.sent_at,
-                   (SELECT analysis_json FROM event_analyses a WHERE a.event_id=e.id ORDER BY a.id DESC LIMIT 1)
-            FROM events e
-            JOIN deliveries d ON d.id = (
-                SELECT sent.id FROM deliveries sent
-                WHERE sent.event_id=e.id AND sent.channel='feishu' AND sent.status='sent'
-                ORDER BY sent.id DESC LIMIT 1
-            )
-            WHERE COALESCE(d.sent_at, '') >= ?
-            """,
-            (cutoff,),
-        ):
-            action, rule_ids, version = _decision_snapshot(_load_json(row[4]))
-            items.append(
-                {
-                    "item_kind": "event",
-                    "source": str(row[1]),
-                    "item_id": str(row[0]),
-                    "title": str(row[2] or ""),
-                    "sent_at": str(row[3] or ""),
-                    "action": action,
-                    "rule_ids": rule_ids,
-                    "version": version,
-                }
-            )
-    return items
+    return canonical_delivered_items(conn, cutoff)
 
 
 def _metric_rows(items: list[dict[str, Any]], key_fn: Any) -> list[dict[str, Any]]:

@@ -10,7 +10,15 @@ from datetime import date
 from pathlib import Path
 
 from market_db import init_db
-from market_review_store import ensure_article_reviews_table, ensure_official_news_table
+from market_item import (
+    AdmissionEvidence,
+    AdmissionResult,
+    DecisionResult,
+    InterpretationResult,
+    MarketFlowResult,
+    NormalizedMarketItem,
+)
+from market_store import complete_market_review, record_article_delivery, record_production_admission
 from market_skills import import_market_skills, match_market_skills
 import signal_outcome_update
 from signal_outcome_update import compute_metrics, quote_rows_from_response, target_rows
@@ -36,10 +44,50 @@ def dumps(value) -> str:  # noqa: ANN001 - tiny test helper
     return json.dumps(value, ensure_ascii=False)
 
 
+def save_unified_review(
+    path: Path,
+    item: NormalizedMarketItem,
+    *,
+    item_kind: str,
+    action: str,
+    importance: str,
+    payload: dict,
+    core_content: str,
+) -> None:
+    admitted = AdmissionResult(
+        status="admitted",
+        reason_code="holding_match",
+        matched_families=("holding",),
+        evidence=(AdmissionEvidence("holding", "entity", item.title),),
+        config_version="test-v1",
+    )
+    market_item_id, review_id = record_production_admission(item, admitted, db_path=path)
+    complete_market_review(
+        review_id,
+        MarketFlowResult(
+            item=item,
+            decision=DecisionResult(
+                action=action,  # type: ignore[arg-type]
+                importance=importance,  # type: ignore[arg-type]
+                reason="测试统一决策",
+            ),
+            interpretation=InterpretationResult(core_content=core_content),
+        ),
+        legacy_payload=payload,
+        alias=(item_kind, item.source, str(item.raw["id"]), "market_items"),
+        db_path=path,
+    )
+    record_article_delivery(
+        market_item_id,
+        review_id,
+        status="sent",
+        decision_action=action,
+        db_path=path,
+    )
+
+
 def seed_db(path: Path) -> None:
     conn = init_db(path)
-    ensure_article_reviews_table(conn)
-    ensure_official_news_table(conn)
     conn.execute(
         """
         INSERT INTO portfolio_holdings (symbol, name, full_name, aliases_json, enabled, raw_json, updated_at)
@@ -47,31 +95,9 @@ def seed_db(path: Path) -> None:
         """,
         ("000725.SZ", "京东方A", "京东方科技集团股份有限公司", dumps(["京东方"]), NOW),
     )
-    conn.execute(
-        """
-        INSERT INTO events (
-            source, source_event_id, event_type, title, summary, full_text, url,
-            published_at, first_seen_at, symbols_json, themes_json, raw_json,
-            content_hash, baseline_only
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-        """,
-        (
-            "ifind_notice",
-            "notice-1",
-            "announcement",
-            "京东方A 先进封装试验线通线",
-            "京东方A 公告先进封装试验线进展。",
-            "板级玻璃基封装载板试验线实现设备通线。",
-            "https://example.com/notice",
-            NOW,
-            NOW,
-            dumps(["000725.SZ"]),
-            dumps(["先进封装"]),
-            "{}",
-            "hash-notice-1",
-        ),
-    )
-    event_id = conn.execute("SELECT id FROM events WHERE source_event_id='notice-1'").fetchone()[0]
+    conn.commit()
+    conn.close()
+
     analysis = {
         "importance": "high",
         "core_content": "京东方A先进封装产线进展。",
@@ -89,42 +115,27 @@ def seed_db(path: Path) -> None:
         "tracking_points": ["后续验证产线良率和客户认证。"],
         "risks": ["量产进度低于预期。"],
     }
-    conn.execute(
-        """
-        INSERT INTO event_analyses (
-            event_id, task, model, importance, classification, direction,
-            impact_duration, should_push, analysis_json, created_at
-        ) VALUES (?, 'portfolio_event', 'fake-model', 'high', '增量利好', '上涨', '数日', 1, ?, ?)
-        """,
-        (event_id, dumps(analysis), NOW),
-    )
-    conn.execute(
-        """
-        INSERT INTO deliveries (event_id, channel, status, sent_at, error, payload_json)
-        VALUES (?, 'feishu', 'sent', ?, '', '{}')
-        """,
-        (event_id, NOW),
-    )
-
-    conn.execute(
-        """
-        INSERT INTO events (
-            source, source_event_id, event_type, title, summary, full_text, url,
-            published_at, first_seen_at, symbols_json, themes_json, raw_json,
-            content_hash, baseline_only
-        ) VALUES ('jygs', 'jygs-1', 'action', '韭研异动样本', '', '', '', ?, ?, '[]', '[]', '{}', 'hash-jygs', 0)
-        """,
-        (NOW, NOW),
-    )
-    jygs_event_id = conn.execute("SELECT id FROM events WHERE source_event_id='jygs-1'").fetchone()[0]
-    conn.execute(
-        """
-        INSERT INTO event_analyses (
-            event_id, task, model, importance, classification, direction,
-            impact_duration, should_push, analysis_json, created_at
-        ) VALUES (?, 'portfolio_event', 'fake-model', 'high', '增量利好', '上涨', '数日', 1, ?, ?)
-        """,
-        (jygs_event_id, dumps({"importance": "high"}), NOW),
+    save_unified_review(
+        path,
+        NormalizedMarketItem(
+            source="ifind_notice",
+            source_category="company_disclosure",
+            content_type="announcement",
+            title="京东方A 先进封装试验线通线",
+            summary="京东方A 公告先进封装试验线进展。",
+            full_text="板级玻璃基封装载板试验线实现设备通线。",
+            url="https://example.com/notice",
+            published_at=NOW,
+            first_seen_at=NOW,
+            symbols=["000725.SZ"],
+            themes=["先进封装"],
+            raw={"id": "notice-1", "event_type": "announcement"},
+        ),
+        item_kind="event",
+        action="push",
+        importance="high",
+        payload=analysis,
+        core_content="京东方A先进封装产线进展。",
     )
 
     article_review = {
@@ -134,34 +145,34 @@ def seed_db(path: Path) -> None:
         "market_impact": "利好先进封装链。",
         "model": "fake-gate",
     }
-    conn.execute(
-        """
-        INSERT INTO article_reviews (
-            source, item_id, url, title, source_module, published_at,
-            importance, push_now, market_impact, incremental_classification,
-            affected_targets_json, reason, daily_summary, confidence, gate_json,
-            pushed_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            "digitimes_tw_semiconductors",
-            "article-1",
-            "https://example.com/article",
-            "玻璃基板封装需求升温",
-            "DIGITIMES Taiwan / 半导体与零组件",
-            NOW,
-            "high",
-            1,
-            "利好先进封装链。",
-            "增量利好",
-            dumps(article_review["affected_targets"]),
-            "出现硬变量。",
-            "玻璃基板封装需求升温。",
-            "高",
-            dumps(article_review),
-            NOW,
-            NOW,
+    article_review.update(
+        {
+            "source_module": "DIGITIMES Taiwan / 半导体与零组件",
+            "market_impact": "利好先进封装链。",
+            "incremental_classification": "增量利好",
+            "affected_targets_json": dumps(article_review["affected_targets"]),
+            "reason": "出现硬变量。",
+            "daily_summary": "玻璃基板封装需求升温。",
+            "confidence": "高",
+        }
+    )
+    save_unified_review(
+        path,
+        NormalizedMarketItem(
+            source="digitimes_tw_semiconductors",
+            source_category="industry_media",
+            content_type="article",
+            title="玻璃基板封装需求升温",
+            url="https://example.com/article",
+            published_at=NOW,
+            first_seen_at=NOW,
+            raw={"id": "article-1"},
         ),
+        item_kind="article",
+        action="push",
+        importance="high",
+        payload=article_review,
+        core_content="玻璃基板封装需求升温。",
     )
 
     official_analysis = {
@@ -182,27 +193,32 @@ def seed_db(path: Path) -> None:
         },
         "global_equity": {"positive": [{"name": "NVDA", "code": "NVDA"}], "negative": []},
     }
-    conn.execute(
-        """
-        INSERT INTO official_news_reviews (
-            source, item_id, url, title, published_at, importance, should_push_now,
-            reason, daily_summary, analysis_json, pushed_at, created_at
-        ) VALUES (?, ?, ?, ?, ?, 'high', 1, ?, ?, ?, ?, ?)
-        """,
-        (
-            "nvidia_blog",
-            "official-1",
-            "https://example.com/nvidia",
-            "NVIDIA 发布 AI 基础设施平台",
-            NOW,
-            "产业链传导明确。",
-            "NVIDIA 平台更新。",
-            dumps(official_analysis),
-            NOW,
-            NOW,
+    official_analysis.update(
+        {
+            "reason": "产业链传导明确。",
+            "daily_summary": "NVIDIA 平台更新。",
+        }
+    )
+    save_unified_review(
+        path,
+        NormalizedMarketItem(
+            source="nvidia_blog",
+            source_category="official_company",
+            content_type="official_news",
+            title="NVIDIA 发布 AI 基础设施平台",
+            url="https://example.com/nvidia",
+            published_at=NOW,
+            first_seen_at=NOW,
+            raw={"id": "official-1"},
         ),
+        item_kind="official",
+        action="push",
+        importance="high",
+        payload=official_analysis,
+        core_content="NVIDIA 发布新平台，带动上游供应链。",
     )
 
+    conn = init_db(path)
     conn.execute(
         """
         CREATE TABLE seen_posts (
@@ -246,9 +262,9 @@ def test_extract_signals_from_existing_sources() -> None:
         path = Path(tmpdir) / "surveil.sqlite3"
         seed_db(path)
         counts = extract_signals(db_path=path, days=TEST_WINDOW_DAYS, dry_run=False)
-        assert counts["events"] == 1
-        assert counts["article_reviews"] == 1
-        assert counts["official_news_reviews"] == 1
+        assert counts["event"] == 1
+        assert counts["article"] == 1
+        assert counts["official"] == 1
         assert counts["seen_posts"] == 1
         assert counts["signals"] == 4
         conn = init_db(path)
@@ -334,7 +350,7 @@ def test_outcome_update_fetches_quotes_once_per_symbol() -> None:
             upsert_signal(
                 conn,
                 {
-                    "source_table": "events",
+                    "source_table": "market_reviews",
                     "source_id": f"event-{index}",
                     "source": "test",
                     "title": f"测试信号 {index}",
@@ -505,32 +521,33 @@ def test_theme_context_expands_signal_targets() -> None:
             },
             db_path=path,
         )
-        with sqlite3.connect(path) as conn:
-            ensure_article_reviews_table(conn)
-            conn.execute(
-                """
-                INSERT INTO article_reviews (
-                    source, item_id, url, title, source_module, published_at,
-                    importance, push_now, market_impact, incremental_classification,
-                    affected_targets_json, reason, daily_summary, confidence,
-                    gate_json, pushed_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'high', 1, ?, '增量利好', '[]', ?, ?, '中', '{}', ?, ?)
-                """,
-                (
-                    "rss",
-                    "diamond-cooling-1",
-                    "https://example.com/diamond",
-                    "人造钻石给芯片降温：量产元年已至",
-                    "test",
-                    NOW,
-                    "人造钻石散热进入量产阶段，可能影响芯片散热材料链。",
-                    "标题命中人造钻石散热主题。",
-                    "人造钻石散热主题强化。",
-                    NOW,
-                    NOW,
-                ),
-            )
-            conn.commit()
+        save_unified_review(
+            path,
+            NormalizedMarketItem(
+                source="rss",
+                source_category="industry_media",
+                content_type="article",
+                title="人造钻石给芯片降温：量产元年已至",
+                summary="人造钻石散热进入量产阶段，可能影响芯片散热材料链。",
+                url="https://example.com/diamond",
+                published_at=NOW,
+                first_seen_at=NOW,
+                raw={"id": "diamond-cooling-1"},
+            ),
+            item_kind="article",
+            action="push",
+            importance="high",
+            payload={
+                "source_module": "test",
+                "market_impact": "人造钻石散热进入量产阶段，可能影响芯片散热材料链。",
+                "incremental_classification": "增量利好",
+                "affected_targets_json": "[]",
+                "reason": "标题命中人造钻石散热主题。",
+                "daily_summary": "人造钻石散热主题强化。",
+                "confidence": "中",
+            },
+            core_content="人造钻石散热主题强化。",
+        )
         extract_signals(db_path=path, days=TEST_WINDOW_DAYS, dry_run=False)
         with sqlite3.connect(path) as conn:
             row = conn.execute(
@@ -641,31 +658,33 @@ staleness: Rubin进度为2026-05时点
             matches = match_market_skills(conn, "英伟达发布 Rubin 架构，AI 服务器下游 PCB 与 MLCC 用量增加")
             assert len(matches) == 1
             assert matches[0]["affected_text"] == "PCB、MLCC、ABF载板"
-            ensure_article_reviews_table(conn)
-            conn.execute(
-                """
-                INSERT INTO article_reviews (
-                    source, item_id, url, title, source_module, published_at,
-                    importance, push_now, market_impact, incremental_classification,
-                    affected_targets_json, reason, daily_summary, confidence,
-                    gate_json, pushed_at, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'high', 1, ?, '增量利好', '[]', ?, ?, '中', '{}', ?, ?)
-                """,
-                (
-                    "rss",
-                    "rubin-1",
-                    "https://example.com/rubin",
-                    "英伟达 Rubin 架构推动 AI 服务器堆料",
-                    "test",
-                    NOW,
-                    "Rubin 架构提升整机柜性能，下游 PCB 和 MLCC 需求增加。",
-                    "标题和正文命中 Rubin 产业链传导。",
-                    "Rubin 下游组件需求上升。",
-                    NOW,
-                    NOW,
-                ),
-            )
-            conn.commit()
+        save_unified_review(
+            path,
+            NormalizedMarketItem(
+                source="rss",
+                source_category="industry_media",
+                content_type="article",
+                title="英伟达 Rubin 架构推动 AI 服务器堆料",
+                summary="Rubin 架构提升整机柜性能，下游 PCB 和 MLCC 需求增加。",
+                url="https://example.com/rubin",
+                published_at=NOW,
+                first_seen_at=NOW,
+                raw={"id": "rubin-1"},
+            ),
+            item_kind="article",
+            action="push",
+            importance="high",
+            payload={
+                "source_module": "test",
+                "market_impact": "Rubin 架构提升整机柜性能，下游 PCB 和 MLCC 需求增加。",
+                "incremental_classification": "增量利好",
+                "affected_targets_json": "[]",
+                "reason": "标题和正文命中 Rubin 产业链传导。",
+                "daily_summary": "Rubin 下游组件需求上升。",
+                "confidence": "中",
+            },
+            core_content="Rubin 下游组件需求上升。",
+        )
         extract_signals(db_path=path, days=TEST_WINDOW_DAYS, dry_run=False)
         with sqlite3.connect(path) as conn:
             target = conn.execute(

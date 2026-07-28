@@ -410,8 +410,27 @@ def test_canonical_readers_preserve_behavior_and_identity() -> None:
         assert counts["signals"] == 2
         with sqlite3.connect(path) as conn:
             signal_keys = set(conn.execute("SELECT source_table,source_id FROM signals"))
-        assert ("article_reviews", "test_source:article-push") in signal_keys
-        assert ("events", str(ids["reviewed"])) in signal_keys
+            expected_review_ids = {
+                str(row[0])
+                for row in conn.execute(
+                    """
+                    SELECT r.id
+                    FROM market_reviews r
+                    JOIN market_item_aliases a ON a.market_item_id=r.market_item_id
+                    WHERE r.is_current=1
+                      AND r.id=(
+                          SELECT MAX(current.id) FROM market_reviews current
+                          WHERE current.market_item_id=r.market_item_id AND current.is_current=1
+                      )
+                      AND (
+                        (a.item_kind='article' AND a.source='test_source' AND a.legacy_item_id='article-push')
+                        OR (a.item_kind='event' AND a.source='event_source' AND a.legacy_item_id=?)
+                    )
+                    """,
+                    (str(ids["reviewed"]),),
+                )
+            }
+        assert signal_keys == {("market_reviews", review_id) for review_id in expected_review_ids}
 
 
 def main() -> int:

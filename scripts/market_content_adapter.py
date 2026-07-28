@@ -1,4 +1,4 @@
-"""Legacy payload and store adapter for article and official market items."""
+"""Interpret article and official market items for the unified runtime."""
 
 from __future__ import annotations
 
@@ -13,15 +13,7 @@ from llm_analysis import format_llm_analysis
 from market_flow import evaluate_market_item
 from market_item import DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem, item_from_article_mapping
 from market_interpreter import thin_system_prompt, thin_user_prompt_template
-from market_review_store import (
-    article_item_id,
-    article_review_exists,
-    ensure_article_reviews_table,
-    ensure_official_news_table,
-    mark_article_pushed,
-    mark_official_pushed,
-    official_review_exists,
-)
+from market_review_store import article_item_id
 from source_profiles import runtime_source_profile
 
 
@@ -180,7 +172,8 @@ def _evaluate_content_item(
         user_agent="surveil-official-content-flow/0.1" if official else "surveil-article-content-flow/0.1",
         force_interpretation=not value_directory_source,
         storage_ref={
-            "store_kind": "official_news_reviews" if official else "article_reviews",
+            "store_kind": "market_reviews",
+            "item_kind": "official" if official else "article",
             "source": source,
             "item_id": article_item_id(item),
         },
@@ -379,7 +372,3 @@ def analysis_lines_from_review(review: dict[str, Any]) -> list[str]:
     if reason:
         prefix.append(f"分流理由：{reason}")
     return [lines[0], *prefix, *lines[1:]] if lines else prefix
-
-
-review_exists = article_review_exists
-mark_pushed = mark_article_pushed

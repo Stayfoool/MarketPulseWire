@@ -31,7 +31,6 @@ from holdings_web import (
     unit_display_metadata,
 )
 from market_db import init_db
-from market_review_store import ensure_article_reviews_table, ensure_official_news_table
 from source_profiles import (
     filter_enabled_named_sources,
     filter_enabled_source_mapping,
@@ -41,6 +40,103 @@ from source_profiles import (
     source_profile_skeptic_enabled,
     source_profiles_payload,
 )
+
+
+def insert_unified_result(
+    conn: sqlite3.Connection,
+    *,
+    item_kind: str,
+    source: str,
+    item_id: str,
+    title: str,
+    published_at: str,
+    seen_at: str,
+    summary: str = "",
+    action: str = "archive",
+    importance: str = "low",
+    delivered: bool = False,
+    collection_class: str = "live",
+    content_type: str = "article",
+    source_label: str = "",
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO market_items (
+            source,source_item_id,dedupe_key,source_category,publisher_role,
+            collector,content_type,title,summary,full_text,url,published_at,
+            first_seen_at,symbols_json,themes_json,raw_json,access_note,
+            content_hash,collection_class,processability_status,
+            processability_reason,processing_status,processing_error,
+            created_at,updated_at
+        ) VALUES (?, ?, ?, '', '', 'test', ?, ?, ?, '', '', ?, ?, '[]', '[]', '{}', '',
+                  ?, ?, 'succeeded', '', ?, '', ?, ?)
+        """,
+        (
+            source,
+            item_id,
+            f"{source}:{item_id}",
+            content_type,
+            title,
+            summary,
+            published_at,
+            seen_at,
+            f"hash:{source}:{item_id}",
+            collection_class,
+            "succeeded" if collection_class == "live" else "not_applicable",
+            seen_at,
+            seen_at,
+        ),
+    )
+    market_item_id = int(cur.lastrowid)
+    conn.execute(
+        """
+        INSERT INTO market_item_aliases (
+            market_item_id,item_kind,source,legacy_item_id,legacy_store_kind,created_at
+        ) VALUES (?, ?, ?, ?, 'market_items', ?)
+        """,
+        (market_item_id, item_kind, source, item_id, seen_at),
+    )
+    if collection_class == "baseline":
+        return market_item_id
+    decision = {"action": action, "importance": importance, "reason": "测试决策"}
+    interpretation = {"core_content": summary, "model": "fixed-test"}
+    legacy_payload = {"_legacy_row": {"source_module": source_label or source}}
+    review_id = int(
+        conn.execute(
+            """
+            INSERT INTO market_reviews (
+                market_item_id,task,run_key,is_current,review_status,
+                admission_status,admission_reason,admission_matched_families_json,
+                admission_evidence_json,admission_json,decision_action,importance,
+                decision_json,interpretation_json,legacy_payload_json,
+                application_revision,created_at,completed_at
+            ) VALUES (?, 'production', ?, 1, 'succeeded', 'admitted', 'test',
+                      '[]', '[]', '{}', ?, ?, ?, ?, ?, 'test', ?, ?)
+            """,
+            (
+                market_item_id,
+                f"test:{source}:{item_id}",
+                action,
+                importance,
+                json.dumps(decision, ensure_ascii=False),
+                json.dumps(interpretation, ensure_ascii=False),
+                json.dumps(legacy_payload, ensure_ascii=False),
+                seen_at,
+                seen_at,
+            ),
+        ).lastrowid
+    )
+    if delivered:
+        conn.execute(
+            """
+            INSERT INTO deliveries (
+                event_id,market_item_id,market_review_id,channel,status,
+                decision_action,attempted_at,sent_at,payload_json
+            ) VALUES (NULL, ?, ?, 'feishu', 'sent', ?, ?, ?, '{}')
+            """,
+            (market_item_id, review_id, action, seen_at, seen_at),
+        )
+    return market_item_id
 
 
 def frontend_source() -> str:
@@ -364,72 +460,32 @@ def test_holdings_page_marks_environment_and_related_keywords() -> None:
 def test_event_center_search_filters_before_per_pipeline_limit() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
-        conn = sqlite3.connect(db_path)
-        conn.execute(
-            """
-            CREATE TABLE article_reviews (
-                source TEXT,
-                item_id TEXT,
-                url TEXT,
-                title TEXT,
-                source_module TEXT,
-                published_at TEXT,
-                importance TEXT,
-                push_now INTEGER,
-                incremental_classification TEXT,
-                affected_targets_json TEXT,
-                daily_summary TEXT,
-                reason TEXT,
-                pushed_at TEXT,
-                created_at TEXT
+        init_db(db_path).close()
+        with sqlite3.connect(db_path) as conn:
+            insert_unified_result(
+                conn,
+                item_kind="article",
+                source="cls_telegraph_api",
+                item_id="2421358",
+                title="高盛重磅发声：做多中国AI价值链",
+                summary="高盛发布中国AI价值链策略",
+                published_at="2026-07-09T03:57:30+00:00",
+                seen_at="2026-07-09T03:57:58.693585+00:00",
+                importance="medium",
+                source_label="财联社 / 电报 API",
             )
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO article_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "cls_telegraph_api",
-                "2421358",
-                "https://example.com/goldman",
-                "高盛重磅发声：做多中国AI价值链",
-                "财联社 / 电报 API",
-                "2026-07-09T03:57:30+00:00",
-                "medium",
-                0,
-                "已有预期",
-                "[]",
-                "高盛发布中国AI价值链策略",
-                "旧门控未推送",
-                "",
-                "2026-07-09T03:57:58.693585+00:00",
-            ),
-        )
-        for index in range(301):
-            conn.execute(
-                """
-                INSERT INTO article_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    "cls_telegraph_api",
-                    f"noise-{index}",
-                    "",
-                    f"噪音新闻 {index}",
-                    "财联社 / 电报 API",
-                    "2026-07-09T15:00:00+00:00",
-                    "low",
-                    0,
-                    "",
-                    "[]",
-                    "普通内容",
-                    "",
-                    "",
-                    f"2026-07-09T15:00:00.{index:03d}+00:00",
-                ),
-            )
-        conn.commit()
-        conn.close()
+            for index in range(301):
+                insert_unified_result(
+                    conn,
+                    item_kind="article",
+                    source="cls_telegraph_api",
+                    item_id=f"noise-{index}",
+                    title=f"噪音新闻 {index}",
+                    summary="普通内容",
+                    published_at="2026-07-09T15:00:00+00:00",
+                    seen_at=f"2026-07-09T15:00:00.{index:03d}+00:00",
+                    source_label="财联社 / 电报 API",
+                )
 
         rows = fetch_events_rows(
             day="2026-07-09",
@@ -446,25 +502,22 @@ def test_event_center_search_filters_before_per_pipeline_limit() -> None:
 def test_event_center_date_range_is_inclusive_in_beijing_time() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
-        conn = sqlite3.connect(db_path)
-        conn.execute(
-            """
-            CREATE TABLE article_reviews (
-                source TEXT, item_id TEXT, url TEXT, title TEXT, source_module TEXT,
-                published_at TEXT, importance TEXT, push_now INTEGER,
-                incremental_classification TEXT, affected_targets_json TEXT,
-                daily_summary TEXT, reason TEXT, pushed_at TEXT, created_at TEXT
-            )
-            """
-        )
-        rows = [
-            ("source", "start", "", "起始日", "source", "", "low", 0, "", "[]", "", "", "", "2026-07-01T00:00:00+00:00"),
-            ("source", "end", "", "结束日", "source", "", "low", 0, "", "[]", "", "", "", "2026-07-02T15:59:59+00:00"),
-            ("source", "after", "", "结束日之后", "source", "", "low", 0, "", "[]", "", "", "", "2026-07-02T16:00:00+00:00"),
-        ]
-        conn.executemany("INSERT INTO article_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
-        conn.commit()
-        conn.close()
+        init_db(db_path).close()
+        with sqlite3.connect(db_path) as conn:
+            for item_id, title, seen_at in (
+                ("start", "起始日", "2026-07-01T00:00:00+00:00"),
+                ("end", "结束日", "2026-07-02T15:59:59+00:00"),
+                ("after", "结束日之后", "2026-07-02T16:00:00+00:00"),
+            ):
+                insert_unified_result(
+                    conn,
+                    item_kind="article",
+                    source="source",
+                    item_id=item_id,
+                    title=title,
+                    published_at="",
+                    seen_at=seen_at,
+                )
 
         selected = fetch_events_rows(start_day="2026-07-01", end_day="2026-07-02", db_path=db_path)
         same_day = fetch_events_rows(day="2026-07-01", db_path=db_path)
@@ -495,79 +548,31 @@ def test_event_center_date_range_rejects_partial_or_inverted_dates() -> None:
 def test_event_center_can_show_baselines_and_filter_by_published_time() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
-        conn = sqlite3.connect(db_path)
-        conn.execute(
-            """
-            CREATE TABLE seen_items (
-                source TEXT,
-                item_id TEXT,
-                url TEXT,
-                title TEXT,
-                summary TEXT,
-                published_at TEXT,
-                first_seen_at TEXT
+        init_db(db_path).close()
+        with sqlite3.connect(db_path) as conn:
+            insert_unified_result(
+                conn,
+                item_kind="article",
+                source="value_directory_ib_stocks",
+                item_id="baseline-1",
+                title="价值目录首次基线研报",
+                summary="首次采集",
+                published_at="2026-07-09T16:00:00+00:00",
+                seen_at="2026-07-10T08:52:24+00:00",
+                collection_class="baseline",
             )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE article_reviews (
-                source TEXT,
-                item_id TEXT,
-                url TEXT,
-                title TEXT,
-                source_module TEXT,
-                published_at TEXT,
-                importance TEXT,
-                push_now INTEGER,
-                incremental_classification TEXT,
-                affected_targets_json TEXT,
-                daily_summary TEXT,
-                reason TEXT,
-                pushed_at TEXT,
-                created_at TEXT
+            insert_unified_result(
+                conn,
+                item_kind="article",
+                source="value_directory_ib_stocks",
+                item_id="reviewed-1",
+                title="价值目录后续研报",
+                summary="后续采集",
+                published_at="2026-07-10T15:00:00+00:00",
+                seen_at="2026-07-11T00:00:10+00:00",
+                importance="medium",
+                source_label="价值目录 / 国际投行-个股",
             )
-            """
-        )
-        conn.execute(
-            """
-            INSERT INTO seen_items (
-                source, item_id, url, title, summary, published_at, first_seen_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "value_directory_ib_stocks",
-                "baseline-1",
-                "https://example.com/baseline",
-                "价值目录首次基线研报",
-                "首次采集",
-                "2026-07-09T16:00:00+00:00",
-                "2026-07-10T08:52:24+00:00",
-            ),
-        )
-        conn.execute(
-            """
-            INSERT INTO article_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "value_directory_ib_stocks",
-                "reviewed-1",
-                "https://example.com/reviewed",
-                "价值目录后续研报",
-                "价值目录 / 国际投行-个股",
-                "2026-07-10T15:00:00+00:00",
-                "medium",
-                0,
-                "规则未命中",
-                "[]",
-                "后续采集",
-                "",
-                "",
-                "2026-07-11T00:00:10+00:00",
-            ),
-        )
-        conn.commit()
-        conn.close()
 
         default_rows = fetch_events_rows(
             day="2026-07-10",
@@ -603,32 +608,18 @@ def test_event_center_shows_company_disclosure_baseline_only_when_requested() ->
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
         with sqlite3.connect(db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO events (
-                    source, source_event_id, event_type, title, summary, full_text, url,
-                    published_at, first_seen_at, symbols_json, themes_json, raw_json,
-                    content_hash, baseline_only
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    "company_disclosures",
-                    "announcement:1225426155",
-                    "announcement",
-                    "股票交易异常波动公告",
-                    "基线公告",
-                    "",
-                    "https://static.cninfo.com.cn/example.pdf",
-                    "2026-07-16T18:00:00+08:00",
-                    "2026-07-16T11:41:48+00:00",
-                    '["001270.SZ"]',
-                    '["公司公告"]',
-                    "{}",
-                    "baseline-hash",
-                    1,
-                ),
+            insert_unified_result(
+                conn,
+                item_kind="event",
+                source="company_disclosures",
+                item_id="announcement:1225426155",
+                title="股票交易异常波动公告",
+                summary="基线公告",
+                published_at="2026-07-16T18:00:00+08:00",
+                seen_at="2026-07-16T11:41:48+00:00",
+                collection_class="baseline",
+                content_type="announcement",
             )
-            conn.commit()
 
         hidden = fetch_events_rows(
             day="2026-07-16",
@@ -644,7 +635,7 @@ def test_event_center_shows_company_disclosure_baseline_only_when_requested() ->
 
     assert hidden == []
     assert len(visible) == 1
-    assert visible[0]["id"] == "1"
+    assert visible[0]["id"] == "announcement:1225426155"
     assert visible[0]["source_id"] == "company_disclosures"
     assert visible[0]["baseline_only"] is True
     assert visible[0]["delivery_status"] == ""
@@ -655,64 +646,29 @@ def test_event_center_does_not_duplicate_seen_item_projected_to_event() -> None:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
         with sqlite3.connect(db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO seen_items (
-                    source, item_id, url, title, summary, published_at, first_seen_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    "sina_flash",
-                    "flash-admitted",
-                    "https://example.com/flash-admitted",
-                    "已准入快讯",
-                    "已生成事件记录",
-                    "2026-07-23T01:00:00+00:00",
-                    "2026-07-23T01:00:01+00:00",
-                ),
+            insert_unified_result(
+                conn,
+                item_kind="event",
+                source="sina_flash",
+                item_id="flash-admitted",
+                title="已准入快讯",
+                summary="已生成统一记录",
+                published_at="2026-07-23T01:00:00+00:00",
+                seen_at="2026-07-23T01:00:01+00:00",
+                content_type="flash",
             )
-            conn.execute(
-                """
-                INSERT INTO seen_items (
-                    source, item_id, url, title, summary, published_at, first_seen_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    "sina_flash",
-                    "flash-excluded",
-                    "https://example.com/flash-excluded",
-                    "未准入快讯",
-                    "只保留发现记录",
-                    "2026-07-23T01:01:00+00:00",
-                    "2026-07-23T01:01:01+00:00",
-                ),
+            insert_unified_result(
+                conn,
+                item_kind="event",
+                source="sina_flash",
+                item_id="flash-excluded",
+                title="未准入快讯",
+                summary="只保留基线记录",
+                published_at="2026-07-23T01:01:00+00:00",
+                seen_at="2026-07-23T01:01:01+00:00",
+                collection_class="baseline",
+                content_type="flash",
             )
-            conn.execute(
-                """
-                INSERT INTO events (
-                    source, source_event_id, event_type, title, summary, full_text, url,
-                    published_at, first_seen_at, symbols_json, themes_json, raw_json,
-                    content_hash, baseline_only
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    "sina_flash",
-                    "flash-admitted",
-                    "flash",
-                    "已准入快讯",
-                    "已生成事件记录",
-                    "已生成事件记录",
-                    "https://example.com/flash-admitted",
-                    "2026-07-23T01:00:00+00:00",
-                    "2026-07-23T01:00:01+00:00",
-                    "[]",
-                    '["新浪财经快讯"]',
-                    "{}",
-                    "flash-admitted-hash",
-                    0,
-                ),
-            )
-            conn.commit()
 
         rows = fetch_events_rows(
             day="2026-07-23",
@@ -724,7 +680,10 @@ def test_event_center_does_not_duplicate_seen_item_projected_to_event() -> None:
     assert len(rows) == 2
     assert sum(row["kind"] == "flash" and row["title"] == "已准入快讯" for row in rows) == 1
     assert sum(row["kind"] == "baseline" and row["id"] == "flash-admitted" for row in rows) == 0
-    assert sum(row["kind"] == "baseline" and row["id"] == "flash-excluded" for row in rows) == 1
+    assert sum(
+        row["kind"] == "flash" and row["id"] == "flash-excluded" and row["baseline_only"]
+        for row in rows
+    ) == 1
 
 
 def test_event_center_source_filter_uses_grouped_dropdown() -> None:
@@ -786,47 +745,67 @@ def test_event_center_projects_current_feedback_across_active_stores() -> None:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
         with sqlite3.connect(db_path) as conn:
-            ensure_article_reviews_table(conn)
-            ensure_official_news_table(conn)
-            article_values = (
-                "cls_telegraph_api", "article-1", "", "文章", "财联社", "2026-07-15T09:00:00+00:00",
-                "high", 1, "", "", "[]", "", "摘要", "", "{}", "{}", "", "2026-07-15T10:00:00+00:00", "2026-07-15T09:00:01+00:00",
+            insert_unified_result(
+                conn,
+                item_kind="article",
+                source="cls_telegraph_api",
+                item_id="article-1",
+                title="文章",
+                summary="摘要",
+                published_at="2026-07-15T09:00:00+00:00",
+                seen_at="2026-07-15T09:00:01+00:00",
+                action="push",
+                importance="high",
+                delivered=True,
+                source_label="财联社",
             )
-            conn.execute("INSERT INTO article_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", article_values)
-            conn.execute(
-                "INSERT INTO article_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                ("cls_telegraph_api", "article-unsent", "", "未投递文章", "财联社", "2026-07-15T09:01:00+00:00", "low", 0, "", "", "[]", "", "", "", "{}", "{}", "", "", "2026-07-15T09:01:01+00:00"),
+            insert_unified_result(
+                conn,
+                item_kind="article",
+                source="cls_telegraph_api",
+                item_id="article-unsent",
+                title="未投递文章",
+                published_at="2026-07-15T09:01:00+00:00",
+                seen_at="2026-07-15T09:01:01+00:00",
+                source_label="财联社",
             )
-            conn.execute(
-                "INSERT INTO official_news_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                ("nvidia_blog", "official-1", "", "官网新闻", "2026-07-15T09:02:00+00:00", "high", 1, "", "摘要", "{}", "{}", "", "2026-07-15T10:02:00+00:00", "2026-07-15T09:02:01+00:00"),
+            insert_unified_result(
+                conn,
+                item_kind="official",
+                source="nvidia_blog",
+                item_id="official-1",
+                title="官网新闻",
+                summary="摘要",
+                published_at="2026-07-15T09:02:00+00:00",
+                seen_at="2026-07-15T09:02:01+00:00",
+                action="push",
+                importance="high",
+                delivered=True,
+                content_type="official_news",
             )
-            event_id = conn.execute(
-                """
-                INSERT INTO events (source, source_event_id, event_type, title, summary, full_text, url,
-                                    published_at, first_seen_at, symbols_json, themes_json, raw_json,
-                                    content_hash, baseline_only)
-                VALUES ('sina_flash', 'event-1', 'flash_news', '事件', '摘要', '', '',
-                        '2026-07-15T09:03:00+00:00', '2026-07-15T09:03:01+00:00', '[]', '[]', '{}', 'hash-1', 0)
-                """
-            ).lastrowid
-            conn.execute(
-                "INSERT INTO event_analyses (event_id, task, importance, classification, should_push, analysis_json, created_at) VALUES (?, 'market', 'high', '', 1, '{}', '2026-07-15T09:03:02+00:00')",
-                (event_id,),
+            event_id = insert_unified_result(
+                conn,
+                item_kind="event",
+                source="sina_flash",
+                item_id="event-1",
+                title="事件",
+                summary="摘要",
+                published_at="2026-07-15T09:03:00+00:00",
+                seen_at="2026-07-15T09:03:01+00:00",
+                action="push",
+                importance="high",
+                delivered=True,
+                content_type="flash_news",
             )
-            conn.execute(
-                "INSERT INTO deliveries (event_id, channel, status, sent_at, payload_json) VALUES (?, 'feishu', 'sent', '2026-07-15T10:03:00+00:00', '{}')",
-                (event_id,),
-            )
-            conn.execute(
-                """
-                INSERT INTO seen_items (
-                    source, item_id, url, title, summary, published_at, first_seen_at
-                ) VALUES (
-                    'baseline_source', 'baseline-1', '', '基线', '',
-                    '2026-07-15T09:04:00+00:00', '2026-07-15T09:04:01+00:00'
-                )
-                """
+            insert_unified_result(
+                conn,
+                item_kind="article",
+                source="baseline_source",
+                item_id="baseline-1",
+                title="基线",
+                published_at="2026-07-15T09:04:00+00:00",
+                seen_at="2026-07-15T09:04:01+00:00",
+                collection_class="baseline",
             )
             insert_feedback(conn, event_id="f1", item_kind="article", source="cls_telegraph_api", item_id="article-1", label="high_value", operator="operator-a", clicked_at_us=100)
             insert_feedback(conn, event_id="f2", item_kind="article", source="cls_telegraph_api", item_id="article-1", label="duplicate", operator="operator-a", clicked_at_us=300, reasons='["stale"]')
@@ -845,7 +824,7 @@ def test_event_center_projects_current_feedback_across_active_stores() -> None:
         assert "特别有用 1" in article["feedback_display"] and "重复 1" in article["feedback_display"]
         assert by_id["official-1"]["feedback_state"] == "unlabelled"
         assert by_id["official-1"]["feedback_display"] == "未反馈"
-        assert by_id[str(event_id)]["feedback_state"] == "unlabelled"
+        assert by_id["event-1"]["feedback_state"] == "unlabelled"
         assert by_id["article-unsent"]["feedback_state"] == "not_delivered"
         assert by_id["baseline-1"]["feedback_state"] == "not_applicable"
         assert "operator_id" not in article and "operator-a" not in str(article)
@@ -857,7 +836,7 @@ def test_event_center_projects_current_feedback_across_active_stores() -> None:
         unlabelled_rows = fetch_events_rows(day="2026-07-15", feedback="unlabelled", db_path=db_path)
         assert [row["id"] for row in duplicate_rows] == ["article-1"]
         assert invalid_rows == []
-        assert {str(row["id"]) for row in unlabelled_rows} == {"official-1", str(event_id)}
+        assert {str(row["id"]) for row in unlabelled_rows} == {"official-1", "event-1"}
         with sqlite3.connect(db_path) as conn:
             assert conn.execute("SELECT COUNT(*) FROM market_feedback").fetchone()[0] == before
 
@@ -867,18 +846,19 @@ def test_event_center_feedback_filter_applies_before_article_limit() -> None:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
         with sqlite3.connect(db_path) as conn:
-            ensure_article_reviews_table(conn)
             for index in range(301):
-                conn.execute(
-                    "INSERT INTO article_reviews VALUES (?, ?, '', ?, '财联社', ?, 'high', 1, '', '', '[]', '', '', '', '{}', '{}', '', ?, ?)",
-                    (
-                        "cls_telegraph_api",
-                        f"article-{index}",
-                        f"文章 {index}",
-                        "2026-07-15T09:00:00+00:00",
-                        "2026-07-15T10:00:00+00:00",
-                        f"2026-07-15T09:{index // 60:02d}:{index % 60:02d}+00:00",
-                    ),
+                insert_unified_result(
+                    conn,
+                    item_kind="article",
+                    source="cls_telegraph_api",
+                    item_id=f"article-{index}",
+                    title=f"文章 {index}",
+                    published_at="2026-07-15T09:00:00+00:00",
+                    seen_at=f"2026-07-15T09:{index // 60:02d}:{index % 60:02d}+00:00",
+                    action="push",
+                    importance="high",
+                    delivered=True,
+                    source_label="财联社",
                 )
             insert_feedback(conn, event_id="oldest-feedback", item_kind="article", source="cls_telegraph_api", item_id="article-0", label="duplicate", operator="operator-a", clicked_at_us=100)
             conn.commit()

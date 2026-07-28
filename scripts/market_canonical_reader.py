@@ -132,7 +132,9 @@ def _selected_item_rows(
 ) -> list[sqlite3.Row]:
     """Return one display result per item while retaining all result versions in storage."""
     seen_time = (
-        "CASE WHEN r.legacy_store_kind IN ('article_reviews','official_news_reviews') "
+        "CASE WHEN EXISTS (SELECT 1 FROM market_item_aliases display_alias "
+        "WHERE display_alias.market_item_id=m.id "
+        "AND display_alias.item_kind IN ('article','official')) "
         "THEN COALESCE(NULLIF(r.created_at,''),m.first_seen_at) ELSE m.first_seen_at END"
     )
     display_time = (
@@ -344,8 +346,7 @@ def _review_rows_for_kind(
     end_utc: str = "",
     since: str = "",
 ) -> list[sqlite3.Row]:
-    store = STORE_FOR_KIND[item_kind]
-    params: list[Any] = [store, item_kind]
+    params: list[Any] = [item_kind]
     time_clause = ""
     if start_utc and end_utc:
         time_clause = "AND datetime(r.created_at) >= datetime(?) AND datetime(r.created_at) < datetime(?)"
@@ -381,7 +382,6 @@ def _review_rows_for_kind(
                 FROM market_reviews current
                 WHERE current.market_item_id=m.id
                   AND current.is_current=1
-                  AND current.legacy_store_kind=?
                 ORDER BY current.id DESC
                 LIMIT 1
             )
@@ -403,6 +403,7 @@ def _article_legacy_row(row: sqlite3.Row) -> dict[str, Any]:
     if not affected:
         affected = _json_text(card_targets(gate))
     return {
+        "market_review_id": int(row["review_id"]),
         "source": str(row["alias_source"] or row["source"]),
         "item_id": str(row["legacy_item_id"]),
         "url": str(row["url"] or legacy.get("url") or ""),
@@ -449,6 +450,7 @@ def _official_legacy_row(row: sqlite3.Row) -> dict[str, Any]:
     analysis = _official_analysis(payload, row)
     interpretation = _interpretation(row)
     return {
+        "market_review_id": int(row["review_id"]),
         "source": str(row["alias_source"] or row["source"]),
         "item_id": str(row["legacy_item_id"]),
         "url": str(row["url"] or legacy.get("url") or ""),
@@ -473,6 +475,7 @@ def _event_legacy_row(row: sqlite3.Row) -> dict[str, Any]:
     payload, legacy = _payload_parts(row)
     analysis = _with_unified_results(payload, row)
     return {
+        "market_review_id": int(row["review_id"]),
         "id": int(row["legacy_item_id"]) if str(row["legacy_item_id"]).isdigit() else row["legacy_item_id"],
         "source": str(row["alias_source"] or row["source"]),
         "source_event_id": str(row["source_item_id"] or ""),
@@ -547,8 +550,7 @@ def canonical_signal_rows(
 def canonical_feedback_snapshot(
     conn: sqlite3.Connection, item_kind: str, source: str, item_id: str
 ) -> dict[str, Any] | None:
-    store = STORE_FOR_KIND.get(item_kind)
-    if not store:
+    if item_kind not in STORE_FOR_KIND:
         return None
     row = conn.execute(
         """
@@ -563,12 +565,11 @@ def canonical_feedback_snapshot(
         JOIN market_items m ON m.id=a.market_item_id
         JOIN market_reviews r ON r.market_item_id=m.id
                              AND r.is_current=1
-                             AND r.legacy_store_kind=?
         WHERE a.item_kind=? AND a.source=? AND a.legacy_item_id=?
         ORDER BY r.id DESC
         LIMIT 1
         """,
-        (store, item_kind, source, item_id),
+        (item_kind, source, item_id),
     ).fetchone()
     if not row:
         return None
