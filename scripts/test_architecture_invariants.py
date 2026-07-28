@@ -46,8 +46,6 @@ UNIFIED_STORAGE_RUNTIME_MODULES = {
     "news_collector.py",
     "official_collector.py",
     "official_news_daily.py",
-    "range_report.py",
-    "resend_events.py",
     "rule_center.py",
     "signals_extract.py",
     "sina_flash.py",
