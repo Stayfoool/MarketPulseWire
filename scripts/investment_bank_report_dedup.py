@@ -60,6 +60,16 @@ _INVALID_SUBJECTS = {
     "the company",
     "the stock",
 }
+_INVALID_INSTITUTIONS = {
+    "证券",
+    "证券公司",
+    "银行",
+    "投行",
+    "研究机构",
+    "该机构",
+    "机构",
+    "公司",
+}
 
 
 def _compact(*values: object) -> str:
@@ -116,6 +126,82 @@ def _institution_id(
         if any(_contains_alias(text, alias) for alias in aliases)
     }
     return next(iter(matched)) if len(matched) == 1 else ""
+
+
+def _normalize_institution_name(value: str) -> str:
+    name = _compact(value).strip(" ：:，,。；;()（）[]【】\"'")
+    name = re.sub(r"(?:对|将)$", "", name)
+    name = re.sub(
+        r"(?:证券股份有限公司|证券有限责任公司|证券公司|股份有限公司|有限责任公司|有限公司|证券|银行)$",
+        "",
+        name,
+        flags=re.I,
+    )
+    name = re.sub(r"(?:\s+securities|\s+bank|\s+capital\s+markets)$", "", name, flags=re.I)
+    return _compact(name).casefold()
+
+
+def _derived_institution_names(text: str, *, subject: str = "") -> set[str]:
+    token = r"(?:[\u4e00-\u9fff·&.]{2,30}|[A-Za-z0-9][A-Za-z0-9&. -]{1,38}?)"
+    suffixed_name = (
+        r"(?:[\u4e00-\u9fff·&.]{1,30}(?:证券(?:股份有限公司|有限责任公司|公司)?|银行|投行)"
+        r"|[A-Za-z0-9][A-Za-z0-9&. -]{1,30}?\s+(?:Securities|Bank|Capital\s+Markets))"
+    )
+    action = r"(?:发布|发表|出具|称|认为|预计|首次覆盖|初次覆盖|启动覆盖|恢复覆盖|将|给出|给予)"
+    patterns = (
+        rf"(?P<institution>{suffixed_name})\s*(?=(?:：|:|，|,)?\s*{action})",
+        rf"(?:^|[。！？；;])\s*(?P<institution>{suffixed_name})\s*(?=：|:)",
+    )
+    if subject:
+        patterns += (
+            rf"(?:^|[。！？；;])\s*(?P<institution>{token})\s*(?=(?:将|对)?\s*{re.escape(subject)}\s*(?:的)?(?:目标价|评级|首次覆盖|初次覆盖|启动覆盖|恢复覆盖))",
+            rf"(?:^|[。！？；;])\s*(?P<institution>{token})\s*(?=(?:首次覆盖|初次覆盖|启动覆盖|恢复覆盖)\s*{re.escape(subject)})",
+        )
+    candidates: set[str] = set()
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, flags=re.I):
+            name = _normalize_institution_name(match.group("institution"))
+            if (
+                not name
+                or name in _INVALID_INSTITUTIONS
+                or re.fullmatch(r"(?:某|该|一家|上述|知名|国际|外资)?(?:投行|机构|券商|银行|证券公司)", name)
+                or name == _normalize_institution_name(subject)
+            ):
+                continue
+            candidates.add(name)
+    return candidates
+
+
+def _institution_identity(
+    evidence_text: str,
+    article_text: str,
+    subject: str,
+    institutions: Sequence[tuple[str, Sequence[str]]],
+) -> tuple[str, str]:
+    combined_text = _compact(evidence_text, article_text)
+    matched_ids = {
+        institution_id
+        for institution_id, aliases in institutions
+        if any(_contains_alias(combined_text, alias) for alias in aliases)
+    }
+    if len(matched_ids) > 1:
+        return "", ""
+
+    derived_names = _derived_institution_names(evidence_text, subject=subject)
+    derived_names.update(_derived_institution_names(article_text, subject=subject))
+    if matched_ids:
+        institution_id = next(iter(matched_ids))
+        aliases = next(aliases for known_id, aliases in institutions if known_id == institution_id)
+        normalized_aliases = {_normalize_institution_name(alias) for alias in aliases}
+        if any(name not in normalized_aliases for name in derived_names):
+            return "", ""
+        display_name = next(iter(derived_names), _normalize_institution_name(aliases[0]))
+        return institution_id, display_name
+    if len(derived_names) != 1:
+        return "", ""
+    display_name = next(iter(derived_names))
+    digest = hashlib.sha256(display_name.encode("utf-8")).hexdigest()[:16]
+    return f"derived-{digest}", display_name
 
 
 def _direct_holding_subject(decision: DecisionResult) -> str:
@@ -200,7 +286,7 @@ def _target_price(text: str) -> tuple[str, str]:
     currency = r"(?P<currency>人民币|港元|美元|CNY|RMB|HKD|USD|￥|¥|\$)?"
     number = r"(?P<number>\d{1,6}(?:,\d{3})*(?:\.\d+)?)"
     patterns = (
-        rf"(?:目标价|target\s+price|\bTP\b)\s*(?:为|至|到|of|at|to|:|：)?\s*{currency}\s*{number}(?:\s*(?:元人民币|人民币|元|港元|美元))?",
+        rf"(?:目标价|target\s+price|\bTP\b)\s*(?:定为|为|至|到|of|at|to|:|：)?\s*{currency}\s*{number}(?:\s*(?:元人民币|人民币|元|港元|美元))?",
         rf"{currency}\s*{number}\s*(?:元人民币|人民币|元|港元|美元)?\s*(?:的)?(?:目标价|target\s+price)",
     )
     for pattern in patterns:
@@ -267,10 +353,6 @@ def investment_bank_report_dedup_hit(
     if any(marker in combined_text.casefold() for marker in _REVISION_MARKERS):
         return None
     action = _report_action(combined_text)
-    known_institutions = institutions if institutions is not None else _default_institutions()
-    institution = _institution_id(text, known_institutions) or _institution_id(
-        article_text, known_institutions
-    )
     evidence_subject = _subject_from_text(text)
     article_subject = _subject_from_text(article_text, hint=evidence_subject)
     if evidence_subject and article_subject and evidence_subject.casefold() in article_subject.casefold():
@@ -278,6 +360,10 @@ def investment_bank_report_dedup_hit(
     else:
         inferred_subject = evidence_subject or article_subject
     subject = _direct_holding_subject(decision) or inferred_subject
+    known_institutions = institutions if institutions is not None else _default_institutions()
+    institution, institution_name = _institution_identity(
+        text, article_text, subject, known_institutions
+    )
     currency, target = _target_price(text)
     if not target:
         currency, target = _target_price(article_text)
@@ -298,6 +384,7 @@ def investment_bank_report_dedup_hit(
         "dedup_kind": "investment_bank_report",
         "event_facts": {
             "institution_id": institution,
+            "institution_name": institution_name,
             "subject": subject,
             "report_action": action,
             "rating": rating,
