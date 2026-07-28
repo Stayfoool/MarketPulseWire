@@ -87,6 +87,8 @@ REMOVED_COMPATIBILITY_MODULES = (
     "market_review_store.py",
     "market_storage_audit.py",
     "market_storage_migration.py",
+    "rule_config_migration_v1.py",
+    "run_production_with_rule_shadow.py",
 )
 
 INDEPENDENT_ROUTE_EXCEPTIONS = {
