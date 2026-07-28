@@ -70,7 +70,7 @@ CI_SAFE_TESTS = (
     "test_rule_center.py",
     "test_rule_core_shadow_combined.py",
     "test_rule_core_shadow_daily.py",
-    "test_rule_core_batch.py",
+    "test_production_collector_batch.py",
     "test_signals_extract.py",
     "test_sina_stock_news.py",
     "test_sina_zy_client.py",

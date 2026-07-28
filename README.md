@@ -55,7 +55,7 @@ cp config/portfolio.example.json config/portfolio.json
 python scripts/market_db.py
 ```
 
-Set `RULE_CORE_SHADOW_CONFIG` in the private `.env` to a complete private global
+Set `RULE_CORE_CONFIG` in the private `.env` to a complete private global
 rule configuration before using media collection or the Web `媒体关键词` page.
 The repository `config/rule_core_v1.test.json` is a test fixture, not a
 production configuration.
