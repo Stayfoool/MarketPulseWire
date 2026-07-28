@@ -211,7 +211,8 @@ reloads the new units and records the installed revision. Only
 installed-systemd revision matches the deployed code revision. This prevents a
 timer from invoking a renamed executable after the old path has been deleted
 but before the replacement unit is installed. GitHub Deploy runs these three
-commands in this order.
+commands in this order. Both sync stages preserve the server-generated
+`REVISION` marker as well as the private configuration, data, logs and reports.
 
 The installer copies but keeps these standalone report-only collector timers disabled:
 

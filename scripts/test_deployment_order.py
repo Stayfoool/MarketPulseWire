@@ -38,6 +38,7 @@ def test_shared_sync_modes_and_private_exclusions() -> None:
     assert prune.count("--delete") == 1
     for exclusion in (
         ".env",
+        "REVISION",
         "proxy.env",
         "config/portfolio.json",
         "config/llm_decision_rules.json",
