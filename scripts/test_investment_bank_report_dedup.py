@@ -51,6 +51,50 @@ def test_same_nomura_report_converges_across_source_wording() -> None:
     assert first["dedup_lookback_days"] == 7
 
 
+def test_unlisted_mizuho_report_converges_without_admission_allowlist() -> None:
+    admission = {
+        "admission": {
+            "evidence": [
+                {
+                    "reason_code": "holding_direct_identity",
+                    "matched_subjects": ["长鑫科技"],
+                }
+            ]
+        }
+    }
+    texts = (
+        "瑞穗证券首次覆盖存储芯片厂商长鑫科技，将长鑫科技目标价定为70元。",
+        "瑞穗证券：长鑫科技目标价为70元，第二季度业绩料将大幅超预期。",
+        "瑞穗证券发布研报称，将长鑫科技目标价定为70元。",
+        "瑞穗对长鑫科技首次覆盖，目标价人民币70元。",
+    )
+    hits = [
+        investment_bank_report_dedup_hit(
+            {"source": f"source-{index}", "title": text},
+            DecisionResult(
+                action="push",
+                importance="high",
+                rule_hits=decision(text).rule_hits,
+                audit_json=admission,
+            ),
+            institutions=(),
+        )
+        for index, text in enumerate(texts)
+    ]
+    assert all(result is not None for result in hits)
+    assert len({result["dedup_key"] for result in hits if result}) == 1
+    assert hits[0]["event_facts"]["institution_name"] == "瑞穗"
+    assert hits[0]["event_facts"]["target_currency"] == "CNY"
+    assert hits[0]["event_facts"]["target_price"] == "70"
+
+
+def test_unlisted_institution_must_be_unique() -> None:
+    text = "甲方证券称，长鑫科技目标价为70元。乙方证券称，长鑫科技目标价为70元。"
+    assert investment_bank_report_dedup_hit(
+        {"title": text}, decision(text), institutions=()
+    ) is None
+
+
 def test_missing_evidence_details_are_completed_only_from_the_same_article() -> None:
     evidence = "长鑫科技股价相对IPO发行价有较大上涨空间，目标价116元人民币。"
     item = {
@@ -150,6 +194,8 @@ def test_missing_local_identity_or_push_eligibility_fails_open() -> None:
 
 def main() -> int:
     test_same_nomura_report_converges_across_source_wording()
+    test_unlisted_mizuho_report_converges_without_admission_allowlist()
+    test_unlisted_institution_must_be_unique()
     test_missing_evidence_details_are_completed_only_from_the_same_article()
     test_changed_report_facts_remain_independent()
     test_same_target_identity_does_not_require_the_same_rating()
