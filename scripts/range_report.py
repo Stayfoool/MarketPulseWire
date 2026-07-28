@@ -13,7 +13,6 @@ from typing import Any
 
 from env_utils import load_env
 from market_db import DEFAULT_DB_PATH, init_db
-from market_event_adapter import analyze_event
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -84,13 +83,26 @@ def select_notice_ids(rows: list[sqlite3.Row], limit: int) -> list[int]:
     return selected
 
 
-def analyze_selected_notices(ids: list[int], task: str) -> dict[int, dict[str, Any]]:
+def selected_notice_analyses(rows: list[sqlite3.Row], ids: list[int]) -> dict[int, dict[str, Any]]:
     analyses: dict[int, dict[str, Any]] = {}
-    for event_id in ids:
+    selected = set(ids)
+    for row in rows:
+        item_id = int(row["id"])
+        if item_id not in selected:
+            continue
         try:
-            analyses[event_id] = analyze_event(event_id, task=task, db_path=DEFAULT_DB_PATH)
-        except Exception as exc:  # noqa: BLE001 - keep report generation best-effort
-            analyses[event_id] = {"_error": str(exc)}
+            payload = json.loads(str(row["legacy_payload_json"] or "{}"))
+            decision = json.loads(str(row["decision_json"] or "{}"))
+            interpretation = json.loads(str(row["interpretation_json"] or "{}"))
+        except (TypeError, json.JSONDecodeError) as exc:
+            analyses[item_id] = {"_error": f"统一存储结果解析失败：{exc}"}
+            continue
+        analysis = payload if isinstance(payload, dict) else {}
+        if isinstance(decision, dict):
+            analysis.setdefault("importance", decision.get("importance", ""))
+        if isinstance(interpretation, dict):
+            analysis.setdefault("core_content", interpretation.get("core_content", ""))
+        analyses[item_id] = analysis
     return analyses
 
 
@@ -107,20 +119,46 @@ def render_report(start: str, end: str, notice_analysis_limit: int) -> str:
     sina = fetch_rows(
         conn,
         """
-        SELECT id, title, summary, full_text, published_at, symbols_json, raw_json
-        FROM events
-        WHERE source='sina_flash' AND (published_at >= ? OR first_seen_at >= ?)
-        ORDER BY published_at DESC, id DESC
+        SELECT m.id, m.title, m.summary, m.full_text, m.published_at,
+               m.first_seen_at, m.symbols_json, m.raw_json,
+               r.decision_json, r.interpretation_json, r.legacy_payload_json
+        FROM market_items m
+        LEFT JOIN market_reviews r ON r.id=(
+            SELECT current.id FROM market_reviews current
+            WHERE current.market_item_id=m.id AND current.task='production'
+              AND current.is_current=1
+            ORDER BY current.id DESC LIMIT 1
+        )
+        WHERE m.source='sina_flash'
+          AND (m.published_at >= ? OR m.first_seen_at >= ?)
+          AND EXISTS (
+              SELECT 1 FROM market_item_aliases a
+              WHERE a.market_item_id=m.id AND a.item_kind='event'
+          )
+        ORDER BY m.published_at DESC, m.id DESC
         """,
         (start, start),
     )
     notices = fetch_rows(
         conn,
         """
-        SELECT id, title, summary, full_text, published_at, symbols_json, raw_json
-        FROM events
-        WHERE source IN ('company_disclosures', 'ifind_notice') AND (published_at >= ? OR first_seen_at >= ?)
-        ORDER BY published_at DESC, id DESC
+        SELECT m.id, m.title, m.summary, m.full_text, m.published_at,
+               m.first_seen_at, m.symbols_json, m.raw_json,
+               r.decision_json, r.interpretation_json, r.legacy_payload_json
+        FROM market_items m
+        LEFT JOIN market_reviews r ON r.id=(
+            SELECT current.id FROM market_reviews current
+            WHERE current.market_item_id=m.id AND current.task='production'
+              AND current.is_current=1
+            ORDER BY current.id DESC LIMIT 1
+        )
+        WHERE m.source IN ('company_disclosures', 'ifind_notice')
+          AND (m.published_at >= ? OR m.first_seen_at >= ?)
+          AND EXISTS (
+              SELECT 1 FROM market_item_aliases a
+              WHERE a.market_item_id=m.id AND a.item_kind='event'
+          )
+        ORDER BY m.published_at DESC, m.id DESC
         """,
         (start, start),
     )
@@ -174,7 +212,7 @@ def render_report(start: str, end: str, notice_analysis_limit: int) -> str:
     )
 
     selected_notice_ids = select_notice_ids(notices, notice_analysis_limit)
-    notice_analyses = analyze_selected_notices(selected_notice_ids, "sample_range_report")
+    notice_analyses = selected_notice_analyses(notices, selected_notice_ids)
 
     notice_by_symbol: dict[str, list[sqlite3.Row]] = defaultdict(list)
     for row in notices:

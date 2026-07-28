@@ -135,11 +135,12 @@ Back up `data/surveil.sqlite3` before deploying a revision that first contains
 this migration, then verify `PRAGMA quick_check`, canonical row counts and
 foreign-key references under the `surveil` service account.
 
-The historical result/read migration is deliberately not run by
-`surveil-db-init.service`. Deploying its code only adds the schema and leaves
-Web, daily output, feedback and signal readers on the compatibility tables.
-After deployment, first create a mode-`0600` SQLite backup and preview the
-migration under the service account:
+The historical result migration is deliberately not run by
+`surveil-db-init.service`. An installation that has old result rows but has not
+yet created the `market-storage-results-v1` marker must complete this migration
+before deploying a revision whose runtime reads only unified storage. First
+create a mode-`0600` SQLite backup and preview the migration under the service
+account:
 
 ```bash
 sudo -u surveil /opt/surveil/.venv/bin/python \
@@ -161,17 +162,15 @@ the retained first-run statistics without scanning or rewriting the database.
 The first apply runs inside one explicit SQLite write transaction;
 any exception rolls back all item, alias, result and delivery-link changes. It
 writes the `market-storage-results-v1` marker only after the transaction
-succeeds. That marker switches Web Event Center,
-article/official daily output, feedback reads and signal extraction to
-`market_items` / `market_reviews`. Do not delete the compatibility tables or
-disable their writes in this stage. Verify old-to-new counts, preserved
-article/official/event ids, current result selection, daily dry runs, feedback
-resolution, signal dry run, foreign keys and SQLite integrity before treating
-the read switch as complete.
+succeeds. Verify old-to-new counts, preserved article/official/event ids,
+current result selection, daily dry runs, feedback resolution, signal dry run,
+foreign keys and SQLite integrity before deploying the unified-only runtime.
+The old tables remain physically present with historical data but receive no
+new production reads or writes after that deployment.
 
-After deploying the unified-write authority change, compare every new unified
-result with its retained compatibility copy. The command is read-only, defaults
-to the migration completion time and prints counts only:
+Before retiring compatibility-copy writes, compare unified results with the
+retained old-table copies. The command is read-only, defaults to the migration
+completion time and prints counts only:
 
 ```bash
 sudo -u surveil /opt/surveil/.venv/bin/python \
@@ -186,8 +185,11 @@ reference, current result blocked by the compatibility-reference unique
 constraint, foreign-key error or failed `quick_check` blocks rollout. Current
 retryable and terminal failures are reported as counts; failures unrelated to
 the compatibility-reference constraint do not by themselves make this storage
-comparison fail. The old tables remain enabled as compatibility copies during
-this stage.
+comparison fail. After the unified-only revision is deployed, this historical
+comparison is retained only as a migration/audit tool; it is not a production
+health check because new old-table copies are intentionally no longer created.
+The deployed unified-only revision is the earliest supported rollback point.
+Do not roll back to a revision that requires complete old-table copies.
 
 Use it to verify whether your Mac, GitHub, and server are aligned:
 
@@ -399,16 +401,19 @@ The installer also copies the production collector units:
 - `surveil-news-collector.timer`
 
 All general collectors construct `NormalizedMarketItem` and call
-`process_market_item(...)`, while preserving the existing `article_reviews`,
-`official_news_reviews`, and `events/event_analyses` stores. The former
-direct/compat runtime switch and compatibility wrappers have been removed; rollback
-now uses the normal Git/PR/deployment process instead of selecting a second runtime.
-The LLM decision cutover follows the same rule: there is no runtime selector back
-to another decision implementation. Record the preceding Git revision before deployment.
-If rollback criteria are met, stop affected Alibaba collectors, deploy that exact
-preceding revision, restart the same services and verify service health, logs and
-SQLite integrity. Do not rewrite already completed reviews or deliveries during
-rollback.
+`process_market_item(...)`. Production processing, Web Event Center, daily
+output, feedback and operational tools read and write `market_items`,
+`market_reviews`, `market_item_aliases` and linked `deliveries`; the old result
+tables retain historical rows only. The former direct/compat runtime switch and
+compatibility wrappers have been removed; rollback now uses the normal
+Git/PR/deployment process instead of selecting a second runtime.
+The LLM decision cutover follows the same rule: there is no runtime selector
+back to another decision implementation. For later deployments, record the
+preceding supported Git revision before deployment. If rollback criteria are
+met, stop affected Alibaba collectors, deploy that exact preceding revision,
+restart the same services and verify service health, logs and SQLite integrity.
+Never select a revision older than the unified-only storage cutover, and do not
+rewrite already completed reviews or deliveries during rollback.
 The research collector also runs public list/sitemap page sources such as
 TrendForce/SEMI pages and AlphaAbstract summaries on the same low-frequency page
 cadence. AlphaAbstract uses its public `sitemap.xml` and public summary pages;

@@ -148,8 +148,8 @@ def test_article_signal_extraction_uses_market_view_thesis_and_targets() -> None
     conn.row_factory = sqlite3.Row
     conn.execute(
         """
-        CREATE TABLE article_reviews (
-            source TEXT, item_id TEXT, url TEXT, title TEXT, source_module TEXT,
+        CREATE TABLE projected_market_rows (
+            market_review_id INTEGER, source TEXT, item_id TEXT, url TEXT, title TEXT, source_module TEXT,
             published_at TEXT, importance TEXT, push_now INTEGER, market_impact TEXT,
             incremental_classification TEXT, affected_targets_json TEXT, reason TEXT,
             daily_summary TEXT, confidence TEXT, gate_json TEXT, pushed_at TEXT, created_at TEXT
@@ -169,9 +169,10 @@ def test_article_signal_extraction_uses_market_view_thesis_and_targets() -> None
     }
     conn.execute(
         """
-        INSERT INTO article_reviews VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO projected_market_rows VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
+            41,
             "digitimes_tw_server",
             "item-1",
             "",
@@ -191,10 +192,12 @@ def test_article_signal_extraction_uses_market_view_thesis_and_targets() -> None
             "2026-07-11T00:01:00+00:00",
         ),
     )
-    row = conn.execute("SELECT * FROM article_reviews").fetchone()
+    row = conn.execute("SELECT * FROM projected_market_rows").fetchone()
     extracted = article_signal_from_row(conn, row)
     assert extracted is not None
     signal, targets, _evidence = extracted
+    assert signal["source_table"] == "market_reviews"
+    assert signal["source_id"] == "41"
     assert signal["thesis"] == "统一解读：液冷供应链关注度提升。"
     target_names = {target.get("name") for target in targets}
     assert "液冷" in target_names

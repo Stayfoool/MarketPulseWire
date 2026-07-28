@@ -139,12 +139,17 @@ def load_reviewed_item_ids(sources: Iterable[str], db_path: Path = DB_PATH) -> s
     placeholders = ",".join("?" for _ in source_list)
     try:
         with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-            if not table_exists(conn, "article_reviews"):
-                return set()
             return {
                 (str(row[0] or ""), str(row[1] or ""))
                 for row in conn.execute(
-                    f"SELECT source, item_id FROM article_reviews WHERE source IN ({placeholders})",
+                    f"""
+                    SELECT m.source,m.source_item_id
+                    FROM market_items m
+                    JOIN market_reviews r
+                      ON r.market_item_id=m.id AND r.task='production'
+                     AND r.is_current=1 AND r.review_status='succeeded'
+                    WHERE m.source IN ({placeholders})
+                    """,
                     source_list,
                 )
             }
@@ -447,7 +452,7 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="输出完整 JSON。")
     parser.add_argument("--write-report", action="store_true", help="把 JSON 报告写入 reports/。")
     parser.add_argument("--no-compare-seen", action="store_true", help="不读取生产库判断 already_seen。")
-    parser.add_argument("--no-compare-reviews", action="store_true", help="不读取 article_reviews 判断 already_reviewed。")
+    parser.add_argument("--no-compare-reviews", action="store_true", help="不读取 market_reviews 判断 already_reviewed。")
     parser.add_argument(
         "--respect-prod-cls-state",
         action="store_true",

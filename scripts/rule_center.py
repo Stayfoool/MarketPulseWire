@@ -497,44 +497,43 @@ def _rule_view(rule: dict[str, Any], settings: dict[str, Any], stats: dict[str, 
 
 
 def _marker_stats(conn, markers: tuple[str, ...], cutoff: str) -> dict[str, Any]:
-    total = 0
-    latest: dict[str, Any] | None = None
-    table_specs = (
-        ("article_reviews", "gate_json", "created_at", "source, item_id, title, published_at, created_at"),
-        ("official_news_reviews", "analysis_json", "created_at", "source, item_id, title, published_at, created_at"),
-        ("event_analyses", "analysis_json", "created_at", "NULL, CAST(event_id AS TEXT), '', '', created_at"),
+    clauses = " OR ".join(
+        "COALESCE(r.decision_json,'') || COALESCE(r.legacy_payload_json,'') LIKE ?"
+        for _ in markers
     )
-    for table, json_column, created_column, select_columns in table_specs:
-        if not db_table_exists(conn, table):
-            continue
-        clauses = " OR ".join(f"{json_column} LIKE ?" for _ in markers)
-        params = [f"%{marker}%" for marker in markers]
-        total += int(
-            conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE {created_column} >= ? AND ({clauses})",
-                [cutoff, *params],
-            ).fetchone()[0]
-        )
-        if latest is None:
-            row = conn.execute(
-                f"""
-                SELECT {select_columns}
-                FROM {table}
-                WHERE {created_column} >= ? AND ({clauses})
-                ORDER BY {created_column} DESC
-                LIMIT 1
-                """,
-                [cutoff, *params],
-            ).fetchone()
-            if row:
-                latest = {
-                    "source": row[0] or "",
-                    "item_id": row[1] or "",
-                    "title": row[2] or "",
-                    "published_at": row[3] or "",
-                    "created_at": row[4] or "",
-                }
-    return {"matches_30d": total, "last_match": latest or {}}
+    params = [f"%{marker}%" for marker in markers]
+    total = int(
+        conn.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM market_reviews r
+            WHERE r.created_at>=? AND r.is_current=1 AND ({clauses})
+            """,
+            [cutoff, *params],
+        ).fetchone()[0]
+    )
+    row = conn.execute(
+        f"""
+        SELECT m.source,m.source_item_id,m.title,m.published_at,r.created_at
+        FROM market_reviews r
+        JOIN market_items m ON m.id=r.market_item_id
+        WHERE r.created_at>=? AND r.is_current=1 AND ({clauses})
+        ORDER BY r.created_at DESC LIMIT 1
+        """,
+        [cutoff, *params],
+    ).fetchone()
+    latest = (
+        {
+            "source": row[0] or "",
+            "item_id": row[1] or "",
+            "title": row[2] or "",
+            "published_at": row[3] or "",
+            "created_at": row[4] or "",
+        }
+        if row
+        else {}
+    )
+    return {"matches_30d": total, "last_match": latest}
 
 
 def rule_center_payload(db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
@@ -625,54 +624,58 @@ def list_rule_audit(*, db_path: Path = DEFAULT_DB_PATH, limit: int = 30) -> list
 
 
 def _article_candidates(conn, cutoff: str, limit: int) -> list[dict[str, Any]]:
-    if not db_table_exists(conn, "article_reviews"):
-        return []
     rows = conn.execute(
         """
-        SELECT source, item_id, title, daily_summary, published_at, gate_json
-        FROM article_reviews
-        WHERE created_at >= ?
-        ORDER BY created_at DESC
+        SELECT m.source,m.source_item_id,m.title,m.summary,m.full_text,m.published_at,
+               m.raw_json,r.legacy_payload_json
+        FROM market_items m
+        JOIN market_item_aliases a ON a.market_item_id=m.id AND a.item_kind='article'
+        JOIN market_reviews r ON r.market_item_id=m.id AND r.is_current=1
+        WHERE r.created_at >= ?
+        ORDER BY r.created_at DESC
         LIMIT ?
         """,
         (cutoff, limit),
     ).fetchall()
     candidates = []
-    for source, item_id, title, summary, published_at, gate_json in rows:
+    for source, item_id, title, summary, full_text, published_at, raw_json, payload_json in rows:
         try:
-            raw = json.loads(gate_json or "{}")
+            raw = json.loads(raw_json or "{}")
         except json.JSONDecodeError:
             raw = {}
+        try:
+            payload = json.loads(payload_json or "{}")
+        except json.JSONDecodeError:
+            payload = {}
         candidates.append(
             {
                 "kind": "article",
                 "source": source,
                 "item_id": item_id,
                 "title": title,
-                "summary": summary or raw.get("core_content") or "",
+                "summary": summary or payload.get("daily_summary") or "",
                 "published_at": published_at or "",
-                "full_text": raw.get("core_content") or "",
-                "raw": raw,
+                "full_text": full_text or summary or "",
+                "raw": {**raw, "review": payload},
             }
         )
     return candidates
 
 
 def _event_candidates(conn, cutoff: str, limit: int) -> list[dict[str, Any]]:
-    if not db_table_exists(conn, "events"):
-        return []
     rows = conn.execute(
         """
-        SELECT id, source, title, summary, full_text, published_at, raw_json
-        FROM events
-        WHERE first_seen_at >= ?
-        ORDER BY first_seen_at DESC
+        SELECT m.source_item_id,m.source,m.title,m.summary,m.full_text,m.published_at,m.raw_json
+        FROM market_items m
+        JOIN market_item_aliases a ON a.market_item_id=m.id AND a.item_kind='event'
+        WHERE m.first_seen_at >= ?
+        ORDER BY m.first_seen_at DESC
         LIMIT ?
         """,
         (cutoff, limit),
     ).fetchall()
     candidates = []
-    for event_id, source, title, summary, full_text, published_at, raw_json in rows:
+    for item_id, source, title, summary, full_text, published_at, raw_json in rows:
         try:
             raw = json.loads(raw_json or "{}")
         except json.JSONDecodeError:
@@ -681,7 +684,7 @@ def _event_candidates(conn, cutoff: str, limit: int) -> list[dict[str, Any]]:
             {
                 "kind": "event",
                 "source": source,
-                "item_id": str(event_id),
+                "item_id": str(item_id),
                 "title": title,
                 "summary": summary or "",
                 "full_text": full_text or "",

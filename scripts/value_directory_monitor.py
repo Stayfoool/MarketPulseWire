@@ -13,9 +13,9 @@ from typing import Any, Callable
 
 from db_utils import update_seen_item_lifecycle
 from market_item import NormalizedMarketItem
-from market_review_store import article_item_id, article_review_exists
+from market_review_store import article_item_id
 from market_runtime import normalize_market_item, process_market_item
-from market_store import processing_failure_status
+from market_store import processing_failure_status, source_item_review_snapshot
 from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from rss_monitor import DB_PATH, connect_db, save_new_items_with_retry
 from source_health import record_source_failure, record_source_success
@@ -104,15 +104,20 @@ def load_unpushed_review_ids(
         return set()
     try:
         with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-            if not table_exists(conn, "article_reviews"):
-                return set()
             return {
                 str(row[0] or "")
                 for row in conn.execute(
                     """
-                    SELECT item_id
-                    FROM article_reviews
-                    WHERE source = ? AND COALESCE(pushed_at, '') = ''
+                    SELECT m.source_item_id
+                    FROM market_items m
+                    JOIN market_reviews r
+                      ON r.market_item_id=m.id AND r.task='production'
+                     AND r.is_current=1 AND r.review_status='succeeded'
+                    WHERE m.source = ?
+                      AND NOT EXISTS (
+                          SELECT 1 FROM deliveries d
+                          WHERE d.market_item_id=m.id AND d.status='sent'
+                      )
                     """,
                     (source_id,),
                 )
@@ -127,12 +132,17 @@ def load_reviewed_item_ids(source_id: str = SOURCE_ID, db_path: Path | None = No
         return set()
     try:
         with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-            if not table_exists(conn, "article_reviews"):
-                return set()
             return {
                 str(row[0] or "")
                 for row in conn.execute(
-                    "SELECT item_id FROM article_reviews WHERE source = ?",
+                    """
+                    SELECT m.source_item_id
+                    FROM market_items m
+                    JOIN market_reviews r
+                      ON r.market_item_id=m.id AND r.task='production'
+                     AND r.is_current=1 AND r.review_status='succeeded'
+                    WHERE m.source = ?
+                    """,
                     (source_id,),
                 )
             }
@@ -328,9 +338,8 @@ def review_and_maybe_push(
 ) -> bool:
     source = source or source_config()
     item_id = article_item_id(item)
-    with connect_db() as conn:
-        existing = article_review_exists(conn, source.source_id, item_id)
-    if existing and (existing.get("pushed_at") or not recheck_rules):
+    existing = source_item_review_snapshot(source.source_id, item_id, db_path=DB_PATH)
+    if existing and (existing.get("delivered") or not recheck_rules):
         return False
 
     if preview_enabled() and not has_preview_record(item):
@@ -470,15 +479,14 @@ def collect_production(
     retryable_item_id_set = {article_item_id(item) for item in retryable_items}
     if recheck_unpushed_enabled():
         limit = recheck_unpushed_limit()
+        unpushed_review_ids = load_unpushed_review_ids(source.source_id)
         for item in entries:
             if rechecked >= limit:
                 break
             item_id = article_item_id(item)
             if item_id in new_item_ids or item_id in retryable_item_id_set:
                 continue
-            with connect_db() as conn:
-                existing = article_review_exists(conn, source.source_id, item_id)
-            if not existing or existing.get("pushed_at"):
+            if item_id not in unpushed_review_ids:
                 continue
             rechecked += 1
             rechecked_item_ids.add(item_id)
@@ -760,7 +768,7 @@ def run(
 def main() -> int:
     load_env(ENV_PATH)
     parser = argparse.ArgumentParser(description="Monitor ValueList international-bank stock research index.")
-    parser.add_argument("--production", action="store_true", help="写入 seen_items/article_reviews 并按硬规则发送飞书。")
+    parser.add_argument("--production", action="store_true", help="写入 seen_items/market_reviews 并按统一决策发送飞书。")
     parser.add_argument("--notify-baseline", action="store_true", help="首次建立基线时也处理旧条目。默认只建立基线。")
     parser.add_argument("--limit", type=int, default=30, help="读取列表页前 N 条。")
     parser.add_argument(

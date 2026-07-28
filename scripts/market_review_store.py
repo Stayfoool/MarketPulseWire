@@ -316,7 +316,7 @@ def insert_event_analysis(
 
 
 def record_event_delivery(
-    event_id: int,
+    event_id: int | None,
     channel: str,
     status: str,
     payload: dict[str, Any],

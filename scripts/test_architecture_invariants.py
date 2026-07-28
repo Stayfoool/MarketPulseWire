@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 from source_profiles import build_profiles
@@ -30,6 +31,48 @@ UNIFIED_FETCHERS = {
     "official_collector.py",
     "news_collector.py",
     *UNIFIED_ITEM_COLLECTORS,
+}
+
+UNIFIED_STORAGE_RUNTIME_MODULES = {
+    "article_daily.py",
+    "holdings_web.py",
+    "market_canonical_reader.py",
+    "market_content_adapter.py",
+    "market_delivery.py",
+    "market_event_adapter.py",
+    "market_feedback.py",
+    "market_runtime.py",
+    "market_store.py",
+    "news_collector.py",
+    "official_collector.py",
+    "official_news_daily.py",
+    "range_report.py",
+    "resend_events.py",
+    "rule_center.py",
+    "signals_extract.py",
+    "sina_flash.py",
+    "sina_stock_news.py",
+    "value_directory_monitor.py",
+}
+
+LEGACY_RESULT_TABLES = (
+    "article_reviews",
+    "official_news_reviews",
+    "events",
+    "event_analyses",
+)
+
+LEGACY_RESULT_HELPERS = {
+    "article_review_exists",
+    "event_row_by_id",
+    "insert_event_analysis_in_conn",
+    "latest_event_analysis",
+    "mark_article_pushed",
+    "mark_official_pushed",
+    "official_review_exists",
+    "save_article_review",
+    "save_official_review",
+    "upsert_event_record",
 }
 
 REMOVED_COMPATIBILITY_MODULES = (
@@ -170,6 +213,37 @@ class CallVisitor(ast.NodeVisitor):
 
 def parsed_module(filename: str) -> ast.Module:
     return ast.parse((SCRIPTS / filename).read_text(encoding="utf-8"), filename=filename)
+
+
+def test_active_runtime_has_no_legacy_result_table_reads_or_writes() -> None:
+    sql_pattern = re.compile(
+        r"\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?"
+        r"(article_reviews|official_news_reviews|events|event_analyses)\b",
+        re.IGNORECASE,
+    )
+    violations: list[str] = []
+    for filename in sorted(UNIFIED_STORAGE_RUNTIME_MODULES):
+        path = SCRIPTS / filename
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=filename)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                for match in sql_pattern.finditer(node.value):
+                    violations.append(f"{filename}:{node.lineno} SQL {match.group(1)}")
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    name = node.func.id
+                elif isinstance(node.func, ast.Attribute):
+                    name = node.func.attr
+                else:
+                    name = ""
+                if name in LEGACY_RESULT_HELPERS:
+                    violations.append(f"{filename}:{node.lineno} call {name}")
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name in LEGACY_RESULT_HELPERS:
+                        violations.append(f"{filename}:{node.lineno} import {alias.name}")
+    assert not violations, "active runtime depends on legacy result storage: " + "; ".join(violations)
 
 
 def test_unified_collectors_use_runtime_without_owning_delivery() -> None:
@@ -417,6 +491,7 @@ def test_source_profiles_have_complete_runtime_ownership() -> None:
 
 
 def main() -> int:
+    test_active_runtime_has_no_legacy_result_table_reads_or_writes()
     test_unified_collectors_use_runtime_without_owning_delivery()
     test_live_unified_collector_calls_cannot_omit_production_admission()
     test_production_decision_boundary_is_llm_only()

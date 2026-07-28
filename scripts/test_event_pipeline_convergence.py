@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -11,7 +10,7 @@ from tempfile import TemporaryDirectory
 import market_event_adapter
 import market_flow
 from market_db import init_db
-from market_item import DecisionResult, InterpretationResult
+from market_item import DecisionResult, InterpretationResult, NormalizedMarketItem
 
 
 def test_decision_result_action_precedes_legacy_push_fields() -> None:
@@ -37,7 +36,7 @@ def test_legacy_analysis_without_decision_result_cannot_push() -> None:
     ) is False
 
 
-def test_analyze_event_writes_interpretation_result_and_legacy_fields() -> None:
+def test_analyze_event_returns_interpretation_without_writing_legacy_tables() -> None:
     original = market_flow.interpret_market_item
 
     def fake_interpret(*args, **kwargs):
@@ -53,23 +52,19 @@ def test_analyze_event_writes_interpretation_result_and_legacy_fields() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
-        event_id, _ = market_event_adapter.upsert_event(
-            {
-                "source": "sina_flash",
-                "source_event_id": "macro-1",
-                "event_type": "flash_news",
-                "title": "美国 CPI 大幅低于市场预期，2年期美债收益率大跌",
-                "summary": "市场重新定价美联储降息路径。",
-                "published_at": "2026-07-12T12:00:00+00:00",
-                "symbols": [],
-                "raw": {"source_event_id": "macro-1"},
-            },
-            db_path,
+        item = NormalizedMarketItem(
+            source="sina_flash",
+            source_category="news_media",
+            content_type="flash_news",
+            title="美国 CPI 大幅低于市场预期，2年期美债收益率大跌",
+            summary="市场重新定价美联储降息路径。",
+            published_at="2026-07-12T12:00:00+00:00",
+            raw={"source_event_id": "macro-1"},
         )
         try:
             market_flow.interpret_market_item = fake_interpret
             analysis = market_event_adapter.analyze_event(
-                event_id,
+                item,
                 db_path=db_path,
                 decision=DecisionResult(
                     action="push",
@@ -81,14 +76,11 @@ def test_analyze_event_writes_interpretation_result_and_legacy_fields() -> None:
         finally:
             market_flow.interpret_market_item = original
 
-        conn = sqlite3.connect(db_path)
-        try:
-            row = conn.execute(
-                "SELECT model, importance, should_push, analysis_json FROM event_analyses WHERE event_id = ?",
-                (event_id,),
-            ).fetchone()
-        finally:
-            conn.close()
+        with sqlite3.connect(db_path) as conn:
+            legacy_counts = (
+                conn.execute("SELECT COUNT(*) FROM events").fetchone()[0],
+                conn.execute("SELECT COUNT(*) FROM event_analyses").fetchone()[0],
+            )
     assert analysis["_decision_result"]["action"] == "push"
     assert analysis["core_content"].startswith("美国 CPI")
     assert "brief_reason" not in analysis
@@ -96,30 +88,23 @@ def test_analyze_event_writes_interpretation_result_and_legacy_fields() -> None:
     assert analysis["_interpretation_result"]["model"] == "fake-model"
     assert analysis["_interpretation_result"]["brief_reason"] == ""
     assert analysis["_interpretation_result"]["related_targets"] == []
-    assert row[:3] == ("fake-model", "high", 1)
-    stored = json.loads(row[3])
-    assert stored["_interpretation_result"]["prompt_version"] == "market_interpreter_v2"
+    assert legacy_counts == (0, 0)
 
 
 def test_event_entry_without_decision_fails_closed() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
-        event_id, _ = market_event_adapter.upsert_event(
-            {
-                "source": "sina_flash",
-                "source_event_id": "missing-decision",
-                "event_type": "flash_news",
-                "title": "测试事件",
-                "summary": "测试摘要。",
-                "published_at": "2026-07-12T12:00:00+00:00",
-                "symbols": [],
-                "raw": {},
-            },
-            db_path,
+        item = NormalizedMarketItem(
+            source="sina_flash",
+            content_type="flash_news",
+            title="测试事件",
+            summary="测试摘要。",
+            published_at="2026-07-12T12:00:00+00:00",
+            raw={"source_event_id": "missing-decision"},
         )
         try:
-            market_event_adapter.analyze_event(event_id, db_path=db_path)
+            market_event_adapter.analyze_event(item, db_path=db_path)
         except RuntimeError as exc:
             assert "决策结果缺失" in str(exc)
         else:
@@ -129,7 +114,7 @@ def test_event_entry_without_decision_fails_closed() -> None:
 def main() -> int:
     test_decision_result_action_precedes_legacy_push_fields()
     test_legacy_analysis_without_decision_result_cannot_push()
-    test_analyze_event_writes_interpretation_result_and_legacy_fields()
+    test_analyze_event_returns_interpretation_without_writing_legacy_tables()
     test_event_entry_without_decision_fails_closed()
     print("event pipeline convergence checks passed")
     return 0

@@ -14,8 +14,7 @@ from cards import div_markdown, md_escape
 from env_utils import load_env
 from feishu import send_card
 from market_db import DEFAULT_DB_PATH as DB_PATH
-from market_review_store import ensure_article_reviews_table
-from market_canonical_reader import canonical_digest_rows, migration_ready as canonical_migration_ready
+from market_canonical_reader import canonical_digest_rows
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,23 +34,9 @@ def day_window(day: str) -> tuple[str, str]:
 def fetch_digest_rows(conn: sqlite3.Connection, day: str) -> list[sqlite3.Row]:
     start_utc, end_utc = day_window(day)
     conn.row_factory = sqlite3.Row
-    if canonical_migration_ready(conn):
-        return canonical_digest_rows(
-            conn, item_kind="article", start_utc=start_utc, end_utc=end_utc
-        )  # type: ignore[return-value]
-    query = """
-        SELECT source, item_id, url, title, source_module, published_at,
-               importance, push_now, market_impact, incremental_classification,
-               affected_targets_json, reason, daily_summary, confidence, created_at
-        FROM article_reviews
-        WHERE created_at >= ? AND created_at < ?
-          AND COALESCE(pushed_at, '') = ''
-        ORDER BY
-          CASE importance WHEN 'medium' THEN 0 WHEN 'low' THEN 1 ELSE 2 END,
-          published_at DESC,
-          created_at DESC
-    """
-    return list(conn.execute(query, (start_utc, end_utc)))
+    return canonical_digest_rows(
+        conn, item_kind="article", start_utc=start_utc, end_utc=end_utc
+    )  # type: ignore[return-value]
 
 
 def targets_text(row: sqlite3.Row) -> str:
@@ -95,7 +80,7 @@ def build_digest_card(rows: list[sqlite3.Row], day: str) -> dict:
             parts.append(f"[打开原文]({row['url']})")
         elements.append(div_markdown("\n".join(parts)))
     if len(rows) > 40:
-        elements.append(div_markdown(f"其余 {len(rows) - 40} 条已省略，可在 SQLite article_reviews 表查看。"))
+        elements.append(div_markdown(f"其余 {len(rows) - 40} 条已省略，可在 Web 事件中心查看。"))
     return {
         "config": {"wide_screen_mode": True},
         "header": {
@@ -114,7 +99,6 @@ def main() -> int:
     args = parser.parse_args()
 
     with sqlite3.connect(DB_PATH) as conn:
-        ensure_article_reviews_table(conn)
         rows = fetch_digest_rows(conn, args.date)
     card = build_digest_card(rows, args.date)
     if args.dry_run:
