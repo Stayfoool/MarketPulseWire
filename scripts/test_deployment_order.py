@@ -74,10 +74,21 @@ def test_prune_requires_matching_systemd_revision() -> None:
     assert prune.index("INSTALLED_COMMIT=") < prune.index("remote_code_sync prune")
 
 
+def test_prune_restores_deployment_root_metadata() -> None:
+    prune = (ROOT / "scripts" / "prune_remote_code.sh").read_text(encoding="utf-8")
+    sync = "remote_code_sync prune"
+    owner = "chown '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' '$REMOTE_DIR'"
+    mode = "chmod 700 '$REMOTE_DIR'"
+    assert prune.count(owner) == 1
+    assert prune.count(mode) == 1
+    assert prune.index(sync) < prune.index(owner) < prune.index(mode)
+
+
 def main() -> int:
     test_shared_sync_modes_and_private_exclusions()
     test_workflow_orders_overlay_install_and_prune()
     test_prune_requires_matching_systemd_revision()
+    test_prune_restores_deployment_root_metadata()
     print("deployment order checks passed")
     return 0
 
