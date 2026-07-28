@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def callback_response(payload: dict[str, Any]) -> dict[str, Any]:
+    started_at = time.monotonic()
     try:
         result = handle_feedback_callback(payload)
         response: dict[str, Any] = {"toast": result["toast"]}
@@ -26,19 +28,30 @@ def callback_response(payload: dict[str, Any]) -> dict[str, Any]:
         try:
             card = feedback_card_for_callback(
                 identity,
-                str(state.get("label") or ""),
+                state.get("active_labels") or [],
                 state.get("reason_tags") or [],
             ) if identity is not None else None
         except Exception as exc:  # noqa: BLE001 - feedback is already durable; state projection is best effort
-            print(f"飞书反馈卡片状态更新失败：{exc}", flush=True)
+            print(f"飞书反馈卡片状态更新失败：{type(exc).__name__}", flush=True)
             card = None
         if card is not None:
             response["card"] = {"type": "raw", "data": card}
+            card_status = "updated"
+        else:
+            response["toast"] = {"type": "warning", "content": "反馈已记录，但卡片状态未更新"}
+            card_status = "unavailable"
+        item_kind = getattr(identity, "item_kind", "unknown") if identity is not None else "unknown"
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        print(
+            f"飞书反馈回调完成：status=recorded card={card_status} kind={item_kind} elapsed_ms={elapsed_ms}",
+            flush=True,
+        )
         return response
     except FeedbackError as exc:
+        print(f"飞书反馈回调完成：status=rejected reason={type(exc).__name__}", flush=True)
         return {"toast": {"type": "warning", "content": str(exc)}}
     except Exception as exc:  # noqa: BLE001 - acknowledge safely within Feishu's three-second limit
-        print(f"飞书反馈处理失败：{exc}", flush=True)
+        print(f"飞书反馈处理失败：{type(exc).__name__}", flush=True)
         return {"toast": {"type": "error", "content": "反馈记录失败，请稍后重试"}}
 
 
@@ -77,8 +90,12 @@ def main() -> int:
         app_id,
         app_secret,
         event_handler=event_handler,
-        log_level=lark.LogLevel.INFO,
+        log_level=lark.LogLevel.WARNING,
     )
+    if hasattr(client, "on_reconnecting"):
+        client.on_reconnecting = lambda: print("飞书反馈长连接正在重连", flush=True)
+    if hasattr(client, "on_reconnected"):
+        client.on_reconnected = lambda: print("飞书反馈长连接已恢复", flush=True)
     print("启动飞书反馈长连接", flush=True)
     client.start()
     return 0

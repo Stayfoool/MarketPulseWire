@@ -211,6 +211,10 @@ else
 fi
 systemctl enable --now surveil-holdings-web.service
 if grep -Eq '^FEISHU_FEEDBACK_(LISTENER_)?ENABLED=(1|true|yes|on)$' '$REMOTE_DIR/.env' 2>/dev/null; then
+  touch '$REMOTE_DIR/logs/feishu-feedback.log' '$REMOTE_DIR/logs/feishu-feedback.err.log'
+  chown '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' \
+    '$REMOTE_DIR/logs/feishu-feedback.log' '$REMOTE_DIR/logs/feishu-feedback.err.log'
+  chmod 600 '$REMOTE_DIR/logs/feishu-feedback.log' '$REMOTE_DIR/logs/feishu-feedback.err.log'
   systemctl enable --now surveil-feishu-feedback.service
   systemctl restart surveil-feishu-feedback.service
 else

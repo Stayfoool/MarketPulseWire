@@ -404,6 +404,9 @@ def test_deployment_preserves_private_proxy_state_and_disables_shadows() -> None
     assert "LLM_DECISION_RULE_CONFIG_PATH=" in installer
     assert "LLM_DECISION_RULE_CONFIG 文件权限必须为 0600" in installer
     assert "LLM_DECISION_RULE_CONFIG 内容校验失败" in installer
+    feedback_unit = (ROOT / "systemd" / "surveil-feishu-feedback.service").read_text(encoding="utf-8")
+    assert "UMask=0077" in feedback_unit
+    assert "chmod 600 '$REMOTE_DIR/logs/feishu-feedback.log' '$REMOTE_DIR/logs/feishu-feedback.err.log'" in installer
     for service in ("surveil-feishu-feedback.service", "surveil-x-stream.service"):
         enable = f"systemctl enable --now {service}"
         restart = f"systemctl restart {service}"

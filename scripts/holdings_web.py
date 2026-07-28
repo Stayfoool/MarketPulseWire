@@ -503,12 +503,21 @@ def event_feedback_filter_clause(
         return "", []
     if not table_exists(conn, "market_feedback"):
         return (f"AND ({delivered_expr})", []) if feedback_filter == "unlabelled" else ("AND 0", [])
+    active_labels_json = (
+        "CASE WHEN json_valid(f.active_labels_json) THEN f.active_labels_json ELSE '[]' END"
+    )
     current_feedback = f"""
         SELECT 1 FROM market_feedback f
         WHERE f.item_kind = ?
           AND f.source = {source_expr}
           AND CAST(f.item_id AS TEXT) = CAST({item_id_expr} AS TEXT)
-          AND f.label IN ('high_value', 'duplicate', 'invalid')
+          AND (
+            (f.active_labels_json IS NULL AND f.label IN ('high_value', 'duplicate', 'invalid'))
+            OR EXISTS (
+              SELECT 1 FROM json_each({active_labels_json}) active_label
+              WHERE active_label.value IN ('high_value', 'duplicate', 'invalid')
+            )
+          )
           AND NOT EXISTS (
             SELECT 1 FROM market_feedback newer
             WHERE newer.item_kind = f.item_kind
@@ -523,7 +532,19 @@ def event_feedback_filter_clause(
     """
     if feedback_filter == "unlabelled":
         return f"AND ({delivered_expr}) AND NOT EXISTS ({current_feedback})", [item_kind]
-    return f"AND ({delivered_expr}) AND EXISTS ({current_feedback} AND f.label = ?)", [item_kind, feedback_filter]
+    selected_label = f"""
+        (
+          (f.active_labels_json IS NULL AND f.label = ?)
+          OR EXISTS (
+            SELECT 1 FROM json_each({active_labels_json}) selected
+            WHERE selected.value = ?
+          )
+        )
+    """
+    return (
+        f"AND ({delivered_expr}) AND EXISTS ({current_feedback} AND {selected_label})",
+        [item_kind, feedback_filter, feedback_filter],
+    )
 
 
 def apply_event_feedback(
