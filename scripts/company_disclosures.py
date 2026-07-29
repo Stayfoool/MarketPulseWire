@@ -33,7 +33,6 @@ SOURCE_ID = "company_disclosures"
 STATE_PREFIX = "collector"
 HEALTH_MONITOR = "company_disclosures"
 DOCUMENT_HEALTH_MONITOR = "company_disclosure_document"
-VALID_MODES = {"report_only", "live"}
 CONTENT_KINDS = ("fulltext", "relation")
 BJ = ZoneInfo("Asia/Shanghai")
 
@@ -194,7 +193,6 @@ def _record_health(db_path: Path, monitor: str, source: str, error: Exception | 
 def collect_disclosures(
     *,
     provider: DisclosureProvider,
-    mode: str,
     days: int,
     db_path: Path = DEFAULT_DB_PATH,
     holdings: list[dict[str, Any]] | None = None,
@@ -205,8 +203,6 @@ def collect_disclosures(
     backfill_baselines: bool = False,
     backfill_first_seen_at: str = "",
 ) -> dict[str, Any]:
-    if mode not in VALID_MODES:
-        raise ValueError(f"unsupported company disclosure mode: {mode}")
     if backfill_first_seen_at and not backfill_baselines:
         raise ValueError("backfill_first_seen_at requires backfill_baselines")
     init_db(db_path).close()
@@ -256,7 +252,6 @@ def collect_disclosures(
     provider_baseline = provider.name not in initialized_providers
     stats: dict[str, Any] = {
         "provider": provider.name,
-        "mode": mode,
         "range": f"{start_date}..{end_date}",
         "fetched": len(records),
         "new": 0,
@@ -289,13 +284,13 @@ def collect_disclosures(
         if document_meta.get("status") == "failed":
             stats["document_failures"] += 1
         event = event_from_disclosure(record, full_text, document_meta)
-        baseline_only = identity_known or provider_baseline or mode == "report_only"
+        baseline_only = identity_known or provider_baseline
         if baseline_only:
             event["baseline_only"] = True
             if identity_known and backfill_seen_at:
                 event["first_seen_at"] = backfill_seen_at
         if dry_run:
-            label = "backfill" if identity_known else ("baseline" if provider_baseline else "report-only")
+            label = "backfill" if identity_known else ("baseline" if provider_baseline else "new")
             print(f"[{label}] {identity} {record.symbol} {record.title} pdf={document_meta.get('status')}", flush=True)
             if not identity_known:
                 stats["baseline"] += 1
@@ -371,7 +366,6 @@ def collect_disclosures(
             "known_identities": known_order[-5000:],
             "initialized_providers": sorted(initialized_providers),
             "providers": providers,
-            "last_mode": mode,
             "last_run_at": datetime.now(BJ).isoformat(),
             "last_stats": stats,
         }
@@ -388,7 +382,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="公司公告采集")
     parser.add_argument("--days", type=int, default=2)
     parser.add_argument("--provider")
-    parser.add_argument("--mode", choices=sorted(VALID_MODES))
     parser.add_argument("--no-analyze", action="store_true")
     parser.add_argument("--no-deliver", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -406,13 +399,11 @@ def main() -> int:
         return 0
     profile = runtime_source_profile(SOURCE_ID, config_path=SOURCE_PROFILE_CONFIG_PATH) or {}
     provider_name = str(args.provider or profile.get("provider") or "cninfo_public").strip()
-    mode = str(args.mode or profile.get("operation_mode") or "report_only").strip()
     init_db(DEFAULT_DB_PATH).close()
     import_holdings(DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH)
     try:
         stats = collect_disclosures(
             provider=provider_factory(provider_name),
-            mode=mode,
             days=args.days,
             analyze=not args.no_analyze,
             deliver=not args.no_deliver,

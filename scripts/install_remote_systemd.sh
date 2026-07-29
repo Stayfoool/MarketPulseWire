@@ -72,6 +72,29 @@ if ! cd '$REMOTE_DIR' || ! sudo -u '$REMOTE_SERVICE_USER' env \
 fi
 cp /tmp/surveil-systemd/*.service /etc/systemd/system/
 cp /tmp/surveil-systemd/*.timer /etc/systemd/system/
+systemctl disable --now \
+  surveil-research-collector-shadow.timer \
+  surveil-official-collector-shadow.timer \
+  surveil-news-collector-shadow.timer \
+  surveil-collector-shadow-digest.timer \
+  surveil-rule-shadow-daily.timer >/dev/null 2>&1 || true
+systemctl stop \
+  surveil-research-collector-shadow.service \
+  surveil-official-collector-shadow.service \
+  surveil-news-collector-shadow.service \
+  surveil-collector-shadow-digest.service \
+  surveil-rule-shadow-daily.service >/dev/null 2>&1 || true
+rm -f \
+  /etc/systemd/system/surveil-research-collector-shadow.service \
+  /etc/systemd/system/surveil-research-collector-shadow.timer \
+  /etc/systemd/system/surveil-official-collector-shadow.service \
+  /etc/systemd/system/surveil-official-collector-shadow.timer \
+  /etc/systemd/system/surveil-news-collector-shadow.service \
+  /etc/systemd/system/surveil-news-collector-shadow.timer \
+  /etc/systemd/system/surveil-collector-shadow-digest.service \
+  /etc/systemd/system/surveil-collector-shadow-digest.timer \
+  /etc/systemd/system/surveil-rule-shadow-daily.service \
+  /etc/systemd/system/surveil-rule-shadow-daily.timer
 systemctl daemon-reload
 SYSTEMCTL_BIN=\"\$(command -v systemctl)\"
 SUDOERS_PATH=/etc/sudoers.d/surveil-web-systemctl
@@ -91,10 +114,6 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-news-collector.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-value-directory.service, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-research-collector-shadow.service, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-official-collector-shadow.service, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-news-collector-shadow.service, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-collector-shadow-digest.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-proxy.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-sina-stock-news.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-overseas-media.timer, \\
@@ -107,10 +126,6 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-news-collector.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-value-directory.timer, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-research-collector-shadow.timer, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-official-collector-shadow.timer, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-news-collector-shadow.timer, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-collector-shadow-digest.timer, \\
     \$SYSTEMCTL_BIN --no-block start surveil-sina-stock-news.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-overseas-media.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-china-media.service, \\
@@ -121,11 +136,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block start surveil-research-collector.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-official-collector.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-news-collector.service, \\
-    \$SYSTEMCTL_BIN --no-block start surveil-value-directory.service, \\
-    \$SYSTEMCTL_BIN --no-block start surveil-research-collector-shadow.service, \\
-    \$SYSTEMCTL_BIN --no-block start surveil-official-collector-shadow.service, \\
-    \$SYSTEMCTL_BIN --no-block start surveil-news-collector-shadow.service, \\
-    \$SYSTEMCTL_BIN --no-block start surveil-collector-shadow-digest.service
+    \$SYSTEMCTL_BIN --no-block start surveil-value-directory.service
 $REMOTE_SERVICE_USER ALL=(root) NOPASSWD: SURVEIL_WEB_SYSTEMCTL
 SUDOERS
 chmod 0440 \"\$SUDOERS_PATH\"
@@ -161,10 +172,8 @@ else
   systemctl enable --now surveil-china-media.timer
 fi
 systemctl enable --now surveil-article-daily.timer
-systemctl disable --now surveil-rule-shadow-daily.timer >/dev/null 2>&1 || true
-systemctl stop surveil-rule-shadow-daily.service >/dev/null 2>&1 || true
 systemctl enable --now surveil-llm-decision-audit-cleanup.timer
-echo '已停用新旧规则对比日报；保留每日 30 天敏感审计清理。'
+echo '已启用每日 30 天大模型决策审计清理。'
 systemctl disable --now \
   surveil-signals-extract.timer \
   surveil-signal-outcome.timer \
@@ -176,15 +185,6 @@ systemctl stop \
   surveil-signal-review.service \
   surveil-signal-digest.service >/dev/null 2>&1 || true
 echo '投资信号复盘任务组默认关闭；信号提取、结果更新、复盘和摘要均未启动。'
-systemctl disable --now surveil-research-collector-shadow.timer >/dev/null 2>&1 || true
-systemctl disable --now surveil-official-collector-shadow.timer >/dev/null 2>&1 || true
-systemctl disable --now surveil-news-collector-shadow.timer >/dev/null 2>&1 || true
-systemctl disable --now surveil-collector-shadow-digest.timer >/dev/null 2>&1 || true
-systemctl stop surveil-research-collector-shadow.service >/dev/null 2>&1 || true
-systemctl stop surveil-official-collector-shadow.service >/dev/null 2>&1 || true
-systemctl stop surveil-news-collector-shadow.service >/dev/null 2>&1 || true
-systemctl stop surveil-collector-shadow-digest.service >/dev/null 2>&1 || true
-echo 'Collector shadow timers are installed but disabled by default.'
 systemctl start surveil-stock-relations-import.service || true
 if grep -Eq '^DISABLE_LEGACY_RSS_MONITOR=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
   systemctl disable --now surveil-rss-monitor.service >/dev/null 2>&1 || true
@@ -241,9 +241,6 @@ systemctl --no-pager --full status surveil-official-collector.timer || true
 systemctl --no-pager --full status surveil-news-collector.timer || true
 systemctl --no-pager --full status surveil-value-directory.timer || true
 systemctl --no-pager --full status surveil-llm-decision-audit-cleanup.timer || true
-systemctl --no-pager --full status surveil-research-collector-shadow.timer || true
-systemctl --no-pager --full status surveil-official-collector-shadow.timer || true
-systemctl --no-pager --full status surveil-news-collector-shadow.timer || true
 systemctl --no-pager --full status surveil-x-stream.service || true
 REVISION_COMMIT=\"\$(sed -n 's/^commit=//p' '$REMOTE_DIR/REVISION' | tail -n 1)\"
 if [ -z \"\$REVISION_COMMIT\" ]; then
@@ -256,5 +253,5 @@ printf 'commit=%s\ninstalled_at=%s\n' \"\$REVISION_COMMIT\" \"\$(date -u +%Y-%m-
 chown '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' \"\$SYSTEMD_MARKER_TMP\"
 chmod 600 \"\$SYSTEMD_MARKER_TMP\"
 mv \"\$SYSTEMD_MARKER_TMP\" \"\$SYSTEMD_MARKER\"
-echo '已安装 surveil-db-init.service，启用公司公告、Sina 个股新闻、生产 collector timers（按 DISABLE_LEGACY_* 切换生产/历史入口）、文章日报、大模型审计清理和持仓 Web UI，并启动新浪快讯常驻服务；投资信号复盘任务组、新旧规则对比日报和 report-only collector shadow timers 默认停用。公司公告默认 report_only，可在来源配置审阅后切换 live。'
+echo '已安装 surveil-db-init.service，启用公司公告、Sina 个股新闻、生产 collector timers（按 DISABLE_LEGACY_* 切换生产/历史入口）、文章日报、大模型审计清理和持仓 Web UI，并启动新浪快讯常驻服务；投资信号复盘任务组默认停用，历史影子任务和规则对比日报已删除。'
 "

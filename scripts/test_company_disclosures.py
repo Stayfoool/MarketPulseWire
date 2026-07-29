@@ -71,7 +71,7 @@ def seed_production_holding(db_path: Path) -> None:
         )
 
 
-def test_report_only_baselines_then_live_processes_only_new_record() -> None:
+def test_first_provider_run_baselines_then_later_new_record_processes() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
@@ -80,7 +80,6 @@ def test_report_only_baselines_then_live_processes_only_new_record() -> None:
         provider = FakeProvider([record("1225409631"), record("1225286505", kind="relation")])
         first = collect_disclosures(
             provider=provider,
-            mode="report_only",
             days=2,
             db_path=db_path,
             holdings=holdings,
@@ -102,7 +101,6 @@ def test_report_only_baselines_then_live_processes_only_new_record() -> None:
         provider.records.append(record("1226000000"))
         second = collect_disclosures(
             provider=provider,
-            mode="live",
             days=2,
             db_path=db_path,
             holdings=holdings,
@@ -127,13 +125,12 @@ def test_report_only_baselines_then_live_processes_only_new_record() -> None:
         assert "cninfo_public" in json.loads(state_raw)["initialized_providers"]
 
 
-def test_new_provider_is_baselined_before_live_processing() -> None:
+def test_switching_provider_creates_a_new_provider_baseline() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         holdings = [{"symbol": "301308.SZ", "name": "江波龙"}]
         collect_disclosures(
             provider=FakeProvider([record("1225409631")]),
-            mode="report_only",
             days=2,
             db_path=db_path,
             holdings=holdings,
@@ -143,7 +140,6 @@ def test_new_provider_is_baselined_before_live_processing() -> None:
         alternate_record = record("alternate-only", provider="tushare")
         result = collect_disclosures(
             provider=FakeProvider([alternate_record], name="tushare"),
-            mode="live",
             days=2,
             db_path=db_path,
             holdings=holdings,
@@ -161,7 +157,7 @@ def test_new_provider_is_baselined_before_live_processing() -> None:
     assert result["baseline"] == 1 and result["processed"] == 0
 
 
-def test_excluded_live_record_advances_source_identity_and_records_unified_admission() -> None:
+def test_excluded_record_advances_source_identity_and_records_unified_admission() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
@@ -183,7 +179,6 @@ def test_excluded_live_record_advances_source_identity_and_records_unified_admis
 
         first = collect_disclosures(
             provider=provider,
-            mode="live",
             days=2,
             db_path=db_path,
             holdings=[{"symbol": "301308.SZ", "name": "江波龙"}],
@@ -193,7 +188,6 @@ def test_excluded_live_record_advances_source_identity_and_records_unified_admis
         )
         second = collect_disclosures(
             provider=provider,
-            mode="live",
             days=2,
             db_path=db_path,
             holdings=[{"symbol": "301308.SZ", "name": "江波龙"}],
@@ -236,7 +230,6 @@ def test_known_identity_backfill_is_idempotent_and_never_analyzed_or_delivered()
             )
         kwargs = {
             "provider": FakeProvider([record("1225409631")]),
-            "mode": "live",
             "days": 2,
             "db_path": db_path,
             "holdings": [{"symbol": "301308.SZ", "name": "江波龙"}],
@@ -314,7 +307,6 @@ def test_stale_cached_security_mapping_is_refreshed_once() -> None:
         provider = RefreshingProvider([record("1225409631")])
         result = collect_disclosures(
             provider=provider,
-            mode="report_only",
             days=2,
             db_path=db_path,
             holdings=[{"symbol": "301308.SZ", "name": "江波龙"}],
@@ -366,9 +358,9 @@ def main() -> int:
     previous = os.environ.get("RULE_CORE_CONFIG")
     os.environ["RULE_CORE_CONFIG"] = str(TEST_RULE_CONFIG)
     try:
-        test_report_only_baselines_then_live_processes_only_new_record()
-        test_new_provider_is_baselined_before_live_processing()
-        test_excluded_live_record_advances_source_identity_and_records_unified_admission()
+        test_first_provider_run_baselines_then_later_new_record_processes()
+        test_switching_provider_creates_a_new_provider_baseline()
+        test_excluded_record_advances_source_identity_and_records_unified_admission()
         test_known_identity_backfill_is_idempotent_and_never_analyzed_or_delivered()
         test_pagination_runs_to_completion_for_each_content_kind()
         test_stale_cached_security_mapping_is_refreshed_once()

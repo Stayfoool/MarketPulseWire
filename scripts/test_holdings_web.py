@@ -25,7 +25,6 @@ from holdings_web import (
     fetch_events_rows,
     html_page,
     parse_systemctl_show_output,
-    rule_shadow_reports_payload,
     utc_window_for_range,
     unit_actions,
     unit_display_metadata,
@@ -237,41 +236,6 @@ def test_media_keywords_use_one_master_list_and_a_title_only_subset() -> None:
                 os.environ["RULE_CORE_CONFIG"] = previous
 
 
-def test_rule_shadow_report_view_is_read_only_and_path_bounded() -> None:
-    source = frontend_source()
-    assert "规则对比报告" in source
-    assert "/api/rule-shadow-reports" in source
-    assert "Current Reason" not in source
-    assert "现有规则" in source
-    assert "对比判断" in source
-    assert "safeExternalUrl" in source
-    assert "对比判断升级" in source
-    assert "对比判断降级" in source
-    assert "无法比较" in source
-    assert "ruleShadowCurrentAction" in source
-    assert "ruleShadowCandidateAction" in source
-    assert "ruleShadowRuleVersion" in source
-    assert "ruleShadowEvaluationStatus" in source
-    assert "ruleShadowComparisonStatus" in source
-    assert 'class="rule-shadow-multi-select"' in source
-    assert "ruleShadowMultiSelectChanged" in source
-    assert "ruleShadowSelectedValues" in source
-    assert "ruleShadowFilterMatches" in source
-    assert "event.target?.closest?.('.rule-shadow-multi-select')" in source
-    assert "document.querySelectorAll('.rule-shadow-multi-select[open]')" in source
-    assert "if (filter !== activeFilter) filter.open = false" in source
-    assert '<select id="ruleShadowCurrentAction"' not in source
-    assert '<select id="ruleShadowCandidateAction"' not in source
-    assert "已选 ${checked.length} 项" in source
-    assert "双方均未准入" in source
-    assert "准入不一致" in source
-    assert "大模型判断或校验失败" in source
-    assert "判断不确定" in source
-    assert "正文来源" in source
-    assert "最新版本文章" in source
-    assert "较早或无法确认" in source
-
-
 def test_llm_decision_view_is_read_only_and_distinguishes_uncertain() -> None:
     source = frontend_source()
     assert "大模型决策" in source
@@ -282,50 +246,6 @@ def test_llm_decision_view_is_read_only_and_distinguishes_uncertain() -> None:
     assert "uncertain" in source
     assert "查看判断理由和证据" in source
     assert "打开原文" in source
-    assert "item.is_latest_candidate_version ?? item.is_latest_rule_core_version" in source
-    assert "item.comparable === false" in source
-    assert "candidate_rule_evidence" in source
-    assert "failure_reason" in source
-    assert "usage.total_tokens" in source
-    assert "renderRuleShadowRows" in source
-    assert "ruleShadowActionRank" in source
-    assert "显示 ${filtered.length} / ${items.length} 条" in source
-
-    with TemporaryDirectory() as tmpdir:
-        report_dir = Path(tmpdir)
-        payload = {
-            "review_date": "2026-07-19",
-            "generated_at": "2026-07-19T07:30:00+00:00",
-            "report_dir": "/opt/surveil/reports",
-            "counts": {"compared": 1, "action_changes": 1, "skipped": {}},
-            "items": [
-                {
-                    "source": "news",
-                    "item_id": "1",
-                    "title": "测试",
-                    "report_path": "/opt/surveil/reports/private.json",
-                    "current_action": "daily",
-                    "candidate_action": "archive",
-                    "comparison_generated_at": "2026-07-19T07:29:00+00:00",
-                    "rule_core_version": "rule-core-v1-20260721-5d701b1",
-                    "is_latest_rule_core_version": True,
-                }
-            ],
-            "notification": {"status": "sent"},
-        }
-        path = report_dir / "rule-core-shadow-daily-2026-07-19.json"
-        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        response = rule_shadow_reports_payload("2026-07-19", report_dir=report_dir)
-        assert response["selected_date"] == "2026-07-19"
-        assert "report_dir" not in response["report"]
-        assert "report_path" not in response["report"]["items"][0]
-        assert response["report"]["items"][0]["is_latest_rule_core_version"] is True
-        try:
-            rule_shadow_reports_payload("../../.env", report_dir=report_dir)
-        except ValueError:
-            pass
-        else:
-            raise AssertionError("invalid report date must be rejected")
 
 
 def test_static_asset_routes_are_allowlisted() -> None:
@@ -375,7 +295,7 @@ def test_health_page_exposes_service_action_controls() -> None:
     assert "renderHealthTasks" in html
     assert "fetching_persistent" in html
     assert "signal_review" in html
-    assert "showShadowUnits" in html
+    assert "showShadowUnits" not in html
     assert "showLegacyUnits" in html
     assert "显示历史兼容单元" in html
     assert "调度状态" in html
@@ -393,6 +313,15 @@ def test_health_page_exposes_service_action_controls() -> None:
     assert "连续失败" in html
     assert "60000" in html
     assert "visibilitychange" in html
+
+
+def test_retired_shadow_tasks_and_rule_comparison_are_not_exposed() -> None:
+    source = frontend_source()
+    backend = Path(holdings_web.__file__).read_text(encoding="utf-8")
+    assert "显示影子任务" not in source
+    assert "规则对比报告" not in source
+    assert "/api/rule-shadow-reports" not in backend
+    assert all("-shadow" not in unit for unit in holdings_web.ALLOWED_SYSTEMD_UNITS)
 
 
 def test_parse_batched_systemctl_show_output() -> None:
@@ -1059,7 +988,7 @@ def test_source_profile_runtime_filters_and_flags() -> None:
         assert source_profile_skeptic_enabled("cls_telegraph_api", config_path=config_path) is False
 
 
-def test_company_disclosure_provider_and_mode_are_private_runtime_overrides() -> None:
+def test_company_disclosure_provider_is_the_only_provider_runtime_override() -> None:
     with TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         config_path = root / "source_profiles.local.json"
@@ -1070,7 +999,6 @@ def test_company_disclosure_provider_and_mode_are_private_runtime_overrides() ->
                         "id": "company_disclosures",
                         "enabled": True,
                         "provider": "future_provider",
-                        "operation_mode": "live",
                     }
                 ]
             },
@@ -1080,8 +1008,7 @@ def test_company_disclosure_provider_and_mode_are_private_runtime_overrides() ->
     profile = next(item for item in payload["profiles"] if item["id"] == "company_disclosures")
     assert saved["override_count"] == 1
     assert profile["provider"] == "future_provider"
-    assert profile["operation_mode"] == "live"
-    assert profile["overrides"] == {"operation_mode": "live", "provider": "future_provider"}
+    assert profile["overrides"] == {"provider": "future_provider"}
     assert "provider=future_provider" in profile["runtime_note"]
 
 
@@ -1151,8 +1078,7 @@ def test_systemd_actions_are_whitelisted() -> None:
     assert RUN_ONCE_TARGETS["surveil-news-collector.timer"] == "surveil-news-collector.service"
     assert "run_once" in unit_actions("surveil-value-directory.timer")
     assert RUN_ONCE_TARGETS["surveil-value-directory.timer"] == "surveil-value-directory.service"
-    assert "run_once" in unit_actions("surveil-research-collector-shadow.timer")
-    assert RUN_ONCE_TARGETS["surveil-research-collector-shadow.timer"] == "surveil-research-collector-shadow.service"
+    assert all("-shadow" not in unit for unit in holdings_web.ALLOWED_SYSTEMD_UNITS)
     assert RUN_ONCE_TARGETS["surveil-china-media.timer"] == "surveil-china-media.service"
     assert "05:00 / 21:00" in holdings_web.UNIT_METADATA["surveil-value-directory.timer"]["schedule"]
     assert unit_actions("surveil-holdings-web.service") == ["status"]
@@ -1251,16 +1177,8 @@ def test_health_summary_flags_disabled_production_timer_and_stopped_service() ->
     }
 
 
-def test_health_summary_excludes_shadow_legacy_and_default_disabled_jygs() -> None:
+def test_health_summary_excludes_legacy_and_default_disabled_jygs() -> None:
     units = [
-        systemd_fixture(
-            "surveil-research-collector-shadow.timer",
-            {"ActiveState": "inactive", "SubState": "dead", "Result": "success"},
-        ),
-        systemd_fixture(
-            "surveil-research-collector-shadow.service",
-            {"ActiveState": "failed", "SubState": "failed", "Result": "failed", "ExecMainStatus": "1"},
-        ),
         systemd_fixture(
             "surveil-china-media.timer",
             {"ActiveState": "inactive", "SubState": "dead", "Result": "success"},
@@ -1382,18 +1300,6 @@ def test_unit_display_metadata_translates_waiting_timer() -> None:
     assert meta["status_text"] == "等待下次触发"
 
 
-def test_unit_display_metadata_groups_shadow_collectors() -> None:
-    meta = unit_display_metadata(
-        "surveil-news-collector-shadow.timer",
-        {"ActiveState": "active", "SubState": "waiting", "Result": "success"},
-    )
-    assert meta["group"] == "fetching_shadow"
-    assert meta["unit_type"] == "影子定时器"
-    assert meta["group_label"] == "影子采集任务"
-    assert meta["lifecycle"] == "shadow"
-    assert meta["default_visible"] is False
-
-
 def test_unit_display_metadata_includes_research_production_collector() -> None:
     meta = unit_display_metadata(
         "surveil-research-collector.timer",
@@ -1430,9 +1336,9 @@ def main() -> int:
     test_extracted_script_keeps_newline_escapes()
     test_page_uses_extracted_assets_and_bounded_placeholders()
     test_media_keywords_use_one_master_list_and_a_title_only_subset()
-    test_rule_shadow_report_view_is_read_only_and_path_bounded()
     test_static_asset_routes_are_allowlisted()
     test_health_page_exposes_service_action_controls()
+    test_retired_shadow_tasks_and_rule_comparison_are_not_exposed()
     test_source_profile_view_is_exposed()
     test_retired_rule_center_is_not_exposed()
     test_feedback_quality_view_is_exposed()
@@ -1449,7 +1355,7 @@ def main() -> int:
     test_source_profile_local_config_roundtrip()
     test_source_profile_local_config_stays_private_across_replacement()
     test_source_profile_runtime_filters_and_flags()
-    test_company_disclosure_provider_and_mode_are_private_runtime_overrides()
+    test_company_disclosure_provider_is_the_only_provider_runtime_override()
     test_company_disclosure_source_can_be_disabled_privately()
     test_source_profile_can_explicitly_remove_news_media_role()
     test_source_profile_runtime_note_reports_effective_counts()
@@ -1459,7 +1365,6 @@ def main() -> int:
     test_signal_review_tasks_are_grouped_and_default_disabled_without_alerts()
     test_unit_display_metadata_translates_oneshot_success()
     test_unit_display_metadata_translates_waiting_timer()
-    test_unit_display_metadata_groups_shadow_collectors()
     test_unit_display_metadata_includes_research_production_collector()
     test_unit_display_metadata_includes_official_production_collector()
     test_unit_display_metadata_includes_news_production_collector()

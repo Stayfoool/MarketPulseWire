@@ -1,11 +1,11 @@
-"""Build one bounded report-only comparison for the reviewed LLM rules."""
+"""Execute and strictly validate the reviewed LLM degree rules."""
 
 from __future__ import annotations
 
 import hashlib
 import time
 from dataclasses import dataclass, replace
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 
 from llm_analysis import ChatCompletionResponse, LLMBalanceInsufficientError
 from llm_rule_catalog import LLM_DECISION_RULE_VERSION
@@ -14,7 +14,6 @@ from llm_rule_decision import (
     PROMPT_VERSION,
     LLMRuleInputError,
     LLMRulePrompt,
-    apply_source_admission_boundary,
     build_llm_rule_prompt,
     build_llm_rule_repair_prompt,
     needs_validation_retry,
@@ -23,30 +22,20 @@ from llm_rule_decision import (
 from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem
 from admission_rules import (
     PortfolioRuleConfig,
-    RuleConfig,
-    SourceAdmissionPolicy,
-    admit_market_item,
 )
 
 
-CONTRACT_VERSION = "llm-rule-shadow-v2"
-VALID_CURRENT_ADMISSION_STATUSES = {"admitted", "excluded", "not_applicable", "unknown"}
-VALID_CURRENT_ACTIONS = {"push", "daily", "archive", "ignore"}
 ModelCaller = Callable[[LLMRulePrompt], ChatCompletionResponse]
 
 
 @dataclass(frozen=True)
 class LLMRuleExecution:
     decision: DecisionResult | None
-    candidate: dict[str, Any]
+    evaluation: dict[str, Any]
 
 
 def _clean(value: object, limit: int = 500) -> str:
     return " ".join(str(value or "").split())[:limit]
-
-
-def _families(values: Iterable[str]) -> list[str]:
-    return list(dict.fromkeys(str(value) for value in values if str(value)))
 
 
 def _rule_ids(decision: DecisionResult | None) -> list[str]:
@@ -178,7 +167,7 @@ def _matched_context(
     return {key: list(dict.fromkeys(values)) for key, values in context.items() if values}
 
 
-def _candidate_base(admission: AdmissionResult) -> dict[str, Any]:
+def _evaluation_base(admission: AdmissionResult) -> dict[str, Any]:
     return {
         "admission_status": admission.status,
         "admission_reason": admission.reason_code,
@@ -209,7 +198,7 @@ def _candidate_base(admission: AdmissionResult) -> dict[str, Any]:
         "prompt_chars": 0,
         "llm_decision_rule_version": LLM_DECISION_RULE_VERSION,
         "prompt_version": PROMPT_VERSION,
-        "candidate_engine": ENGINE_VERSION,
+        "execution_engine": ENGINE_VERSION,
     }
 
 
@@ -251,7 +240,7 @@ def _model_call_audit(
     }
 
 
-def _failure_candidate(
+def _failure_evaluation(
     admission: AdmissionResult,
     status: str,
     reason: str,
@@ -261,8 +250,8 @@ def _failure_candidate(
     model_calls: int = 0,
     model_audit_calls: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    candidate = _candidate_base(admission)
-    candidate.update(
+    evaluation = _evaluation_base(admission)
+    evaluation.update(
         {
             "evaluation_status": status,
             "failure_reason": _clean(reason, 500),
@@ -282,7 +271,7 @@ def _failure_candidate(
         }
     )
     if response is not None:
-        candidate.update(
+        evaluation.update(
             {
                 "model": _clean(response.model, 200),
                 "provider": _clean(response.provider, 200),
@@ -293,10 +282,10 @@ def _failure_candidate(
                 "elapsed_seconds": response.elapsed_seconds,
             }
         )
-    return candidate
+    return evaluation
 
 
-def _completed_candidate(
+def _completed_evaluation(
     admission: AdmissionResult,
     prompt: LLMRulePrompt,
     response: ChatCompletionResponse,
@@ -308,8 +297,8 @@ def _completed_candidate(
     decision = result.decision
     if decision is None:
         raise ValueError("completed model validation did not return DecisionResult")
-    candidate = _candidate_base(admission)
-    candidate.update(
+    evaluation = _evaluation_base(admission)
+    evaluation.update(
         {
             **_decision_summary(decision),
             "evaluation_status": "completed",
@@ -335,7 +324,7 @@ def _completed_candidate(
             },
         }
     )
-    return candidate
+    return evaluation
 
 
 def _combined_response(
@@ -371,7 +360,7 @@ def execute_llm_rule_decision(
 ) -> LLMRuleExecution:
     """Execute and strictly validate one LLM degree decision without persistence."""
     if admission.status != "admitted":
-        return LLMRuleExecution(None, _candidate_base(admission))
+        return LLMRuleExecution(None, _evaluation_base(admission))
     try:
         prompt = build_llm_rule_prompt(
             item,
@@ -381,8 +370,8 @@ def execute_llm_rule_decision(
             max_input_chars=max_input_chars,
         )
     except LLMRuleInputError as exc:
-        candidate = _failure_candidate(admission, "insufficient_input", f"{exc.code}: {exc}")
-        return LLMRuleExecution(None, candidate)
+        evaluation = _failure_evaluation(admission, "insufficient_input", f"{exc.code}: {exc}")
+        return LLMRuleExecution(None, evaluation)
 
     audit_calls: list[dict[str, Any]] = []
     request_options = getattr(model_caller, "audit_options", {})
@@ -405,7 +394,7 @@ def execute_llm_rule_decision(
                 request_options=request_options,
             )
         )
-        candidate = _failure_candidate(
+        evaluation = _failure_evaluation(
             admission,
             "model_unavailable",
             "balance_insufficient",
@@ -413,12 +402,12 @@ def execute_llm_rule_decision(
             model_calls=1,
             model_audit_calls=audit_calls,
         )
-        return LLMRuleExecution(None, candidate)
+        return LLMRuleExecution(None, evaluation)
     except TimeoutError:
         audit_calls.append(
             _model_call_audit(prompt, transport_error="timeout", request_options=request_options)
         )
-        candidate = _failure_candidate(
+        evaluation = _failure_evaluation(
             admission,
             "model_unavailable",
             "timeout",
@@ -426,13 +415,13 @@ def execute_llm_rule_decision(
             model_calls=1,
             model_audit_calls=audit_calls,
         )
-        return LLMRuleExecution(None, candidate)
+        return LLMRuleExecution(None, evaluation)
     except Exception as exc:  # noqa: BLE001 - caller receives a bounded failure result.
         category = "not_configured" if "未配置" in str(exc) else "request_failed"
         audit_calls.append(
             _model_call_audit(prompt, transport_error=category, request_options=request_options)
         )
-        candidate = _failure_candidate(
+        evaluation = _failure_evaluation(
             admission,
             "model_unavailable",
             category,
@@ -440,7 +429,7 @@ def execute_llm_rule_decision(
             model_calls=1,
             model_audit_calls=audit_calls,
         )
-        return LLMRuleExecution(None, candidate)
+        return LLMRuleExecution(None, evaluation)
 
     result = validate_llm_rule_response(
         response.content,
@@ -499,7 +488,7 @@ def execute_llm_rule_decision(
                 )
             )
     if result.evaluation_status != "completed":
-        candidate = _failure_candidate(
+        evaluation = _failure_evaluation(
             admission,
             result.evaluation_status,
             "; ".join(result.validation_errors),
@@ -508,7 +497,7 @@ def execute_llm_rule_decision(
             model_calls=model_calls,
             model_audit_calls=audit_calls,
         )
-        return LLMRuleExecution(None, candidate)
+        return LLMRuleExecution(None, evaluation)
 
     decision = result.decision
     if decision is None:
@@ -517,7 +506,7 @@ def execute_llm_rule_decision(
         audit = dict(decision.audit_json)
         audit["production_authority"] = True
         decision = replace(decision, audit_json=audit)
-    candidate = _completed_candidate(
+    evaluation = _completed_evaluation(
         admission,
         prompt,
         response,
@@ -525,73 +514,4 @@ def execute_llm_rule_decision(
         model_calls=model_calls,
         model_audit_calls=audit_calls,
     )
-    return LLMRuleExecution(decision, candidate)
-
-
-def compare_llm_rule_candidate(
-    item: NormalizedMarketItem,
-    *,
-    current_decision: DecisionResult | None,
-    current_admission_status: str,
-    current_admission_reason: str,
-    current_matched_families: Iterable[str],
-    rule_config: RuleConfig,
-    portfolio: PortfolioRuleConfig,
-    source_policy: SourceAdmissionPolicy,
-    model_caller: ModelCaller,
-    production_admission: AdmissionResult | None = None,
-    input_text_scope: str | None = None,
-    max_input_chars: int = 120_000,
-) -> dict[str, Any]:
-    if current_admission_status not in VALID_CURRENT_ADMISSION_STATUSES:
-        raise ValueError(f"invalid current admission status: {current_admission_status}")
-    if current_decision is not None and current_decision.action not in VALID_CURRENT_ACTIONS:
-        raise ValueError(f"invalid current decision action: {current_decision.action}")
-
-    admission = production_admission or apply_source_admission_boundary(
-        item,
-        admit_market_item(
-            item,
-            rule_config=rule_config,
-            portfolio=portfolio,
-            source_policy=source_policy,
-        ),
-    )
-    current = {
-        "admission_status": current_admission_status,
-        "admission_reason": _clean(current_admission_reason, 500),
-        "matched_families": _families(current_matched_families),
-        **_decision_summary(current_decision),
-    }
-    execution = execute_llm_rule_decision(
-        item,
-        admission=admission,
-        portfolio=portfolio,
-        model_caller=model_caller,
-        input_text_scope=input_text_scope,
-        max_input_chars=max_input_chars,
-    )
-    candidate = execution.candidate
-
-    comparable = candidate.get("evaluation_status") == "completed"
-    changed_fields = [
-        field
-        for field in ("admission_status", "admission_reason", "matched_families")
-        if current[field] != candidate[field]
-    ]
-    if comparable:
-        changed_fields.extend(
-            field
-            for field in ("action", "rule_ids")
-            if current[field] != candidate[field]
-        )
-    return {
-        "ok": True,
-        "contract_version": CONTRACT_VERSION,
-        "comparison_only": True,
-        "affects_current_decision": False,
-        "comparable": comparable,
-        "current": current,
-        "candidate": candidate,
-        "changed_fields": changed_fields,
-    }
+    return LLMRuleExecution(decision, evaluation)

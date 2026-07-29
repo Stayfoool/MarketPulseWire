@@ -42,7 +42,6 @@ from llm_decision_web import llm_decision_rows, llm_decision_summary
 from current_rules_web import current_rules_payload
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
 from market_view import article_view_from_row, event_view_from_row, official_view_from_row
-from rule_shadow_report_store import list_daily_reports, load_daily_report
 from settings_store import save_settings, settings_payload
 from signals_extract import extract_signals
 from source_profiles import save_source_profile_config, source_profiles_payload
@@ -63,7 +62,6 @@ from stock_relations import (
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = ROOT / "web"
-RULE_SHADOW_REPORT_DIR = ROOT / "reports"
 WEB_INDEX_PATH = WEB_ROOT / "index.html"
 WEB_STATIC_ASSETS = {
     "/static/styles.css": (WEB_ROOT / "styles.css", "text/css; charset=utf-8"),
@@ -76,31 +74,6 @@ HOLDINGS_PREVIEW_TTL_SECONDS = 15 * 60
 _HOLDINGS_PREVIEW_SIGNING_KEY = secrets.token_bytes(32)
 
 
-def rule_shadow_reports_payload(
-    report_date: str = "",
-    *,
-    report_dir: Path = RULE_SHADOW_REPORT_DIR,
-) -> dict[str, Any]:
-    reports = list_daily_reports(report_dir)
-    selected_date = report_date or (str(reports[0].get("date") or "") if reports else "")
-    report = load_daily_report(report_dir, selected_date) if selected_date else None
-    if report is not None:
-        report = dict(report)
-        report.pop("report_dir", None)
-        cleaned_items: list[dict[str, Any]] = []
-        for item in report.get("items") if isinstance(report.get("items"), list) else []:
-            if not isinstance(item, dict):
-                continue
-            cleaned = dict(item)
-            cleaned.pop("report_path", None)
-            cleaned_items.append(cleaned)
-        report["items"] = cleaned_items
-    return {
-        "ok": True,
-        "reports": reports,
-        "selected_date": selected_date,
-        "report": report,
-    }
 SYSTEMCTL_SHOW_FIELDS = {
     "ActiveState",
     "SubState",
@@ -135,10 +108,6 @@ SERVICE_UNITS = [
     "surveil-official-collector.service",
     "surveil-news-collector.service",
     "surveil-value-directory.service",
-    "surveil-research-collector-shadow.service",
-    "surveil-official-collector-shadow.service",
-    "surveil-news-collector-shadow.service",
-    "surveil-collector-shadow-digest.service",
     "surveil-holdings-web.service",
     "surveil-proxy.service",
 ]
@@ -159,10 +128,6 @@ TIMER_UNITS = [
     "surveil-official-collector.timer",
     "surveil-news-collector.timer",
     "surveil-value-directory.timer",
-    "surveil-research-collector-shadow.timer",
-    "surveil-official-collector-shadow.timer",
-    "surveil-news-collector-shadow.timer",
-    "surveil-collector-shadow-digest.timer",
 ]
 
 RUN_ONCE_TARGETS = {
@@ -181,10 +146,6 @@ RUN_ONCE_TARGETS = {
     "surveil-official-collector.timer": "surveil-official-collector.service",
     "surveil-news-collector.timer": "surveil-news-collector.service",
     "surveil-value-directory.timer": "surveil-value-directory.service",
-    "surveil-research-collector-shadow.timer": "surveil-research-collector-shadow.service",
-    "surveil-official-collector-shadow.timer": "surveil-official-collector-shadow.service",
-    "surveil-news-collector-shadow.timer": "surveil-news-collector-shadow.service",
-    "surveil-collector-shadow-digest.timer": "surveil-collector-shadow-digest.service",
 }
 
 SIGNAL_REVIEW_UNITS = {
@@ -207,17 +168,6 @@ LEGACY_CUTOVER_UNITS = {
     "surveil-overseas-media.timer",
     "surveil-china-media.service",
     "surveil-china-media.timer",
-}
-
-SHADOW_UNITS = {
-    "surveil-research-collector-shadow.service",
-    "surveil-research-collector-shadow.timer",
-    "surveil-official-collector-shadow.service",
-    "surveil-official-collector-shadow.timer",
-    "surveil-news-collector-shadow.service",
-    "surveil-news-collector-shadow.timer",
-    "surveil-collector-shadow-digest.service",
-    "surveil-collector-shadow-digest.timer",
 }
 
 LEGACY_REPLACEMENTS = {
@@ -248,10 +198,6 @@ UNIT_METADATA = {
     "surveil-official-collector.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 10 分钟"},
     "surveil-news-collector.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 2 分钟"},
     "surveil-value-directory.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每天 05:00 / 21:00；需先完成服务器浏览器登录"},
-    "surveil-research-collector-shadow.service": {"group": "fetching_shadow", "type": "影子采集", "schedule": "timer 每 15 分钟"},
-    "surveil-official-collector-shadow.service": {"group": "fetching_shadow", "type": "影子采集", "schedule": "timer 每 30 分钟"},
-    "surveil-news-collector-shadow.service": {"group": "fetching_shadow", "type": "影子采集", "schedule": "timer 每 10 分钟"},
-    "surveil-collector-shadow-digest.service": {"group": "processing_scheduled", "type": "影子报告", "schedule": "timer 21:05"},
     "surveil-article-daily.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 20:50"},
     "surveil-llm-decision-audit-cleanup.service": {"group": "processing_scheduled", "type": "审计清理", "schedule": "每天 15:30 北京时间"},
     "surveil-signals-extract.service": {"group": "signal_review", "type": "定时处理", "schedule": "默认关闭；启用后每 10 分钟", "health_alert": False},
@@ -275,10 +221,6 @@ UNIT_METADATA = {
     "surveil-official-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 10 分钟"},
     "surveil-news-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 2 分钟"},
     "surveil-value-directory.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每天 05:00 / 21:00；默认需人工启用"},
-    "surveil-research-collector-shadow.timer": {"group": "fetching_shadow", "type": "影子定时器", "schedule": "每 15 分钟"},
-    "surveil-official-collector-shadow.timer": {"group": "fetching_shadow", "type": "影子定时器", "schedule": "每 30 分钟"},
-    "surveil-news-collector-shadow.timer": {"group": "fetching_shadow", "type": "影子定时器", "schedule": "每 10 分钟"},
-    "surveil-collector-shadow-digest.timer": {"group": "processing_scheduled", "type": "影子报告定时器", "schedule": "21:05"},
     "surveil-article-daily.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "20:50"},
     "surveil-llm-decision-audit-cleanup.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "每天 15:30 北京时间"},
     "surveil-signals-extract.timer": {"group": "signal_review", "type": "定时器", "schedule": "默认关闭；启用后每 10 分钟", "health_alert": False},
@@ -290,7 +232,6 @@ UNIT_METADATA = {
 UNIT_GROUP_LABELS = {
     "fetching_persistent": "常驻采集服务",
     "fetching_scheduled": "定时采集任务",
-    "fetching_shadow": "影子采集任务",
     "fetching_legacy": "历史兼容采集单元",
     "processing_scheduled": "非抓取处理/日报任务",
     "signal_review": "投资信号复盘（默认关闭）",
@@ -329,10 +270,6 @@ LOG_FILES = [
     "official-collector.err.log",
     "news-collector.err.log",
     "value-directory.err.log",
-    "research-collector-shadow.err.log",
-    "official-collector-shadow.err.log",
-    "news-collector-shadow.err.log",
-    "collector-shadow-digest.err.log",
     "llm-decision-audit-cleanup.err.log",
     "sina-flash.err.log",
     "sina-stock-news.err.log",
@@ -1210,11 +1147,6 @@ def unit_display_metadata(unit: str, values: dict[str, Any]) -> dict[str, Any]:
         lifecycle_label = "历史兼容"
         replacement = LEGACY_REPLACEMENTS.get(unit, "")
         default_visible = False
-    elif unit in SHADOW_UNITS:
-        lifecycle = "shadow"
-        lifecycle_label = "影子验证"
-        replacement = ""
-        default_visible = False
     else:
         lifecycle = "production"
         lifecycle_label = "生产"
@@ -2034,18 +1966,6 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 payload = media_keyword_payload()
                 payload["ok"] = True
                 self.send_json(payload)
-            except Exception as exc:  # noqa: BLE001
-                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
-            return
-        if parsed.path == "/api/rule-shadow-reports":
-            if not self.require_auth():
-                return
-            try:
-                qs = parse_qs(parsed.query)
-                report_date = (qs.get("date") or [""])[0]
-                self.send_json(rule_shadow_reports_payload(report_date))
-            except ValueError as exc:
-                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except Exception as exc:  # noqa: BLE001
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return

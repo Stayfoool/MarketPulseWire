@@ -87,6 +87,12 @@ REMOVED_COMPATIBILITY_MODULES = (
     "market_storage_migration.py",
     "rule_config_migration_v1.py",
     "run_production_with_rule_shadow.py",
+    "collector_shadow_digest.py",
+    "llm_rule_shadow.py",
+    "rule_core_fixture.py",
+    "rule_core_shadow_combined.py",
+    "rule_core_shadow_daily.py",
+    "rule_shadow_report_store.py",
 )
 
 INDEPENDENT_ROUTE_EXCEPTIONS = {
@@ -301,6 +307,9 @@ def test_production_decision_boundary_is_llm_only() -> None:
     assert "def decide_market_item_with_llm(" in engine
     assert "def decide_market_item(" not in engine
     assert "from llm_production_decision import decide_production_market_item" in engine
+    assert "from llm_rule_execution import LLMRuleExecution, execute_llm_rule_decision" in production
+    assert 'os.environ.get("LLM_THINKING_TYPE")' in production
+    assert "RULE_COMPARISON_LLM_THINKING_TYPE" not in production
     assert "class ProductionLLMInsufficientEvidence" in production
     assert 'if status == "uncertain"' in production
     for collector in (
@@ -384,7 +393,7 @@ def test_direct_urllib_request_usage_is_explicit_and_bounded() -> None:
             assert (SCRIPTS / test).exists(), (filename, test)
 
 
-def test_deployment_preserves_private_proxy_state_and_disables_shadows() -> None:
+def test_deployment_preserves_private_state_and_retires_shadow_units() -> None:
     deploy = (SCRIPTS / "deploy_remote.sh").read_text(encoding="utf-8")
     installer = (SCRIPTS / "install_remote_systemd.sh").read_text(encoding="utf-8")
     sync = (SCRIPTS / "remote_code_sync.sh").read_text(encoding="utf-8")
@@ -413,15 +422,22 @@ def test_deployment_preserves_private_proxy_state_and_disables_shadows() -> None
         assert installer.count(enable) == 1
         assert installer.count(restart) == 1
         assert installer.index(enable) < installer.index(restart)
-    shadow_timers = (
+    retired_units = (
+        "surveil-research-collector-shadow.service",
         "surveil-research-collector-shadow.timer",
+        "surveil-official-collector-shadow.service",
         "surveil-official-collector-shadow.timer",
+        "surveil-news-collector-shadow.service",
         "surveil-news-collector-shadow.timer",
+        "surveil-collector-shadow-digest.service",
         "surveil-collector-shadow-digest.timer",
+        "surveil-rule-shadow-daily.service",
+        "surveil-rule-shadow-daily.timer",
     )
-    for timer in shadow_timers:
-        assert f"systemctl disable --now {timer}" in installer
-        assert f"systemctl enable --now {timer}" not in installer
+    for unit in retired_units:
+        assert f"/etc/systemd/system/{unit}" in installer
+        assert not (ROOT / "systemd" / unit).exists()
+        assert unit not in (SCRIPTS / "holdings_web.py").read_text(encoding="utf-8")
 
 
 def test_interval_timer_activation_policy_after_deployment() -> None:
@@ -509,7 +525,7 @@ def main() -> int:
     test_removed_compatibility_modules_do_not_return()
     test_independent_routes_are_explicit_and_tested()
     test_direct_urllib_request_usage_is_explicit_and_bounded()
-    test_deployment_preserves_private_proxy_state_and_disables_shadows()
+    test_deployment_preserves_private_state_and_retires_shadow_units()
     test_interval_timer_activation_policy_after_deployment()
     test_value_directory_runs_twice_daily_without_enabling_a_disabled_timer()
     test_source_profiles_have_complete_runtime_ownership()

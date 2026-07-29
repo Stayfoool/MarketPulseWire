@@ -52,7 +52,6 @@ EDITABLE_OVERRIDE_FIELDS = {
     "web_evidence_enabled",
     "proxy_profile",
     "provider",
-    "operation_mode",
     "notes",
 }
 
@@ -80,7 +79,6 @@ class SourceProfile:
     source_priority: str = ""
     url: str = ""
     provider: str = ""
-    operation_mode: str = ""
     notes: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -458,8 +456,7 @@ def build_profiles() -> list[SourceProfile]:
                 skeptic_enabled=False,
                 web_evidence_enabled=False,
                 provider="cninfo_public",
-                operation_mode="report_only",
-                notes="正式披露以官方公告原文为准；首次部署默认只报告，不进入决策或投递。",
+                notes="正式披露以官方公告原文为准；每个新 provider 首次成功抓取只建立基线。",
             ),
         ]
     )
@@ -576,7 +573,7 @@ def save_source_profile_config(
             disabled_sources.append(source_id)
 
         item: dict[str, Any] = {}
-        for field in ("frequency", "proxy_profile", "provider", "operation_mode", "notes"):
+        for field in ("frequency", "proxy_profile", "provider", "notes"):
             value = str(row.get(field) or "").strip()
             if value and value != str(default.get(field) or ""):
                 item[field] = value
@@ -619,7 +616,7 @@ def apply_local_config(profile: SourceProfile, config: dict[str, Any]) -> dict[s
     payload["runtime_effective"] = True
     if payload.get("provider"):
         payload["runtime_note"] = (
-            f"来源开关、provider={payload.get('provider')}、mode={payload.get('operation_mode') or 'report_only'} 由运行时读取；"
+            f"来源开关、provider={payload.get('provider')} 由运行时读取；"
             "频率和代理暂仅记录。"
         )
     else:
