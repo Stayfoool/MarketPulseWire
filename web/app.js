@@ -15,7 +15,6 @@ let sourceProfileCache = {categories: [], profiles: []};
 let eventSourceOptionsLoaded = false;
 let eventOperationId = 0;
 let eventAbortController = null;
-let ruleShadowReportCache = {items: []};
 let currentRulesCache = null;
 
 function headers() {
@@ -129,24 +128,20 @@ function serviceActionButtons(unit) {
 }
 
 function renderHealthTasks(tasks, groupLabels) {
-  const showShadow = Boolean(document.getElementById('showShadowUnits')?.checked);
   const showLegacy = Boolean(document.getElementById('showLegacyUnits')?.checked);
   const allTasks = tasks || [];
   const visibleTasks = allTasks.filter(task => {
-    if (task.lifecycle === 'shadow' && !showShadow) return false;
     if (task.lifecycle === 'legacy_cutover' && !showLegacy) return false;
     return true;
   });
-  const hiddenShadow = allTasks.filter(task => task.lifecycle === 'shadow').length;
   const hiddenLegacy = allTasks.filter(task => task.lifecycle === 'legacy_cutover').length;
   const summary = document.getElementById('healthUnitSummary');
   if (summary) {
     const parts = [`展示 ${visibleTasks.length} / ${allTasks.length} 个逻辑任务`];
-    if (!showShadow && hiddenShadow) parts.push(`隐藏影子任务 ${hiddenShadow} 个`);
     if (!showLegacy && hiddenLegacy) parts.push(`隐藏历史兼容任务 ${hiddenLegacy} 个`);
     summary.textContent = parts.join('；');
   }
-  const order = ['fetching_persistent', 'fetching_scheduled', 'processing_scheduled', 'signal_review', 'infrastructure', 'fetching_shadow', 'fetching_legacy', 'other'];
+  const order = ['fetching_persistent', 'fetching_scheduled', 'processing_scheduled', 'signal_review', 'infrastructure', 'fetching_legacy', 'other'];
   const byGroup = {};
   visibleTasks.forEach(task => {
     const group = task.group || 'other';
@@ -241,7 +236,6 @@ function showView(name) {
   }
   if (name === 'health') loadHealth();
   if (name === 'keywords') loadKeywords();
-  if (name === 'rule-shadow') loadRuleShadowReports();
   if (name === 'settings') {
     loadSettings();
   }
@@ -1175,7 +1169,7 @@ function sourceProfileSearchText(item) {
     item.category_label, item.name, item.id, item.source_type, item.fetch_range,
     item.filter_policy, item.frequency, item.runtime_shape, item.pipeline,
     item.fetcher, item.publisher_role, item.tavily_policy, item.proxy_profile, item.text_length_policy,
-    item.provider, item.operation_mode,
+    item.provider,
     (item.service_units || []).join(' '), item.notes, item.enabled ? 'enabled' : 'disabled'
   ].join(' ').toLowerCase();
 }
@@ -1206,7 +1200,6 @@ function sourceProfilesForSave() {
     web_evidence_enabled: Boolean(item.web_evidence_enabled),
     proxy_profile: item.proxy_profile || '',
     provider: item.provider || '',
-    operation_mode: item.operation_mode || '',
     notes: item.notes || ''
   }));
 }
@@ -1241,13 +1234,6 @@ function renderSourceProfiles() {
       <div style="margin-top:6px">
         <div class="hint">采集 provider</div>
         <input class="source-control" data-source-id="${escapeHtml(item.id || '')}" data-field="provider" value="${escapeHtml(item.provider || '')}" oninput="updateSourceProfileDraft(this)">
-      </div>
-      <div style="margin-top:6px">
-        <div class="hint">运行模式</div>
-        <select class="source-control" data-source-id="${escapeHtml(item.id || '')}" data-field="operation_mode" onchange="updateSourceProfileDraft(this)">
-          <option value="report_only" ${item.operation_mode === 'report_only' ? 'selected' : ''}>只报告（不决策/不投递）</option>
-          <option value="live" ${item.operation_mode === 'live' ? 'selected' : ''}>正式运行</option>
-        </select>
       </div>
     ` : '';
     return `
@@ -1463,271 +1449,6 @@ async function saveKeywords() {
     document.getElementById('excludeKeywords').value = keywordListToText(data.exclude_keywords || []);
     document.getElementById('mediaKeywordConfigVersion').textContent = data.config_version || '-';
     showStatus(`媒体关键词已保存。主关键词 ${(data.semiconductor_ai_keywords || []).length} 个，标题限定 ${(data.semiconductor_ai_title_keywords || []).length} 个，排除 ${(data.exclude_keywords || []).length} 个。`);
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-function ruleShadowUsageText(usage) {
-  const prompt = Number(usage.prompt_tokens || 0);
-  const completion = Number(usage.completion_tokens || 0);
-  const total = Number(usage.total_tokens || 0);
-  if (!prompt && !completion && !total) return '';
-  return `token：输入 ${prompt}，输出 ${completion}，合计 ${total}`;
-}
-
-function ruleShadowEvaluationStatusLabel(status) {
-  return {
-    completed: '已完成',
-    not_admitted: '未通过范围准入',
-    insufficient_input: '正文不足',
-    model_unavailable: '大模型不可用',
-    invalid_output: '大模型输出无效',
-    evidence_invalid: '原文证据校验失败',
-    conflict: '判断结果冲突',
-    uncertain: '判断不确定'
-  }[status] || '其他无法比较';
-}
-
-function ruleShadowComparisonStatusLabel(status) {
-  return {
-    action_compared: '已比较 action',
-    both_not_admitted: '双方均未准入',
-    admission_difference: '准入不一致',
-    model_validation_failed: '大模型判断或校验失败'
-  }[status] || '状态未记录';
-}
-
-function ruleShadowEngineLabel(engine) {
-  if (String(engine || '').startsWith('llm_rule_decision')) return '大模型候选';
-  if (engine === 'rule_core_v1') return '新规则候选';
-  return engine || '对比判断';
-}
-
-function ruleShadowEvidence(item) {
-  const evidence = Array.isArray(item.candidate_rule_evidence) ? item.candidate_rule_evidence : [];
-  return evidence.slice(0, 8).map(row => {
-    const ruleId = row && typeof row === 'object' ? row.rule_id || '' : '';
-    const quote = row && typeof row === 'object' ? row.quote || '' : '';
-    return quote ? `<div class="hint">原文证据：${escapeHtml(ruleId ? `${ruleId}：${quote}` : quote)}</div>` : '';
-  }).join('');
-}
-
-function ruleShadowDecisionCell(item, prefix) {
-  const action = item[`${prefix}_action`] || 'none';
-  const importance = item[`${prefix}_importance`] || '';
-  const reason = item[`${prefix}_reason`] || '';
-  const rules = item[`${prefix}_rule_ids`] || [];
-  const comparisonStatus = item.comparison_status || (item.comparable === false ? 'model_validation_failed' : 'action_compared');
-  if (prefix === 'candidate' && comparisonStatus === 'model_validation_failed') {
-    const status = ruleShadowEvaluationStatusLabel(item.evaluation_status || 'unknown');
-    const failure = item.failure_reason || reason || '未记录失败原因';
-    return `
-      <div>${badge('无法比较')} ${badge(status)}</div>
-      <div class="summary-cell" style="margin-top:6px">${escapeHtml(failure)}</div>
-      <div class="hint">未生成候选 action</div>
-    `;
-  }
-  if (prefix === 'candidate' && comparisonStatus === 'both_not_admitted') {
-    return `
-      <div>${badge(ruleShadowComparisonStatusLabel(comparisonStatus))} ${badge(ruleShadowEvaluationStatusLabel(item.evaluation_status || 'not_admitted'))}</div>
-      <div class="summary-cell" style="margin-top:6px">${escapeHtml(reason || '双方均未通过范围准入')}</div>
-      <div class="hint">未调用大模型，未生成候选 action</div>
-    `;
-  }
-  if (prefix === 'candidate' && comparisonStatus === 'admission_difference' && action === 'none') {
-    return `
-      <div>${badge(ruleShadowComparisonStatusLabel(comparisonStatus))} ${badge(ruleShadowEvaluationStatusLabel(item.evaluation_status || 'not_admitted'))}</div>
-      <div class="summary-cell" style="margin-top:6px">${escapeHtml(reason || '两套范围准入判断不一致')}</div>
-      <div class="hint">未生成候选 action</div>
-    `;
-  }
-  return `
-    <div>${badge(action)} ${importance ? badge(importance) : ''} ${prefix === 'candidate' && comparisonStatus === 'admission_difference' ? badge('准入不一致') : ''}</div>
-    <div class="summary-cell" style="margin-top:6px">${escapeHtml(reason || '未记录原因')}</div>
-    <div class="hint">${rules.length ? escapeHtml(rules.join('，')) : '未命中规则'}</div>
-    ${prefix === 'candidate' ? ruleShadowEvidence(item) : ''}
-  `;
-}
-
-const ruleShadowActionRank = {none: 0, ignore: 1, archive: 2, daily: 3, push: 4};
-
-function ruleShadowAction(item, prefix) {
-  const action = String(item[`${prefix}_action`] || 'none').toLowerCase();
-  return Object.prototype.hasOwnProperty.call(ruleShadowActionRank, action) ? action : 'none';
-}
-
-function ruleShadowChange(item) {
-  if ((item.comparison_status || (item.comparable === false ? 'model_validation_failed' : 'action_compared')) !== 'action_compared') return 'unavailable';
-  const current = ruleShadowAction(item, 'current');
-  const candidate = ruleShadowAction(item, 'candidate');
-  if (current === candidate) return 'same';
-  return ruleShadowActionRank[candidate] > ruleShadowActionRank[current] ? 'upgrade' : 'downgrade';
-}
-
-const ruleShadowMultiSelectIds = [
-  'ruleShadowComparisonStatus',
-  'ruleShadowChange',
-  'ruleShadowCurrentAction',
-  'ruleShadowCandidateAction',
-  'ruleShadowRuleVersion',
-  'ruleShadowEvaluationStatus',
-];
-
-function ruleShadowSelectedValues(id) {
-  const root = document.getElementById(id);
-  return new Set(Array.from(root?.querySelectorAll('input[type="checkbox"]:checked') || []).map(input => input.value));
-}
-
-function ruleShadowFilterMatches(selected, value) {
-  return selected.size === 0 || selected.has(value);
-}
-
-function updateRuleShadowMultiSelectLabel(id) {
-  const root = document.getElementById(id);
-  const summary = root?.querySelector('summary');
-  if (!summary) return;
-  const checked = Array.from(root.querySelectorAll('input[type="checkbox"]:checked'));
-  if (!checked.length) {
-    summary.textContent = summary.dataset.defaultLabel || '全部';
-  } else if (checked.length === 1) {
-    summary.textContent = checked[0].closest('label')?.textContent.trim() || checked[0].value;
-  } else {
-    summary.textContent = `已选 ${checked.length} 项`;
-  }
-}
-
-function ruleShadowMultiSelectChanged(id) {
-  updateRuleShadowMultiSelectLabel(id);
-  renderRuleShadowRows();
-}
-
-document.addEventListener('click', event => {
-  const activeFilter = event.target?.closest?.('.rule-shadow-multi-select') || null;
-  document.querySelectorAll('.rule-shadow-multi-select[open]').forEach(filter => {
-    if (filter !== activeFilter) filter.open = false;
-  });
-});
-
-function renderRuleShadowRows() {
-  const items = Array.isArray(ruleShadowReportCache.items) ? ruleShadowReportCache.items : [];
-  const comparisonStatuses = ruleShadowSelectedValues('ruleShadowComparisonStatus');
-  const changes = ruleShadowSelectedValues('ruleShadowChange');
-  const currentActions = ruleShadowSelectedValues('ruleShadowCurrentAction');
-  const candidateActions = ruleShadowSelectedValues('ruleShadowCandidateAction');
-  const ruleVersions = ruleShadowSelectedValues('ruleShadowRuleVersion');
-  const evaluationStatuses = ruleShadowSelectedValues('ruleShadowEvaluationStatus');
-  const filtered = items.filter(item =>
-    ruleShadowFilterMatches(comparisonStatuses, item.comparison_status || (item.comparable === false ? 'model_validation_failed' : 'action_compared')) &&
-    ruleShadowFilterMatches(changes, ruleShadowChange(item)) &&
-    ruleShadowFilterMatches(currentActions, ruleShadowAction(item, 'current')) &&
-    ruleShadowFilterMatches(candidateActions, ruleShadowAction(item, 'candidate')) &&
-    ruleShadowFilterMatches(
-      ruleVersions,
-      (item.is_latest_candidate_version ?? item.is_latest_rule_core_version) === true ? 'latest' : 'earlier'
-    ) &&
-    ruleShadowFilterMatches(
-      evaluationStatuses,
-      ['completed', 'not_admitted', 'insufficient_input', 'model_unavailable', 'invalid_output', 'evidence_invalid', 'conflict', 'uncertain'].includes(item.evaluation_status || 'unknown')
-        ? (item.evaluation_status || 'unknown')
-        : 'unknown'
-    )
-  );
-
-  document.getElementById('ruleShadowFilterSummary').textContent = `显示 ${filtered.length} / ${items.length} 条`;
-  document.getElementById('ruleShadowRows').innerHTML = filtered.map(item => {
-    const safeUrl = safeExternalUrl(item.url);
-    const title = safeUrl
-      ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title || '')}</a>`
-      : escapeHtml(item.title || '');
-    const candidateVersion = item.candidate_version || item.rule_core_version || '版本无法确认';
-    const candidateEngine = ruleShadowEngineLabel(item.candidate_engine || 'rule_core_v1');
-    const model = item.model ? `模型：${item.model}` : '';
-    const provider = item.provider ? `服务地址：${item.provider}` : '';
-    const usage = ruleShadowUsageText(item.usage);
-    const elapsed = Number(item.elapsed_seconds || 0) > 0 ? `耗时：${Number(item.elapsed_seconds).toFixed(2)} 秒` : '';
-    const inputFieldLabels = {title: '标题', summary: '摘要', full_text: '正文'};
-    const providedFields = Array.isArray(item.provided_fields)
-      ? item.provided_fields.map(field => inputFieldLabels[field] || field).join('、')
-      : '';
-    const inputFields = providedFields ? `判断依据：${providedFields}` : '';
-    const originalBodyChars = Number(item.body_original_chars || 0);
-    const providedBodyChars = Number(item.body_provided_chars || 0);
-    const bodyInput = originalBodyChars > 0
-      ? `正文：提供 ${providedBodyChars} / 原文 ${originalBodyChars} 字${item.body_truncated ? '（已截断）' : ''}`
-      : '';
-    const bodySource = item.body_source ? `正文来源：${item.body_source}` : '';
-    const candidateMeta = [
-      `判断方式：${candidateEngine}`,
-      `版本：${candidateVersion}`,
-      model,
-      provider,
-      inputFields,
-      bodyInput,
-      bodySource,
-      Number(item.model_calls || 0) > 1 ? `大模型调用：${Number(item.model_calls)} 次（首次全部未命中后重新判断）` : '',
-      usage,
-      elapsed,
-    ].filter(Boolean);
-    return `
-      <tr>
-        <td>${escapeHtml(item.source || '')}<div class="hint">${escapeHtml(item.source_group || '')}</div><div class="hint">${escapeHtml(formatTime(item.comparison_generated_at || ''))}</div></td>
-        <td><strong>${title}</strong><div class="hint">${escapeHtml(item.item_id || '')}</div></td>
-        <td>${ruleShadowDecisionCell(item, 'current')}</td>
-        <td>${ruleShadowDecisionCell(item, 'candidate')}<div class="hint" style="margin-top:6px">${candidateMeta.map(escapeHtml).join('<br>')}</div></td>
-      </tr>
-    `;
-  }).join('') || '<tr><td colspan="4">没有符合当前筛选条件的文章。</td></tr>';
-}
-
-function resetRuleShadowFilters() {
-  ruleShadowMultiSelectIds.forEach(id => {
-    const root = document.getElementById(id);
-    root?.querySelectorAll('input[type="checkbox"]').forEach(input => { input.checked = false; });
-    if (root) root.open = false;
-    updateRuleShadowMultiSelectLabel(id);
-  });
-  renderRuleShadowRows();
-}
-
-async function loadRuleShadowReports(reportDate='') {
-  try {
-    const query = reportDate ? `?date=${encodeURIComponent(reportDate)}` : '';
-    const data = await api(`/api/rule-shadow-reports${query}`);
-    const selector = document.getElementById('ruleShadowDate');
-    const selected = data.selected_date || '';
-    selector.innerHTML = (data.reports || []).map(item => `
-      <option value="${escapeHtml(item.date || '')}" ${item.date === selected ? 'selected' : ''}>${escapeHtml(item.date || '')}</option>
-    `).join('') || '<option value="">暂无报告</option>';
-
-    const report = data.report || {};
-    const counts = report.counts || {};
-    const unableToCompare = Number(counts.model_validation_failures ?? counts.unable_to_compare ?? Object.values(counts.skipped || {}).reduce((sum, value) => sum + Number(value || 0), 0));
-    const usage = counts.usage || {};
-    const currentSummary = (data.reports || []).find(item => item.date === selected) || {};
-    const candidateLabel = report.candidate_label || '对比判断';
-    document.getElementById('ruleShadowCandidateHeader').textContent = candidateLabel;
-    document.getElementById('ruleShadowMetrics').innerHTML = [
-      ['全部文章', counts.items ?? ((counts.compared || 0) + unableToCompare)],
-      ['可比较文章', counts.compared || 0],
-      ['双方均未准入', counts.both_not_admitted || 0],
-      ['准入不一致', counts.admission_differences || 0],
-      ['action 不一致', counts.action_changes || 0],
-      ['最新版本文章', counts.latest_candidate_items ?? counts.latest_rule_items ?? 0],
-      ['涉及 push', currentSummary.push_changes || 0],
-      ['大模型判断或校验失败', unableToCompare],
-      ['token 合计', usage.total_tokens || 0],
-      ['飞书提醒', currentSummary.notification_status || '-']
-    ].map(item => `<section class="metric"><div class="label">${escapeHtml(item[0])}</div><div class="value">${escapeHtml(item[1])}</div></section>`).join('');
-    const rebuild = report.rebuild || {};
-    const rebuildNotice = rebuild.source === 'stored_comparison_reports' && rebuild.candidate_re_evaluated === false
-      ? '<span>本报告仅重新汇总已保存的现有生产判断和对比判断，没有重新执行对比判断。</span>'
-      : '';
-    document.getElementById('ruleShadowWindow').innerHTML = report.window_start
-      ? `<span>统计区间：${escapeHtml(formatTime(report.window_start))} 至 ${escapeHtml(formatTime(report.window_end))}</span><span>报告生成：${escapeHtml(formatTime(report.generated_at))}</span><span>对比判断：${escapeHtml(candidateLabel)}</span>${rebuildNotice}`
-      : '<span>暂无日期报告。</span>';
-    ruleShadowReportCache = report;
-    renderRuleShadowRows();
   } catch (err) {
     showStatus(err.message, 'err');
   }

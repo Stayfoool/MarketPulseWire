@@ -14,8 +14,7 @@ The recommended production setup is:
 The current production target is an Alibaba Cloud Debian 12 server with 2
 vCPU, 2 GiB plan memory, a persistent 2 GiB swap file, and a 40 GiB system
 disk. Host/IP and operator-key details remain in the private local operator
-notes, not this repository. Report-only collector shadow timers stay disabled
-on this constrained host unless a bounded observation explicitly requires them.
+notes, not this repository.
 
 Do not commit `.env`, runtime databases, logs, reports, proxy configs, or real portfolio files.
 
@@ -217,15 +216,10 @@ After pruning, `prune_remote_code.sh` restores the deployment root to the
 configured service account and mode `0700`, because rsync otherwise applies the
 checkout root metadata to that directory.
 
-The installer copies but keeps these standalone report-only collector timers disabled:
-
-- `surveil-research-collector-shadow.timer`
-- `surveil-official-collector-shadow.timer`
-- `surveil-news-collector-shadow.timer`
-- `surveil-collector-shadow-digest.timer`
-
-These standalone jobs are migration aids and are not used by the normal
-production schedule. The production collectors use the shared runtime directly.
+The installer stops, disables and removes the retired research, official and
+news collector shadow units, the collector shadow digest units and the retired
+rule-comparison daily units before reloading systemd. The production collectors
+use the shared runtime directly.
 After five-group range admission, `decision_engine.py` calls the reviewed LLM
 degree rules and returns the only production `DecisionResult`. There is no
 configuration selector or retained deterministic action code, and
@@ -300,12 +294,10 @@ replaces the private configuration. Verify file ownership/mode, configuration
 version, title-only count, core macro-indicator count and representative range
 admission replays before restarting affected Alibaba services.
 
-Installation disables `surveil-rule-shadow-daily.timer` and enables
-`surveil-llm-decision-audit-cleanup.timer` at 15:30 `Asia/Shanghai`. No new
-current-versus-candidate report or Feishu reminder is generated. Existing dated
-and combined comparison reports remain available read-only in the Web
-workbench. The cleanup retains those historical report files while removing
-expired sensitive model requests/responses.
+Installation enables `surveil-llm-decision-audit-cleanup.timer` at 15:30
+`Asia/Shanghai`. It scans only private production `llm-decision-audit-*` files
+and removes expired sensitive model requests/responses after 30 days while
+retaining bounded decision results.
 
 An admitted item with a non-empty title enters the production LLM decision even
 when `full_text` is empty. Available summary is included. Available body text is
@@ -376,24 +368,6 @@ The command changes only mode-`0600` private audit files, is idempotent, makes
 no model request, changes no SQLite row and never sends a message. If the
 30-day cleanup has already removed raw calls, an existing `web_projection` is
 preserved.
-
-An operator may explicitly rebuild a historical daily file from its retained
-per-item comparison reports without sending another reminder:
-
-```bash
-sudo -u surveil /opt/surveil/.venv/bin/python \
-  /opt/surveil/scripts/rule_core_shadow_daily.py \
-  --date YYYY-MM-DD --force-rebuild --dry-run --json
-```
-
-This only re-aggregates stored current/candidate decisions. Comparison reports do not
-retain article bodies, so the command does not re-run the selected candidate
-against historical `NormalizedMarketItem` inputs. The rebuilt report records
-that limitation and preserves an existing `notification.status=sent` without
-sending a second Feishu reminder. A historical rebuild updates only the dated
-report and does not replace the rolling `rule-core-shadow-combined-latest` view.
-It fails without changing the dated report if fewer retained per-item reports
-are available than the original daily report recorded.
 
 The installer also copies the production collector units:
 
@@ -514,13 +488,11 @@ enabled for a reviewed rollout, unchanged derived signals, targets and evidence
 must still produce zero SQLite writes.
 
 `surveil-company-disclosures.timer` retains the former announcement schedule at
-08:00 and 20:00. Its source profile defaults to `provider=cninfo_public` and
-`operation_mode=report_only`; report-only runs update source state, PDF cache,
-source health and baseline-only event audit rows, but do not create analyses,
-decisions or deliveries.
-After the observation window and explicit approval, change only this private
-source profile to `operation_mode=live`. A newly selected provider always
-baselines its first successful result before processing later records. The
+08:00 and 20:00. Its source profile defaults to `provider=cninfo_public`. Every
+newly selected provider's first successful fetch updates source state, PDF
+cache, source health and baseline-only event audit rows without creating
+decisions or deliveries. Later new records enter normal production admission,
+decision and delivery. The
 systemd installer disables and removes the expired
 `surveil-ifind-notice.timer`/service and never starts them again.
 

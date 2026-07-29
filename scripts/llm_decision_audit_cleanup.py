@@ -10,8 +10,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from llm_production_decision import DEFAULT_AUDIT_DIR
-from rule_core_shadow_combined import REPORT_DIR
-from rule_core_shadow_daily import MODEL_AUDIT_RETENTION_DAYS, redact_expired_model_audits
+
+
+MODEL_AUDIT_RETENTION_DAYS = 30
 
 
 def redact_expired_production_audits(
@@ -55,17 +56,12 @@ def redact_expired_production_audits(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--report-dir", type=Path, default=REPORT_DIR)
     parser.add_argument("--audit-dir", type=Path, default=DEFAULT_AUDIT_DIR)
     args = parser.parse_args()
-    historical = redact_expired_model_audits(args.report_dir)
     production = redact_expired_production_audits(args.audit_dir)
     print(
         json.dumps(
-            {
-                "historical_comparison_audits_redacted": historical,
-                "production_decision_audits_redacted": production,
-            },
+            {"production_decision_audits_redacted": production},
             ensure_ascii=False,
         )
     )

@@ -1,4 +1,4 @@
-"""Pure contracts and validation for the report-only LLM decision candidate.
+"""Pure contracts and validation for the production LLM degree decision.
 
 This module does not call a model or connect to the production runtime. It
 builds a bounded prompt payload, validates a fixed response, and projects a
@@ -201,18 +201,18 @@ def _validated_article(
     max_input_chars: int,
 ) -> tuple[dict[str, str], int, set[str], int, int, bool]:
     if input_text_scope == "title_summary_full_text":
-        candidate_fields = ("title", "summary", "full_text")
+        provided_fields = ("title", "summary", "full_text")
     elif input_text_scope == "title_summary":
-        candidate_fields = ("title", "summary")
+        provided_fields = ("title", "summary")
     elif input_text_scope == "title":
-        candidate_fields = ("title",)
+        provided_fields = ("title",)
     else:
         raise LLMRuleInputError("invalid_input_scope", f"unsupported input_text_scope: {input_text_scope}")
 
     body_original_chars = len(item.full_text)
-    body = item.full_text[:MAX_BODY_INPUT_CHARS] if "full_text" in candidate_fields else ""
+    body = item.full_text[:MAX_BODY_INPUT_CHARS] if "full_text" in provided_fields else ""
     source_values = {"title": item.title, "summary": item.summary, "full_text": body}
-    article = {field: source_values[field] for field in candidate_fields if source_values[field].strip()}
+    article = {field: source_values[field] for field in provided_fields if source_values[field].strip()}
     if not article:
         raise LLMRuleInputError("insufficient_input", "title, summary and full_text are all empty")
     input_chars = sum(len(value) for value in article.values())
@@ -600,7 +600,7 @@ def _load_response(response: Any, errors: list[str]) -> dict[str, Any] | None:
     return _exact_fields(response, TOP_LEVEL_FIELDS, "response", errors)
 
 
-def _candidate_decision(
+def _decision_result(
     action: str,
     assessments: Sequence[Mapping[str, Any]],
     rules_by_id: Mapping[str, LLMRuleDefinition],
@@ -637,7 +637,7 @@ def _candidate_decision(
         rule_hits=hits,
         candidate_rules=[hit for hit in hits if hit["decision_action"] != action],
         audit_json={
-            "candidate_engine": ENGINE_VERSION,
+            "execution_engine": ENGINE_VERSION,
             "schema_version": SCHEMA_VERSION,
             "llm_decision_rule_version": LLM_DECISION_RULE_VERSION,
             "prompt_version": PROMPT_VERSION,
@@ -800,7 +800,7 @@ def validate_llm_rule_response(
             evidence_character_count=evidence_chars,
         )
 
-    decision = _candidate_decision(
+    decision = _decision_result(
         str(final_action),
         assessments,
         rules_by_id,

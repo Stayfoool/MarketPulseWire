@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from llm_decision_audit_cleanup import redact_expired_production_audits
+from llm_decision_audit_cleanup import MODEL_AUDIT_RETENTION_DAYS, redact_expired_production_audits
 
 
 def write_audit(path: Path, generated_at: datetime) -> None:
@@ -38,6 +38,7 @@ def write_audit(path: Path, generated_at: datetime) -> None:
 
 
 def test_only_expired_sensitive_payload_is_redacted() -> None:
+    assert MODEL_AUDIT_RETENTION_DAYS == 30
     with TemporaryDirectory() as tmp:
         audit_dir = Path(tmp)
         now = datetime(2026, 7, 24, tzinfo=timezone.utc)

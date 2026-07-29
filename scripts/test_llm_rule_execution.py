@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fixed-response checks for the report-only LLM comparison module."""
+"""Fixed-response checks for LLM rule execution and strict validation."""
 
 from __future__ import annotations
 
@@ -8,9 +8,10 @@ from pathlib import Path
 
 from llm_analysis import ChatCompletionResponse
 from llm_rule_catalog import rules_for_families
-from llm_rule_shadow import compare_llm_rule_candidate
-from market_item import DecisionResult, NormalizedMarketItem, RuleFamily
-from admission_rules import SourceAdmissionPolicy, parse_portfolio_config, parse_rule_config
+from llm_rule_decision import apply_source_admission_boundary
+from llm_rule_execution import execute_llm_rule_decision
+from market_item import NormalizedMarketItem, RuleFamily
+from admission_rules import SourceAdmissionPolicy, admit_market_item, parse_portfolio_config, parse_rule_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,26 +72,26 @@ def _model_response(content: str) -> ChatCompletionResponse:
     )
 
 
-def _compare(item: NormalizedMarketItem, caller, *, portfolio=None):
-    return compare_llm_rule_candidate(
+def _execute(item: NormalizedMarketItem, caller, *, portfolio=None):
+    portfolio = portfolio or parse_portfolio_config([])
+    admission = apply_source_admission_boundary(
         item,
-        current_decision=DecisionResult(
-            action="daily",
-            importance="medium",
-            reason="现有生产判断",
-            rule_hits=[{"rule_id": "industry_quantified_hardline", "evidence_quote": QUOTE}],
+        admit_market_item(
+            item,
+            rule_config=CONFIG,
+            portfolio=portfolio,
+            source_policy=SourceAdmissionPolicy(),
         ),
-        current_admission_status="admitted",
-        current_admission_reason="current_scope_match",
-        current_matched_families=("semiconductor_ai",),
-        rule_config=CONFIG,
-        portfolio=portfolio or parse_portfolio_config([]),
-        source_policy=SourceAdmissionPolicy(),
+    )
+    return execute_llm_rule_decision(
+        item,
+        admission=admission,
+        portfolio=portfolio,
         model_caller=caller,
     )
 
 
-def test_completed_comparison_records_usage_and_private_model_audit() -> None:
+def test_completed_execution_records_usage_and_private_model_audit() -> None:
     captured = {}
 
     def caller(prompt):
@@ -100,51 +101,46 @@ def test_completed_comparison_records_usage_and_private_model_audit() -> None:
         )
 
     item = _item()
-    comparison = _compare(item, caller)
-    assert comparison["ok"] is True
-    assert comparison["comparison_only"] is True
-    assert comparison["affects_current_decision"] is False
-    assert comparison["comparable"] is True
-    assert comparison["current"]["action"] == "daily"
-    assert comparison["current"]["rule_evidence"] == [
-        {"rule_id": "industry_quantified_hardline", "quote": QUOTE}
-    ]
-    candidate = comparison["candidate"]
-    assert candidate["evaluation_status"] == "completed"
-    assert candidate["action"] == "push"
-    assert candidate["model"] == "fixed-test-model"
-    assert candidate["provider"] == "provider.example"
-    assert candidate["usage"]["total_tokens"] == 150
-    assert candidate["attempts"] == 1
-    assert candidate["elapsed_seconds"] == 0.25
-    assert candidate["rule_ids"] == ["company_industry_execution_change"]
+    execution = _execute(item, caller)
+    evaluation = execution.evaluation
+    assert execution.decision is not None
+    assert execution.decision.action == "push"
+    assert evaluation["evaluation_status"] == "completed"
+    assert evaluation["action"] == "push"
+    assert evaluation["model"] == "fixed-test-model"
+    assert evaluation["provider"] == "provider.example"
+    assert evaluation["usage"]["total_tokens"] == 150
+    assert evaluation["attempts"] == 1
+    assert evaluation["elapsed_seconds"] == 0.25
+    assert evaluation["rule_ids"] == ["company_industry_execution_change"]
     assert "source_metadata" not in captured["prompt"].user_payload
     assert "current_decision" not in json.dumps(captured["prompt"].user_payload, ensure_ascii=False)
-    audit = comparison["candidate"]["model_audit"]
+    assert evaluation["execution_engine"]
+    audit = evaluation["model_audit"]
     assert "PRIVATE_BODY_START" in json.dumps(audit, ensure_ascii=False)
-    assert "PRIVATE_BODY_START" not in json.dumps(comparison["candidate"]["rule_evidence"], ensure_ascii=False)
+    assert "PRIVATE_BODY_START" not in json.dumps(evaluation["rule_evidence"], ensure_ascii=False)
 
 
 def test_invalid_output_model_failure_and_missing_body_behavior() -> None:
     invalid_calls = []
-    invalid = _compare(
+    invalid = _execute(
         _item(),
         lambda prompt: invalid_calls.append(prompt) or _model_response("not-json"),
     )
     assert len(invalid_calls) == 2
-    assert invalid["comparable"] is False
-    assert invalid["candidate"]["evaluation_status"] == "invalid_output"
-    assert invalid["candidate"]["action"] is None
-    assert invalid["current"]["action"] == "daily"
-    assert len(invalid["candidate"]["model_audit"]["calls"]) == 2
-    assert invalid["candidate"]["model_audit"]["calls"][0]["response"]["content"] == "not-json"
-    assert invalid["candidate"]["model_audit"]["calls"][0]["validation"]["validation_errors"]
+    assert invalid.decision is None
+    assert invalid.evaluation["evaluation_status"] == "invalid_output"
+    assert invalid.evaluation["action"] is None
+    assert len(invalid.evaluation["model_audit"]["calls"]) == 2
+    assert invalid.evaluation["model_audit"]["calls"][0]["response"]["content"] == "not-json"
+    assert invalid.evaluation["model_audit"]["calls"][0]["validation"]["validation_errors"]
 
-    unavailable = _compare(_item(), lambda _prompt: (_ for _ in ()).throw(RuntimeError("provider down")))
-    assert unavailable["candidate"]["evaluation_status"] == "model_unavailable"
-    assert unavailable["candidate"]["failure_reason"] == "request_failed"
-    assert unavailable["candidate"]["action"] is None
-    assert unavailable["candidate"]["model_audit"]["calls"][0]["response"] is None
+    unavailable = _execute(_item(), lambda _prompt: (_ for _ in ()).throw(RuntimeError("provider down")))
+    assert unavailable.decision is None
+    assert unavailable.evaluation["evaluation_status"] == "model_unavailable"
+    assert unavailable.evaluation["failure_reason"] == "request_failed"
+    assert unavailable.evaluation["action"] is None
+    assert unavailable.evaluation["model_audit"]["calls"][0]["response"] is None
 
     calls = []
     response = json.loads(_response("semiconductor_ai", "company_industry_execution_change", "push"))
@@ -155,24 +151,24 @@ def test_invalid_output_model_failure_and_missing_body_behavior() -> None:
         calls.append(prompt)
         return _model_response(json.dumps(response, ensure_ascii=False))
 
-    title_summary = _compare(_item(full_text=""), title_summary_caller)
+    title_summary = _execute(_item(full_text=""), title_summary_caller)
     assert len(calls) == 1
     assert calls[0].input_text_scope == "title_summary"
-    assert title_summary["candidate"]["evaluation_status"] == "completed"
-    assert title_summary["candidate"]["action"] == "push"
+    assert title_summary.evaluation["evaluation_status"] == "completed"
+    assert title_summary.decision is not None and title_summary.decision.action == "push"
 
 
 def test_excluded_item_does_not_call_model() -> None:
     calls = []
-    comparison = _compare(
+    execution = _execute(
         _item(title="普通生活资讯", summary="没有产业信息", full_text="普通生活资讯正文。"),
         lambda prompt: calls.append(prompt),
     )
     assert calls == []
-    assert comparison["comparable"] is False
-    assert comparison["candidate"]["admission_status"] == "excluded"
-    assert comparison["candidate"]["evaluation_status"] == "not_admitted"
-    assert comparison["candidate"]["action"] is None
+    assert execution.decision is None
+    assert execution.evaluation["admission_status"] == "excluded"
+    assert execution.evaluation["evaluation_status"] == "not_admitted"
+    assert execution.evaluation["action"] is None
 
 
 def test_all_unmatched_response_completes_as_archive_without_retry() -> None:
@@ -190,19 +186,19 @@ def test_all_unmatched_response_completes_as_archive_without_retry() -> None:
         calls.append(prompt)
         return _model_response(all_unmatched)
 
-    comparison = _compare(_item(), caller)
+    execution = _execute(_item(), caller)
     assert len(calls) == 1
     assert "validation_feedback" not in calls[0].user_payload
-    candidate = comparison["candidate"]
-    assert comparison["comparable"] is True
-    assert candidate["evaluation_status"] == "completed"
-    assert candidate["action"] == "archive"
-    assert candidate["model_calls"] == 1
-    assert candidate["attempts"] == 1
-    assert candidate["usage"]["total_tokens"] == 150
+    evaluation = execution.evaluation
+    assert execution.decision is not None
+    assert evaluation["evaluation_status"] == "completed"
+    assert evaluation["action"] == "archive"
+    assert evaluation["model_calls"] == 1
+    assert evaluation["attempts"] == 1
+    assert evaluation["usage"]["total_tokens"] == 150
 
 
-def test_no_match_with_uncertain_does_not_retry_or_create_candidate() -> None:
+def test_no_match_with_uncertain_does_not_retry_or_create_decision() -> None:
     calls = []
     rules = rules_for_families(("semiconductor_ai",))
     response = json.dumps(
@@ -228,13 +224,13 @@ def test_no_match_with_uncertain_does_not_retry_or_create_candidate() -> None:
         calls.append(prompt)
         return _model_response(response)
 
-    comparison = _compare(_item(), caller)
+    execution = _execute(_item(), caller)
     assert len(calls) == 1
-    assert comparison["comparable"] is False
-    candidate = comparison["candidate"]
-    assert candidate["evaluation_status"] == "uncertain"
-    assert candidate["action"] is None
-    assert candidate["model_calls"] == 1
+    assert execution.decision is None
+    evaluation = execution.evaluation
+    assert evaluation["evaluation_status"] == "uncertain"
+    assert evaluation["action"] is None
+    assert evaluation["model_calls"] == 1
 
 
 def test_company_disclosure_receives_only_holding_rules_and_minimal_matched_context() -> None:
@@ -255,7 +251,7 @@ def test_company_disclosure_receives_only_holding_rules_and_minimal_matched_cont
         captured["prompt"] = prompt
         return _model_response(_response("holding", "company_industry_execution_change", "daily"))
 
-    comparison = _compare(
+    execution = _execute(
         _item(
             source="company_disclosures",
             source_category="company_disclosures",
@@ -278,17 +274,17 @@ def test_company_disclosure_receives_only_holding_rules_and_minimal_matched_cont
         "matched_related_keywords": ["HBM"],
         "immediate_alert_keywords": ["临时停产"],
     }
-    assert comparison["candidate"]["action"] == "daily"
+    assert execution.decision is not None and execution.decision.action == "daily"
 
 
 def main() -> int:
-    test_completed_comparison_records_usage_and_private_model_audit()
+    test_completed_execution_records_usage_and_private_model_audit()
     test_invalid_output_model_failure_and_missing_body_behavior()
     test_excluded_item_does_not_call_model()
     test_all_unmatched_response_completes_as_archive_without_retry()
-    test_no_match_with_uncertain_does_not_retry_or_create_candidate()
+    test_no_match_with_uncertain_does_not_retry_or_create_decision()
     test_company_disclosure_receives_only_holding_rules_and_minimal_matched_context()
-    print("LLM rule shadow checks passed")
+    print("LLM rule execution checks passed")
     return 0
 
 

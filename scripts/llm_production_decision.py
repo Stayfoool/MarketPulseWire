@@ -14,7 +14,7 @@ from typing import Any, Callable
 from llm_analysis import call_chat_completion_raw_with_prompts_hard_deadline
 from llm_decision_web import build_web_projection
 from llm_rule_decision import LLMRulePrompt, resolve_input_text_scope
-from llm_rule_shadow import LLMRuleExecution, execute_llm_rule_decision
+from llm_rule_execution import LLMRuleExecution, execute_llm_rule_decision
 from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem
 from market_store import InsufficientEvidenceError, application_revision
 from admission_rules import PortfolioRuleConfig
@@ -35,7 +35,7 @@ class ProductionLLMInsufficientEvidence(InsufficientEvidenceError, ProductionLLM
     """Raised for a valid uncertain result that must terminate without an action."""
 
 def _default_model_caller(deadline_monotonic: float):
-    thinking = str(os.environ.get("RULE_COMPARISON_LLM_THINKING_TYPE") or "").strip() or None
+    thinking = str(os.environ.get("LLM_THINKING_TYPE") or "").strip() or None
 
     def call(prompt: LLMRulePrompt):
         return call_chat_completion_raw_with_prompts_hard_deadline(
@@ -72,7 +72,7 @@ def _write_private_audit(
 ) -> Path:
     audit_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(audit_dir, 0o700)
-    candidate = execution.candidate
+    evaluation = execution.evaluation
     payload = {
         "contract_version": PRODUCTION_DECISION_CONTRACT_VERSION,
         "generated_at": generated_at,
@@ -82,25 +82,25 @@ def _write_private_audit(
         "source": item.source,
         "source_item_id": str(item.raw.get("source_event_id") or item.raw.get("id") or item.dedupe_key),
         "application_revision": application_revision,
-        "llm_decision_rule_version": candidate.get("llm_decision_rule_version") or "",
-        "prompt_version": candidate.get("prompt_version") or "",
-        "model": candidate.get("model") or "",
-        "provider": candidate.get("provider") or "",
+        "llm_decision_rule_version": evaluation.get("llm_decision_rule_version") or "",
+        "prompt_version": evaluation.get("prompt_version") or "",
+        "model": evaluation.get("model") or "",
+        "provider": evaluation.get("provider") or "",
         "admission_config_version": admission.config_version,
         "item_digest": str(
             next(
                 (
                     call.get("validation", {}).get("item_digest")
-                    for call in candidate.get("model_audit", {}).get("calls", [])
+                    for call in evaluation.get("model_audit", {}).get("calls", [])
                     if isinstance(call, dict) and isinstance(call.get("validation"), dict)
                 ),
                 "",
             )
         ),
-        "evaluation_status": candidate.get("evaluation_status") or "",
-        "failure_reason": candidate.get("failure_reason") or "",
+        "evaluation_status": evaluation.get("evaluation_status") or "",
+        "failure_reason": evaluation.get("failure_reason") or "",
         "decision": execution.decision.to_dict() if execution.decision else None,
-        "model_audit": candidate.get("model_audit") or {},
+        "model_audit": evaluation.get("model_audit") or {},
     }
     payload["web_projection"] = build_web_projection(payload)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
@@ -156,8 +156,8 @@ def decide_production_market_item(
         application_revision=deployed_revision,
     )
     if execution.decision is None:
-        status = str(execution.candidate.get("evaluation_status") or "invalid_output")
-        reason = str(execution.candidate.get("failure_reason") or "no valid DecisionResult")
+        status = str(execution.evaluation.get("evaluation_status") or "invalid_output")
+        reason = str(execution.evaluation.get("failure_reason") or "no valid DecisionResult")
         if status == "uncertain":
             raise ProductionLLMInsufficientEvidence(
                 f"LLM degree decision has insufficient evidence: {reason}"
