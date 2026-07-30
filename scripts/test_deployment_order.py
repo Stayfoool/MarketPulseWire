@@ -84,11 +84,21 @@ def test_prune_restores_deployment_root_metadata() -> None:
     assert prune.index(sync) < prune.index(owner) < prune.index(mode)
 
 
+def test_installer_restarts_web_after_enabling_it() -> None:
+    installer = (ROOT / "scripts" / "install_remote_systemd.sh").read_text(encoding="utf-8")
+    enable = "systemctl enable --now surveil-holdings-web.service"
+    restart = "systemctl restart surveil-holdings-web.service"
+    assert installer.count(enable) == 1
+    assert installer.count(restart) == 1
+    assert installer.index(enable) < installer.index(restart) < installer.index("SYSTEMD_MARKER=")
+
+
 def main() -> int:
     test_shared_sync_modes_and_private_exclusions()
     test_workflow_orders_overlay_install_and_prune()
     test_prune_requires_matching_systemd_revision()
     test_prune_restores_deployment_root_metadata()
+    test_installer_restarts_web_after_enabling_it()
     print("deployment order checks passed")
     return 0
 
