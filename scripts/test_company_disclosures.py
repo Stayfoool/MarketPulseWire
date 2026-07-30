@@ -128,6 +128,7 @@ def test_first_provider_run_baselines_then_later_new_record_processes() -> None:
 def test_switching_provider_creates_a_new_provider_baseline() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
         holdings = [{"symbol": "301308.SZ", "name": "江波龙"}]
         collect_disclosures(
             provider=FakeProvider([record("1225409631")]),

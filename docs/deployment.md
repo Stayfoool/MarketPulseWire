@@ -125,10 +125,12 @@ deployed_at=<UTC timestamp>
 deployed_by=deploy_remote.sh
 ```
 
-`surveil-db-init.service` applies additive unified-storage migrations before
-collectors start. Fresh databases create only `market_items`, `market_reviews`,
-`market_item_aliases` and unified `deliveries` for market results. Normal
-initialization and deployment never delete data.
+`surveil-db-init.service` is the only production schema initializer and runs
+before every retained service. It creates the complete current schema for a
+fresh database and idempotently verifies current tables and indexes with
+`CREATE ... IF NOT EXISTS`; business processes do not create or alter schema at
+runtime. Direct upgrades from databases created by older revisions are not
+supported. Initialization and deployment never delete data.
 
 Use it to verify whether your Mac, GitHub, and server are aligned:
 

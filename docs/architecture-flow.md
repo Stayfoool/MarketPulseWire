@@ -308,6 +308,13 @@ The project keeps these current physical stores:
 - `source_health`, `x_stream_health`
 - `portfolio_holdings`, `stocks`, `stock_relations`
 
+`market_db.py` is the only production schema initializer. The oneshot
+`surveil-db-init.service` runs it before every retained service; collectors,
+stores, health recording and X streaming only open and use the initialized
+database. They do not create tables, add columns or invoke db-init at runtime.
+The project no longer upgrades databases created by older revisions directly;
+deployment requires the already-current production schema or a fresh database.
+
 The unused relation-suggestion workflow, retired rule-center audit store and
 Web evidence retrieval stores are not part of the current schema or runtime.
 

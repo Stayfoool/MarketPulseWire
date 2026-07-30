@@ -8,7 +8,8 @@ import os
 from dataclasses import dataclass
 
 import rss_monitor
-from db_utils import ensure_seen_tables, update_seen_item_lifecycle
+from db_utils import update_seen_item_lifecycle
+from market_db import SCHEMA
 from source_backoff import backoff_state_after_failure, clear_backoff_state, should_skip_by_backoff
 from source_health import format_error, record_source_failure, record_source_success, should_alert_failure, should_alert_recovery
 
@@ -81,7 +82,7 @@ def test_feed_state_roundtrip() -> None:
 
 def test_expanded_scope_baseline_and_retry_lifecycle() -> None:
     conn = sqlite3.connect(":memory:")
-    ensure_seen_tables(conn)
+    conn.executescript(SCHEMA)
     item = {
         "id": "item-1",
         "url": "https://example.com/item-1",
@@ -179,6 +180,7 @@ def test_fetch_feed_uses_conditionals_and_skips_304() -> None:
 
 def test_source_health_failure_and_recovery() -> None:
     conn = sqlite3.connect(":memory:")
+    conn.executescript(SCHEMA)
     record_source_failure(conn, "test", "source_a", RuntimeError("boom"))
     record_source_failure(conn, "test", "source_a", RuntimeError("boom again"))
     row = conn.execute(

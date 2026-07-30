@@ -6,19 +6,11 @@ import argparse
 import sqlite3
 from pathlib import Path
 
-from db_utils import SEEN_ITEM_LIFECYCLE_COLUMNS, connect_sqlite
+from db_utils import connect_sqlite
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB_PATH = ROOT / "data" / "surveil.sqlite3"
-
-
-def db_table_exists(conn: sqlite3.Connection, table: str) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
-        (table,),
-    ).fetchone()
-    return row is not None
 
 
 SCHEMA = """
@@ -38,6 +30,17 @@ CREATE TABLE IF NOT EXISTS source_health (
     last_alerted_at TEXT,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (monitor, source)
+);
+
+CREATE TABLE IF NOT EXISTS x_stream_health (
+    issue_key TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    first_failed_at TEXT,
+    last_failed_at TEXT,
+    last_error TEXT,
+    last_alerted_at TEXT,
+    last_recovered_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS seen_items (
@@ -202,6 +205,20 @@ CREATE TABLE IF NOT EXISTS seen_sources (
     first_seen_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS seen_posts (
+    source TEXT NOT NULL,
+    post_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    text TEXT NOT NULL,
+    published_at TEXT,
+    first_seen_at TEXT NOT NULL,
+    delivery_status TEXT NOT NULL DEFAULT 'pending',
+    delivered_at TEXT,
+    delivery_error TEXT,
+    delivery_attempts INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (source, post_id)
+);
+
 CREATE TABLE IF NOT EXISTS trendforce_page_seen_items (
     item_id TEXT PRIMARY KEY,
     url TEXT NOT NULL,
@@ -244,6 +261,12 @@ CREATE TABLE IF NOT EXISTS deliveries (
     FOREIGN KEY(market_item_id) REFERENCES market_items(id),
     FOREIGN KEY(market_review_id) REFERENCES market_reviews(id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_deliveries_market_item
+ON deliveries(market_item_id, attempted_at);
+
+CREATE INDEX IF NOT EXISTS idx_deliveries_market_review
+ON deliveries(market_review_id, attempted_at);
 
 CREATE TABLE IF NOT EXISTS market_feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -320,108 +343,19 @@ CREATE TABLE IF NOT EXISTS stock_relations (
     UNIQUE(symbol, related_symbol, relation_type)
 );
 
+CREATE INDEX IF NOT EXISTS idx_stock_relations_symbol
+ON stock_relations(symbol, enabled);
+
+CREATE INDEX IF NOT EXISTS idx_stock_relations_related
+ON stock_relations(related_symbol, enabled);
+
 """
-
-
-def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
-    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-
-
-def add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
-    if column not in table_columns(conn, table):
-        try:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-        except sqlite3.OperationalError as exc:
-            if "duplicate column name" not in str(exc).lower():
-                raise
-
-
-def migrate_schema(conn: sqlite3.Connection) -> None:
-    """Apply additive migrations for existing personal SQLite databases."""
-    for column, definition in SEEN_ITEM_LIFECYCLE_COLUMNS.items():
-        add_column_if_missing(conn, "seen_items", column, definition)
-    stock_relation_columns = {
-        "symbol_name": "TEXT",
-        "related_name": "TEXT",
-        "impact_direction": "TEXT",
-        "theme": "TEXT",
-        "relation_strength": "TEXT",
-        "valid_from": "TEXT",
-        "valid_to": "TEXT",
-        "last_review_verdict": "TEXT",
-        "hit_count": "INTEGER NOT NULL DEFAULT 0",
-        "miss_count": "INTEGER NOT NULL DEFAULT 0",
-        "enabled": "INTEGER NOT NULL DEFAULT 1",
-        "raw_json": "TEXT",
-    }
-    for column, definition in stock_relation_columns.items():
-        add_column_if_missing(conn, "stock_relations", column, definition)
-    delivery_columns = {
-        "market_item_id": "INTEGER",
-        "market_review_id": "INTEGER",
-        "decision_action": "TEXT",
-        "attempted_at": "TEXT",
-    }
-    for column, definition in delivery_columns.items():
-        add_column_if_missing(conn, "deliveries", column, definition)
-    add_column_if_missing(conn, "market_reviews", "legacy_payload_json", "TEXT")
-    add_column_if_missing(conn, "market_feedback", "active_labels_json", "TEXT")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_seen_items_first_seen ON seen_items(first_seen_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_relations_symbol ON stock_relations(symbol, enabled)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_relations_related ON stock_relations(related_symbol, enabled)")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_rule_alert_dedup_rule_created "
-        "ON rule_alert_dedup(rule_id, created_at)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_market_feedback_item "
-        "ON market_feedback(item_kind, source, item_id, operator_id, clicked_at_us, id)"
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_market_feedback_received ON market_feedback(received_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_market_feedback_label ON market_feedback(label, received_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_market_items_seen ON market_items(first_seen_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_market_items_source ON market_items(source, source_item_id)")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_market_items_processing "
-        "ON market_items(processing_status, updated_at)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_market_item_aliases_item "
-        "ON market_item_aliases(market_item_id)"
-    )
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_market_reviews_current "
-        "ON market_reviews(market_item_id, task) WHERE is_current = 1"
-    )
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_market_reviews_legacy "
-        "ON market_reviews(legacy_store_kind, legacy_store_id) "
-        "WHERE legacy_store_kind IS NOT NULL AND legacy_store_id IS NOT NULL"
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_market_reviews_created ON market_reviews(created_at)")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_market_reviews_admission "
-        "ON market_reviews(admission_status, created_at)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_market_reviews_action "
-        "ON market_reviews(decision_action, created_at)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_deliveries_market_item "
-        "ON deliveries(market_item_id, attempted_at)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_deliveries_market_review "
-        "ON deliveries(market_review_id, attempted_at)"
-    )
 
 
 def init_db(path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = connect_sqlite(path)
     conn.executescript(SCHEMA)
-    migrate_schema(conn)
     conn.commit()
     return conn
 

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from db_utils import connect_sqlite
-from market_db import DEFAULT_DB_PATH, init_db
+from market_db import DEFAULT_DB_PATH
 from market_item import AdmissionResult, MarketFlowResult, NormalizedMarketItem
 
 
@@ -246,7 +246,6 @@ def record_production_admission(
     task: str = "production",
     force_new: bool = False,
 ) -> tuple[int, int]:
-    init_db(db_path).close()
     with connect_sqlite(db_path) as conn:
         item_source_id = source_item_id(item)
         existing = conn.execute(
@@ -370,7 +369,6 @@ def record_baseline_item(
     legacy_store_kind: str | None = None,
     legacy_store_id: str | None = None,
 ) -> int:
-    init_db(db_path).close()
     with connect_sqlite(db_path) as conn:
         item_id = upsert_market_item(
             conn,

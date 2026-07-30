@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Iterator
 
 import alphabstract_monitor
+from market_db import init_db
 from source_profiles import runtime_source_profile
 
 
@@ -84,6 +85,7 @@ def temporary_database() -> Iterator[Path]:
     original_db = alphabstract_monitor.DB_PATH
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.sqlite3"
+        init_db(db_path).close()
         alphabstract_monitor.DB_PATH = db_path
         try:
             yield db_path

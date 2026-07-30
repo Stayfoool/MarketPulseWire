@@ -18,7 +18,7 @@ from collector_runtime import (
     load_source_state as runtime_load_source_state,
     save_source_state as runtime_save_source_state,
 )
-from db_utils import ensure_trendforce_page_seen_table, retry_on_locked, update_seen_item_lifecycle
+from db_utils import retry_on_locked, update_seen_item_lifecycle
 from http_utils import http_get
 from llm_analysis import llm_config
 from market_flow import normalize_market_item, process_market_item
@@ -278,10 +278,6 @@ def extract_items(source: PageSource) -> list[dict]:
     raise ValueError(f"未知官方页面类型：{source.kind}")
 
 
-def ensure_page_seen_table(conn: sqlite3.Connection) -> None:
-    ensure_trendforce_page_seen_table(conn)
-
-
 def source_initialized(conn: sqlite3.Connection, source_name: str) -> bool:
     row = conn.execute("SELECT 1 FROM seen_sources WHERE source = ? LIMIT 1", (source_name,)).fetchone()
     return row is not None
@@ -302,7 +298,6 @@ def save_new_page_items(
     notify_baseline: bool = False,
     expanded_scope_baseline: bool = False,
 ) -> list[dict]:
-    ensure_page_seen_table(conn)
     source_name = source.name
     is_baseline = not source_initialized(conn, source_name)
     now = datetime.now(timezone.utc).isoformat()

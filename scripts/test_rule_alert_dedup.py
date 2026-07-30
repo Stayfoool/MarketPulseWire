@@ -7,6 +7,7 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from market_db import init_db
 from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert, reserve_rule_alert_set
 
 
@@ -27,6 +28,7 @@ def review_with_rule(key: str, rule_id: str = "international_bank_theme_strategy
 def test_reserve_confirm_and_duplicate() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
         first = reserve_rule_alert(
             review_with_rule("ib_theme:first"),
             source="cls_telegraph_api",
@@ -52,6 +54,7 @@ def test_reserve_confirm_and_duplicate() -> None:
 def test_release_makes_failed_send_retryable() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
         first = reserve_rule_alert(
             review_with_rule("ib_theme:retry"),
             source="cls_telegraph_api",
@@ -75,6 +78,7 @@ def test_release_makes_failed_send_retryable() -> None:
 def test_fed_path_rule_uses_cross_source_reservation() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
         first = reserve_rule_alert(
             review_with_rule("ib_fed_path:test", rule_id="international_bank_fed_rate_path_revision"),
             source="wallstreetcn_news",
@@ -100,6 +104,7 @@ def test_fed_path_rule_uses_cross_source_reservation() -> None:
 def test_attributed_research_rule_uses_the_same_cross_source_reservation() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
         first = reserve_rule_alert(
             review_with_rule(
                 "attributed_research:semianalysis:test",
@@ -132,6 +137,7 @@ def test_delivery_alias_migrates_legacy_reservation_to_canonical_key() -> None:
     canonical_key = "macro:market_reaction:US:CPI:2026-06"
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
         first = reserve_rule_alert(
             {},
             source="cls_telegraph_api",
@@ -178,6 +184,7 @@ def test_fact_set_reserves_all_new_keys_and_duplicates_regardless_of_order() -> 
     ]
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
         first = reserve_rule_alert_set(
             hits,
             source="sina_stock_news",
@@ -212,6 +219,7 @@ def test_fact_set_with_one_new_identity_sends_and_failure_releases_only_new_keys
     ]
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
         first = reserve_rule_alert_set(
             first_hits,
             source="source-a",

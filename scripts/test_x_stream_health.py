@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 import x_stream
+from market_db import init_db
 
 
 def test_stream_failure_records_unified_health() -> None:
@@ -15,6 +16,7 @@ def test_stream_failure_records_unified_health() -> None:
         original_alerts = x_stream.alerts_enabled
         try:
             x_stream.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            init_db(x_stream.DB_PATH).close()
             x_stream.alerts_enabled = lambda: False
             x_stream.record_stream_failure("HTTP 401: unauthorized", status_code=401, phase="stream")
             with x_stream.connect_db() as conn:
@@ -47,6 +49,7 @@ def test_stream_recovery_clears_unified_health() -> None:
         original_alerts = x_stream.alerts_enabled
         try:
             x_stream.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            init_db(x_stream.DB_PATH).close()
             x_stream.alerts_enabled = lambda: False
             x_stream.record_stream_failure("HTTP 503: unavailable", status_code=503, phase="stream")
             x_stream.record_stream_recovery(phase="stream_connected")

@@ -27,7 +27,7 @@ from collector_runtime import (
     load_source_states,
     save_source_state,
 )
-from db_utils import connect_sqlite, ensure_source_state_table
+from db_utils import connect_sqlite
 from media_sources import OVERSEAS_MEDIA_FEEDS
 from rss_monitor import CORE_COMPANY_FEEDS, DB_PATH, fetch_feed, filter_items, run_once as run_rss_once, strip_tags
 from source_profiles import SOURCE_PROFILE_CONFIG_PATH, runtime_profile_map
@@ -193,7 +193,6 @@ def load_shadow_feed_states(feeds: dict[str, str], save_shadow_state: bool) -> d
     if not save_shadow_state or not feeds:
         return {source: {} for source in feeds}
     with connect_sqlite(DB_PATH) as conn:
-        ensure_source_state_table(conn)
         return load_source_states(conn, feeds, prefix=SHADOW_STATE_PREFIX)
 
 
@@ -201,7 +200,6 @@ def save_shadow_feed_state(source: str, state: dict[str, Any], save_shadow_state
     if not save_shadow_state:
         return
     with connect_sqlite(DB_PATH) as conn:
-        ensure_source_state_table(conn)
         save_source_state(conn, source, state, prefix=SHADOW_STATE_PREFIX)
         conn.commit()
 
@@ -223,7 +221,6 @@ def due_page_sources(
 
     now = datetime.now(timezone.utc)
     with connect_sqlite(DB_PATH) as conn:
-        ensure_source_state_table(conn)
         states = load_source_states(conn, [source.name for source in sources], prefix=PRODUCTION_PAGE_STATE_PREFIX)
 
     due: list[PageSource] = []
@@ -245,7 +242,6 @@ def mark_page_sources_checked(sources: list[Any]) -> None:
         return
     now = utc_now()
     with connect_sqlite(DB_PATH) as conn:
-        ensure_source_state_table(conn)
         for source in sources:
             save_source_state(conn, source.name, {"last_checked_at": now}, prefix=PRODUCTION_PAGE_STATE_PREFIX)
         conn.commit()

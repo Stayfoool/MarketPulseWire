@@ -732,12 +732,19 @@ def test_recheck_uses_enriched_item_without_a_preliminary_decision_gate() -> Non
     original_process = value_directory_monitor.process_market_item
     original_lifecycle = value_directory_monitor.set_seen_item_lifecycle_if_present
     original_admission = value_directory_monitor.production_admission_context
+    original_persist_admission = value_directory_monitor.persist_production_admission_context
     calls: list[dict[str, object]] = []
     try:
         value_directory_monitor.connect_db = lambda: _DummyContext()
         value_directory_monitor.source_item_review_snapshot = lambda *_args, **_kwargs: existing
         value_directory_monitor.set_seen_item_lifecycle_if_present = lambda *_args, **_kwargs: None
         value_directory_monitor.production_admission_context = lambda *_args, **_kwargs: admitted_context()
+        value_directory_monitor.persist_production_admission_context = lambda _item, context, **_kwargs: types.SimpleNamespace(
+            result=context.result,
+            portfolio=context.portfolio,
+            market_item_id=1,
+            market_review_id=1,
+        )
 
         def fake_process(normalized, raw_item, **kwargs):
             calls.append({"normalized": normalized, "raw_item": raw_item, **kwargs})
@@ -760,6 +767,7 @@ def test_recheck_uses_enriched_item_without_a_preliminary_decision_gate() -> Non
         value_directory_monitor.process_market_item = original_process
         value_directory_monitor.set_seen_item_lifecycle_if_present = original_lifecycle
         value_directory_monitor.production_admission_context = original_admission
+        value_directory_monitor.persist_production_admission_context = original_persist_admission
     assert len(calls) == 1
     assert calls[0]["reprocess_existing"] is True
 
@@ -781,11 +789,18 @@ def test_new_item_uses_market_flow_after_preview_enrichment() -> None:
     original_process = value_directory_monitor.process_market_item
     original_lifecycle = value_directory_monitor.set_seen_item_lifecycle_if_present
     original_admission = value_directory_monitor.production_admission_context
+    original_persist_admission = value_directory_monitor.persist_production_admission_context
     try:
         value_directory_monitor.connect_db = lambda: _DummyContext()
         value_directory_monitor.source_item_review_snapshot = lambda *_args, **_kwargs: None
         value_directory_monitor.set_seen_item_lifecycle_if_present = lambda *_args, **_kwargs: None
         value_directory_monitor.production_admission_context = lambda *_args, **_kwargs: admitted_context()
+        value_directory_monitor.persist_production_admission_context = lambda _item, context, **_kwargs: types.SimpleNamespace(
+            result=context.result,
+            portfolio=context.portfolio,
+            market_item_id=1,
+            market_review_id=1,
+        )
         def fake_enrich(raw_item):
             enriched = dict(raw_item)
             enriched["summary"] = "瑞银认为智能体 AI 将继续推动半导体与硬件上行。"
@@ -826,6 +841,7 @@ def test_new_item_uses_market_flow_after_preview_enrichment() -> None:
         value_directory_monitor.process_market_item = original_process
         value_directory_monitor.set_seen_item_lifecycle_if_present = original_lifecycle
         value_directory_monitor.production_admission_context = original_admission
+        value_directory_monitor.persist_production_admission_context = original_persist_admission
 
     assert len(calls) == 1
     call = calls[0]

@@ -28,8 +28,6 @@ from collector_runtime import (
 )
 from db_utils import (
     connect_sqlite,
-    ensure_seen_tables,
-    ensure_source_state_table,
     retry_on_locked,
     update_seen_item_lifecycle,
 )
@@ -72,8 +70,6 @@ EXPANDED_SCOPE_BASELINE_STATE_KEY = "expanded_scope_baseline_at"
 
 def connect_db() -> sqlite3.Connection:
     conn = connect_sqlite(DB_PATH)
-    ensure_seen_tables(conn)
-    ensure_source_state_table(conn)
     conn.execute(
         """
         INSERT OR IGNORE INTO seen_sources (source, first_seen_at)

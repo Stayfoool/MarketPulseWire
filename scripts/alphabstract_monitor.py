@@ -21,8 +21,6 @@ from typing import Any, Iterable
 from collector_runtime import load_source_state, save_source_state
 from db_utils import (
     connect_sqlite,
-    ensure_seen_tables,
-    ensure_source_state_table,
     retry_on_locked,
     update_seen_item_lifecycle,
 )
@@ -75,8 +73,6 @@ ALPHAABSTRACT_SOURCES: tuple[AlphaAbstractSource, ...] = (DEFAULT_SOURCE,)
 
 def connect_db() -> sqlite3.Connection:
     conn = connect_sqlite(DB_PATH)
-    ensure_seen_tables(conn)
-    ensure_source_state_table(conn)
     conn.execute(
         """
         INSERT OR IGNORE INTO seen_sources (source, first_seen_at)

@@ -13,24 +13,6 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def ensure_source_health_table(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS source_health (
-            monitor TEXT NOT NULL,
-            source TEXT NOT NULL,
-            consecutive_failures INTEGER NOT NULL DEFAULT 0,
-            last_success_at TEXT,
-            last_failure_at TEXT,
-            last_error TEXT,
-            last_alerted_at TEXT,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (monitor, source)
-        )
-        """
-    )
-
-
 def alert_threshold() -> int:
     raw = os.getenv("SOURCE_HEALTH_ALERT_FAILURES", "").strip()
     try:
@@ -90,7 +72,6 @@ def format_error(error: Exception | str) -> str:
 
 
 def record_source_failure(conn: sqlite3.Connection, monitor: str, source: str, error: Exception | str) -> None:
-    ensure_source_health_table(conn)
     now = utc_now()
     row = conn.execute(
         """
@@ -139,7 +120,6 @@ def record_source_failure(conn: sqlite3.Connection, monitor: str, source: str, e
 
 
 def record_source_success(conn: sqlite3.Connection, monitor: str, source: str) -> None:
-    ensure_source_health_table(conn)
     now = utc_now()
     row = conn.execute(
         """

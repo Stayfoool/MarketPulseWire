@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import holdings_store
 import holdings_web
+from market_db import init_db
 from holdings_store import (
     HoldingsConflictError,
     HoldingsError,
@@ -273,6 +274,7 @@ def test_save_normalization_never_enriches_symbols_remotely() -> None:
     with TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         config_path = root / "portfolio.json"
+        init_db(root / "surveil.sqlite3").close()
         config_path.write_text('{"holdings": []}\n', encoding="utf-8")
         original_lock_path = holdings_store.LOCK_PATH
         original_backup = holdings_store.backup_config

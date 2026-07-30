@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from db_utils import connect_sqlite
-from market_db import DEFAULT_DB_PATH, init_db
+from market_db import DEFAULT_DB_PATH
 from pipeline_health import record_pipeline_failure, record_pipeline_success
 
 
@@ -152,7 +152,6 @@ def relation_identity(item: dict[str, Any]) -> tuple[str, str, str]:
 
 
 def import_relations(*, db_path: Path, config_path: Path) -> dict[str, int]:
-    init_db(db_path).close()
     payload = load_json(config_path)
     rows = payload.get("relations") or []
     if not isinstance(rows, list):
@@ -231,7 +230,6 @@ def list_relations(
     enabled: str = "all",
     limit: int = 300,
 ) -> list[dict[str, Any]]:
-    init_db(db_path).close()
     q_lower = q.strip().lower()
     rows: list[dict[str, Any]] = []
     enabled_clause = ""
@@ -270,7 +268,6 @@ def save_relation(
     db_path: Path = DEFAULT_DB_PATH,
     relation_id: int | None = None,
 ) -> dict[str, Any]:
-    init_db(db_path).close()
     normalized = normalize_relation_item(item)
     now = utc_now()
     with connect_sqlite(db_path) as conn:
@@ -384,7 +381,6 @@ def save_relation(
 
 
 def delete_relation(*, relation_id: int, db_path: Path = DEFAULT_DB_PATH) -> bool:
-    init_db(db_path).close()
     with connect_sqlite(db_path) as conn:
         cur = conn.execute("DELETE FROM stock_relations WHERE id = ?", (relation_id,))
         conn.commit()
@@ -392,7 +388,6 @@ def delete_relation(*, relation_id: int, db_path: Path = DEFAULT_DB_PATH) -> boo
 
 
 def set_relation_enabled(*, relation_id: int, enabled: bool, db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
-    init_db(db_path).close()
     now = utc_now()
     with connect_sqlite(db_path) as conn:
         conn.row_factory = sqlite3.Row
@@ -417,7 +412,6 @@ def set_relation_enabled(*, relation_id: int, enabled: bool, db_path: Path = DEF
 
 
 def export_relations(*, db_path: Path = DEFAULT_DB_PATH, config_path: Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
-    init_db(db_path).close()
     config_path.parent.mkdir(parents=True, exist_ok=True)
     relations = list_relations(db_path=db_path, q="", enabled="all", limit=10000)
     payload = {
@@ -431,7 +425,6 @@ def export_relations(*, db_path: Path = DEFAULT_DB_PATH, config_path: Path = DEF
 
 
 def diff_relations(*, db_path: Path = DEFAULT_DB_PATH, config_path: Path = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
-    init_db(db_path).close()
     db_relations = {relation_identity(item): relation_json_item(item) for item in list_relations(db_path=db_path, limit=10000)}
     payload = load_json(config_path)
     json_rows = payload.get("relations") or []
@@ -599,7 +592,6 @@ def portfolio_relation_matches(
     """
     if not str(text or "").strip() or not holdings:
         return []
-    init_db(db_path).close()
     with connect_sqlite(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(

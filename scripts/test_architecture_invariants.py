@@ -6,7 +6,9 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
+from market_db import init_db
 from source_profiles import build_profiles
 
 
@@ -383,6 +385,40 @@ def test_retired_management_flows_do_not_return() -> None:
     assert "/api/relation-suggestions" not in frontend
     assert "WEB_EVIDENCE_" not in settings
     assert "SKEPTIC_" not in settings
+
+
+def test_market_db_is_the_only_production_schema_initializer() -> None:
+    schema_path = SCRIPTS / "market_db.py"
+    schema_source = schema_path.read_text(encoding="utf-8")
+    assert "ALTER TABLE" not in schema_source
+    assert "migrate_schema" not in schema_source
+
+    for path in SCRIPTS.glob("*.py"):
+        if path.name.startswith("test_") or path == schema_path:
+            continue
+        source = path.read_text(encoding="utf-8")
+        assert "CREATE TABLE" not in source, path.name
+        assert "ALTER TABLE" not in source, path.name
+        assert "init_db(" not in source, path.name
+
+    with TemporaryDirectory() as tmpdir:
+        with init_db(Path(tmpdir) / "surveil.sqlite3") as conn:
+            tables = {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            assert {"seen_posts", "x_stream_health", "source_health"} <= tables
+            seen_post_columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(seen_posts)").fetchall()
+            }
+            assert {
+                "delivery_status",
+                "delivered_at",
+                "delivery_error",
+                "delivery_attempts",
+            } <= seen_post_columns
 
 
 def test_independent_routes_are_explicit_and_tested() -> None:
