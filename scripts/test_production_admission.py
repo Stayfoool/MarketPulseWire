@@ -123,6 +123,28 @@ def test_ordinary_sources_use_five_groups_and_holding_only_sources_do_not() -> N
         assert direct_holding.matched_families == ("holding",)
 
 
+def test_same_content_has_same_admission_across_ordinary_sources() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = Path(tmp) / "surveil.sqlite3"
+        seed_holding(db_path)
+        env = {"RULE_CORE_CONFIG": str(RULE_CONFIG)}
+        results = [
+            evaluate_production_admission(
+                item("HBM capacity expansion begins", source=source, category=category),
+                db_path=db_path,
+                env=env,
+            )
+            for source, category in (
+                ("digitimes", "research_industry_media"),
+                ("wallstreetcn_news", "domestic_finance_media"),
+            )
+        ]
+        assert [(result.status, result.matched_families) for result in results] == [
+            ("admitted", ("semiconductor_ai",)),
+            ("admitted", ("semiconductor_ai",)),
+        ]
+
+
 def test_direct_holding_keeps_configured_related_keyword_evidence() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "surveil.sqlite3"
@@ -184,6 +206,7 @@ def main() -> int:
     test_missing_production_rule_config_fails_closed()
     test_production_portfolio_comes_from_sqlite()
     test_ordinary_sources_use_five_groups_and_holding_only_sources_do_not()
+    test_same_content_has_same_admission_across_ordinary_sources()
     test_direct_holding_keeps_configured_related_keyword_evidence()
     test_official_trade_source_uses_direct_trade_admission()
     test_context_and_lifecycle_reuse_exact_admission()

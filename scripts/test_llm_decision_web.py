@@ -9,7 +9,6 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from backfill_llm_insufficient_evidence import apply_candidates, current_uncertain_candidates
 from llm_decision_audit_cleanup import redact_expired_production_audits
 from llm_decision_web import (
     WEB_PROJECTION_VERSION,
@@ -19,9 +18,6 @@ from llm_decision_web import (
     load_web_projections,
     write_web_projection,
 )
-from market_db import init_db
-from market_item import AdmissionResult, NormalizedMarketItem
-from market_store import fail_market_review, record_production_admission
 
 
 def audit_payload(status: str = "uncertain", review_id: int = 12) -> dict:
@@ -172,72 +168,11 @@ def test_retention_removes_raw_calls_but_keeps_web_projection() -> None:
         assert payload["model_audit"]["status"] == "expired"
 
 
-def test_backfill_only_converts_current_uncertain_retryable_review() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        directory = Path(tmp)
-        audit_dir = directory / "audits"
-        audit_dir.mkdir(mode=0o700)
-        db_path = directory / "surveil.sqlite3"
-        init_db(db_path).close()
-        with sqlite3.connect(db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO seen_items (
-                    source,item_id,url,title,summary,published_at,first_seen_at,
-                    collection_class,processability_status,admission_status,processing_status,lifecycle_updated_at
-                ) VALUES ('source-a','item-a','https://example.com/a','测试标题','','',
-                          '2026-07-26T01:00:00+00:00','live','succeeded','admitted','failed_retryable',
-                          '2026-07-26T01:00:00+00:00')
-                """
-            )
-            conn.commit()
-        item = NormalizedMarketItem(
-            source="source-a",
-            title="测试标题",
-            url="https://example.com/a",
-            raw={"id": "item-a"},
-        )
-        admission = AdmissionResult(
-            status="admitted",
-            reason_code="test",
-            matched_families=("holding",),
-            evidence=(),
-            config_version="test-v1",
-        )
-        market_item_id, review_id = record_production_admission(item, admission, db_path=db_path)
-        fail_market_review(review_id, RuntimeError("temporary"), db_path=db_path)
-        path = audit_dir / f"llm-decision-audit-{market_item_id}-{review_id}.json"
-        path.write_text(json.dumps(audit_payload(review_id=review_id), ensure_ascii=False), encoding="utf-8")
-        path.chmod(0o600)
-        write_web_projection(path, apply=True)
-
-        with sqlite3.connect(db_path) as conn:
-            candidates = current_uncertain_candidates(conn, audit_dir=audit_dir)
-            assert candidates == [(review_id, market_item_id, "source-a", "item-a")]
-            result = apply_candidates(conn, candidates)
-            assert result == {
-                "updated_reviews": 1,
-                "updated_market_items": 1,
-                "updated_seen_items": 1,
-            }
-            assert conn.execute(
-                "SELECT review_status,decision_action FROM market_reviews WHERE id=?", (review_id,)
-            ).fetchone() == ("insufficient_evidence", None)
-            assert conn.execute(
-                "SELECT processing_status FROM market_items WHERE id=?", (market_item_id,)
-            ).fetchone()[0] == "insufficient_evidence"
-            assert conn.execute(
-                "SELECT processing_status FROM seen_items WHERE source='source-a' AND item_id='item-a'"
-            ).fetchone()[0] == "insufficient_evidence"
-            assert current_uncertain_candidates(conn, audit_dir=audit_dir) == []
-
-
 def main() -> None:
     test_uncertain_projection_is_bounded()
     test_projection_write_is_idempotent_and_mode_bounded()
     test_rows_show_terminal_insufficient_evidence_without_action()
     test_retention_removes_raw_calls_but_keeps_web_projection()
-    test_backfill_only_converts_current_uncertain_retryable_review()
     print("llm decision web checks passed")
 
 

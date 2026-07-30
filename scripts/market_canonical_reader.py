@@ -505,26 +505,6 @@ def canonical_digest_rows(
     return grouped
 
 
-def canonical_signal_rows(
-    conn: sqlite3.Connection,
-    *,
-    item_kind: str,
-    since: str,
-) -> list[dict[str, Any]]:
-    if item_kind not in ITEM_KINDS:
-        raise ValueError(f"unsupported signal item kind: {item_kind}")
-    result: list[dict[str, Any]] = []
-    for row in _review_rows_for_kind(conn, item_kind, since=since):
-        if item_kind == "article":
-            result.append(_article_legacy_row(row))
-        elif item_kind == "official":
-            result.append(_official_legacy_row(row))
-        else:
-            result.append(_event_legacy_row(row))
-    result.sort(key=lambda item: str(item.get("created_at") or item.get("analysis_created_at") or item.get("first_seen_at") or ""))
-    return result
-
-
 def canonical_feedback_snapshot(
     conn: sqlite3.Connection, item_kind: str, source: str, item_id: str
 ) -> dict[str, Any] | None:

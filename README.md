@@ -9,7 +9,7 @@ MarketPulseWire is not an investment adviser and does not generate buy/sell reco
 Market-moving semiconductor and AI infrastructure signals are scattered across X, sell-side-style research headlines, official company blogs, regional supply-chain media, company notices, and paid/authorized data services. MarketPulseWire turns that messy stream into a self-hosted research radar:
 
 - Track your own holdings and adjacent supply-chain names.
-- Watch high-signal sources such as Serenity on X, SEMI, TrendForce, DIGITIMES, Nikkei xTECH, The Elec, OpenAI, NVIDIA, Samsung, SK hynix, Micron, Sina Finance, WallstreetCN, iFinD, and JYGS.
+- Watch high-signal sources such as Serenity on X, SEMI, TrendForce, DIGITIMES, Nikkei xTECH, The Elec, OpenAI, NVIDIA, Samsung, SK hynix, Micron, Sina Finance, WallstreetCN, and CNINFO.
 - Use reviewed private decision rules with strict evidence validation to decide what deserves immediate attention and what can wait for a daily digest.
 - Keep credentials and personal research data on your own machine or server.
 
@@ -17,13 +17,13 @@ Market-moving semiconductor and AI infrastructure signals are scattered across X
 
 - Holdings/watchlist management through a local-only Web workbench
 - Sina Finance news adapters for holdings-related news
-- iFinD notice ingestion and PDF text extraction
+- CNINFO company-disclosure ingestion and bounded PDF text extraction
 - X account monitoring through official API credentials
 - RSS/Atom/RDF monitoring for official company and industry sources
 - DIGITIMES, Nikkei xTECH, The Elec, TrendForce-style media adapters
-- Rule-first decision layer, freshness checks, and thin structured summaries
+- Five-group range admission, reviewed LLM degree decisions, and thin structured summaries
 - Feishu card delivery
-- Linux systemd deployment and macOS launchd templates
+- Linux systemd deployment
 - GitHub Actions CI and optional SSH deployment workflow
 
 ## Built-In Source Radar
@@ -38,7 +38,7 @@ MarketPulseWire keeps a public, reusable source catalog for semiconductor and AI
 | Nikkei xTECH | Japan technology and manufacturing coverage, useful for materials, components, equipment, automotive electronics, and industrial technology shifts. |
 | The Elec | Korea-centered semiconductor/display/battery supply-chain media, useful for Samsung, SK hynix, OLED, memory, equipment, and materials signals. |
 | OpenAI / NVIDIA / Samsung / SK hynix / Micron official feeds | First-party product, architecture, capex, platform, memory, and AI infrastructure announcements. |
-| Sina Finance / WallstreetCN / iFinD / JYGS | China-market and global-macro news, company notices, announcements, and A-share event/opportunity tracking. |
+| Sina Finance / WallstreetCN / CNINFO | China-market and global-macro news plus official company disclosures and investor-relations records. |
 
 See [docs/sources.md](docs/sources.md) for URLs, access methods, and compliance notes.
 
@@ -109,14 +109,14 @@ LLM_BASE_URL=https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
 LLM_MODEL=glm-5.2
 ```
 
-Legacy `OPENAI_*` and `DASHSCOPE_*` variables are kept as compatibility aliases, but new setups should use `LLM_*`.
+Only the `LLM_*` names are supported for model configuration.
 
 ## Data Sources
 
 MarketPulseWire is designed around official or authorized access paths:
 
 - Sina Finance public pages, with optional paid OpenAPI support
-- iFinD REST/API access with your account token
+- CNINFO public company-disclosure interfaces
 - X API tokens for the account you monitor
 - Official RSS feeds and public list pages
 - Optional logged-in cookies only for sources where your usage is authorized
@@ -139,7 +139,6 @@ See:
 - [Source Catalog](docs/sources.md)
 - [Security](docs/security.md)
 - [Compliance](docs/compliance.md)
-- [Roadmap](docs/roadmap.md)
 
 ## Remote Helper Scripts
 
@@ -233,31 +232,9 @@ just remote-revision
 
 `just status-strict` exits non-zero when the local tree is dirty, local `HEAD` differs from `origin/main`, or the server deployed commit differs from GitHub.
 
-## Signal Outcome Loop
+## Relationship Mappings
 
-MarketPulseWire can turn high-importance alerts into traceable signal records for later review:
-
-- `signals`: one extracted research signal
-- `signal_targets`: affected holdings, mapped stocks, or industry links
-- `signal_evidence`: source snippets and follow-up checkpoints
-- `signal_outcomes`: post-event price reaction metrics
-- `signal_reviews`: automatic hit/miss/partial/too-early reviews
-- `stock_relations`: optional private supply-chain/competitor/customer relation mappings
-- `market_skills`: optional private reusable investment reasoning maps, such as event -> chain -> affected segment patterns distilled from authorized notes
-
-Manual commands:
-
-```bash
-python scripts/market_skills.py --skill-dir /path/to/market_skill
-python scripts/signals_extract.py --days 14
-python scripts/signal_outcome_update.py --days 45
-python scripts/signal_review.py --days 60
-python scripts/signal_digest.py --mode daily --dry-run
-```
-
-The outcome updater currently backfills A-share targets through iFinD history quotes when iFinD credentials are configured. It records unsupported markets or missing quote data explicitly instead of inventing results. JYGS action/prediction tables are not part of this loop.
-
-Relationship mappings can be managed from the local Web workbench's `关系映射` tab. SQLite is the live source used by signal extraction; `config/stock_relations.json` is a private backup and migration snapshot. Web saves automatically update SQLite and export the private JSON snapshot.
+Relationship mappings can be managed from the Web workbench's `关系映射` tab. SQLite is the live source; `config/stock_relations.json` is a private seed and backup snapshot. Web saves update SQLite and export the private JSON snapshot.
 
 To seed private relationship mappings from JSON, copy the example file and import it:
 
@@ -266,16 +243,7 @@ cp config/stock_relations.example.json config/stock_relations.json
 python scripts/stock_relations.py --config config/stock_relations.json
 ```
 
-`config/stock_relations.json` is gitignored. Use it for personal holdings, supply-chain links, competitors, customers, upstream/downstream names, and theme mappings that should not be published. Mappings can be triggered by direct symbols as well as exact theme/name matches or sufficiently specific title/body context. The Web workbench also provides JSON import/export, diff checks, recent signal backfill, and a pending suggestion queue for future LLM- or analyst-derived mapping ideas.
-
-Market skill notes are also private by default. Put a reusable skill directory under `config/market_skill/`, or set `MARKET_SKILL_DIR`, then import it:
-
-```bash
-MARKET_SKILL_DIR=/path/to/market_skill python scripts/market_skills.py
-python scripts/market_skills.py --skill-dir /path/to/market_skill --match "Rubin HBM PCB MLCC"
-```
-
-`market_skill` records do not directly change push gates or become stock relation facts. During signal extraction they can add `skill_inferred` targets and `market_skill` evidence, so the later review loop can verify whether a reasoning pattern was useful.
+`config/stock_relations.json` is gitignored. Use it for personal holdings, supply-chain links, competitors, customers, upstream/downstream names, and theme mappings that should not be published. The Web workbench provides JSON import/export, diff checks, and a pending suggestion queue for reviewed relationship candidates.
 
 ### Source Health Noise
 
@@ -311,22 +279,7 @@ Before making a fork public:
 ```bash
 python -m py_compile scripts/*.py
 bash -n scripts/*.sh
-python scripts/test_analysis.py
-python scripts/test_llm_analysis.py
-python scripts/test_trendforce_page_monitor.py
-python scripts/test_alphabstract_monitor.py
-python scripts/test_link_enrichment.py
-python scripts/test_sina_stock_news.py
-python scripts/test_china_finance_media_monitor.py
-python scripts/test_rss_monitor_fetch.py
-python scripts/test_gate_prompts.py
-python scripts/test_sina_zy_client.py
-python scripts/test_macro_policy.py
-python scripts/test_holdings_web.py
-python scripts/test_time_utils.py
-python scripts/test_x_stream_health.py
-python scripts/test_web_evidence.py
-python scripts/test_signals_extract.py
+python scripts/run_test_suite.py
 python scripts/scan_secrets.py
 ```
 

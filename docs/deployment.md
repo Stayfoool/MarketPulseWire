@@ -35,13 +35,13 @@ python scripts/market_db.py
 
 Relationship mappings can also be created and edited later from the Web workbench's `关系映射` tab. The SQLite database is the live source; `config/stock_relations.json` is a gitignored private seed/backup snapshot.
 
-Edit `.env`, then run individual components:
+Edit `.env`, then run the local Web workbench when needed:
 
 ```bash
 python scripts/holdings_web.py --host 127.0.0.1 --port 8787
-python scripts/rss_monitor.py --interval 300
-python scripts/overseas_media_monitor.py
 ```
+
+Production collectors and persistent services run only on the Linux systemd host; do not run them as Mac background services.
 
 `RULE_CORE_CONFIG` must point to a complete private global rule JSON before any
 production collector or the Web `媒体关键词` page is used. Production five-group
@@ -130,55 +130,6 @@ collectors start. Fresh databases create only `market_items`, `market_reviews`,
 `market_item_aliases` and unified `deliveries` for market results. Normal
 initialization and deployment never delete data.
 
-Removal of the four historical result tables is a one-time explicit operation.
-It is valid only after a unified-only runtime has been deployed and verified.
-Record the exact enabled/active state of every Alibaba service and timer that
-writes the SQLite database, pause those writers, then create a server-only
-mode-`0600` online backup and verify it:
-
-```bash
-BACKUP="/opt/surveil/data/surveil.sqlite3.pre-legacy-retirement-$(date -u +%Y%m%dT%H%M%SZ).bak"
-sudo -u surveil env BACKUP="$BACKUP" /opt/surveil/.venv/bin/python -c \
-  'import os,sqlite3; source=sqlite3.connect("/opt/surveil/data/surveil.sqlite3"); target=sqlite3.connect(os.environ["BACKUP"]); source.backup(target); target.close(); source.close()'
-sudo chown surveil:surveil "$BACKUP"
-sudo chmod 600 "$BACKUP"
-sudo -u surveil env BACKUP="$BACKUP" /opt/surveil/.venv/bin/python -c \
-  'import os,sqlite3; c=sqlite3.connect("file:"+os.environ["BACKUP"]+"?mode=ro",uri=True); print(c.execute("PRAGMA quick_check").fetchone()[0]); print(c.execute("PRAGMA integrity_check").fetchone()[0]); print(len(c.execute("PRAGMA foreign_key_check").fetchall()))'
-sha256sum "$BACKUP"
-```
-
-Preview without changing the production database:
-
-```bash
-sudo -u surveil /opt/surveil/.venv/bin/python \
-  /opt/surveil/scripts/market_db.py \
-  --db /opt/surveil/data/surveil.sqlite3 \
-  --retire-legacy-results preview
-```
-
-The preview must report zero missing article, official-news, event and
-event-analysis mappings; every delivery with the old event link must already
-have `market_item_id`; all unified delivery/review/feedback links and foreign
-keys must be valid. A partial schema or any missing mapping stops the operation.
-After reviewing the counts and backup, apply explicitly:
-
-```bash
-sudo -u surveil /opt/surveil/.venv/bin/python \
-  /opt/surveil/scripts/market_db.py \
-  --db /opt/surveil/data/surveil.sqlite3 \
-  --retire-legacy-results apply
-```
-
-Apply runs in one transaction, rebuilds `deliveries` without the old
-`event_id`, preserves delivery ids and `market_feedback.delivery_id`, then
-removes the four old result tables. Historical null `market_review_id` values
-remain null. Repeating apply is idempotent. Restore exactly the prior service
-and timer state, then verify Web Event Center, article/official daily dry runs,
-feedback resolution, natural article/official/event processing, `quick_check`,
-`integrity_check` and `foreign_key_check`. The unified-only revision deployed
-before this operation is the earliest supported rollback point; never roll
-back to code that requires the deleted tables.
-
 Use it to verify whether your Mac, GitHub, and server are aligned:
 
 ```bash
@@ -191,8 +142,6 @@ Write secrets:
 ./scripts/write_remote_secrets.sh
 ./scripts/write_remote_feishu.sh
 ./scripts/write_remote_x_credentials.sh
-./scripts/write_remote_ifind_token.sh
-./scripts/write_remote_jygs_cookie.sh
 ```
 
 Install services and timers:
@@ -201,6 +150,11 @@ Install services and timers:
 ./scripts/install_remote_systemd.sh
 ./scripts/prune_remote_code.sh
 ```
+
+Every retained service uses `UMask=0077`. The installer also keeps the top-level
+`logs/` directory service-account-owned and mode `0700`, and normal log files
+mode `0600`; verify these permissions after deployment without printing log
+contents.
 
 Code deployment deliberately uses three ordered stages. `deploy_remote.sh`
 first overlays the new checkout without deleting paths that may still be used
@@ -244,56 +198,6 @@ Production admission uses `RULE_CORE_CONFIG` and current Web-managed production
 SQLite holdings. The LLM decision additionally loads its exact degree-decision
 rules from `LLM_DECISION_RULE_CONFIG`.
 
-For an existing installation that still has private
-`config/media_keywords.json`, preview the one-time migration after deploying
-the new code and before using the Web page:
-
-```bash
-sudo -u surveil /opt/surveil/.venv/bin/python \
-  /opt/surveil/scripts/migrate_media_keywords.py \
-  --env-file /opt/surveil/.env
-```
-
-The preview prints counts and hashed term identifiers, not private keyword
-values. Review it, then apply the same migration explicitly:
-
-```bash
-sudo -u surveil /opt/surveil/.venv/bin/python \
-  /opt/surveil/scripts/migrate_media_keywords.py \
-  --env-file /opt/surveil/.env \
-  --apply
-```
-
-The migration starts from the reviewed `semiconductor_ai_keywords`, preserves
-actual user additions and exclusions from the old Web configuration, and adds
-the approved semiconductor company aliases. The five reviewed generic-power
-terms that must remain omitted are reported by hashed identifier and are not
-restored. Keep the generated backup and
-verify the effective count and configuration version through the authenticated
-Web page before restarting or manually running collectors.
-
-After deploying the admission simplification, place the reviewed title-only
-subset in a service-private mode-`0600` JSON array. Its values must already
-exist in the private `semiconductor_ai_keywords` master list. Preview the
-combined keyword and macro migration without printing private values:
-
-```bash
-sudo -u surveil /opt/surveil/.venv/bin/python \
-  /opt/surveil/scripts/migrate_admission_simplification.py \
-  --env-file /opt/surveil/.env \
-  --title-keywords-file /opt/surveil-private/semiconductor-ai-title-keywords.json
-```
-
-The preview removes standalone generic `AI`/`人工智能`, reports their hashed
-identifiers, and replaces legacy `macro_data.tiers` with the old `primary`
-list as the sole `macro_data.indicators` list. It does not create exceptions or
-reaction-based admission for removed secondary indicators. After reviewing the
-redacted counts, apply the same migration explicitly with `--apply`. The apply
-validates the complete rule file, creates a mode-`0600` backup and atomically
-replaces the private configuration. Verify file ownership/mode, configuration
-version, title-only count, core macro-indicator count and representative range
-admission replays before restarting affected Alibaba services.
-
 Installation enables `surveil-llm-decision-audit-cleanup.timer` at 15:30
 `Asia/Shanghai`. It scans only private production `llm-decision-audit-*` files
 and removes expired sensitive model requests/responses after 30 days while
@@ -317,22 +221,6 @@ inherit collector `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` variables. Source
 fetching continues to use `proxy.env`; no SOCKS dependency is required for the
 model provider request.
 
-After first deploying this lifecycle, preview current retryable reviews whose
-latest bounded private-audit projection is valid `uncertain`:
-
-```bash
-sudo -u surveil /opt/surveil/.venv/bin/python \
-  /opt/surveil/scripts/backfill_llm_insufficient_evidence.py \
-  --db /opt/surveil/data/surveil.sqlite3 \
-  --audit-dir /opt/surveil/reports/llm-decision-audits
-```
-
-Create and verify a mode-`0600` online SQLite backup, review the redacted counts,
-then apply explicitly with `--apply`. The command changes only current
-`failed_retryable` reviews with no decision whose latest private projection is
-`uncertain`, plus the matching canonical item and `seen_items` lifecycle. It is
-idempotent, makes no model request and sends no message.
-
 Each production decision audit stores exact requests, raw responses, response
 metadata and validation details for all calls under
 `reports/llm-decision-audits`. The directory is mode `0700`, files are mode
@@ -346,28 +234,7 @@ The authenticated Web workbench's `大模型决策` view reads completed
 `DecisionResult` fields from unified SQLite and joins failed attempts to the
 bounded `web_projection` stored in the same private audit file. The projection
 contains only bounded rule judgments, reasons, evidence/counterevidence and
-version metadata; it is not a decision input. After deploying code that adds the
-projection writer, preview the retained audit files without printing their
-content:
-
-```bash
-sudo -u surveil /opt/surveil/.venv/bin/python \
-  /opt/surveil/scripts/backfill_llm_decision_web_projection.py \
-  --audit-dir /opt/surveil/reports/llm-decision-audits
-```
-
-Apply only after reviewing the redacted counts:
-
-```bash
-sudo -u surveil /opt/surveil/.venv/bin/python \
-  /opt/surveil/scripts/backfill_llm_decision_web_projection.py \
-  --audit-dir /opt/surveil/reports/llm-decision-audits --apply
-```
-
-The command changes only mode-`0600` private audit files, is idempotent, makes
-no model request, changes no SQLite row and never sends a message. If the
-30-day cleanup has already removed raw calls, an existing `web_projection` is
-preserved.
+version metadata; it is not a decision input.
 
 The installer also copies the production collector units:
 
@@ -381,17 +248,17 @@ The installer also copies the production collector units:
 All general collectors construct `NormalizedMarketItem` and call
 `process_market_item(...)`. Production processing, Web Event Center, daily
 output, feedback and operational tools read and write `market_items`,
-`market_reviews`, `market_item_aliases` and linked `deliveries`; the old result
-tables retain historical rows only. The former direct/compat runtime switch and
-compatibility wrappers have been removed; rollback now uses the normal
-Git/PR/deployment process instead of selecting a second runtime.
+`market_reviews`, `market_item_aliases` and linked `deliveries`. The former
+direct/compat runtime switch and compatibility wrappers have been removed;
+rollback uses the normal Git/PR/deployment process instead of selecting a
+second runtime.
 The LLM decision cutover follows the same rule: there is no runtime selector
 back to another decision implementation. For later deployments, record the
 preceding supported Git revision before deployment. If rollback criteria are
 met, stop affected Alibaba collectors, deploy that exact preceding revision,
 restart the same services and verify service health, logs and SQLite integrity.
-Never select a revision older than the unified-only storage cutover, and do not
-rewrite already completed reviews or deliveries during rollback.
+Only revisions using the current unified schema and LLM-only degree decision are
+supported; do not rewrite already completed reviews or deliveries during rollback.
 The research collector also runs public list/sitemap page sources such as
 TrendForce/SEMI pages and AlphaAbstract summaries on the same low-frequency page
 cadence. AlphaAbstract uses its public `sitemap.xml` and public summary pages;
@@ -419,33 +286,7 @@ as the `surveil` service user. Do not write `/opt/surveil/.env` as root, because
 an atomic replacement would change file ownership and prevent services from
 reading the production configuration.
 
-After cutover, keep the legacy guards below in `.env`: the installer will keep
-the old units disabled and enable the matching production collector timers.
-
-During the earlier research collector cutover, the old RSS monitor could be kept
-for official company feeds with:
-
-```bash
-RSS_MONITOR_EXCLUDE_PROFILE_CATEGORIES=research_industry_media
-```
-
-After the official-company and research/industry-media collector cutovers, keep
-the old RSS / TrendForce / overseas media units off across future installs by
-setting:
-
-```bash
-DISABLE_LEGACY_RSS_MONITOR=1
-DISABLE_LEGACY_RESEARCH_MONITORS=1
-```
-
-After the domestic news-media collector cutover, keep the old China media timer
-off across future installs and enable `surveil-news-collector.timer` by setting:
-
-```bash
-DISABLE_LEGACY_CHINA_MEDIA_MONITOR=1
-```
-
-With the three cutovers complete, the production fetching timers to inspect are:
+The production fetching timers to inspect are:
 
 ```bash
 systemctl status --no-pager \
@@ -478,39 +319,20 @@ when each unit was already active. `systemctl enable --now` alone does not load
 new Python code into an existing long-running process. Verify their
 `ExecMainStartTimestamp` after deployment, in addition to enabled/active state.
 
-The investment-signal review group is installed but disabled by default:
-`surveil-signals-extract.timer`, `surveil-signal-outcome.timer`,
-`surveil-signal-review.timer` and `surveil-signal-digest.timer` must all be
-disabled/inactive after deployment. Their services must also be inactive. Do
-not enable or run one step independently; a future rollout must review and
-enable all four together. Historical signal data is retained. When explicitly
-enabled for a reviewed rollout, unchanged derived signals, targets and evidence
-must still produce zero SQLite writes.
-
 `surveil-company-disclosures.timer` retains the former announcement schedule at
 08:00 and 20:00. Its source profile defaults to `provider=cninfo_public`. Every
 newly selected provider's first successful fetch updates source state, PDF
 cache, source health and baseline-only event audit rows without creating
 decisions or deliveries. Later new records enter normal production admission,
-decision and delivery. The
-systemd installer disables and removes the expired
-`surveil-ifind-notice.timer`/service and never starts them again.
+decision and delivery.
 
 The Web-managed private source-profile override remains at
 `config/source_profiles.local.json`. It is Git-ignored, excluded by
 `deploy_remote.sh`, owned by the production service account and mode `0600`.
 Every Web save creates the temporary file as `0600` before writing and preserves
-that mode across the atomic replacement. For an installation created by older
-code, migrate only its permission without changing content:
-
-```bash
-chown surveil:surveil /opt/surveil/config/source_profiles.local.json
-chmod 600 /opt/surveil/config/source_profiles.local.json
-```
-
-Then verify the authenticated source-profile API still reports the same
-disabled and override counts. Ordinary deployment must not upload or replace
-this production-private file.
+that mode across the atomic replacement. Verify the authenticated source-profile
+API still reports the expected disabled and override counts. Ordinary deployment
+must not upload or replace this production-private file.
 
 Open the Web workbench through an SSH tunnel:
 
@@ -650,11 +472,9 @@ Or upload a locally downloaded Clash/Mihomo YAML:
 Keep these only in server `.env` or local `.env`:
 
 - LLM API keys
-- iFinD refresh/access tokens
 - X bearer/OAuth tokens
 - Feishu webhook/secret
 - Sina API key
-- JYGS cookie/session
 - Proxy subscription or node configs
 
 ## Feishu Market Feedback

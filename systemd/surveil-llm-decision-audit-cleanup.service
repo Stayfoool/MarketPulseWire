@@ -3,6 +3,7 @@ Description=Surveil LLM decision audit retention cleanup
 After=surveil-db-init.service
 
 [Service]
+UMask=0077
 Type=oneshot
 User=surveil
 WorkingDirectory=/opt/surveil

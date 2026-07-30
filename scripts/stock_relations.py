@@ -14,7 +14,6 @@ from typing import Any
 from db_utils import connect_sqlite
 from market_db import DEFAULT_DB_PATH, init_db
 from pipeline_health import record_pipeline_failure, record_pipeline_success
-from signal_store import json_dumps, normalize_direction, normalize_symbol, symbol_market
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +22,47 @@ DEFAULT_CONFIG_PATH = ROOT / "config" / "stock_relations.json"
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def json_dumps(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def normalize_direction(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    mapping = {
+        "positive": "positive",
+        "negative": "negative",
+        "neutral": "neutral",
+        "uncertain": "uncertain",
+        "上涨": "positive",
+        "利好": "positive",
+        "增量利好": "positive",
+        "下跌": "negative",
+        "利空": "negative",
+        "增量利空": "negative",
+        "震荡或中性": "neutral",
+        "中性": "neutral",
+        "无法判断": "uncertain",
+    }
+    return mapping.get(raw, raw or "uncertain")
+
+
+def normalize_symbol(value: str) -> str:
+    return str(value or "").strip().upper()
+
+
+def symbol_market(symbol: str) -> str:
+    normalized = normalize_symbol(symbol)
+    if normalized.endswith((".SZ", ".SH", ".BJ")):
+        return "A股"
+    if normalized.endswith(".HK"):
+        return "港股"
+    if normalized.endswith((".JP", ".KS", ".KQ", ".TW", ".TWO")):
+        return "海外"
+    if normalized:
+        return "海外/未知"
+    return "行业环节"
 
 
 def load_json(path: Path) -> dict[str, Any]:

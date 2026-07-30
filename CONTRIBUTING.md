@@ -23,11 +23,8 @@ Good contribution areas:
 
 ```bash
 python -m py_compile scripts/*.py
-python scripts/test_analysis.py
-python scripts/test_llm_analysis.py
-python scripts/test_trendforce_page_monitor.py
-python scripts/test_link_enrichment.py
-python scripts/test_sina_stock_news.py
+python scripts/run_test_suite.py
+python scripts/scan_secrets.py
 ```
 
 Some tests may require optional credentials or network access. Keep credential-dependent checks optional.

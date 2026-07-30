@@ -17,7 +17,7 @@ The catalog is public configuration and code. Credentials, cookies, paid-content
 | The Elec | Korea is central to memory, HBM, OLED/display, batteries, equipment, and materials. The Elec can surface Samsung/SK hynix/LG-adjacent supply-chain signals. |
 | Official company feeds | First-party announcements from OpenAI, NVIDIA, Samsung Semiconductor, SK hynix, and Micron are primary sources for architecture, product, capex, platform, and supply-chain changes. |
 | Official trade-policy sources | Federal Register, USTR, European Commission and MOFCOM expose investigations, public comments, hearings, tariffs, export controls, trade remedies and official escalation language before or at formal action. |
-| Sina Finance / iFinD / JYGS | China-market channels for holdings-related news, official company notices, announcements, and A-share event/action monitoring. |
+| Sina Finance / CNINFO | China-market channels for holdings-related news, official company disclosures and investor-relations records. |
 | First Yicai / CLS / Star Market Daily / Jin10 / WallstreetCN | Domestic market-moving context for A-share risk appetite, hard-tech company updates, macro/Fed policy reaction, and China-side semiconductor/AI narratives. |
 
 ## X Accounts
@@ -42,7 +42,7 @@ These feeds are included in `scripts/trendforce_sources.py` through `DEFAULT_RSS
 | `skhynix_newsroom` | SK hynix Newsroom | `https://news.skhynix.com/feed/` | RSS |
 | `micron_news_releases` | Micron News Releases | `https://investors.micron.com/rss/news-releases.xml` | RSS |
 
-Official company news goes through the unified decision layer first. High-impact semiconductor/AI infrastructure items can be pushed immediately; lower-signal items can be collected into a daily digest, and the LLM only supplies thin interpretation or restricted supplemental judgement.
+Official company news enters five-group range admission and then the reviewed LLM degree decision. `DecisionResult.action` alone determines immediate push eligibility; the later LLM interpretation remains thin and cannot change the action.
 
 ## Official Trade Policy
 
@@ -102,7 +102,7 @@ AlphaAbstract is monitored as a public third-party research-summary site. It doe
 | --- | --- | --- | --- |
 | `alphabstract_summaries` | AlphaAbstract / Summaries | `https://alphabstract.com/sitemap.xml` | Public sitemap + public summary pages |
 
-The collector preserves Article JSON-LD metadata, canonical URL, published/modified dates, author, and `isBasedOn` original-source links when present. AlphaAbstract does not receive source-level push privilege: items still go through `NormalizedMarketItem`, deterministic cross-source rules, restricted interpretation, Skeptic controls, deduplication, and final `DecisionResult.action`.
+The collector preserves Article JSON-LD metadata, canonical URL, published/modified dates, author, and `isBasedOn` original-source links when present. AlphaAbstract does not receive source-level push privilege: items still go through `NormalizedMarketItem`, five-group range admission, reviewed LLM degree decisions, thin interpretation, deduplication, and final `DecisionResult.action`.
 
 ## SEMI
 
@@ -112,7 +112,7 @@ SEMI is monitored as a first-tier semiconductor industry source, alongside Trend
 | --- | --- | --- | --- |
 | `semi_prnewswire_semiconductors` | SEMI releases on PR Newswire Semiconductors | `https://www.prnewswire.com/news-releases/business-technology-latest-news/semiconductors-list/` | Public list page filtered to SEMI releases |
 
-SEMI's own website may use Cloudflare or similar bot protection. MarketPulseWire does not bypass access controls. The default source therefore monitors SEMI's public releases as distributed through PR Newswire and routes them through the same LLM gate, skeptic, signal extraction, and Feishu delivery path as other major semiconductor media.
+SEMI's own website may use Cloudflare or similar bot protection. MarketPulseWire does not bypass access controls. The default source therefore monitors SEMI's public releases as distributed through PR Newswire and routes them through the same range admission, reviewed LLM degree decision, thin interpretation, deduplication, and Feishu delivery path as other major semiconductor media.
 
 ## Industry Media
 
@@ -130,16 +130,16 @@ These sources are defined in `scripts/media_sources.py`.
 | `thelec_kr_semiconductor` | The Elec Korea / Semiconductor | `https://www.thelec.kr/rss/S1N2.xml` | RSS |
 | `thelec_kr_all` | The Elec Korea / All Articles | `https://www.thelec.kr/rss/allArticle.xml` | RSS |
 
-These feeds are filtered by configurable media keywords before LLM gating. The default keywords cover AI, semiconductors, HBM, MLCC, advanced packaging, PCB, glass substrates, liquid cooling, optical interconnects, diamond cooling, and related infrastructure.
+These feeds use the private media-keyword configuration as part of five-group range admission before the reviewed LLM degree decision.
 
-## Sina Finance and iFinD
+## Sina Finance and Company Disclosures
 
 | Source | Method | Credentials |
 | --- | --- | --- |
 | Sina Finance news | OpenAPI, MCP backup, or legacy public pages | `SINA_ZY_API_KEY` if using OpenAPI |
-| iFinD notices | iFinD REST/API | `IFIND_REFRESH_TOKEN` or access token |
+| CNINFO company disclosures | Public form-encoded JSON interfaces and bounded PDF download | None |
 
-iFinD is the preferred source for company notices/announcements. Sina news filters out announcement-like reposts where possible so iFinD remains the authoritative notice path.
+Company disclosures use the logical source `company_disclosures` and the `cninfo_public` provider. Provider baselines, source health, normalized storage, degree decisions and delivery stay inside the unified event runtime.
 
 ## Domestic Finance and Hard-Tech Media
 
@@ -153,16 +153,7 @@ These sources are defined in `scripts/china_media_sources.py` and run through `s
 | `jin10_rsshub_important` | Jin10 / important events | RSSHub route | Public RSSHub backup route for important events; it may be rate-limited or temporarily unavailable. |
 | `wallstreetcn_news` | WallstreetCN / 华尔街见闻 | Public `/news/global`, `/live`, and official monthly sitemaps | Peer general news-media source. Public list pages provide near-real-time ids; sitemaps provide baseline/catch-up. Public detail only; member content is not opened or used as full evidence. |
 
-Star Market Daily is useful for China hard-tech and STAR Market signals, including semiconductors, AI, advanced manufacturing, materials, IPO/refinancing, and listed-company research notes. It is not pushed unconditionally: items still pass the media keyword/macro filters, LLM article gate, skeptic evaluator, and duplicate checks before immediate Feishu delivery.
-
-## JYGS
-
-JYGS action analysis is supported as a low-frequency monitor. It requires user-authorized private configuration:
-
-- `JYGS_COOKIE` or `JYGS_SESSION`
-- `JYGS_SIGN_SECRET`
-
-Do not commit these values. If the source changes login, signing, or access rules, use only authorized access paths.
+Star Market Daily is useful for China hard-tech and STAR Market coverage, including semiconductors, AI, advanced manufacturing, materials, IPO/refinancing, and listed-company research notes. It is not pushed unconditionally: items still pass five-group range admission, the reviewed LLM degree decision, and delivery deduplication.
 
 ## Customization
 
