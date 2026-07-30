@@ -286,7 +286,6 @@ class DecisionResult:
     brief_reason: str = ""
     rule_hits: list[dict[str, Any]] = field(default_factory=list)
     candidate_rules: list[dict[str, Any]] = field(default_factory=list)
-    skeptic: dict[str, Any] = field(default_factory=dict)
     dedup: dict[str, Any] = field(default_factory=dict)
     need_llm_interpretation: bool = False
     need_limited_llm_judgement: bool = False
@@ -299,7 +298,6 @@ class DecisionResult:
         self.brief_reason = str(self.brief_reason or "").strip()
         self.rule_hits = [item for item in self.rule_hits if isinstance(item, dict)]
         self.candidate_rules = [item for item in self.candidate_rules if isinstance(item, dict)]
-        self.skeptic = _dict_value(self.skeptic)
         self.dedup = _dict_value(self.dedup)
         self.audit_json = _dict_value(self.audit_json)
 
@@ -315,7 +313,6 @@ class DecisionResult:
             "brief_reason": self.brief_reason,
             "rule_hits": list(self.rule_hits),
             "candidate_rules": list(self.candidate_rules),
-            "skeptic": dict(self.skeptic),
             "dedup": dict(self.dedup),
             "need_llm_interpretation": self.need_llm_interpretation,
             "need_limited_llm_judgement": self.need_limited_llm_judgement,
@@ -383,7 +380,6 @@ def decision_result_from_payload(payload: Any) -> DecisionResult | None:
             brief_reason=candidate.get("brief_reason", ""),
             rule_hits=candidate.get("rule_hits") or [],
             candidate_rules=candidate.get("candidate_rules") or [],
-            skeptic=candidate.get("skeptic") or {},
             dedup=candidate.get("dedup") or {},
             need_llm_interpretation=bool(candidate.get("need_llm_interpretation")),
             need_limited_llm_judgement=bool(candidate.get("need_limited_llm_judgement")),

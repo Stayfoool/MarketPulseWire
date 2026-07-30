@@ -446,7 +446,7 @@ def main() -> int:
     load_env(ENV_PATH)
     parser = argparse.ArgumentParser(description="Run news-media and official trade-policy collector.")
     parser.add_argument("--source", action="append", default=[], help="只跑指定 source id，可重复。")
-    parser.add_argument("--production", action="store_true", help="运行生产链路：入库、统一决策/解读、Skeptic/Tavily、飞书推送。")
+    parser.add_argument("--production", action="store_true", help="运行生产链路：入库、统一决策/解读和飞书推送。")
     parser.add_argument("--notify-baseline", action="store_true", help="生产模式下首次建立基线时也发送通知。默认不发送旧条目。")
     parser.add_argument("--limit", type=int, default=5, help="每个 source 输出候选条数；0 表示不限制。")
     parser.add_argument("--json", action="store_true", help="输出完整 JSON。")

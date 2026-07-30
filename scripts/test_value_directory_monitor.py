@@ -468,7 +468,6 @@ def test_source_profile_registers_value_directory() -> None:
     assert profile["category"] == "research_industry_media"
     assert "surveil-value-directory.timer" in profile["service_units"]
     assert "05:00 / 21:00" in profile["frequency"]
-    assert profile["skeptic_enabled"] is False
     macro = runtime_source_profile("value_directory_ib_industry_macro")
     assert macro is not None
     assert macro["name"] == "价值目录 / 国际投行-行业宏观"

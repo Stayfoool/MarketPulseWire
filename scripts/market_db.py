@@ -296,18 +296,6 @@ CREATE TABLE IF NOT EXISTS rule_alert_dedup (
 CREATE INDEX IF NOT EXISTS idx_rule_alert_dedup_rule_created
 ON rule_alert_dedup(rule_id, created_at);
 
-CREATE TABLE IF NOT EXISTS rule_config_audit (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    changed_at TEXT NOT NULL,
-    actor TEXT NOT NULL,
-    before_json TEXT NOT NULL,
-    after_json TEXT NOT NULL,
-    changes_json TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_rule_config_audit_changed
-ON rule_config_audit(changed_at);
-
 CREATE TABLE IF NOT EXISTS stock_relations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol TEXT NOT NULL,
@@ -332,75 +320,6 @@ CREATE TABLE IF NOT EXISTS stock_relations (
     UNIQUE(symbol, related_symbol, relation_type)
 );
 
-CREATE TABLE IF NOT EXISTS relation_suggestions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source_table TEXT,
-    source_id TEXT,
-    symbol TEXT NOT NULL,
-    symbol_name TEXT,
-    related_symbol TEXT NOT NULL,
-    related_name TEXT,
-    relation_type TEXT NOT NULL,
-    impact_direction TEXT,
-    theme TEXT,
-    reason TEXT,
-    confidence TEXT,
-    source TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',
-    raw_json TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    reviewed_at TEXT
-);
-
-CREATE TABLE IF NOT EXISTS web_evidence_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    trigger_module TEXT NOT NULL,
-    trigger_source TEXT,
-    trigger_item_id TEXT,
-    trigger_reason TEXT,
-    mode TEXT NOT NULL DEFAULT 'realtime',
-    provider TEXT NOT NULL,
-    query_json TEXT NOT NULL,
-    status TEXT NOT NULL,
-    error TEXT,
-    started_at TEXT NOT NULL,
-    finished_at TEXT,
-    created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_web_evidence_runs_trigger
-    ON web_evidence_runs(trigger_module, trigger_source, trigger_item_id);
-CREATE INDEX IF NOT EXISTS idx_web_evidence_runs_created ON web_evidence_runs(created_at);
-
-CREATE TABLE IF NOT EXISTS web_evidence_docs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id INTEGER NOT NULL,
-    query_type TEXT NOT NULL,
-    query TEXT NOT NULL,
-    result_rank INTEGER NOT NULL,
-    url TEXT NOT NULL,
-    canonical_url TEXT NOT NULL,
-    title TEXT,
-    source TEXT,
-    published_at TEXT,
-    retrieved_at TEXT NOT NULL,
-    snippet TEXT,
-    extracted_text TEXT,
-    claim TEXT,
-    evidence_type TEXT NOT NULL,
-    stance TEXT NOT NULL,
-    source_quality TEXT,
-    score REAL,
-    content_hash TEXT NOT NULL,
-    raw_json TEXT,
-    created_at TEXT NOT NULL,
-    UNIQUE(run_id, canonical_url, query_type),
-    FOREIGN KEY(run_id) REFERENCES web_evidence_runs(id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_web_evidence_docs_run ON web_evidence_docs(run_id);
-CREATE INDEX IF NOT EXISTS idx_web_evidence_docs_url ON web_evidence_docs(canonical_url);
 """
 
 
@@ -450,19 +369,10 @@ def migrate_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_seen_items_first_seen ON seen_items(first_seen_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_relations_symbol ON stock_relations(symbol, enabled)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_stock_relations_related ON stock_relations(related_symbol, enabled)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_relation_suggestions_status ON relation_suggestions(status, updated_at)")
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_web_evidence_runs_trigger "
-        "ON web_evidence_runs(trigger_module, trigger_source, trigger_item_id)"
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_web_evidence_runs_created ON web_evidence_runs(created_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_web_evidence_docs_run ON web_evidence_docs(run_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_web_evidence_docs_url ON web_evidence_docs(canonical_url)")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_rule_alert_dedup_rule_created "
         "ON rule_alert_dedup(rule_id, created_at)"
     )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_config_audit_changed ON rule_config_audit(changed_at)")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_market_feedback_item "
         "ON market_feedback(item_kind, source, item_id, operator_id, clicked_at_us, id)"

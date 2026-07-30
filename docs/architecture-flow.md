@@ -305,8 +305,10 @@ The project keeps these current physical stores:
 - `rule_alert_dedup`, `deliveries` (`rule_alert_dedup` also records delivery-only intraday market-move, US macro event, bounded industry-fact, individual-equity investment-bank report and generic company-event fact-set reservations)
 - `market_feedback` (append-only Feishu feedback events; the latest valid operator/item event carries that operator's complete current label set)
 - `source_health`, `x_stream_health`
-- `portfolio_holdings`, `stocks`, `stock_relations`, `relation_suggestions`,
-  `rule_config_audit` and bounded Web-evidence tables
+- `portfolio_holdings`, `stocks`, `stock_relations`
+
+The unused relation-suggestion workflow, retired rule-center audit store and
+Web evidence retrieval stores are not part of the current schema or runtime.
 
 `article`, `official` and `event` are external display/feedback identities, not
 separate storage or decision paths. All three arrive through the unified runtime

@@ -15,7 +15,6 @@ from typing import Any
 
 from llm_analysis import call_chat_completion_with_prompts, llm_config
 from market_item import NormalizedMarketItem
-from rule_center import effective_list, rule_enabled
 
 
 RULE_ID = "attributed_research_hard_variable"
@@ -263,30 +262,12 @@ def publisher_role(item: NormalizedMarketItem | dict[str, Any]) -> str:
 
 
 def trusted_institution_ids() -> tuple[str, ...]:
-    configured = effective_list(
-        RULE_ID,
-        "trusted_institutions",
-        DEFAULT_TRUSTED_INSTITUTIONS,
-        replace_when_set=True,
-    )
-    return tuple(value for value in configured if value in INSTITUTIONS)
-
-
-def _extra_aliases() -> dict[str, list[str]]:
-    result: dict[str, list[str]] = {}
-    for value in effective_list(RULE_ID, "extra_aliases", ()):
-        institution_id, separator, alias = str(value).partition("=")
-        institution_id = institution_id.strip()
-        alias = alias.strip()
-        if separator and institution_id in INSTITUTIONS and alias:
-            result.setdefault(institution_id, []).append(alias)
-    return result
+    return tuple(value for value in DEFAULT_TRUSTED_INSTITUTIONS if value in INSTITUTIONS)
 
 
 def institution_aliases(institution_id: str) -> tuple[str, ...]:
     definition = INSTITUTIONS.get(institution_id) or {}
     values = list(definition.get("aliases") or ()) + list(definition.get("speakers") or ())
-    values.extend(_extra_aliases().get(institution_id, []))
     return tuple(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
 
 
@@ -527,8 +508,6 @@ def llm_extraction(item: NormalizedMarketItem, mentions: list[dict[str, str]]) -
 
 def prepare_item_for_decision(item: NormalizedMarketItem) -> NormalizedMarketItem:
     if isinstance(item.raw.get(EXTRACTION_KEY), dict):
-        return item
-    if not rule_enabled(RULE_ID):
         return item
     text = item_text(item)
     mentions = institution_mentions(text)

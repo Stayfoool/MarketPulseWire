@@ -627,7 +627,7 @@ def main() -> int:
     parser.add_argument("--source", action="append", default=[], help="只跑指定 source id，可重复。")
     parser.add_argument("--rss-only", action="store_true", help="只跑 RSS/RDF 源。")
     parser.add_argument("--pages-only", action="store_true", help="只跑页面源。")
-    parser.add_argument("--production", action="store_true", help="运行生产链路：入库、统一决策/解读、Skeptic/Tavily、飞书推送。")
+    parser.add_argument("--production", action="store_true", help="运行生产链路：入库、统一决策/解读和飞书推送。")
     parser.add_argument("--notify-baseline", action="store_true", help="生产模式下首次建立基线时也发送通知。默认不发送旧条目。")
     parser.add_argument(
         "--page-min-interval",

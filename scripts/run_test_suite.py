@@ -64,7 +64,6 @@ CI_SAFE_TESTS = (
     "test_research_collector.py",
     "test_rss_monitor_fetch.py",
     "test_rule_alert_dedup.py",
-    "test_rule_center.py",
     "test_production_collector_batch.py",
     "test_sina_stock_news.py",
     "test_sina_zy_client.py",
@@ -75,7 +74,6 @@ CI_SAFE_TESTS = (
     "test_trendforce_page_monitor.py",
     "test_value_directory_monitor.py",
     "test_wallstreetcn_monitor.py",
-    "test_web_evidence.py",
     "test_x_stream_health.py",
 )
 

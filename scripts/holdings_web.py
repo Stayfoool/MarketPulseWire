@@ -46,14 +46,11 @@ from settings_store import save_settings, settings_payload
 from source_profiles import save_source_profile_config, source_profiles_payload
 from stock_relations import (
     DEFAULT_CONFIG_PATH as STOCK_RELATIONS_CONFIG_PATH,
-    accept_relation_suggestion,
     delete_relation,
     diff_relations,
     export_relations,
     import_relations,
-    list_relation_suggestions,
     list_relations,
-    reject_relation_suggestion,
     save_relation,
     set_relation_enabled,
 )
@@ -1473,24 +1470,6 @@ class HoldingsHandler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
-        if parsed.path == "/api/relation-suggestions":
-            if not self.require_auth():
-                return
-            try:
-                qs = parse_qs(parsed.query)
-                self.send_json(
-                    {
-                        "ok": True,
-                        "suggestions": list_relation_suggestions(
-                            db_path=DEFAULT_DB_PATH,
-                            status=(qs.get("status") or ["pending"])[0],
-                            limit=100,
-                        ),
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001
-                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
-            return
         if parsed.path == "/api/health":
             if not self.require_auth():
                 return
@@ -1649,22 +1628,6 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 response = {"ok": True, "counts": counts}
                 response.update(relation_snapshot_payload())
                 self.send_json(response)
-                return
-            if parsed.path == "/api/relation-suggestions/accept":
-                suggestion_id = int(payload.get("id") or 0)
-                if suggestion_id <= 0:
-                    raise HoldingsError("请求缺少有效 id")
-                relation = accept_relation_suggestion(suggestion_id=suggestion_id, db_path=DEFAULT_DB_PATH)
-                response = {"ok": True, "relation": relation}
-                response.update(relation_snapshot_payload())
-                self.send_json(response)
-                return
-            if parsed.path == "/api/relation-suggestions/reject":
-                suggestion_id = int(payload.get("id") or 0)
-                if suggestion_id <= 0:
-                    raise HoldingsError("请求缺少有效 id")
-                rejected = reject_relation_suggestion(suggestion_id=suggestion_id, db_path=DEFAULT_DB_PATH)
-                self.send_json({"ok": True, "rejected": rejected})
                 return
             items = payload.get("holdings")
             if not isinstance(items, list):
