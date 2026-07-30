@@ -45,7 +45,6 @@ UNIFIED_STORAGE_RUNTIME_MODULES = {
     "news_collector.py",
     "official_collector.py",
     "official_news_daily.py",
-    "rule_center.py",
     "sina_flash.py",
     "sina_stock_news.py",
     "value_directory_monitor.py",
@@ -72,6 +71,8 @@ LEGACY_RESULT_HELPERS = {
 }
 
 REMOVED_COMPATIBILITY_MODULES = (
+    "rule_center.py",
+    "web_evidence.py",
     "article_gate.py",
     "official_news_gate.py",
     "content_runtime.py",
@@ -365,6 +366,19 @@ def test_removed_compatibility_modules_do_not_return() -> None:
     assert not list((ROOT / "launchd").glob("*.plist"))
 
 
+def test_retired_management_flows_do_not_return() -> None:
+    schema = (SCRIPTS / "market_db.py").read_text(encoding="utf-8")
+    backend = (SCRIPTS / "holdings_web.py").read_text(encoding="utf-8")
+    frontend = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+    settings = (SCRIPTS / "settings_store.py").read_text(encoding="utf-8")
+    for retired_table in ("relation_suggestions", "rule_config_audit", "web_evidence_runs", "web_evidence_docs"):
+        assert retired_table not in schema
+    assert "/api/relation-suggestions" not in backend
+    assert "/api/relation-suggestions" not in frontend
+    assert "WEB_EVIDENCE_" not in settings
+    assert "SKEPTIC_" not in settings
+
+
 def test_independent_routes_are_explicit_and_tested() -> None:
     for filename, contract in INDEPENDENT_ROUTE_EXCEPTIONS.items():
         assert (SCRIPTS / filename).exists(), filename
@@ -567,6 +581,7 @@ def main() -> int:
     test_live_unified_collector_calls_cannot_omit_production_admission()
     test_production_decision_boundary_is_llm_only()
     test_removed_compatibility_modules_do_not_return()
+    test_retired_management_flows_do_not_return()
     test_independent_routes_are_explicit_and_tested()
     test_direct_urllib_request_usage_is_explicit_and_bounded()
     test_deployment_preserves_private_state_and_retires_unused_units()

@@ -233,32 +233,6 @@
           </table>
         </div>
       </section>
-      <section class="panel" style="margin-top:12px">
-        <div class="list-row" style="padding:10px 12px"><strong>候选关系</strong><span class="summary">大模型或人工沉淀的候选，确认后才正式生效</span></div>
-        <div class="toolbar" style="padding:0 12px 10px">
-          <select id="relationSuggestionStatus" style="width:140px">
-            <option value="pending">待确认</option>
-            <option value="accepted">已确认</option>
-            <option value="rejected">已拒绝</option>
-            <option value="all">全部</option>
-          </select>
-          <button onclick="loadRelationSuggestions()">刷新候选</button>
-        </div>
-        <div class="table-wrap" style="max-height:360px">
-          <table>
-            <thead>
-              <tr>
-                <th style="width:90px">状态</th>
-                <th style="width:150px">触发</th>
-                <th style="width:150px">映射</th>
-                <th>理由</th>
-                <th style="width:130px">操作</th>
-              </tr>
-            </thead>
-            <tbody id="relationSuggestionRows"></tbody>
-          </table>
-        </div>
-      </section>
     </section>
 
     <section id="view-sources" class="view">
@@ -270,9 +244,7 @@
         </div>
       </div>
       <div id="sourceAlertSummary" class="health-issue-summary" role="status" aria-live="polite" hidden></div>
-      <div id="sourceProfileConfigHint" class="status ok" style="display:block">
-正在读取信息源、Skeptic 和 Tavily/Web Evidence 的实际运行配置。
-      </div>
+      <div id="sourceProfileConfigHint" class="status ok" style="display:block">正在读取信息源运行配置。</div>
       <div id="sourceProfileMetrics" class="metric-grid"></div>
       <div class="toolbar">
         <select id="sourceProfileEnabled" aria-label="信息源状态" style="width:140px" onchange="renderSourceProfiles()">
@@ -294,7 +266,6 @@
                 <th style="width:110px">状态</th>
                 <th style="width:155px">频率/形态</th>
                 <th style="width:170px">处理层</th>
-                <th style="width:150px">Skeptic/Tavily</th>
                 <th>范围/筛选/代理/备注</th>
               </tr>
             </thead>

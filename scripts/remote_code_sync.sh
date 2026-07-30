@@ -31,7 +31,6 @@ remote_code_sync() {
     --exclude 'config/portfolio.json' \
     --exclude 'config/media_keywords.json' \
     --exclude 'config/llm_decision_rules.json' \
-    --exclude 'config/push_rules.local.json' \
     --exclude 'config/source_profiles.local.json' \
     --exclude 'config/stock_relations.json' \
     --exclude 'config/market_skill/' \

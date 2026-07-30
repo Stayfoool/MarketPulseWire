@@ -35,7 +35,6 @@ from source_profiles import (
     load_source_profile_config,
     save_source_profile_config,
     source_profile_enabled,
-    source_profile_skeptic_enabled,
     source_profiles_payload,
 )
 
@@ -346,10 +345,12 @@ def test_source_profile_view_is_exposed() -> None:
     assert "信息源" in html
 
 
-def test_retired_rule_center_is_not_exposed() -> None:
+def test_retired_management_flows_are_not_exposed() -> None:
     html = frontend_source()
     assert "/api/current-rules" in html
     assert "/api/rule-center" not in html
+    assert "/api/relation-suggestions" not in html
+    assert "Skeptic/Tavily" not in html
     assert "runRuleSimulation" not in html
 
 
@@ -935,7 +936,6 @@ def test_source_profile_local_config_roundtrip() -> None:
         assert set(raw["overrides"]["semianalysis"]) == {
             "frequency",
             "publisher_role",
-            "skeptic_enabled",
             "proxy_profile",
             "notes",
         }
@@ -944,8 +944,8 @@ def test_source_profile_local_config_roundtrip() -> None:
     assert profile["enabled"] is False
     assert profile["frequency"] == "每 60 秒"
     assert profile["publisher_role"] == "news_media"
-    assert profile["skeptic_enabled"] is False
-    assert profile["web_evidence_enabled"] is True
+    assert "skeptic_enabled" not in profile
+    assert "web_evidence_enabled" not in profile
     assert profile["proxy_profile"] == "测试代理"
     assert profile["notes"] == "测试覆盖"
     assert profile["config_modified"] is True
@@ -976,14 +976,13 @@ def test_source_profile_local_config_stays_private_across_replacement() -> None:
             os.umask(previous_umask)
 
 
-def test_source_profile_runtime_filters_and_flags() -> None:
+def test_source_profile_runtime_filters() -> None:
     with TemporaryDirectory() as tmpdir:
         config_path = Path(tmpdir) / "source_profiles.local.json"
         save_source_profile_config(
             {
                 "profiles": [
                     {"id": "semianalysis", "enabled": False},
-                    {"id": "cls_telegraph_api", "skeptic_enabled": False},
                 ]
             },
             path=config_path,
@@ -995,7 +994,6 @@ def test_source_profile_runtime_filters_and_flags() -> None:
         assert filter_enabled_named_sources(["semianalysis", "nvidia_blog"], config_path=config_path) == [
             "nvidia_blog"
         ]
-        assert source_profile_skeptic_enabled("cls_telegraph_api", config_path=config_path) is False
 
 
 def test_company_disclosure_provider_is_the_only_provider_runtime_override() -> None:
@@ -1047,7 +1045,7 @@ def test_source_profile_can_explicitly_remove_news_media_role() -> None:
     assert profile["publisher_role"] == ""
 
 
-def test_source_profile_runtime_note_reports_effective_counts() -> None:
+def test_source_profile_runtime_note_reports_enabled_counts() -> None:
     with TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         config_path = tmp_path / "source_profiles.local.json"
@@ -1058,8 +1056,6 @@ def test_source_profile_runtime_note_reports_effective_counts() -> None:
                     {
                         "id": profile["id"],
                         "enabled": True,
-                        "skeptic_enabled": False,
-                        "web_evidence_enabled": False,
                     }
                     for profile in initial["profiles"]
                 ]
@@ -1068,10 +1064,8 @@ def test_source_profile_runtime_note_reports_effective_counts() -> None:
         )
         payload = source_profiles_payload(tmp_path / "surveil.sqlite3", config_path=config_path)
     status = payload["runtime_status"]
-    assert status["skeptic_sources"] == 0
-    assert status["web_evidence_sources"] == 0
-    assert "Skeptic 实际启用 0 个" in payload["runtime_note"]
-    assert "Tavily/Web Evidence 实际可触发 0 个" in payload["runtime_note"]
+    assert status["enabled_sources"] == status["total_sources"]
+    assert payload["runtime_note"] == f"当前启用 {status['enabled_sources']}/{status['total_sources']} 个来源。"
     assert "覆盖已接入" not in payload["runtime_note"]
 
 
@@ -1266,7 +1260,7 @@ def main() -> int:
     test_health_page_exposes_service_action_controls()
     test_retired_shadow_tasks_and_rule_comparison_are_not_exposed()
     test_source_profile_view_is_exposed()
-    test_retired_rule_center_is_not_exposed()
+    test_retired_management_flows_are_not_exposed()
     test_feedback_quality_view_is_exposed()
     test_holdings_page_marks_environment_and_related_keywords()
     test_event_center_search_filters_before_per_pipeline_limit()
@@ -1280,11 +1274,11 @@ def main() -> int:
     test_source_profiles_aggregate_wildcard_health()
     test_source_profile_local_config_roundtrip()
     test_source_profile_local_config_stays_private_across_replacement()
-    test_source_profile_runtime_filters_and_flags()
+    test_source_profile_runtime_filters()
     test_company_disclosure_provider_is_the_only_provider_runtime_override()
     test_company_disclosure_source_can_be_disabled_privately()
     test_source_profile_can_explicitly_remove_news_media_role()
-    test_source_profile_runtime_note_reports_effective_counts()
+    test_source_profile_runtime_note_reports_enabled_counts()
     test_systemd_actions_are_whitelisted()
     test_health_tasks_pair_timer_with_service_and_prefer_execution_result()
     test_health_tasks_show_disabled_timer_and_last_success_separately()

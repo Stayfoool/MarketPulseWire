@@ -48,8 +48,6 @@ SOURCE_PROFILE_CONFIG_PATH = ROOT / "config/source_profiles.local.json"
 EDITABLE_OVERRIDE_FIELDS = {
     "frequency",
     "publisher_role",
-    "skeptic_enabled",
-    "web_evidence_enabled",
     "proxy_profile",
     "provider",
     "notes",
@@ -71,9 +69,6 @@ class SourceProfile:
     health_keys: tuple[tuple[str, str], ...]
     fetcher: str = ""
     publisher_role: str = ""
-    skeptic_enabled: bool = False
-    web_evidence_enabled: bool = False
-    tavily_policy: str = "不触发"
     proxy_profile: str = "默认直连"
     text_length_policy: str = ""
     source_priority: str = ""
@@ -97,7 +92,6 @@ def rss_profile(
     *,
     source_priority: str = "",
     pipeline: str = "NormalizedMarketItem -> 统一决策/解读 -> market_reviews -> 统一投递/view",
-    skeptic_enabled: bool = True,
     filter_policy: str = "媒体关键词粗筛；短硬变量走规则快判；不确定项进入补充判读",
     notes: str = "",
 ) -> SourceProfile:
@@ -114,9 +108,6 @@ def rss_profile(
         service_units=("surveil-research-collector.timer", "surveil-research-collector.service"),
         health_keys=(("rss_monitor", source_id),),
         fetcher="scripts/research_collector.py -> scripts/rss_monitor.py",
-        skeptic_enabled=skeptic_enabled,
-        web_evidence_enabled=skeptic_enabled,
-        tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key" if skeptic_enabled else "不触发",
         proxy_profile="可通过 SURVEIL_HTTP_PROXY / mihomo",
         text_length_policy="长短文本共用统一决策；长文只影响摘要/截断成本",
         source_priority=source_priority,
@@ -136,12 +127,10 @@ def build_profiles() -> list[SourceProfile]:
             filter_policy="X 规则和账号配置；发送状态 pending/failed 会重试",
             frequency="长连接，异常后重连",
             runtime_shape="常驻 simple",
-            pipeline="X 来源采集 + 帖子解读；后续可接统一决策审计 / Skeptic",
+            pipeline="X 来源采集 -> NormalizedMarketItem -> 统一决策/解读 -> market_reviews -> 统一投递/view",
             service_units=("surveil-x-stream.service",),
             health_keys=(("x_stream", "stream"), ("x_stream", "link_enrichment")),
             fetcher="scripts/x_stream.py",
-            skeptic_enabled=False,
-            web_evidence_enabled=False,
             proxy_profile="通常走服务器本机 mihomo 代理",
             notes="订阅内容仍取决于 X API 和账号权限，不绕过访问控制。",
         )
@@ -188,9 +177,6 @@ def build_profiles() -> list[SourceProfile]:
                 service_units=("surveil-research-collector.timer", "surveil-research-collector.service"),
                 health_keys=(("trendforce_page", page_source.name),),
                 fetcher="scripts/research_collector.py -> scripts/trendforce_page_monitor.py",
-                skeptic_enabled=True,
-                web_evidence_enabled=True,
-                tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key",
                 proxy_profile="默认直连；必要时可走 SURVEIL_HTTP_PROXY",
                 text_length_policy="统一决策；短硬变量直接快判，长文按需截断/摘要",
                 url=page_source.url,
@@ -213,9 +199,6 @@ def build_profiles() -> list[SourceProfile]:
                 service_units=("surveil-research-collector.timer", "surveil-research-collector.service"),
                 health_keys=(("rss_monitor", source_id),),
                 fetcher="scripts/research_collector.py -> scripts/overseas_media_monitor.py / rss_monitor.py",
-                skeptic_enabled=True,
-                web_evidence_enabled=True,
-                tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key",
                 proxy_profile="通常走服务器本机 mihomo 代理",
                 text_length_policy="统一决策；短硬变量直接快判，长文按需截断/摘要",
                 url=url,
@@ -229,7 +212,7 @@ def build_profiles() -> list[SourceProfile]:
             name="AlphaAbstract / Summaries",
             source_type="公开 sitemap + summary 页面",
             fetch_range="robots.txt 允许的公开 sitemap 条目和 summary 页面正文、Article JSON-LD、原始来源链接；不访问登录、付费或受控内容",
-            filter_policy="公开摘要全文进入统一决策；不因来源本身提升推送资格，依赖跨来源硬变量、持仓/关键词、主题规则和 Skeptic 控制",
+            filter_policy="公开摘要全文进入统一决策；不因来源本身提升推送资格，依赖跨来源范围准入和程度决策规则",
             frequency="每 5 分钟 timer；页面源内部 900 秒节流",
             runtime_shape="timer one-shot",
             pipeline="AlphaAbstract sitemap/page -> NormalizedMarketItem -> 统一决策/解读 -> market_reviews -> 统一去重/投递/view",
@@ -237,9 +220,6 @@ def build_profiles() -> list[SourceProfile]:
             health_keys=(("alphabstract", "alphabstract_summaries"),),
             fetcher="scripts/research_collector.py -> scripts/alphabstract_monitor.py",
             publisher_role="third_party_research_summary",
-            skeptic_enabled=True,
-            web_evidence_enabled=True,
-            tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key",
             proxy_profile="默认直连；必要时可走 SURVEIL_HTTP_PROXY",
             text_length_policy="读取公开 summary 页正文；长文由统一决策/解读截断和规则处理",
             source_priority="二级研究摘要源，不设来源级推送特权",
@@ -262,9 +242,6 @@ def build_profiles() -> list[SourceProfile]:
             service_units=("surveil-value-directory.timer", "surveil-value-directory.service"),
             health_keys=(("value_directory", "value_directory_ib_stocks"),),
             fetcher="scripts/value_directory_monitor.py -> scripts/value_directory_browser.py",
-            skeptic_enabled=False,
-            web_evidence_enabled=False,
-            tavily_policy="首期不触发；仅规则命中即时推送",
             proxy_profile="服务器专用持久化 Chromium profile；遇 WAF/验证码停止并告警",
             text_length_policy="标题索引 + 可见第一页预览提取，不抓研报全文",
             source_priority="国际投行单股评级/目标价与重大主题策略硬规则",
@@ -286,9 +263,6 @@ def build_profiles() -> list[SourceProfile]:
             service_units=("surveil-value-directory.timer", "surveil-value-directory.service"),
             health_keys=(("value_directory", "value_directory_ib_industry_macro"),),
             fetcher="scripts/value_directory_monitor.py -> scripts/value_directory_browser.py",
-            skeptic_enabled=False,
-            web_evidence_enabled=False,
-            tavily_policy="首期不触发；仅规则命中即时推送",
             proxy_profile="服务器专用持久化 Chromium profile；遇 WAF/验证码停止并告警",
             text_length_policy="标题索引 + 可见第一页预览提取，不抓研报全文",
             source_priority="国际投行重大主题策略、行业配置和宏观策略硬规则",
@@ -322,9 +296,6 @@ def build_profiles() -> list[SourceProfile]:
                 service_units=("surveil-official-collector.timer", "surveil-official-collector.service"),
                 health_keys=(("rss_monitor", source_id),),
                 fetcher="scripts/official_collector.py",
-                skeptic_enabled=True,
-                web_evidence_enabled=True,
-                tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key",
                 proxy_profile="可通过 SURVEIL_HTTP_PROXY / mihomo",
                 text_length_policy="默认官网新闻流；普通营销/活动降级",
                 url=url,
@@ -355,9 +326,6 @@ def build_profiles() -> list[SourceProfile]:
                 health_keys=(("trade_policy", policy_source.name),),
                 fetcher="scripts/news_collector.py -> scripts/trade_policy_monitor.py",
                 publisher_role="government_official",
-                skeptic_enabled=True,
-                web_evidence_enabled=True,
-                tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key",
                 proxy_profile="默认直连；必要时可走 SURVEIL_HTTP_PROXY",
                 text_length_policy="列表/API 发现后只富化新条目；统一决策按局部证据判断",
                 source_priority="官方一手政策与前置程序；来源身份本身不创建推送资格",
@@ -393,9 +361,6 @@ def build_profiles() -> list[SourceProfile]:
                 ),
                 fetcher="scripts/news_collector.py -> scripts/china_finance_media_monitor.py",
                 publisher_role="news_media",
-                skeptic_enabled=True,
-                web_evidence_enabled=True,
-                tavily_policy="Skeptic 触发；需 WEB_EVIDENCE_ENABLED=1 和 API key",
                 text_length_policy="长短文本共用统一决策；长文按需截断/摘要",
                 url=url,
             )
@@ -417,8 +382,6 @@ def build_profiles() -> list[SourceProfile]:
                 health_keys=(("sina_flash", "*"),),
                 fetcher="scripts/sina_flash.py",
                 publisher_role="news_media",
-                skeptic_enabled=False,
-                web_evidence_enabled=False,
                 proxy_profile="默认直连",
                 text_length_policy="短快讯事件流；重大宏观/硬变量不受字数限制",
             ),
@@ -436,9 +399,7 @@ def build_profiles() -> list[SourceProfile]:
                 health_keys=(("sina_stock_news", "*"),),
                 fetcher="scripts/sina_stock_news.py",
                 publisher_role="news_media",
-                skeptic_enabled=False,
-                web_evidence_enabled=False,
-                text_length_policy="按持仓相关性优先；长文/旧闻争议后续可接 Skeptic",
+                text_length_policy="按持仓相关性优先；长文按统一决策所需证据截断",
             ),
             SourceProfile(
                 id="company_disclosures",
@@ -453,8 +414,6 @@ def build_profiles() -> list[SourceProfile]:
                 service_units=("surveil-company-disclosures.timer", "surveil-company-disclosures.service"),
                 health_keys=(("company_disclosures", "*"), ("company_disclosure_document", "*")),
                 fetcher="scripts/company_disclosures.py -> scripts/cninfo_disclosure_provider.py",
-                skeptic_enabled=False,
-                web_evidence_enabled=False,
                 provider="cninfo_public",
                 notes="正式披露以官方公告原文为准；每个新 provider 首次成功抓取只建立基线。",
             ),
@@ -501,10 +460,7 @@ def normalize_source_profile_config(raw: Any, valid_ids: set[str] | None = None)
             for field in EDITABLE_OVERRIDE_FIELDS:
                 if field not in item:
                     continue
-                if field in {"skeptic_enabled", "web_evidence_enabled"}:
-                    normalized[field] = normalize_bool(item.get(field), False)
-                else:
-                    normalized[field] = str(item.get(field) or "").strip()
+                normalized[field] = str(item.get(field) or "").strip()
             if normalized:
                 overrides[source_id] = normalized
     return {"disabled_sources": disabled_sources, "overrides": overrides}
@@ -580,10 +536,6 @@ def save_source_profile_config(
         publisher_role = str(row.get("publisher_role") or "").strip()
         if publisher_role != str(default.get("publisher_role") or ""):
             item["publisher_role"] = publisher_role
-        for field in ("skeptic_enabled", "web_evidence_enabled"):
-            value = normalize_bool(row.get(field), bool(default.get(field)))
-            if value != bool(default.get(field)):
-                item[field] = value
         if item:
             overrides[source_id] = item
 
@@ -646,37 +598,6 @@ def source_profile_enabled(
     if profile is None:
         return default
     return bool(profile.get("enabled", default))
-
-
-def source_profile_bool(
-    source_id: str,
-    field: str,
-    *,
-    default: bool,
-    config_path: Path = SOURCE_PROFILE_CONFIG_PATH,
-) -> bool:
-    profile = runtime_source_profile(source_id, config_path=config_path)
-    if profile is None or field not in profile:
-        return default
-    return normalize_bool(profile.get(field), default)
-
-
-def source_profile_skeptic_enabled(
-    source_id: str,
-    *,
-    default: bool = True,
-    config_path: Path = SOURCE_PROFILE_CONFIG_PATH,
-) -> bool:
-    return source_profile_bool(source_id, "skeptic_enabled", default=default, config_path=config_path)
-
-
-def source_profile_web_evidence_enabled(
-    source_id: str,
-    *,
-    default: bool = True,
-    config_path: Path = SOURCE_PROFILE_CONFIG_PATH,
-) -> bool:
-    return source_profile_bool(source_id, "web_evidence_enabled", default=default, config_path=config_path)
 
 
 def disabled_source_ids(config_path: Path = SOURCE_PROFILE_CONFIG_PATH) -> set[str]:
@@ -820,36 +741,11 @@ def source_profiles_payload(
         for category in CATEGORY_ORDER
     ]
     enabled_profiles = [profile for profile in profiles if profile.get("enabled", True)]
-    skeptic_source_count = sum(bool(profile.get("skeptic_enabled")) for profile in enabled_profiles)
-    evidence_source_count = sum(
-        bool(profile.get("skeptic_enabled")) and bool(profile.get("web_evidence_enabled"))
-        for profile in enabled_profiles
-    )
-    skeptic_global_enabled = normalize_bool(os.getenv("SKEPTIC_EVALUATOR_ENABLED", "1"), True)
-    evidence_global_enabled = normalize_bool(os.getenv("WEB_EVIDENCE_ENABLED", "0"), False)
-    evidence_api_configured = bool(
-        os.getenv("WEB_EVIDENCE_API_KEY", "").strip()
-        or os.getenv("TAVILY_API_KEY", "").strip()
-        or os.getenv("BRAVE_SEARCH_API_KEY", "").strip()
-    )
-    effective_skeptic_count = skeptic_source_count if skeptic_global_enabled else 0
-    effective_evidence_count = evidence_source_count if evidence_global_enabled and evidence_api_configured else 0
     runtime_status = {
         "enabled_sources": len(enabled_profiles),
         "total_sources": len(profiles),
-        "skeptic_sources": effective_skeptic_count,
-        "skeptic_source_selections": skeptic_source_count,
-        "skeptic_global_enabled": skeptic_global_enabled,
-        "web_evidence_sources": effective_evidence_count,
-        "web_evidence_source_selections": evidence_source_count,
-        "web_evidence_global_enabled": evidence_global_enabled,
-        "web_evidence_api_configured": evidence_api_configured,
     }
-    runtime_note = (
-        f"当前启用 {len(enabled_profiles)}/{len(profiles)} 个来源；"
-        f"Skeptic 实际启用 {effective_skeptic_count} 个；"
-        f"Tavily/Web Evidence 实际可触发 {effective_evidence_count} 个。"
-    )
+    runtime_note = f"当前启用 {len(enabled_profiles)}/{len(profiles)} 个来源。"
     return {
         "ok": True,
         "categories": categories,

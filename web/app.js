@@ -923,7 +923,6 @@ async function loadRelationManager() {
         </td>
       </tr>
     `).join('') || '<tr><td colspan="7">暂无关系映射。</td></tr>';
-    await loadRelationSuggestions();
   } catch (err) {
     showStatus(err.message, 'err');
   }
@@ -1074,51 +1073,6 @@ async function diffRelationJson() {
   }
 }
 
-async function loadRelationSuggestions() {
-  try {
-    const status = document.getElementById('relationSuggestionStatus') ? document.getElementById('relationSuggestionStatus').value : 'pending';
-    const params = new URLSearchParams();
-    if (status) params.set('status', status);
-    const data = await api('/api/relation-suggestions?' + params.toString());
-    document.getElementById('relationSuggestionRows').innerHTML = (data.suggestions || []).map(item => `
-      <tr>
-        <td>${badge(item.status || '')}<div class="hint">${formatTime(item.updated_at)}</div></td>
-        <td><strong>${escapeHtml(item.symbol || '')}</strong><div class="hint">${escapeHtml(item.symbol_name || '')}</div></td>
-        <td><strong>${escapeHtml(item.related_symbol || '')}</strong><div class="hint">${escapeHtml(item.related_name || '')}</div></td>
-        <td class="summary-cell">
-          <div>${escapeHtml(item.relation_type || '')} / ${escapeHtml(item.theme || '')} / ${escapeHtml(item.confidence || '')}</div>
-          <div class="hint">${escapeHtml(shortText(item.reason || '', 220))}</div>
-        </td>
-        <td>
-          ${item.status === 'pending' ? `<button onclick="acceptSuggestion(${item.id})">确认</button><button class="danger" onclick="rejectSuggestion(${item.id})">拒绝</button>` : '-'}
-        </td>
-      </tr>
-    `).join('') || '<tr><td colspan="5">暂无候选关系。</td></tr>';
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-async function acceptSuggestion(id) {
-  try {
-    const data = await api('/api/relation-suggestions/accept', {method: 'POST', body: JSON.stringify({id})});
-    await loadRelationManager();
-    showStatus(`候选关系已确认并同步 JSON 快照：${(data.snapshot || {}).path || ''}`);
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-async function rejectSuggestion(id) {
-  try {
-    await api('/api/relation-suggestions/reject', {method: 'POST', body: JSON.stringify({id})});
-    await loadRelationSuggestions();
-    showStatus('候选关系已拒绝。');
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
 async function runServiceAction(unit, action) {
   const label = serviceActionLabel(action);
   if (!confirm(`确认对 ${unit} 执行“${label}”？`)) return;
@@ -1183,8 +1137,6 @@ function sourceProfilesForSave() {
     enabled: item.enabled !== false,
     frequency: item.frequency || '',
     publisher_role: item.publisher_role || '',
-    skeptic_enabled: Boolean(item.skeptic_enabled),
-    web_evidence_enabled: Boolean(item.web_evidence_enabled),
     proxy_profile: item.proxy_profile || '',
     provider: item.provider || '',
     notes: item.notes || ''
@@ -1211,15 +1163,9 @@ function renderSourceProfiles() {
     const isFailing = isFailingSourceProfile(item);
     const healthDetail = item.last_error ? `<div class="hint">${escapeHtml(shortText(item.last_error, 120))}</div>` : '';
     const healthTime = isFailing && item.last_failure_at ? `<div class="hint">最近失败：${escapeHtml(formatTime(item.last_failure_at))}</div>` : '';
-    const gates = [
-      item.skeptic_enabled ? 'Skeptic' : '无 Skeptic',
-      item.web_evidence_enabled ? 'Tavily 可触发' : '无 Tavily'
-    ].join('<br>');
     const services = (item.service_units || []).map(unit => `<span class="badge">${escapeHtml(unit)}</span>`).join(' ');
     const modified = item.config_modified ? '<div class="hint source-dirty">本地覆盖</div>' : '';
     const enabledChecked = item.enabled !== false ? 'checked' : '';
-    const skepticChecked = item.skeptic_enabled ? 'checked' : '';
-    const evidenceChecked = item.web_evidence_enabled ? 'checked' : '';
     const providerControls = item.provider ? `
       <div style="margin-top:6px">
         <div class="hint">采集 provider</div>
@@ -1253,14 +1199,6 @@ function renderSourceProfiles() {
             <option value="third_party_research_summary" ${item.publisher_role === 'third_party_research_summary' ? 'selected' : ''}>第三方研究汇总</option>
           </select>
         </td>
-        <td>
-          <div class="source-checks">
-            <label><input type="checkbox" data-source-id="${escapeHtml(item.id || '')}" data-field="skeptic_enabled" onchange="updateSourceProfileDraft(this)" ${skepticChecked}> Skeptic</label>
-            <label><input type="checkbox" data-source-id="${escapeHtml(item.id || '')}" data-field="web_evidence_enabled" onchange="updateSourceProfileDraft(this)" ${evidenceChecked}> Tavily</label>
-          </div>
-          <div class="hint">${gates}</div>
-          <div class="hint">${escapeHtml(item.tavily_policy || '')}</div>
-        </td>
         <td class="summary-cell">
           <div>${escapeHtml(item.fetch_range || '')}</div>
           <div class="hint">${escapeHtml(item.filter_policy || '')}</div>
@@ -1274,7 +1212,7 @@ function renderSourceProfiles() {
         </td>
       </tr>
     `;
-  }).join('') || '<tr><td colspan="8">没有匹配信息源。</td></tr>';
+  }).join('') || '<tr><td colspan="7">没有匹配信息源。</td></tr>';
 }
 
 async function loadSourceProfiles() {
@@ -1482,9 +1420,6 @@ function settingsRestartAdvice(changedItems) {
   const hasPrefix = prefix => keys.some(key => key.startsWith(prefix));
   const hasAny = names => keys.some(key => names.includes(key));
   const lines = [];
-  if (hasPrefix('WEB_EVIDENCE_') || hasAny(['TAVILY_API_KEY', 'BRAVE_SEARCH_API_KEY'])) {
-    lines.push('Tavily/Web Evidence：新 collector 为 timer one-shot，下一轮会读取配置；如需马上验证，在任务健康页立即运行 surveil-research-collector.timer、surveil-official-collector.timer、surveil-news-collector.timer。');
-  }
   if (hasPrefix('LLM_')) {
     lines.push('大模型配置：重启常驻的 surveil-x-stream.service、surveil-sina-flash.service；研究机构/官网/新闻媒体 collector 下一轮自动读取，也可立即运行对应 timer。');
   }
