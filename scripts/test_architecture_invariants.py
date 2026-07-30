@@ -71,6 +71,8 @@ LEGACY_RESULT_HELPERS = {
 }
 
 REMOVED_COMPATIBILITY_MODULES = (
+    "market_view.py",
+    "x_monitor.py",
     "rule_center.py",
     "web_evidence.py",
     "article_gate.py",

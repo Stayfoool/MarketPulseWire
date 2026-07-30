@@ -41,7 +41,6 @@ from market_feedback import FEEDBACK_LABELS, feedback_projection_by_item, feedba
 from llm_decision_web import llm_decision_rows, llm_decision_summary
 from current_rules_web import current_rules_payload
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
-from market_view import article_view_from_row, event_view_from_row, official_view_from_row
 from settings_store import save_settings, settings_payload
 from source_profiles import save_source_profile_config, source_profiles_payload
 from stock_relations import (
@@ -321,63 +320,6 @@ def normalized_filter_values(values: str | list[str]) -> list[str]:
         dict.fromkeys(
             str(value or "").strip().lower() for value in raw_values if str(value or "").strip()
         )
-    )
-
-
-def event_feedback_filter_clause(
-    conn: sqlite3.Connection,
-    *,
-    feedback_filter: str,
-    item_kind: str,
-    source_expr: str,
-    item_id_expr: str,
-    delivered_expr: str,
-) -> tuple[str, list[str]]:
-    if not feedback_filter:
-        return "", []
-    if not table_exists(conn, "market_feedback"):
-        return (f"AND ({delivered_expr})", []) if feedback_filter == "unlabelled" else ("AND 0", [])
-    active_labels_json = (
-        "CASE WHEN json_valid(f.active_labels_json) THEN f.active_labels_json ELSE '[]' END"
-    )
-    current_feedback = f"""
-        SELECT 1 FROM market_feedback f
-        WHERE f.item_kind = ?
-          AND f.source = {source_expr}
-          AND CAST(f.item_id AS TEXT) = CAST({item_id_expr} AS TEXT)
-          AND (
-            (f.active_labels_json IS NULL AND f.label IN ('high_value', 'duplicate', 'invalid'))
-            OR EXISTS (
-              SELECT 1 FROM json_each({active_labels_json}) active_label
-              WHERE active_label.value IN ('high_value', 'duplicate', 'invalid')
-            )
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM market_feedback newer
-            WHERE newer.item_kind = f.item_kind
-              AND newer.source = f.source
-              AND newer.item_id = f.item_id
-              AND newer.operator_id = f.operator_id
-              AND (
-                newer.clicked_at_us > f.clicked_at_us
-                OR (newer.clicked_at_us = f.clicked_at_us AND newer.id > f.id)
-              )
-          )
-    """
-    if feedback_filter == "unlabelled":
-        return f"AND ({delivered_expr}) AND NOT EXISTS ({current_feedback})", [item_kind]
-    selected_label = f"""
-        (
-          (f.active_labels_json IS NULL AND f.label = ?)
-          OR EXISTS (
-            SELECT 1 FROM json_each({active_labels_json}) selected
-            WHERE selected.value = ?
-          )
-        )
-    """
-    return (
-        f"AND ({delivered_expr}) AND EXISTS ({current_feedback} AND {selected_label})",
-        [item_kind, feedback_filter, feedback_filter],
     )
 
 

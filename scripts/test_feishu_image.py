@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from feishu_image import configured, image_key_from_url
 from x_check import configured_x_username, load_env
-from x_monitor import fetch_recent_posts
+from x_stream import fetch_recent_posts
 
 
 def main() -> int:
