@@ -7,7 +7,8 @@ updates:
       day: "monday"
       time: "09:00"
       timezone: "Asia/Shanghai"
-    open-pull-requests-limit: 5
+    # Python runtime dependency updates are reviewed as one intentional baseline task.
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
     commit-message:
