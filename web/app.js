@@ -10,10 +10,148 @@ let dragIndex = null;
 let managedRelations = [];
 let editingRelationId = null;
 let sourceProfileCache = {categories: [], profiles: []};
-let eventSourceOptionsLoaded = false;
+let sourceFilterOptionsLoaded = false;
 let eventOperationId = 0;
 let eventAbortController = null;
 let currentRulesCache = null;
+const multiSelectControls = new Map();
+
+function initializeMultiSelect(id, options, onChange) {
+  const root = document.getElementById(id);
+  if (!root) return;
+  if (!multiSelectControls.has(id)) {
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'multi-select-trigger';
+    trigger.setAttribute('aria-haspopup', 'true');
+    trigger.setAttribute('aria-expanded', 'false');
+    const label = document.createElement('span');
+    trigger.appendChild(label);
+    const menu = document.createElement('div');
+    menu.className = 'multi-select-menu';
+    menu.hidden = true;
+    const actions = document.createElement('div');
+    actions.className = 'multi-select-actions';
+    const selectAll = document.createElement('button');
+    selectAll.type = 'button';
+    selectAll.textContent = '全选';
+    selectAll.addEventListener('click', () => setMultiSelectSelection(id, 'all'));
+    const clear = document.createElement('button');
+    clear.type = 'button';
+    clear.textContent = '清空';
+    clear.addEventListener('click', () => setMultiSelectSelection(id, 'none'));
+    actions.append(selectAll, clear);
+    const optionList = document.createElement('div');
+    optionList.className = 'multi-select-options';
+    menu.append(actions, optionList);
+    root.replaceChildren(trigger, menu);
+    trigger.addEventListener('click', event => {
+      event.stopPropagation();
+      const opening = menu.hidden;
+      closeMultiSelectMenus(id);
+      menu.hidden = !opening;
+      root.classList.toggle('open', opening);
+      trigger.setAttribute('aria-expanded', String(opening));
+    });
+    menu.addEventListener('click', event => event.stopPropagation());
+    multiSelectControls.set(id, {root, trigger, label, menu, optionList, options: [], onChange});
+  }
+  const control = multiSelectControls.get(id);
+  control.onChange = onChange;
+  setMultiSelectOptions(id, options || []);
+}
+
+function setMultiSelectOptions(id, options) {
+  const control = multiSelectControls.get(id);
+  if (!control) return;
+  const selected = new Set(selectedMultiSelectValues(id));
+  control.options = (options || []).filter(option => option?.value).map(option => ({
+    value: String(option.value),
+    label: String(option.label || option.value),
+    group: String(option.group || '')
+  }));
+  control.optionList.replaceChildren();
+  let currentGroup = null;
+  control.options.forEach(option => {
+    if (option.group && option.group !== currentGroup) {
+      const heading = document.createElement('div');
+      heading.className = 'multi-select-group';
+      heading.textContent = option.group;
+      control.optionList.appendChild(heading);
+      currentGroup = option.group;
+    }
+    const row = document.createElement('label');
+    row.className = 'multi-select-option';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.value = option.value;
+    checkbox.checked = selected.has(option.value);
+    checkbox.addEventListener('change', () => {
+      updateMultiSelectLabel(id);
+      control.onChange?.();
+    });
+    const text = document.createElement('span');
+    text.textContent = option.label;
+    row.append(checkbox, text);
+    control.optionList.appendChild(row);
+  });
+  if (!control.options.length) {
+    const empty = document.createElement('div');
+    empty.className = 'multi-select-empty';
+    empty.textContent = '暂无可选项';
+    control.optionList.appendChild(empty);
+  }
+  updateMultiSelectLabel(id);
+}
+
+function selectedMultiSelectValues(id) {
+  const control = multiSelectControls.get(id);
+  if (!control) return [];
+  return [...control.optionList.querySelectorAll('input[type="checkbox"]:checked')].map(input => input.value);
+}
+
+function availableMultiSelectValues(id) {
+  return (multiSelectControls.get(id)?.options || []).map(option => option.value);
+}
+
+function setMultiSelectSelection(id, mode) {
+  const control = multiSelectControls.get(id);
+  if (!control) return;
+  control.optionList.querySelectorAll('input[type="checkbox"]').forEach(input => {
+    input.checked = mode === 'all';
+  });
+  updateMultiSelectLabel(id);
+  control.onChange?.();
+}
+
+function updateMultiSelectLabel(id) {
+  const control = multiSelectControls.get(id);
+  if (!control) return;
+  const selected = selectedMultiSelectValues(id);
+  const placeholder = control.root.dataset.placeholder || '全部';
+  if (!selected.length) {
+    control.label.textContent = placeholder;
+  } else if (selected.length === 1) {
+    control.label.textContent = control.options.find(option => option.value === selected[0])?.label || selected[0];
+  } else {
+    control.label.textContent = `已选 ${selected.length} 项`;
+  }
+  control.trigger.title = selected.length ? selected.map(value => control.options.find(option => option.value === value)?.label || value).join('、') : placeholder;
+}
+
+function closeMultiSelectMenus(exceptId='') {
+  multiSelectControls.forEach((control, id) => {
+    if (id === exceptId) return;
+    control.menu.hidden = true;
+    control.root.classList.remove('open');
+    control.trigger.setAttribute('aria-expanded', 'false');
+  });
+}
+
+document.addEventListener('click', () => closeMultiSelectMenus());
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeMultiSelectMenus();
+});
 
 function headers() {
   const h = {'Content-Type': 'application/json'};
@@ -216,7 +354,7 @@ function showView(name) {
   document.getElementById(`tab-${name}`).classList.add('active');
   if (name === 'overview') loadOverview();
   if (name === 'events') loadEventsView();
-  if (name === 'llm-decisions') loadLlmDecisions();
+  if (name === 'llm-decisions') loadLlmDecisionsView();
   if (name === 'rules') loadCurrentRules();
   if (name === 'feedback') loadFeedbackQuality();
   if (name === 'relations') loadRelationManager();
@@ -301,10 +439,10 @@ function renderRangeAdmissionRules(section) {
   `).join('');
 }
 
-function llmRuleMatches(rule, family, action, query) {
+function llmRuleMatches(rule, families, actions, query) {
   const applicableFamilies = rule.applicable_families || [rule.family];
-  if (family && !applicableFamilies.includes(family)) return false;
-  if (action && !(rule.allowed_actions || []).includes(action)) return false;
+  if (families.length && !families.some(family => applicableFamilies.includes(family))) return false;
+  if (actions.length && !actions.some(action => (rule.allowed_actions || []).includes(action))) return false;
   if (!query) return true;
   const searchable = [
     rule.rule_id,
@@ -344,10 +482,10 @@ function renderLlmRules() {
   }
   status.className = 'status ok rules-inline-status';
   status.textContent = '当前私有规则文件已通过严格校验。';
-  const family = document.getElementById('llmRuleFamily').value;
-  const action = document.getElementById('llmRuleAction').value;
+  const families = selectedMultiSelectValues('llmRuleFamily');
+  const actions = selectedMultiSelectValues('llmRuleAction');
   const query = document.getElementById('llmRuleQuery').value.trim().toLowerCase();
-  const filtered = (section.rules || []).filter(rule => llmRuleMatches(rule, family, action, query));
+  const filtered = (section.rules || []).filter(rule => llmRuleMatches(rule, families, actions, query));
   metrics.innerHTML = [
     ruleMetric('规则版本', section.version || '-', true),
     ruleMetric('全部规则', String(section.rule_count || 0)),
@@ -378,16 +516,16 @@ function renderLlmRules() {
 }
 
 function populateLlmRuleFamilies(section) {
-  const select = document.getElementById('llmRuleFamily');
-  const selected = select.value;
   const labels = {};
   (section.rules || []).forEach(rule => {
     const families = rule.applicable_families || [rule.family];
     const familyLabels = rule.applicable_family_labels || [rule.family_label || rule.family];
     families.forEach((family, index) => { labels[family] = familyLabels[index] || family; });
   });
-  select.innerHTML = '<option value="">全部规则族</option>' + (section.families || []).map(family => `<option value="${escapeHtml(family)}">${escapeHtml(labels[family] || family)}</option>`).join('');
-  if ([...select.options].some(option => option.value === selected)) select.value = selected;
+  setMultiSelectOptions('llmRuleFamily', (section.families || []).map(family => ({
+    value: family,
+    label: labels[family] || family
+  })));
 }
 
 async function loadCurrentRules(force=false) {
@@ -486,52 +624,42 @@ function eventSourceFilterValue(profile) {
   return String(profile.id || '').trim();
 }
 
-async function loadEventSourceOptions() {
-  if (eventSourceOptionsLoaded) return;
-  const select = document.getElementById('eventSource');
-  const selected = select.value;
-  let data = sourceProfileCache;
-  if (!Array.isArray(data.profiles) || !data.profiles.length) {
-    data = await api('/api/source-profiles');
-    sourceProfileCache = data;
-  }
-  const groups = new Map();
-  (data.profiles || []).forEach(profile => {
+async function loadSourceFilterOptions() {
+  if (sourceFilterOptionsLoaded) return;
+  const data = await api('/api/source-profiles');
+  const options = [];
+  (data.profiles || []).filter(profile => profile.enabled !== false).forEach(profile => {
     const value = eventSourceFilterValue(profile);
     if (!value) return;
-    const label = profile.category_label || '其他来源';
-    if (!groups.has(label)) groups.set(label, []);
-    groups.get(label).push({value, profile});
-  });
-  select.replaceChildren();
-  const all = document.createElement('option');
-  all.value = '';
-  all.textContent = '全部来源';
-  select.appendChild(all);
-  groups.forEach((items, label) => {
-    const group = document.createElement('optgroup');
-    group.label = label;
-    items.forEach(({value, profile}) => {
-      const option = document.createElement('option');
-      option.value = value;
-      option.textContent = `${profile.name || value}（${value}）${profile.enabled === false ? ' - 已停用' : ''}`;
-      group.appendChild(option);
+    options.push({
+      value,
+      label: `${profile.name || value}（${value}）`,
+      group: profile.category_label || '其他来源'
     });
-    select.appendChild(group);
   });
-  if ([...select.options].some(option => option.value === selected)) {
-    select.value = selected;
-  }
-  eventSourceOptionsLoaded = true;
+  setMultiSelectOptions('eventSource', options);
+  setMultiSelectOptions('llmDecisionSource', options);
+  sourceFilterOptionsLoaded = true;
 }
 
 async function loadEventsView() {
   try {
-    await loadEventSourceOptions();
+    await loadSourceFilterOptions();
   } catch (err) {
     showStatus(`来源下拉加载失败：${err.message}`, 'err');
+    return;
   }
   await loadEvents();
+}
+
+async function loadLlmDecisionsView() {
+  try {
+    await loadSourceFilterOptions();
+  } catch (err) {
+    showStatus(`来源下拉加载失败：${err.message}`, 'err');
+    return;
+  }
+  await loadLlmDecisions();
 }
 
 async function loadOverview() {
@@ -573,8 +701,9 @@ async function loadEvents() {
     const startDate = document.getElementById('eventFromDate').value;
     const endDate = document.getElementById('eventToDate').value;
     const timeBasis = document.getElementById('eventTimeBasis').value;
-    const source = document.getElementById('eventSource').value.trim();
-    const feedback = document.getElementById('eventFeedback').value.trim();
+    const selectedSources = selectedMultiSelectValues('eventSource');
+    const sources = selectedSources.length ? selectedSources : availableMultiSelectValues('eventSource');
+    const feedback = selectedMultiSelectValues('eventFeedback');
     const q = document.getElementById('eventQuery').value.trim();
     if (Boolean(startDate) !== Boolean(endDate)) {
       showStatus('开始日期和结束日期必须同时填写。', 'err');
@@ -589,8 +718,8 @@ async function loadEvents() {
       params.set('to', endDate);
     }
     if (timeBasis !== 'seen') params.set('time_basis', timeBasis);
-    if (source) params.set('source', source);
-    if (feedback) params.set('feedback', feedback);
+    sources.forEach(source => params.append('source', source));
+    feedback.forEach(value => params.append('feedback', value));
     if (q) params.set('q', q);
     if (document.getElementById('eventIncludeBaseline').checked) params.set('include_baseline', '1');
     eventAbortController?.abort();
@@ -720,13 +849,14 @@ async function loadLlmDecisions() {
       params.set('from', startDate);
       params.set('to', endDate);
     }
-    const action = document.getElementById('llmDecisionAction').value;
-    const status = document.getElementById('llmDecisionStatus').value;
-    const source = document.getElementById('llmDecisionSource').value.trim();
+    const selectedActions = selectedMultiSelectValues('llmDecisionAction');
+    const selectedStatuses = selectedMultiSelectValues('llmDecisionStatus');
+    const selectedSources = selectedMultiSelectValues('llmDecisionSource');
+    const sources = selectedSources.length ? selectedSources : availableMultiSelectValues('llmDecisionSource');
     const query = document.getElementById('llmDecisionQuery').value.trim();
-    if (action) params.set('action', action);
-    if (status) params.set('status', status);
-    if (source) params.set('source', source);
+    selectedActions.forEach(action => params.append('action', action));
+    selectedStatuses.forEach(value => params.append('status', value));
+    sources.forEach(source => params.append('source', source));
     if (query) params.set('q', query);
     const data = await api('/api/llm-decisions?' + params.toString());
     const summary = data.summary || {};
@@ -1015,12 +1145,10 @@ function renderSourceProfileMetrics(categories) {
 }
 
 function renderSourceCategoryOptions(categories) {
-  const select = document.getElementById('sourceProfileCategory');
-  const current = select.value;
-  select.innerHTML = '<option value="">全部来源</option>' + (categories || []).map(item => `
-    <option value="${escapeHtml(item.id || '')}">${escapeHtml(item.label || item.id || '')}（${escapeHtml(item.count || 0)}）</option>
-  `).join('');
-  select.value = current;
+  setMultiSelectOptions('sourceProfileCategory', (categories || []).map(item => ({
+    value: item.id || '',
+    label: `${item.label || item.id || ''}（${item.count || 0}）`
+  })));
 }
 
 function sourceProfileSearchText(item) {
@@ -1068,10 +1196,13 @@ function isFailingSourceProfile(item) {
 }
 
 function renderSourceProfiles() {
-  const category = document.getElementById('sourceProfileCategory').value;
+  const categories = selectedMultiSelectValues('sourceProfileCategory');
+  const enabled = document.getElementById('sourceProfileEnabled').value;
   const q = document.getElementById('sourceProfileQuery').value.trim().toLowerCase();
   const rows = (sourceProfileCache.profiles || []).filter(item => {
-    if (category && item.category !== category) return false;
+    if (enabled === 'enabled' && item.enabled === false) return false;
+    if (enabled === 'disabled' && item.enabled !== false) return false;
+    if (categories.length && !categories.includes(item.category)) return false;
     if (q && !sourceProfileSearchText(item).includes(q)) return false;
     return true;
   }).sort((left, right) => Number(isFailingSourceProfile(right)) - Number(isFailingSourceProfile(left)));
@@ -1157,6 +1288,7 @@ async function loadSourceProfiles() {
       runtime_note: data.runtime_note || '',
       dirty: false
     };
+    sourceFilterOptionsLoaded = false;
     renderSourceProfileMetrics(sourceProfileCache.categories);
     renderSourceCategoryOptions(sourceProfileCache.categories);
     renderSourceProfiles();
@@ -1185,6 +1317,7 @@ async function saveSourceProfiles() {
       runtime_note: data.runtime_note || '',
       dirty: false
     };
+    sourceFilterOptionsLoaded = false;
     renderSourceProfileMetrics(sourceProfileCache.categories);
     renderSourceCategoryOptions(sourceProfileCache.categories);
     renderSourceProfiles();
@@ -1665,6 +1798,34 @@ async function confirmSave() {
     endHoldingsOperation(operationId);
   }
 }
+
+initializeMultiSelect('eventSource', [], loadEvents);
+initializeMultiSelect('eventFeedback', [
+  {value: 'high_value', label: '特别有用'},
+  {value: 'duplicate', label: '重复'},
+  {value: 'invalid', label: '无效'},
+  {value: 'unlabelled', label: '未反馈'}
+], loadEvents);
+initializeMultiSelect('llmDecisionAction', [
+  {value: 'push', label: 'push'},
+  {value: 'daily', label: 'daily'},
+  {value: 'archive', label: 'archive'}
+], loadLlmDecisions);
+initializeMultiSelect('llmDecisionStatus', [
+  {value: 'completed', label: '已完成'},
+  {value: 'insufficient_evidence', label: '证据不足'},
+  {value: 'uncertain', label: '历史 uncertain'},
+  {value: 'model_unavailable', label: '大模型不可用'},
+  {value: 'pending', label: '等待判断'}
+], loadLlmDecisions);
+initializeMultiSelect('llmDecisionSource', [], loadLlmDecisions);
+initializeMultiSelect('llmRuleFamily', [], renderLlmRules);
+initializeMultiSelect('llmRuleAction', [
+  {value: 'push', label: 'push'},
+  {value: 'daily', label: 'daily'},
+  {value: 'archive', label: 'archive'}
+], renderLlmRules);
+initializeMultiSelect('sourceProfileCategory', [], renderSourceProfiles);
 
 document.getElementById('eventFromDate').value = todayString();
 document.getElementById('eventToDate').value = todayString();

@@ -277,16 +277,20 @@ def event_center_where_clause(
     time_field: str,
     start_utc: str,
     end_utc: str,
-    source_lower: str,
+    source_lowers: list[str],
     source_fields: tuple[str, ...],
     q_lower: str,
     q_fields: tuple[str, ...],
 ) -> tuple[str, list[str]]:
     clauses = [f"datetime({time_field}) >= datetime(?)", f"datetime({time_field}) < datetime(?)"]
     params = [start_utc, end_utc]
-    if source_lower and source_fields:
-        clauses.append("(" + " OR ".join(f"LOWER(COALESCE({field}, '')) LIKE ?" for field in source_fields) + ")")
-        params.extend([f"%{source_lower}%"] * len(source_fields))
+    if source_lowers and source_fields:
+        source_clauses = []
+        for field in source_fields:
+            for source in source_lowers:
+                source_clauses.append(f"LOWER(COALESCE({field}, '')) LIKE ?")
+                params.append(f"%{source}%")
+        clauses.append("(" + " OR ".join(source_clauses) + ")")
     if q_lower and q_fields:
         clauses.append("(" + " OR ".join(f"LOWER(COALESCE({field}, '')) LIKE ?" for field in q_fields) + ")")
         params.extend([f"%{q_lower}%"] * len(q_fields))
@@ -312,6 +316,15 @@ def displayed_event_time(item: dict[str, Any], basis: str) -> str:
 def normalized_event_feedback_filter(value: str) -> str:
     normalized = str(value or "").strip().lower()
     return normalized if normalized in {*FEEDBACK_LABELS, "unlabelled"} else ""
+
+
+def normalized_filter_values(values: str | list[str]) -> list[str]:
+    raw_values = [values] if isinstance(values, str) else values
+    return list(
+        dict.fromkeys(
+            str(value or "").strip().lower() for value in raw_values if str(value or "").strip()
+        )
+    )
 
 
 def event_feedback_filter_clause(
@@ -431,7 +444,7 @@ def fetch_events_rows(
     q: str = "",
     time_basis: str = "seen",
     include_baseline: bool = False,
-    feedback: str = "",
+    feedback: str | list[str] = "",
     limit: int = 100,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> list[dict[str, Any]]:
@@ -441,9 +454,13 @@ def fetch_events_rows(
         start_day = end_day = day
     start_utc, end_utc, _, _ = utc_window_for_range(start_day, end_day)
     q_lower = q.strip().lower()
-    source_lower = source.strip().lower()
+    source_lowers = normalized_filter_values(source)
     kind_lower = kind.strip().lower()
-    feedback_filter = normalized_event_feedback_filter(feedback)
+    feedback_filters = list(
+        dict.fromkeys(
+            filter(None, map(normalized_event_feedback_filter, normalized_filter_values(feedback)))
+        )
+    )
     time_basis = normalized_event_time_basis(time_basis)
     rows: list[dict[str, Any]] = []
     with connect_sqlite(db_path) as conn:
@@ -470,7 +487,7 @@ def fetch_events_rows(
                     projection=feedback_projection,
                 )
             rows.append(item)
-        if not feedback_filter and table_exists(conn, "seen_posts"):
+        if not feedback_filters and table_exists(conn, "seen_posts"):
             seen_columns = table_columns(conn, "seen_posts")
             delivery_expr = "delivery_status" if "delivery_status" in seen_columns else "'sent'"
             where, params = event_center_where_clause(
@@ -481,7 +498,7 @@ def fetch_events_rows(
                 ),
                 start_utc=start_utc,
                 end_utc=end_utc,
-                source_lower=source_lower,
+                source_lowers=source_lowers,
                 source_fields=("source",),
                 q_lower=q_lower,
                 q_fields=("text", "url"),
@@ -521,20 +538,21 @@ def fetch_events_rows(
             apply_event_feedback(item)
 
     def matches(item: dict[str, Any]) -> bool:
-        if source_lower and source_lower not in str(item["source"]).lower() and source_lower not in str(
-            item.get("source_id") or ""
-        ).lower():
-            return False
+        if source_lowers:
+            item_sources = (str(item["source"]).lower(), str(item.get("source_id") or "").lower())
+            if not any(source in item_source for source in source_lowers for item_source in item_sources):
+                return False
         if kind_lower and kind_lower != str(item["kind"]).lower():
             return False
         if q_lower:
             hay = json.dumps(item, ensure_ascii=False).lower()
             if q_lower not in hay:
                 return False
-        if feedback_filter == "unlabelled" and item.get("feedback_state") != "unlabelled":
-            return False
-        if feedback_filter in FEEDBACK_LABELS and feedback_filter not in (item.get("feedback_labels") or []):
-            return False
+        if feedback_filters:
+            current = set(item.get("feedback_labels") or [])
+            matches_unlabelled = "unlabelled" in feedback_filters and item.get("feedback_state") == "unlabelled"
+            if not matches_unlabelled and not current.intersection(feedback_filters):
+                return False
         return True
 
     rows = [item for item in rows if matches(item)]
@@ -545,9 +563,9 @@ def fetch_events_rows(
 def fetch_llm_decision_rows(
     start_day: str = "",
     end_day: str = "",
-    action: str = "",
-    status: str = "",
-    source: str = "",
+    action: str | list[str] = "",
+    status: str | list[str] = "",
+    source: str | list[str] = "",
     query: str = "",
     limit: int = 200,
     db_path: Path = DEFAULT_DB_PATH,
@@ -1374,13 +1392,13 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                     day=(qs.get("date") or [""])[0],
                     start_day=(qs.get("from") or [""])[0],
                     end_day=(qs.get("to") or [""])[0],
-                    source=(qs.get("source") or [""])[0],
+                    source=qs.get("source") or [],
                     kind=(qs.get("kind") or [""])[0],
                     q=(qs.get("q") or [""])[0],
                     time_basis=(qs.get("time_basis") or ["seen"])[0],
                     include_baseline=(qs.get("include_baseline") or [""])[0].strip().lower()
                     in {"1", "true", "yes", "on"},
-                    feedback=(qs.get("feedback") or [""])[0],
+                    feedback=qs.get("feedback") or [],
                     limit=limit,
                 )
                 self.send_json({"ok": True, "events": events, "feedback_summary": event_feedback_summary(events)})
@@ -1402,9 +1420,9 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 payload = fetch_llm_decision_rows(
                     start_day=(qs.get("from") or [""])[0],
                     end_day=(qs.get("to") or [""])[0],
-                    action=(qs.get("action") or [""])[0],
-                    status=(qs.get("status") or [""])[0],
-                    source=(qs.get("source") or [""])[0],
+                    action=qs.get("action") or [],
+                    status=qs.get("status") or [],
+                    source=qs.get("source") or [],
                     query=(qs.get("q") or [""])[0],
                     limit=limit,
                 )

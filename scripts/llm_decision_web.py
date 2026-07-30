@@ -272,14 +272,19 @@ def _decision_assessments(decision: dict[str, Any]) -> list[dict[str, Any]]:
     return _decision_projection(decision).get("rule_assessments", [])
 
 
+def _filter_values(values: str | list[str]) -> set[str]:
+    raw_values = [values] if isinstance(values, str) else values
+    return {str(value or "").strip().lower() for value in raw_values if str(value or "").strip()}
+
+
 def llm_decision_rows(
     conn: sqlite3.Connection,
     *,
     start_utc: str,
     end_utc: str,
-    action: str = "",
-    status: str = "",
-    source: str = "",
+    action: str | list[str] = "",
+    status: str | list[str] = "",
+    source: str | list[str] = "",
     query: str = "",
     limit: int = 200,
     audit_dir: Path = DEFAULT_AUDIT_DIR,
@@ -307,10 +312,10 @@ def llm_decision_rows(
         (start_utc, end_utc),
     ).fetchall()
     audit_map = load_web_projections(audit_dir)
-    source_lower = source.strip().lower()
+    sources = _filter_values(source)
     query_lower = query.strip().lower()
-    action = action.strip().lower()
-    status = status.strip().lower()
+    actions = _filter_values(action)
+    statuses = _filter_values(status)
     result: list[dict[str, Any]] = []
     for row in rows:
         decision = _json_dict_value(row["decision_json"])
@@ -325,12 +330,14 @@ def llm_decision_rows(
             model_status = str(attempts[-1].get("evaluation_status") or model_status)
         display_source = str(row["display_source"] or row["source"] or "")
         searchable = " ".join((display_source, str(row["title"] or ""), str(row["source_item_id"] or ""))).lower()
-        if action and final_action != action:
+        if actions and final_action.lower() not in actions:
             continue
-        if status and model_status != status:
+        if statuses and model_status.lower() not in statuses:
             continue
-        if source_lower and source_lower not in display_source.lower():
-            continue
+        if sources:
+            row_sources = (display_source.lower(), str(row["source"] or "").lower())
+            if not any(source in row_source for source in sources for row_source in row_sources):
+                continue
         if query_lower and query_lower not in searchable:
             continue
         result.append(
