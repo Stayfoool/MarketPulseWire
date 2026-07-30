@@ -13,7 +13,13 @@ from types import SimpleNamespace
 import china_finance_media_monitor as cfm
 import investment_universe as iu
 from china_finance_media_monitor import cls_sign, next_data_from_html, parse_cls_time
+from market_db import init_db
 from media_keyword_config import keyword_matches_text
+
+
+def use_test_database(path: Path) -> None:
+    init_db(path).close()
+    cfm.DB_PATH = path
 
 
 def test_cls_sign_includes_empty_values_and_sorts_keys() -> None:
@@ -85,7 +91,7 @@ def test_cls_poll_interval_skips_recent_fetch() -> None:
         original_db = cfm.DB_PATH
         original_min = os.environ.get("CLS_MIN_POLL_SECONDS")
         try:
-            cfm.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            use_test_database(Path(tmpdir) / "test.sqlite3")
             os.environ["CLS_MIN_POLL_SECONDS"] = "300"
             cfm.save_source_state("cls_telegraph_api", {"last_fetch_at": "2026-06-29T00:00:00+00:00"})
             original_now = cfm.datetime
@@ -107,6 +113,9 @@ def test_cls_poll_interval_skips_recent_fetch() -> None:
 
 
 def test_run_once_fetches_sources_independently() -> None:
+    tmpdir = tempfile.TemporaryDirectory()
+    original_db = cfm.DB_PATH
+    use_test_database(Path(tmpdir.name) / "test.sqlite3")
     calls: list[str] = []
     original_source_items = cfm.source_items
     original_record_success = cfm.record_source_success
@@ -135,6 +144,8 @@ def test_run_once_fetches_sources_independently() -> None:
         assert successes == ["good"]
         assert failures == ["bad"]
     finally:
+        cfm.DB_PATH = original_db
+        tmpdir.cleanup()
         cfm.source_items = original_source_items
         cfm.record_source_success = original_record_success
         cfm.record_source_failure = original_record_failure
@@ -143,37 +154,11 @@ def test_run_once_fetches_sources_independently() -> None:
         cfm.notify_item = original_notify
 
 
-def test_seen_item_lifecycle_migration_baseline_and_retry() -> None:
+def test_fresh_schema_seen_item_lifecycle_baseline_and_retry() -> None:
     original_db = cfm.DB_PATH
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            cfm.DB_PATH = Path(tmpdir) / "test.sqlite3"
-            with cfm.connect_db() as conn:
-                conn.execute(
-                    """
-                    CREATE TABLE seen_items (
-                        source TEXT NOT NULL, item_id TEXT NOT NULL, url TEXT NOT NULL,
-                        title TEXT NOT NULL, summary TEXT, published_at TEXT,
-                        first_seen_at TEXT NOT NULL, PRIMARY KEY (source, item_id)
-                    )
-                    """
-                )
-                conn.execute(
-                    "INSERT INTO seen_items VALUES ('legacy', 'old', '', 'old', '', '', '')"
-                )
-                conn.commit()
-                cfm.ensure_seen_table(conn)
-                legacy = conn.execute(
-                    "SELECT collection_class, processability_status, admission_status, processing_status "
-                    "FROM seen_items WHERE source = 'legacy' AND item_id = 'old'"
-                ).fetchone()
-                assert legacy == (
-                    "legacy_unclassified",
-                    "legacy_unclassified",
-                    "legacy_unclassified",
-                    "legacy_unclassified",
-                )
-
+            use_test_database(Path(tmpdir) / "test.sqlite3")
             baseline_item = {"id": "base", "title": "baseline", "url": "", "summary": ""}
             assert cfm.save_new_items_with_retry("baseline-source", [baseline_item]) == []
             with cfm.connect_db() as conn:
@@ -230,9 +215,8 @@ def test_excluded_item_stops_before_decision_runtime() -> None:
     original_process = cfm.process_market_item
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            cfm.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            use_test_database(Path(tmpdir) / "test.sqlite3")
             with cfm.connect_db() as conn:
-                cfm.ensure_seen_table(conn)
                 conn.execute("INSERT INTO seen_sources (source, first_seen_at) VALUES ('test-source', '')")
                 conn.commit()
             item = {"id": "excluded", "title": "ordinary market article", "url": "", "summary": "text"}
@@ -258,9 +242,8 @@ def test_admitted_item_reuses_normalized_item_and_processing_failure_retries() -
     original_process = cfm.process_market_item
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            cfm.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            use_test_database(Path(tmpdir) / "test.sqlite3")
             with cfm.connect_db() as conn:
-                cfm.ensure_seen_table(conn)
                 conn.execute("INSERT INTO seen_sources (source, first_seen_at) VALUES ('test-source', '')")
                 conn.commit()
             item = {"id": "admitted", "title": "DRAM supply", "url": "", "summary": "DRAM shortage"}
@@ -306,9 +289,8 @@ def test_wallstreetcn_processability_retry_waits_for_source_rediscovery() -> Non
     original_enrich = cfm.enrich_item
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            cfm.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            use_test_database(Path(tmpdir) / "test.sqlite3")
             with cfm.connect_db() as conn:
-                cfm.ensure_seen_table(conn)
                 conn.execute(
                     "INSERT INTO seen_sources (source, first_seen_at) VALUES (?, '')",
                     (cfm.WALLSTREETCN_SOURCE,),
@@ -379,9 +361,8 @@ def test_wallstreetcn_stale_retry_keeps_processing_but_skips_delivery() -> None:
     original_process = cfm.process_market_item
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            cfm.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            use_test_database(Path(tmpdir) / "test.sqlite3")
             with cfm.connect_db() as conn:
-                cfm.ensure_seen_table(conn)
                 conn.execute(
                     "INSERT INTO seen_sources (source, first_seen_at) VALUES (?, ?)",
                     (cfm.WALLSTREETCN_SOURCE, "2026-07-01T00:00:00+00:00"),
@@ -641,7 +622,7 @@ def test_star_market_daily_cross_source_dedup() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         original_db = cfm.DB_PATH
         try:
-            cfm.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            use_test_database(Path(tmpdir) / "test.sqlite3")
             first = {
                 "id": "cls-1",
                 "url": "https://api3.cls.cn/share/article/1?os=web",
@@ -839,10 +820,9 @@ def test_sina_roll_stops_at_watermark_and_skips_seen_items() -> None:
     original_pages = os.environ.get("SINA_FINANCE_ROLL_MAX_PAGES")
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            cfm.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            use_test_database(Path(tmpdir) / "test.sqlite3")
             cfm.save_source_state(cfm.SINA_FINANCE_SOURCE, {"roll_watermarks": {"2517": 200}})
             with cfm.connect_db() as conn:
-                cfm.ensure_seen_table(conn)
                 conn.execute(
                     """
                     INSERT INTO seen_items (source, item_id, url, title, summary, published_at, first_seen_at)
@@ -909,7 +889,7 @@ def test_sina_first_run_baseline_and_idempotency() -> None:
     original_db = cfm.DB_PATH
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            cfm.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            use_test_database(Path(tmpdir) / "test.sqlite3")
             item = {
                 "id": "nihefve8236522",
                 "url": "https://finance.sina.com.cn/wm/2026-07-09/doc-inihefve8236522.shtml",
@@ -962,7 +942,7 @@ def main() -> int:
     test_cls_items_preserve_vip_product_and_author_targets()
     test_cls_poll_interval_skips_recent_fetch()
     test_run_once_fetches_sources_independently()
-    test_seen_item_lifecycle_migration_baseline_and_retry()
+    test_fresh_schema_seen_item_lifecycle_baseline_and_retry()
     test_excluded_item_stops_before_decision_runtime()
     test_admitted_item_reuses_normalized_item_and_processing_failure_retries()
     test_wallstreetcn_processability_retry_waits_for_source_rediscovery()

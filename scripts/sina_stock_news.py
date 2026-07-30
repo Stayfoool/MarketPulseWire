@@ -18,7 +18,7 @@ from db_utils import connect_sqlite
 from env_utils import load_env
 from http_utils import http_get
 from llm_analysis import call_chat_completion_with_prompts
-from market_db import DEFAULT_DB_PATH, init_db
+from market_db import DEFAULT_DB_PATH
 from market_flow import normalize_market_item, process_market_item
 from holdings_store import load_enabled_holdings
 from market_item import event_content_hash as content_hash
@@ -688,7 +688,6 @@ def fetch_sina_zy_stock_news(symbol: str, limit: int) -> list[dict[str, str]]:
 
 
 def load_state() -> dict[str, Any]:
-    init_db(DEFAULT_DB_PATH).close()
     with connect_sqlite(DEFAULT_DB_PATH) as conn:
         row = conn.execute("SELECT state_json FROM source_state WHERE source = ?", (STATE_KEY,)).fetchone()
     if not row:
@@ -1082,7 +1081,6 @@ def run_once(
     if not source_profile_enabled(SOURCE):
         print("source profile: sina_stock_news 已停用，跳过本轮。", flush=True)
         return 0
-    init_db(DEFAULT_DB_PATH).close()
     import_holdings(DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH)
     holdings = load_enabled_holdings(DEFAULT_DB_PATH)
     if not holdings:

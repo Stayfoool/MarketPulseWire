@@ -15,6 +15,7 @@ from collector_runtime import (
     source_state_key,
     split_sources_by_backoff,
 )
+from market_db import SCHEMA
 from source_profiles import save_source_profile_config
 
 
@@ -41,6 +42,7 @@ def test_source_profile_filtering_for_mapping_and_named_sources() -> None:
 
 def test_source_state_roundtrip_with_prefix() -> None:
     conn = sqlite3.connect(":memory:")
+    conn.executescript(SCHEMA)
     assert source_state_key("demo", prefix="rss_feed") == "rss_feed:demo"
     save_source_state(conn, "demo", {"etag": '"abc"'}, prefix="rss_feed")
     assert load_source_state(conn, "demo", prefix="rss_feed") == {"etag": '"abc"'}

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from collector_runtime import filter_enabled_mapping_for_run, load_source_states, save_source_state
-from db_utils import connect_sqlite, ensure_source_state_table
+from db_utils import connect_sqlite
 from rss_monitor import DB_PATH, fetch_feed, filter_items, run_once as run_rss_once, strip_tags
 from source_profiles import SOURCE_PROFILE_CONFIG_PATH, runtime_profile_map
 from trendforce_sources import DEFAULT_RSS_FEEDS
@@ -153,7 +153,6 @@ def load_shadow_feed_states(feeds: dict[str, str], save_shadow_state: bool) -> d
     if not save_shadow_state or not feeds:
         return {source: {} for source in feeds}
     with connect_sqlite(DB_PATH) as conn:
-        ensure_source_state_table(conn)
         return load_source_states(conn, feeds, prefix=SHADOW_STATE_PREFIX)
 
 
@@ -161,7 +160,6 @@ def save_shadow_feed_state(source: str, state: dict[str, Any], save_shadow_state
     if not save_shadow_state:
         return
     with connect_sqlite(DB_PATH) as conn:
-        ensure_source_state_table(conn)
         save_source_state(conn, source, state, prefix=SHADOW_STATE_PREFIX)
         conn.commit()
 

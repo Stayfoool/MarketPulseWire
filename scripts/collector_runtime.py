@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TypeVar
 
-from db_utils import ensure_source_state_table
 from source_backoff import should_skip_by_backoff
 from source_profiles import (
     SOURCE_PROFILE_CONFIG_PATH,
@@ -73,7 +72,6 @@ def load_source_state(
     *,
     prefix: str = "",
 ) -> dict[str, Any]:
-    ensure_source_state_table(conn)
     row = conn.execute(
         "SELECT state_json FROM source_state WHERE source = ?",
         (source_state_key(source, prefix=prefix),),
@@ -94,7 +92,6 @@ def save_source_state(
     *,
     prefix: str = "",
 ) -> None:
-    ensure_source_state_table(conn)
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
         """

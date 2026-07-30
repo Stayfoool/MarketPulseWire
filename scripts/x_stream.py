@@ -45,58 +45,7 @@ def bearer_token() -> str:
 
 
 def connect_db() -> sqlite3.Connection:
-    conn = connect_sqlite(DB_PATH)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS seen_posts (
-            source TEXT NOT NULL,
-            post_id TEXT NOT NULL,
-            url TEXT NOT NULL,
-            text TEXT NOT NULL,
-            published_at TEXT,
-            first_seen_at TEXT NOT NULL,
-            delivery_status TEXT NOT NULL DEFAULT 'pending',
-            delivered_at TEXT,
-            delivery_error TEXT,
-            delivery_attempts INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (source, post_id)
-        )
-        """
-    )
-    ensure_seen_posts_delivery_columns(conn)
-    ensure_x_stream_health_table(conn)
-    conn.commit()
-    return conn
-
-
-def ensure_seen_posts_delivery_columns(conn: sqlite3.Connection) -> None:
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(seen_posts)")}
-    if "delivery_status" not in columns:
-        # Existing rows were produced before delivery tracking existed; avoid replaying old posts.
-        conn.execute("ALTER TABLE seen_posts ADD COLUMN delivery_status TEXT NOT NULL DEFAULT 'sent'")
-    if "delivered_at" not in columns:
-        conn.execute("ALTER TABLE seen_posts ADD COLUMN delivered_at TEXT")
-    if "delivery_error" not in columns:
-        conn.execute("ALTER TABLE seen_posts ADD COLUMN delivery_error TEXT")
-    if "delivery_attempts" not in columns:
-        conn.execute("ALTER TABLE seen_posts ADD COLUMN delivery_attempts INTEGER NOT NULL DEFAULT 0")
-
-
-def ensure_x_stream_health_table(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS x_stream_health (
-            issue_key TEXT PRIMARY KEY,
-            status TEXT NOT NULL,
-            failure_count INTEGER NOT NULL DEFAULT 0,
-            first_failed_at TEXT,
-            last_failed_at TEXT,
-            last_error TEXT,
-            last_alerted_at TEXT,
-            last_recovered_at TEXT
-        )
-        """
-    )
+    return connect_sqlite(DB_PATH)
 
 
 def rest_backfill_interval_seconds() -> int:

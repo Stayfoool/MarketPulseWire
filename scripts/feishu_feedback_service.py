@@ -12,7 +12,7 @@ from typing import Any
 from env_utils import load_env
 from feishu_app import feedback_listener_enabled
 from market_feedback import FeedbackError, feedback_card_for_callback, handle_feedback_callback
-from market_db import DEFAULT_DB_PATH, init_db
+from market_db import DEFAULT_DB_PATH
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,7 +69,6 @@ def main() -> int:
         raise SystemExit("FEISHU_FEEDBACK_TOKEN_SECRET 未配置")
     if not os.getenv("FEISHU_FEEDBACK_ALLOWED_OPEN_IDS", "").strip():
         raise SystemExit("FEISHU_FEEDBACK_ALLOWED_OPEN_IDS 未配置")
-    init_db(DEFAULT_DB_PATH).close()
 
     try:
         import lark_oapi as lark

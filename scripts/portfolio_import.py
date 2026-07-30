@@ -11,7 +11,7 @@ from typing import Any
 
 from db_utils import connect_sqlite
 from env_utils import load_env
-from market_db import DEFAULT_DB_PATH, init_db
+from market_db import DEFAULT_DB_PATH
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,7 +52,6 @@ def load_portfolio(path: Path) -> list[dict[str, Any]]:
 
 
 def import_holdings(config_path: Path = DEFAULT_CONFIG_PATH, db_path: Path = DEFAULT_DB_PATH) -> int:
-    init_db(db_path).close()
     holdings = load_portfolio(config_path)
     now = utc_now()
     active_symbols = [item["symbol"] for item in holdings if item["symbol"]]

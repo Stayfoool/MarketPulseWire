@@ -12,22 +12,22 @@ from typing import Any, TypeVar
 T = TypeVar("T")
 
 
-SEEN_ITEM_LIFECYCLE_COLUMNS = {
-    "collection_class": "TEXT NOT NULL DEFAULT 'legacy_unclassified'",
-    "processability_status": "TEXT NOT NULL DEFAULT 'legacy_unclassified'",
-    "processability_reason": "TEXT",
-    "admission_status": "TEXT NOT NULL DEFAULT 'legacy_unclassified'",
-    "admission_reason": "TEXT",
-    "admission_matched_families_json": "TEXT NOT NULL DEFAULT '[]'",
-    "admission_evidence_json": "TEXT NOT NULL DEFAULT '[]'",
-    "admission_config_version": "TEXT",
-    "admission_rule_contract_version": "TEXT",
-    "admission_evaluated_at": "TEXT",
-    "result_event_id": "INTEGER",
-    "processing_status": "TEXT NOT NULL DEFAULT 'legacy_unclassified'",
-    "processing_error": "TEXT",
-    "processed_at": "TEXT",
-    "lifecycle_updated_at": "TEXT",
+SEEN_ITEM_LIFECYCLE_FIELDS = {
+    "collection_class",
+    "processability_status",
+    "processability_reason",
+    "admission_status",
+    "admission_reason",
+    "admission_matched_families_json",
+    "admission_evidence_json",
+    "admission_config_version",
+    "admission_rule_contract_version",
+    "admission_evaluated_at",
+    "result_event_id",
+    "processing_status",
+    "processing_error",
+    "processed_at",
+    "lifecycle_updated_at",
 }
 SEEN_ITEM_LIFECYCLE_VALUES = {
     "collection_class": {"baseline", "live", "legacy_unclassified"},
@@ -85,62 +85,13 @@ def retry_on_locked(operation: Callable[[], T], attempts: int = 6) -> T:
     raise RuntimeError(f"SQLite 数据库繁忙，重试后仍失败：{last_error}")
 
 
-def ensure_seen_tables(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS seen_items (
-            source TEXT NOT NULL,
-            item_id TEXT NOT NULL,
-            url TEXT NOT NULL,
-            title TEXT NOT NULL,
-            summary TEXT,
-            published_at TEXT,
-            first_seen_at TEXT NOT NULL,
-            collection_class TEXT NOT NULL DEFAULT 'legacy_unclassified',
-            processability_status TEXT NOT NULL DEFAULT 'legacy_unclassified',
-            processability_reason TEXT,
-            admission_status TEXT NOT NULL DEFAULT 'legacy_unclassified',
-            admission_reason TEXT,
-            admission_matched_families_json TEXT NOT NULL DEFAULT '[]',
-            admission_evidence_json TEXT NOT NULL DEFAULT '[]',
-            admission_config_version TEXT,
-            admission_rule_contract_version TEXT,
-            admission_evaluated_at TEXT,
-            result_event_id INTEGER,
-            processing_status TEXT NOT NULL DEFAULT 'legacy_unclassified',
-            processing_error TEXT,
-            processed_at TEXT,
-            lifecycle_updated_at TEXT,
-            PRIMARY KEY (source, item_id)
-        )
-        """
-    )
-    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(seen_items)")}
-    for column, definition in SEEN_ITEM_LIFECYCLE_COLUMNS.items():
-        if column not in columns:
-            try:
-                conn.execute(f"ALTER TABLE seen_items ADD COLUMN {column} {definition}")
-            except sqlite3.OperationalError as exc:
-                if "duplicate column name" not in str(exc).lower():
-                    raise
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS seen_sources (
-            source TEXT PRIMARY KEY,
-            first_seen_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_seen_items_first_seen ON seen_items(first_seen_at)")
-
-
 def update_seen_item_lifecycle(
     conn: sqlite3.Connection,
     source: str,
     item_id: str,
     **values: Any,
 ) -> None:
-    unknown = set(values) - set(SEEN_ITEM_LIFECYCLE_COLUMNS)
+    unknown = set(values) - SEEN_ITEM_LIFECYCLE_FIELDS
     if unknown:
         raise ValueError(f"unsupported seen_items lifecycle fields: {sorted(unknown)}")
     if not values:
@@ -156,29 +107,3 @@ def update_seen_item_lifecycle(
     )
     if cursor.rowcount != 1:
         raise LookupError(f"seen item not found: {source}/{item_id}")
-
-
-def ensure_source_state_table(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS source_state (
-            source TEXT PRIMARY KEY,
-            state_json TEXT,
-            updated_at TEXT NOT NULL
-        )
-        """
-    )
-
-
-def ensure_trendforce_page_seen_table(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS trendforce_page_seen_items (
-            item_id TEXT PRIMARY KEY,
-            url TEXT NOT NULL,
-            title TEXT NOT NULL,
-            first_source TEXT NOT NULL,
-            first_seen_at TEXT NOT NULL
-        )
-        """
-    )

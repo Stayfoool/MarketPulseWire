@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from market_db import DEFAULT_DB_PATH, init_db
+from market_db import DEFAULT_DB_PATH
 from market_item import decision_result_from_payload
 
 
@@ -78,7 +78,6 @@ def reserve_rule_alert(
     lookback_minutes = max(1, min(int(lookback_minutes), 90 * 24 * 60))
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(minutes=lookback_minutes)).isoformat()
-    init_db(db_path).close()
     conn = sqlite3.connect(db_path, timeout=60, isolation_level="IMMEDIATE")
     try:
         conn.execute("PRAGMA busy_timeout = 60000")
@@ -204,7 +203,6 @@ def reserve_rule_alert_set(
         return {"reserved": False, "applicable": False, "reservations": [], "covered": []}
 
     now = datetime.now(timezone.utc)
-    init_db(db_path).close()
     conn = sqlite3.connect(db_path, timeout=60, isolation_level="IMMEDIATE")
     try:
         conn.execute("PRAGMA busy_timeout = 60000")
@@ -356,7 +354,6 @@ def confirm_rule_alert(reservation: dict[str, Any], *, db_path: Path = DEFAULT_D
     keys = _reserved_keys(reservation)
     if not keys:
         return
-    init_db(db_path).close()
     with sqlite3.connect(db_path, timeout=60) as conn:
         placeholders = ",".join("?" for _ in keys)
         conn.execute(
@@ -370,7 +367,6 @@ def release_rule_alert(reservation: dict[str, Any], *, db_path: Path = DEFAULT_D
     keys = _reserved_keys(reservation)
     if not keys:
         return
-    init_db(db_path).close()
     with sqlite3.connect(db_path, timeout=60) as conn:
         placeholders = ",".join("?" for _ in keys)
         conn.execute(

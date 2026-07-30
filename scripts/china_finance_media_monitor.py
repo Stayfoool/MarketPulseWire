@@ -34,7 +34,7 @@ from collector_runtime import (
     save_source_state as runtime_save_source_state,
     split_sources_by_backoff,
 )
-from db_utils import connect_sqlite, ensure_seen_tables, retry_on_locked, update_seen_item_lifecycle
+from db_utils import connect_sqlite, retry_on_locked, update_seen_item_lifecycle
 from env_utils import load_env
 from http_utils import http_get
 from investment_universe import investment_universe_match, relevant_digest_for_mixed_item
@@ -76,11 +76,6 @@ SEEN_ITEM_RETRY_FIRST_SEEN_KEY = "_seen_item_retry_first_seen_at"
 
 def connect_db() -> sqlite3.Connection:
     return connect_sqlite(DB_PATH)
-
-
-def ensure_seen_table(conn: sqlite3.Connection) -> None:
-    ensure_seen_tables(conn)
-    conn.commit()
 
 
 def canonical_url(url: str) -> str:
@@ -454,7 +449,6 @@ def merge_sina_roll_item(existing: dict[str, Any], incoming: dict[str, Any]) -> 
 def seen_item_ids_for_source(source: str) -> set[str]:
     try:
         with connect_db() as conn:
-            ensure_seen_table(conn)
             return {
                 str(row[0] or "")
                 for row in conn.execute("SELECT item_id FROM seen_items WHERE source = ?", (source,))
@@ -985,7 +979,6 @@ def set_seen_item_lifecycle(source: str, item_id: str, **values: str | None) -> 
 
     def operation() -> None:
         with connect_db() as conn:
-            ensure_seen_table(conn)
             update_seen_item_lifecycle(conn, source, item_id, **values)
             conn.commit()
 
@@ -1001,7 +994,6 @@ def backfill_wallstreetcn_seen_metadata(source: str, item_id: str, item: dict[st
 
     def operation() -> None:
         with connect_db() as conn:
-            ensure_seen_table(conn)
             existing = conn.execute(
                 "SELECT title, summary, published_at FROM seen_items WHERE source = ? AND item_id = ?",
                 (source, item_id),
@@ -1042,7 +1034,6 @@ def restore_existing_wallstreetcn_empty_details(source: str) -> int:
 
     def operation() -> int:
         with connect_db() as conn:
-            ensure_seen_table(conn)
             cursor = conn.execute(
                 """
                 UPDATE seen_items
@@ -1077,7 +1068,6 @@ def retryable_seen_items(source: str) -> list[dict[str, Any]]:
     if restored:
         print(f"华尔街见闻：{restored} 条空快讯详情恢复为可重试，等待来源再次发现。", flush=True)
     with connect_db() as conn:
-        ensure_seen_table(conn)
         rows = conn.execute(
             """
             SELECT item_id, url, title, summary, published_at
@@ -1116,7 +1106,6 @@ def save_new_items(
     items: Iterable[dict[str, Any]],
     notify_baseline: bool = False,
 ) -> list[dict[str, Any]]:
-    ensure_seen_table(conn)
     items_list = list(items)
     is_baseline = not seen_source(conn, source)
     if is_baseline:

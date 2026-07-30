@@ -19,7 +19,7 @@ from typing import Any
 
 from db_utils import connect_sqlite
 from http_utils import http_get
-from market_db import DEFAULT_DB_PATH, init_db
+from market_db import DEFAULT_DB_PATH
 from portfolio_import import import_holdings
 
 
@@ -62,7 +62,6 @@ def load_enabled_holdings(
             raise FileNotFoundError(f"SQLite 数据库不存在：{db_path}")
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     else:
-        init_db(db_path).close()
         conn = connect_sqlite(db_path)
     with conn:
         rows = conn.execute(

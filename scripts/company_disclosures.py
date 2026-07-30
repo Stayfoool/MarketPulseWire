@@ -15,7 +15,7 @@ from db_utils import connect_sqlite
 from disclosure_document import parse_disclosure_pdf
 from disclosure_providers import DisclosureProvider, DisclosureRecord, DisclosureSecurity, disclosure_identity, provider_factory
 from env_utils import load_env
-from market_db import DEFAULT_DB_PATH, init_db
+from market_db import DEFAULT_DB_PATH
 from market_flow import normalize_market_item, process_market_item
 from holdings_store import load_enabled_holdings
 from market_item import event_content_hash
@@ -205,7 +205,6 @@ def collect_disclosures(
 ) -> dict[str, Any]:
     if backfill_first_seen_at and not backfill_baselines:
         raise ValueError("backfill_first_seen_at requires backfill_baselines")
-    init_db(db_path).close()
     holdings = list(holdings if holdings is not None else load_enabled_holdings(db_path))
     symbols = [str(item.get("symbol") or "").strip().upper() for item in holdings if item.get("symbol")]
     if not symbols:
@@ -395,7 +394,6 @@ def main() -> int:
         return 0
     profile = runtime_source_profile(SOURCE_ID, config_path=SOURCE_PROFILE_CONFIG_PATH) or {}
     provider_name = str(args.provider or profile.get("provider") or "cninfo_public").strip()
-    init_db(DEFAULT_DB_PATH).close()
     import_holdings(DEFAULT_CONFIG_PATH, DEFAULT_DB_PATH)
     try:
         stats = collect_disclosures(
