@@ -194,6 +194,7 @@ systemctl enable --now surveil-llm-decision-audit-cleanup.timer
 echo '已启用每日 30 天大模型决策审计清理。'
 systemctl start surveil-stock-relations-import.service || true
 systemctl enable --now surveil-holdings-web.service
+systemctl restart surveil-holdings-web.service
 if grep -Eq '^FEISHU_FEEDBACK_(LISTENER_)?ENABLED=(1|true|yes|on)$' '$REMOTE_DIR/.env' 2>/dev/null; then
   touch '$REMOTE_DIR/logs/feishu-feedback.log' '$REMOTE_DIR/logs/feishu-feedback.err.log'
   chown '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' \
