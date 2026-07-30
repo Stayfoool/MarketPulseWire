@@ -544,7 +544,6 @@ def notify_item(item: dict[str, Any], *, source: AlphaAbstractSource = DEFAULT_S
             normalized,
             enriched,
             store_kind="article",
-            source_profile_id=source.name,
             db_path=DB_PATH,
             use_rule_dedup=True,
             production_admission=admission,

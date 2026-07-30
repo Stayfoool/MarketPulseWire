@@ -14,7 +14,7 @@ from company_disclosures import collect_disclosures, event_from_disclosure, fetc
 from disclosure_document import parse_disclosure_pdf
 from disclosure_providers import DisclosurePage, DisclosureRecord, DisclosureSecurity
 from market_db import init_db
-from market_runtime import normalize_market_item
+from market_flow import normalize_market_item
 
 
 ROOT = Path(__file__).resolve().parents[1]

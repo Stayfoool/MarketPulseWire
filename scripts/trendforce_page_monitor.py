@@ -517,7 +517,6 @@ def notify_item(item: dict) -> None:
             normalized,
             enriched,
             store_kind="article",
-            source_profile_id=profile_id,
             db_path=DB_PATH,
             use_rule_dedup=False,
             production_admission=admission,

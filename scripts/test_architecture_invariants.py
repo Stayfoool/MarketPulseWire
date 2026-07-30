@@ -40,7 +40,7 @@ UNIFIED_STORAGE_RUNTIME_MODULES = {
     "market_delivery.py",
     "market_event_adapter.py",
     "market_feedback.py",
-    "market_runtime.py",
+    "market_flow.py",
     "market_store.py",
     "news_collector.py",
     "official_collector.py",
@@ -71,6 +71,7 @@ LEGACY_RESULT_HELPERS = {
 }
 
 REMOVED_COMPATIBILITY_MODULES = (
+    "market_runtime.py",
     "market_view.py",
     "x_monitor.py",
     "rule_center.py",
@@ -302,15 +303,13 @@ def test_live_unified_collector_calls_cannot_omit_production_admission() -> None
 
 
 def test_production_decision_boundary_is_llm_only() -> None:
-    runtime = (SCRIPTS / "market_runtime.py").read_text(encoding="utf-8")
+    flow = (SCRIPTS / "market_flow.py").read_text(encoding="utf-8")
     engine = (SCRIPTS / "decision_engine.py").read_text(encoding="utf-8")
     production = (SCRIPTS / "llm_production_decision.py").read_text(encoding="utf-8")
     content_adapter = (SCRIPTS / "market_content_adapter.py").read_text(encoding="utf-8")
     event_adapter = (SCRIPTS / "market_event_adapter.py").read_text(encoding="utf-8")
-    flow = (SCRIPTS / "market_flow.py").read_text(encoding="utf-8")
-
-    assert "from decision_engine import decide_market_item_with_llm" in runtime
-    assert runtime.count("decide_market_item_with_llm(") == 2
+    assert "from decision_engine import decide_market_item_with_llm" in flow
+    assert flow.count("decide_market_item_with_llm(") == 2
     assert "def decide_market_item_with_llm(" in engine
     assert "def decide_market_item(" not in engine
     assert "from llm_production_decision import decide_production_market_item" in engine
@@ -342,7 +341,12 @@ def test_production_decision_boundary_is_llm_only() -> None:
     ):
         assert forbidden not in production
     assert "apply_skeptic_review" not in content_adapter
-    assert "attach_decision_result_to_event_analysis(decision, {})" in event_adapter
+    assert "def project_article_review(" in content_adapter
+    assert "def project_official_review(" in content_adapter
+    assert "def project_event_analysis(" in event_adapter
+    assert "from market_flow import" not in content_adapter
+    assert "from market_flow import" not in event_adapter
+    assert "importlib" not in flow
     assert "decide_market_item(" not in flow
     assert not (SCRIPTS / "rule_core_v1.py").exists()
     assert not (SCRIPTS / "rule_core_runtime_shadow.py").exists()

@@ -63,16 +63,19 @@ def test_analyze_event_returns_interpretation_without_writing_legacy_tables() ->
         )
         try:
             market_flow.interpret_market_item = fake_interpret
-            analysis = market_event_adapter.analyze_event(
+            flow_result = market_flow.evaluate_event_item(
                 item,
-                db_path=db_path,
-                decision=DecisionResult(
+                DecisionResult(
                     action="push",
                     importance="high",
                     reason="大模型程度决策命中。",
                     rule_hits=[{"rule_id": "macro_policy_line"}],
                 ),
+                task="portfolio_event",
+                db_path=db_path,
+                storage_ref={},
             )
+            analysis = market_event_adapter.project_event_analysis(flow_result)
         finally:
             market_flow.interpret_market_item = original
 
@@ -104,7 +107,13 @@ def test_event_entry_without_decision_fails_closed() -> None:
             raw={"source_event_id": "missing-decision"},
         )
         try:
-            market_event_adapter.analyze_event(item, db_path=db_path)
+            market_flow.evaluate_event_item(
+                item,
+                None,
+                task="portfolio_event",
+                db_path=db_path,
+                storage_ref={},
+            )
         except RuntimeError as exc:
             assert "决策结果缺失" in str(exc)
         else:

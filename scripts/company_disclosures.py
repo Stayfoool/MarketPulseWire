@@ -300,13 +300,10 @@ def collect_disclosures(
                 normalized,
                 event,
                 store_kind="event",
-                source_profile_id=SOURCE_ID,
                 db_path=db_path,
                 baseline_only=True,
                 analyze=False,
                 deliver=False,
-                current_admission_status="not_applicable",
-                current_admission_reason="baseline_only",
             )
             if identity_known:
                 stats["backfilled"] += 1 if outcome.inserted else 0
@@ -334,7 +331,6 @@ def collect_disclosures(
                         normalized,
                         event,
                         store_kind="event",
-                        source_profile_id=SOURCE_ID,
                         db_path=db_path,
                         analyze=analyze,
                         deliver=deliver,

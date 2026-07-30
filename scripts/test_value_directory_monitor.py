@@ -23,7 +23,7 @@ from market_item import (
     MarketFlowResult,
     NormalizedMarketItem,
 )
-from market_runtime import MarketProcessOutcome
+from market_flow import MarketProcessOutcome
 from market_store import complete_market_review, record_production_admission
 from source_profiles import runtime_source_profile
 from value_directory_browser import (
@@ -764,7 +764,7 @@ def test_recheck_uses_enriched_item_without_a_preliminary_decision_gate() -> Non
     assert calls[0]["reprocess_existing"] is True
 
 
-def test_new_item_uses_unified_market_runtime_after_preview_enrichment() -> None:
+def test_new_item_uses_market_flow_after_preview_enrichment() -> None:
     source = source_config("value_directory_ib_industry_macro")
     item = {
         "id": "862079",
@@ -1117,7 +1117,7 @@ def main() -> int:
     test_preview_ocr_text_path_uses_text_llm_without_vision()
     test_preview_ocr_failure_falls_back_without_blocking()
     test_recheck_uses_enriched_item_without_a_preliminary_decision_gate()
-    test_new_item_uses_unified_market_runtime_after_preview_enrichment()
+    test_new_item_uses_market_flow_after_preview_enrichment()
     test_value_directory_monitor_does_not_own_store_dedup_or_delivery()
     test_run_finishes_browser_collection_before_source_processing()
     test_collected_preview_does_not_launch_another_browser()

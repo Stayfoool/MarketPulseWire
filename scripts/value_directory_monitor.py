@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 from db_utils import update_seen_item_lifecycle
 from market_item import NormalizedMarketItem, article_item_id
-from market_runtime import normalize_market_item, process_market_item
+from market_flow import normalize_market_item, process_market_item
 from market_store import processing_failure_status, source_item_review_snapshot
 from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from rss_monitor import DB_PATH, connect_db, save_new_items_with_retry
@@ -394,7 +394,6 @@ def review_and_maybe_push(
             normalized,
             item,
             store_kind="article",
-            source_profile_id=source.source_id,
             db_path=DB_PATH,
             deliver=True,
             use_rule_dedup=True,

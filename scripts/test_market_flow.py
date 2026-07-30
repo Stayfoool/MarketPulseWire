@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 import market_content_adapter
 import market_event_adapter
 import market_flow
-import market_runtime
+import market_flow as market_flow
 from llm_production_decision import ProductionLLMInsufficientEvidence
 from market_flow import evaluate_market_item
 from market_db import init_db
@@ -150,39 +150,46 @@ def test_supplied_source_interpretation_skips_second_llm_call() -> None:
 
 
 def test_value_directory_enrichment_is_preserved_in_review_audit() -> None:
+    raw_item = {
+        "id": "value-flow-1",
+        "title": "瑞银-亚太科技策略：Agentic AI to carry Semis&Hardware further",
+        "summary": "瑞银认为智能体 AI 将继续推动半导体与硬件上行。",
+        "raw": {
+            "value_directory_preview": {
+                "facts": {
+                    "status": "ok",
+                    "core_content": "瑞银认为智能体 AI 将继续推动半导体与硬件上行。",
+                    "research_action": "overweight",
+                    "targets": ["半导体", "AI 硬件"],
+                    "key_points": ["半导体景气上行"],
+                    "preview_basis": "visible_first_page_ocr",
+                    "model": "preview-model",
+                    "ocr": {"status": "ok", "text": "Agentic AI to carry Semis further"},
+                }
+            },
+            "value_directory_policy": {
+                "preview_enabled": True,
+                "push_on_preview_failure": True,
+            },
+        },
+    }
     original_interpreter = market_flow.interpret_market_item
     try:
         market_flow.interpret_market_item = lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("preview facts should supply the interpretation")
         )
-        review = market_content_adapter.evaluate_article_review(
-            None,
-            "value_directory_ib_industry_macro",
-            {
-                "id": "value-flow-1",
-                "title": "瑞银-亚太科技策略：Agentic AI to carry Semis&Hardware further",
-                "summary": "瑞银认为智能体 AI 将继续推动半导体与硬件上行。",
-                "raw": {
-                    "value_directory_preview": {
-                        "facts": {
-                            "status": "ok",
-                            "core_content": "瑞银认为智能体 AI 将继续推动半导体与硬件上行。",
-                            "research_action": "overweight",
-                            "targets": ["半导体", "AI 硬件"],
-                            "key_points": ["半导体景气上行"],
-                            "preview_basis": "visible_first_page_ocr",
-                            "model": "preview-model",
-                            "ocr": {"status": "ok", "text": "Agentic AI to carry Semis further"},
-                        }
-                    },
-                    "value_directory_policy": {
-                        "preview_enabled": True,
-                        "push_on_preview_failure": True,
-                    },
-                },
-            },
-            decision=DecisionResult(action="daily", importance="medium", reason="模型判断为日报。"),
+        flow_result = market_flow.evaluate_content_item(
+            market_flow.normalize_market_item(
+                "value_directory_ib_industry_macro",
+                raw_item,
+                store_kind="article",
+            ),
+            raw_item,
+            DecisionResult(action="daily", importance="medium", reason="模型判断为日报。"),
+            official=False,
+            storage_ref={},
         )
+        review = market_content_adapter.project_article_review(raw_item, flow_result)
     finally:
         market_flow.interpret_market_item = original_interpreter
     enrichment = review["raw"]["_source_enrichment"]
@@ -191,323 +198,6 @@ def test_value_directory_enrichment_is_preserved_in_review_audit() -> None:
     assert facts["ocr"]["text"] == "Agentic AI to carry Semis further"
     assert review["raw"]["_market_flow_result"]["audit"]["source_interpretation_supplied"] is True
 
-
-class _DummyContext:
-    def __enter__(self):
-        return object()
-
-    def __exit__(self, *_args):
-        return False
-
-
-def test_reprocessing_existing_review_preserves_pushed_marker() -> None:
-    original_connect = market_runtime.connect_sqlite
-    original_existing = market_runtime.article_review_exists
-    original_module = market_runtime._selected_module
-    original_deliver = market_runtime.deliver_article_review
-    calls = {"processed": 0, "delivered": 0}
-
-    class FakeModule:
-        @staticmethod
-        def process_article_review(*_args, **_kwargs):
-            calls["processed"] += 1
-            return {
-                "importance": "high",
-                "push_now": True,
-                "reason": "规则重算命中。",
-                "raw": {
-                    "decision_result": DecisionResult(
-                        action="push",
-                        importance="high",
-                        reason="规则重算命中。",
-                    ).to_dict()
-                },
-            }
-
-        @staticmethod
-        def gate_lines(_review):
-            return []
-
-    try:
-        market_runtime.connect_sqlite = lambda *_args, **_kwargs: _DummyContext()
-        market_runtime.article_review_exists = lambda *_args, **_kwargs: {
-            "pushed_at": "2026-07-13T00:00:00+00:00",
-            "raw": {},
-        }
-        market_runtime._selected_module = lambda _kind: FakeModule
-
-        def fake_deliver(_source, _item, review, **_kwargs):
-            calls["delivered"] += 1
-            assert review["pushed_at"] == "2026-07-13T00:00:00+00:00"
-            assert _kwargs["decision"].action == "push"
-            return "skipped"
-
-        market_runtime.deliver_article_review = fake_deliver
-        item = NormalizedMarketItem(
-            source="value_directory_ib_stocks",
-            source_category="research_industry_media",
-            collector="value_directory_monitor",
-            content_type="research_index",
-            title="高盛研报",
-            raw={"id": "reprocess-pushed"},
-        )
-        outcome = market_runtime.process_market_item(
-            item,
-            {"id": "reprocess-pushed", "title": "高盛研报"},
-            store_kind="article",
-            reprocess_existing=True,
-        )
-    finally:
-        market_runtime.connect_sqlite = original_connect
-        market_runtime.article_review_exists = original_existing
-        market_runtime._selected_module = original_module
-        market_runtime.deliver_article_review = original_deliver
-    assert calls == {"processed": 1, "delivered": 1}
-    assert outcome.inserted is False
-    assert outcome.delivery_status == "skipped"
-
-
-def test_existing_legacy_review_without_decision_fails_closed() -> None:
-    original_connect = market_runtime.connect_sqlite
-    original_existing = market_runtime.article_review_exists
-    try:
-        market_runtime.connect_sqlite = lambda *_args, **_kwargs: _DummyContext()
-        market_runtime.article_review_exists = lambda *_args, **_kwargs: {
-            "importance": "high",
-            "push_now": True,
-            "reason": "legacy push flag",
-            "raw": {},
-            "pushed_at": "",
-        }
-        item = NormalizedMarketItem(
-            source="cls_telegraph_api",
-            source_category="news_media",
-            collector="news_collector",
-            content_type="article",
-            title="旧记录",
-            raw={"id": "legacy-no-decision"},
-        )
-        outcome = market_runtime.process_market_item(
-            item,
-            {"id": "legacy-no-decision", "title": "旧记录"},
-            store_kind="article",
-        )
-    finally:
-        market_runtime.connect_sqlite = original_connect
-        market_runtime.article_review_exists = original_existing
-    assert outcome.flow_result.decision.action == "archive"
-    assert outcome.flow_result.decision.audit_json["contract_error"] == "missing_decision_result"
-    assert outcome.delivery_status == "missing_decision"
-
-
-def test_runtime_comparison_receives_the_exact_item_before_delivery() -> None:
-    original_connect = market_runtime.connect_sqlite
-    original_existing = market_runtime.article_review_exists
-    original_module = market_runtime._selected_module
-    original_record = market_runtime._record_rule_comparison
-    original_deliver = market_runtime.deliver_article_review
-    original_prepare = market_runtime.prepare_item_for_decision
-    order: list[str] = []
-    observed: list[NormalizedMarketItem] = []
-
-    class FakeModule:
-        @staticmethod
-        def process_article_review(*_args, **kwargs):
-            assert kwargs["normalized_item"] is prepared
-            return {
-                "raw": {
-                    "decision_result": DecisionResult(
-                        action="daily",
-                        importance="medium",
-                        reason="现有规则结果",
-                    ).to_dict()
-                }
-            }
-
-        @staticmethod
-        def gate_lines(_review):
-            return []
-
-    item = NormalizedMarketItem(
-        source="wallstreetcn_news",
-        source_category="news_media",
-        collector="news_collector",
-        content_type="article",
-        title="DRAM价格上涨",
-        full_text="完整生产正文。",
-        raw={"id": "same-item-1"},
-    )
-    prepared = replace(item, raw={**item.raw, "_attributed_research": {"extraction_mode": "not_confirmed"}})
-    prepare_calls: list[NormalizedMarketItem] = []
-    try:
-        market_runtime.connect_sqlite = lambda *_args, **_kwargs: _DummyContext()
-        market_runtime.article_review_exists = lambda *_args, **_kwargs: None
-        market_runtime._selected_module = lambda _kind: FakeModule
-        market_runtime.prepare_item_for_decision = lambda normalized: prepare_calls.append(normalized) or prepared
-
-        def fake_record(normalized, flow_result, storage_ref):
-            order.append("comparison")
-            observed.append(normalized)
-            assert flow_result.decision.action == "daily"
-            assert storage_ref["item_id"] == "same-item-1"
-
-        def fake_deliver(*_args, **_kwargs):
-            order.append("delivery")
-            return "skipped"
-
-        market_runtime._record_rule_comparison = fake_record
-        market_runtime.deliver_article_review = fake_deliver
-        outcome = market_runtime.process_market_item(
-            item,
-            {"id": "same-item-1", "title": item.title, "full_text": item.full_text},
-            store_kind="article",
-        )
-    finally:
-        market_runtime.connect_sqlite = original_connect
-        market_runtime.article_review_exists = original_existing
-        market_runtime._selected_module = original_module
-        market_runtime._record_rule_comparison = original_record
-        market_runtime.deliver_article_review = original_deliver
-        market_runtime.prepare_item_for_decision = original_prepare
-    assert prepare_calls == [item]
-    assert observed == [prepared]
-    assert order == ["comparison", "delivery"]
-    assert outcome.flow_result.item is prepared
-
-
-def test_analyzed_event_compares_before_delivery_and_baseline_does_not() -> None:
-    original_module = market_runtime._selected_module
-    original_record = market_runtime.record_rule_comparison
-    original_prepare = market_runtime.prepare_item_for_decision
-    order: list[str] = []
-
-    class FakeEventModule:
-        next_id = 40
-
-        @classmethod
-        def upsert_event(cls, *_args, **_kwargs):
-            cls.next_id += 1
-            return cls.next_id, True
-
-        @staticmethod
-        def analyze_event(*_args, **kwargs):
-            assert kwargs["normalized_item"] is prepared
-            return {
-                "analysis": {
-                    "decision_result": DecisionResult(
-                        action="push",
-                        importance="high",
-                        reason="现有事件规则结果",
-                    ).to_dict()
-                }
-            }
-
-        @staticmethod
-        def maybe_deliver_event(*_args, **_kwargs):
-            order.append("delivery")
-            return "skipped"
-
-    item = NormalizedMarketItem(
-        source="sina_flash",
-        source_category="news_media",
-        collector="sina_flash",
-        content_type="flash",
-        title="美国CPI低于预期",
-        full_text="美国CPI低于预期，市场调整降息预期。",
-        raw={"source_event_id": "event-1"},
-    )
-    prepared = replace(item, raw={**item.raw, "_attributed_research": {"extraction_mode": "not_confirmed"}})
-    prepare_calls: list[NormalizedMarketItem] = []
-    try:
-        market_runtime._selected_module = lambda _kind: FakeEventModule
-        market_runtime.prepare_item_for_decision = lambda normalized: prepare_calls.append(normalized) or prepared
-
-        def fake_record(normalized, decision, _storage_ref, **kwargs):
-            order.append("comparison")
-            assert normalized is prepared
-            assert decision.action == "push"
-            assert kwargs["current_admission_status"] == "admitted"
-
-        market_runtime.record_rule_comparison = fake_record
-        baseline = market_runtime.process_market_item(
-            item,
-            {"source_event_id": "baseline-1", "title": item.title},
-            store_kind="event",
-            baseline_only=True,
-        )
-        assert baseline.delivery_status == "baseline"
-        assert order == []
-
-        analyzed = market_runtime.process_market_item(
-            item,
-            {"source_event_id": "event-1", "title": item.title},
-            store_kind="event",
-            current_admission_status="admitted",
-            current_admission_reason="test_current_admission",
-        )
-    finally:
-        market_runtime._selected_module = original_module
-        market_runtime.record_rule_comparison = original_record
-        market_runtime.prepare_item_for_decision = original_prepare
-    assert prepare_calls == [item]
-    assert analyzed.flow_result.item is prepared
-    assert order == ["comparison", "delivery"]
-
-
-def test_retry_can_finish_an_existing_event_without_analysis() -> None:
-    original_module = market_runtime._selected_module
-    original_latest = market_runtime.latest_event_analysis
-    original_record = market_runtime.record_rule_comparison
-    calls: list[str] = []
-
-    class FakeEventModule:
-        @staticmethod
-        def upsert_event(*_args, **_kwargs):
-            return 77, False
-
-        @staticmethod
-        def analyze_event(*_args, **_kwargs):
-            calls.append("analyze")
-            return {
-                "analysis": {
-                    "decision_result": DecisionResult(
-                        action="daily",
-                        importance="medium",
-                        reason="retry completed",
-                    ).to_dict()
-                }
-            }
-
-        @staticmethod
-        def maybe_deliver_event(*_args, **_kwargs):
-            calls.append("delivery")
-            return "not_eligible"
-
-    item = NormalizedMarketItem(
-        source="sina_flash",
-        source_category="news_media",
-        title="retry event",
-        raw={"source_event_id": "retry-1"},
-    )
-    try:
-        market_runtime._selected_module = lambda _kind: FakeEventModule
-        market_runtime.latest_event_analysis = lambda *_args, **_kwargs: None
-        market_runtime.record_rule_comparison = lambda *_args, **_kwargs: calls.append("comparison")
-        outcome = market_runtime.process_market_item(
-            item,
-            {"source": "sina_flash", "source_event_id": "retry-1", "title": item.title},
-            store_kind="event",
-            reprocess_existing=True,
-            current_admission_status="admitted",
-            current_admission_reason="sina_flash_holding",
-        )
-    finally:
-        market_runtime._selected_module = original_module
-        market_runtime.latest_event_analysis = original_latest
-        market_runtime.record_rule_comparison = original_record
-    assert outcome.event_id == 77
-    assert outcome.inserted is False
-    assert calls == ["analyze", "comparison", "delivery"]
 
 
 def admitted() -> AdmissionResult:
@@ -521,40 +211,32 @@ def admitted() -> AdmissionResult:
 
 
 def test_production_content_runtime_uses_unified_result_for_existing_and_delivery() -> None:
-    original_module = market_runtime._selected_module
-    original_deliver = market_runtime.deliver_article_review
-    original_prepare = market_runtime.prepare_item_for_decision
-    original_decider = market_runtime.decide_market_item_with_llm
+    original_project = market_flow.project_article_review
+    original_deliver = market_flow.deliver_article_review
+    original_interpreter = market_flow.interpret_market_item
+    original_prepare = market_flow.prepare_item_for_decision
+    original_decider = market_flow.decide_market_item_with_llm
     calls = {"evaluate": 0, "deliver": 0}
     decision = DecisionResult(action="push", importance="high", reason="HBM扩产")
 
-    class FakeModule:
-        @staticmethod
-        def evaluate_article_review(*_args, **_kwargs):
-            calls["evaluate"] += 1
-            return {
-                "importance": "high",
-                "push_now": True,
-                "reason": "HBM扩产",
-                "daily_summary": "HBM扩产",
-                "raw": {"decision_result": decision.to_dict()},
-            }
-
-        @staticmethod
-        def gate_lines(_review):
-            return []
-
     try:
-        market_runtime._selected_module = lambda _kind: FakeModule
-        market_runtime.prepare_item_for_decision = lambda value: value
-        market_runtime.decide_market_item_with_llm = lambda *_args, **_kwargs: decision
+        def fake_project(item, flow_result):
+            calls["evaluate"] += 1
+            return original_project(item, flow_result)
+
+        market_flow.project_article_review = fake_project
+        market_flow.interpret_market_item = lambda *_args, **_kwargs: InterpretationResult(
+            core_content="HBM扩产"
+        )
+        market_flow.prepare_item_for_decision = lambda value: value
+        market_flow.decide_market_item_with_llm = lambda *_args, **_kwargs: decision
 
         def fake_deliver(*_args, **kwargs):
             calls["deliver"] += 1
             assert kwargs["already_sent"] is False
             return "sent"
 
-        market_runtime.deliver_article_review = fake_deliver
+        market_flow.deliver_article_review = fake_deliver
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "runtime.sqlite3"
             init_db(db_path).close()
@@ -568,7 +250,7 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
             )
             raw_item = {"id": "hbm-1", "title": item.title, "url": item.url}
             item_id, review_id = record_production_admission(item, admitted(), db_path=db_path)
-            first = market_runtime.process_market_item(
+            first = market_flow.process_market_item(
                 item,
                 raw_item,
                 store_kind="article",
@@ -579,7 +261,7 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
                 market_review_id=review_id,
             )
             repeated_ids = record_production_admission(item, admitted(), db_path=db_path)
-            second = market_runtime.process_market_item(
+            second = market_flow.process_market_item(
                 item,
                 raw_item,
                 store_kind="article",
@@ -603,37 +285,34 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
             assert second.inserted is False
             assert second.delivery_status == "existing"
     finally:
-        market_runtime._selected_module = original_module
-        market_runtime.deliver_article_review = original_deliver
-        market_runtime.prepare_item_for_decision = original_prepare
-        market_runtime.decide_market_item_with_llm = original_decider
+        market_flow.project_article_review = original_project
+        market_flow.deliver_article_review = original_deliver
+        market_flow.interpret_market_item = original_interpreter
+        market_flow.prepare_item_for_decision = original_prepare
+        market_flow.decide_market_item_with_llm = original_decider
     assert calls == {"evaluate": 1, "deliver": 1}
 
 
 def test_production_event_runtime_completes_only_unified_result() -> None:
-    original_module = market_runtime._selected_module
-    original_prepare = market_runtime.prepare_item_for_decision
-    original_decider = market_runtime.decide_market_item_with_llm
+    original_project = market_flow.project_event_analysis
+    original_interpreter = market_flow.interpret_market_item
+    original_prepare = market_flow.prepare_item_for_decision
+    original_decider = market_flow.decide_market_item_with_llm
     calls = {"analyze": 0}
     decision = DecisionResult(action="daily", importance="medium", reason="公告跟踪")
 
-    class FakeEventModule:
-        analysis_record_fields = staticmethod(market_event_adapter.analysis_record_fields)
-
-        @staticmethod
-        def analyze_event(*_args, **kwargs):
-            calls["analyze"] += 1
-            assert kwargs["decision"] is decision
-            return {
-                "core_content": "公告跟踪",
-                "_decision_result": decision.to_dict(),
-                "_interpretation_result": {"core_content": "公告跟踪"},
-            }
+    def fake_project(flow_result):
+        calls["analyze"] += 1
+        assert flow_result.decision is decision
+        return original_project(flow_result)
 
     try:
-        market_runtime._selected_module = lambda _kind: FakeEventModule
-        market_runtime.prepare_item_for_decision = lambda value: value
-        market_runtime.decide_market_item_with_llm = lambda *_args, **_kwargs: decision
+        market_flow.project_event_analysis = fake_project
+        market_flow.interpret_market_item = lambda *_args, **_kwargs: InterpretationResult(
+            core_content="公告跟踪"
+        )
+        market_flow.prepare_item_for_decision = lambda value: value
+        market_flow.decide_market_item_with_llm = lambda *_args, **_kwargs: decision
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "event-runtime.sqlite3"
             init_db(db_path).close()
@@ -645,11 +324,11 @@ def test_production_event_runtime_completes_only_unified_result() -> None:
                 "summary": "公告内容",
                 "raw": {"source_event_id": "event-unified-1"},
             }
-            item = market_runtime.normalize_market_item("sina_flash", raw_event, store_kind="event")
+            item = market_flow.normalize_market_item("sina_flash", raw_event, store_kind="event")
             item_id, review_id = record_production_admission(
                 item, admitted(), db_path=db_path, task="portfolio_event"
             )
-            first = market_runtime.process_market_item(
+            first = market_flow.process_market_item(
                 item,
                 raw_event,
                 store_kind="event",
@@ -660,7 +339,7 @@ def test_production_event_runtime_completes_only_unified_result() -> None:
                 market_item_id=item_id,
                 market_review_id=review_id,
             )
-            second = market_runtime.process_market_item(
+            second = market_flow.process_market_item(
                 item,
                 raw_event,
                 store_kind="event",
@@ -687,37 +366,25 @@ def test_production_event_runtime_completes_only_unified_result() -> None:
             assert second.inserted is False
             assert second.delivery_status == "existing"
     finally:
-        market_runtime._selected_module = original_module
-        market_runtime.prepare_item_for_decision = original_prepare
-        market_runtime.decide_market_item_with_llm = original_decider
+        market_flow.project_event_analysis = original_project
+        market_flow.interpret_market_item = original_interpreter
+        market_flow.prepare_item_for_decision = original_prepare
+        market_flow.decide_market_item_with_llm = original_decider
     assert calls == {"analyze": 1}
 
 
 def test_production_official_runtime_uses_only_unified_result() -> None:
-    original_module = market_runtime._selected_module
-    original_prepare = market_runtime.prepare_item_for_decision
-    original_decider = market_runtime.decide_market_item_with_llm
+    original_interpreter = market_flow.interpret_market_item
+    original_prepare = market_flow.prepare_item_for_decision
+    original_decider = market_flow.decide_market_item_with_llm
     decision = DecisionResult(action="archive", importance="low", reason="例行官网更新")
 
-    class FakeOfficialModule:
-        @staticmethod
-        def evaluate_official_review(*_args, **_kwargs):
-            return {
-                "importance": "low",
-                "should_push_now": False,
-                "reason": "例行官网更新",
-                "daily_summary": "例行官网更新",
-                "analysis": {"_decision_result": decision.to_dict()},
-            }
-
-        @staticmethod
-        def analysis_lines_from_review(_review):
-            return []
-
     try:
-        market_runtime._selected_module = lambda _kind: FakeOfficialModule
-        market_runtime.prepare_item_for_decision = lambda value: value
-        market_runtime.decide_market_item_with_llm = lambda *_args, **_kwargs: decision
+        market_flow.interpret_market_item = lambda *_args, **_kwargs: InterpretationResult(
+            core_content="例行官网更新"
+        )
+        market_flow.prepare_item_for_decision = lambda value: value
+        market_flow.decide_market_item_with_llm = lambda *_args, **_kwargs: decision
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "official-runtime.sqlite3"
             init_db(db_path).close()
@@ -731,7 +398,7 @@ def test_production_official_runtime_uses_only_unified_result() -> None:
             )
             raw_item = {"id": "official-1", "title": item.title, "url": item.url}
             item_id, review_id = record_production_admission(item, admitted(), db_path=db_path)
-            outcome = market_runtime.process_market_item(
+            outcome = market_flow.process_market_item(
                 item,
                 raw_item,
                 store_kind="official",
@@ -756,14 +423,15 @@ def test_production_official_runtime_uses_only_unified_result() -> None:
             assert alias == ("official", "nvidia_blog", "official-1")
             assert outcome.inserted is True
     finally:
-        market_runtime._selected_module = original_module
-        market_runtime.prepare_item_for_decision = original_prepare
-        market_runtime.decide_market_item_with_llm = original_decider
+        market_flow.interpret_market_item = original_interpreter
+        market_flow.prepare_item_for_decision = original_prepare
+        market_flow.decide_market_item_with_llm = original_decider
 
 
 def test_production_llm_failure_retries_same_review_without_delivery() -> None:
-    original_module = market_runtime._selected_module
-    original_decider = market_runtime.decide_market_item_with_llm
+    original_project = market_flow.project_article_review
+    original_interpreter = market_flow.interpret_market_item
+    original_decider = market_flow.decide_market_item_with_llm
     calls = {"evaluate": 0}
     decision = DecisionResult(
         action="daily",
@@ -772,25 +440,16 @@ def test_production_llm_failure_retries_same_review_without_delivery() -> None:
         audit_json={"production_authority": True},
     )
 
-    class FakeModule:
-        @staticmethod
-        def evaluate_article_review(*_args, **kwargs):
-            calls["evaluate"] += 1
-            assert kwargs["decision"] is decision
-            return {
-                "importance": "medium",
-                "push_now": False,
-                "reason": decision.reason,
-                "daily_summary": "模型固定响应",
-                "raw": {"decision_result": decision.to_dict()},
-            }
-
-        @staticmethod
-        def gate_lines(_review):
-            return []
+    def fake_project(item, flow_result):
+        calls["evaluate"] += 1
+        assert flow_result.decision is decision
+        return original_project(item, flow_result)
 
     try:
-        market_runtime._selected_module = lambda _kind: FakeModule
+        market_flow.project_article_review = fake_project
+        market_flow.interpret_market_item = lambda *_args, **_kwargs: InterpretationResult(
+            core_content="模型固定响应"
+        )
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "llm-retry.sqlite3"
             init_db(db_path).close()
@@ -804,11 +463,11 @@ def test_production_llm_failure_retries_same_review_without_delivery() -> None:
             )
             raw_item = {"id": "llm-retry-1", "title": item.title, "url": item.url}
             item_id, review_id = record_production_admission(item, admitted(), db_path=db_path)
-            market_runtime.decide_market_item_with_llm = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            market_flow.decide_market_item_with_llm = lambda *_args, **_kwargs: (_ for _ in ()).throw(
                 RuntimeError("model unavailable")
             )
             try:
-                market_runtime.process_market_item(
+                market_flow.process_market_item(
                     item,
                     raw_item,
                     store_kind="article",
@@ -832,8 +491,8 @@ def test_production_llm_failure_retries_same_review_without_delivery() -> None:
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='article_reviews'"
                 ).fetchone()[0] == 0
 
-            market_runtime.decide_market_item_with_llm = lambda *_args, **_kwargs: decision
-            outcome = market_runtime.process_market_item(
+            market_flow.decide_market_item_with_llm = lambda *_args, **_kwargs: decision
+            outcome = market_flow.process_market_item(
                 item,
                 raw_item,
                 store_kind="article",
@@ -850,13 +509,14 @@ def test_production_llm_failure_retries_same_review_without_delivery() -> None:
             assert outcome.market_review_id == review_id
             assert outcome.flow_result.decision.action == "daily"
     finally:
-        market_runtime._selected_module = original_module
-        market_runtime.decide_market_item_with_llm = original_decider
+        market_flow.project_article_review = original_project
+        market_flow.interpret_market_item = original_interpreter
+        market_flow.decide_market_item_with_llm = original_decider
     assert calls == {"evaluate": 1}
 
 
 def test_production_uncertain_terminates_review_without_delivery() -> None:
-    original_decider = market_runtime.decide_market_item_with_llm
+    original_decider = market_flow.decide_market_item_with_llm
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "llm-insufficient.sqlite3"
         init_db(db_path).close()
@@ -870,11 +530,11 @@ def test_production_uncertain_terminates_review_without_delivery() -> None:
         )
         raw_item = {"id": "llm-insufficient-1", "title": item.title, "url": item.url}
         item_id, review_id = record_production_admission(item, admitted(), db_path=db_path)
-        market_runtime.decide_market_item_with_llm = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        market_flow.decide_market_item_with_llm = lambda *_args, **_kwargs: (_ for _ in ()).throw(
             ProductionLLMInsufficientEvidence("valid uncertain result")
         )
         try:
-            market_runtime.process_market_item(
+            market_flow.process_market_item(
                 item,
                 raw_item,
                 store_kind="article",
@@ -890,7 +550,7 @@ def test_production_uncertain_terminates_review_without_delivery() -> None:
         else:
             raise AssertionError("valid uncertain must stop before interpretation and delivery")
         finally:
-            market_runtime.decide_market_item_with_llm = original_decider
+            market_flow.decide_market_item_with_llm = original_decider
         assert record_production_admission(item, admitted(), db_path=db_path) == (item_id, review_id)
         changed_admission = AdmissionResult(
             status="admitted",
@@ -922,9 +582,9 @@ def test_production_uncertain_terminates_review_without_delivery() -> None:
             repeated_calls += 1
             raise AssertionError("terminal evidence insufficiency must not call the model again")
 
-        market_runtime.decide_market_item_with_llm = unexpected_decider
+        market_flow.decide_market_item_with_llm = unexpected_decider
         try:
-            market_runtime.process_market_item(
+            market_flow.process_market_item(
                 item,
                 raw_item,
                 store_kind="article",
@@ -941,12 +601,12 @@ def test_production_uncertain_terminates_review_without_delivery() -> None:
         else:
             raise AssertionError("terminal review must remain closed")
         finally:
-            market_runtime.decide_market_item_with_llm = original_decider
+            market_flow.decide_market_item_with_llm = original_decider
         assert repeated_calls == 0
 
 
 def test_event_uncertain_preserves_terminal_status_through_processing_wrapper() -> None:
-    original_decider = market_runtime.decide_market_item_with_llm
+    original_decider = market_flow.decide_market_item_with_llm
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "event-insufficient.sqlite3"
         init_db(db_path).close()
@@ -969,11 +629,11 @@ def test_event_uncertain_preserves_terminal_status_through_processing_wrapper() 
             db_path=db_path,
             task="sina_flash_portfolio",
         )
-        market_runtime.decide_market_item_with_llm = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        market_flow.decide_market_item_with_llm = lambda *_args, **_kwargs: (_ for _ in ()).throw(
             ProductionLLMInsufficientEvidence("valid uncertain result")
         )
         try:
-            market_runtime.process_market_item(
+            market_flow.process_market_item(
                 item,
                 raw_item,
                 store_kind="event",
@@ -984,12 +644,12 @@ def test_event_uncertain_preserves_terminal_status_through_processing_wrapper() 
                 market_item_id=item_id,
                 market_review_id=review_id,
             )
-        except market_runtime.MarketItemProcessingError as exc:
+        except market_flow.MarketItemProcessingError as exc:
             assert processing_failure_status(exc) == "insufficient_evidence"
         else:
             raise AssertionError("event uncertain must retain the terminal processing status")
         finally:
-            market_runtime.decide_market_item_with_llm = original_decider
+            market_flow.decide_market_item_with_llm = original_decider
         with sqlite3.connect(db_path) as conn:
             assert conn.execute(
                 "SELECT review_status,decision_action FROM market_reviews WHERE id=?", (review_id,)
