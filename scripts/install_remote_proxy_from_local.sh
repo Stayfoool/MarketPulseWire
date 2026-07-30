@@ -33,7 +33,7 @@ mkdir -p "$RENDERED_SYSTEMD"
 REMOTE_DIR_ESCAPED="$(escape_sed_replacement "$REMOTE_DIR")"
 REMOTE_PROXY_DIR_ESCAPED="$(escape_sed_replacement "$REMOTE_PROXY_DIR")"
 REMOTE_SERVICE_USER_ESCAPED="$(escape_sed_replacement "$REMOTE_SERVICE_USER")"
-for unit in ./systemd/surveil-proxy.service ./systemd/surveil-overseas-media.service; do
+for unit in ./systemd/surveil-proxy.service; do
   sed \
     -e "s/User=surveil/User=$REMOTE_SERVICE_USER_ESCAPED/g" \
     -e "s/\/opt\/surveil-proxy/$REMOTE_PROXY_DIR_ESCAPED/g" \
@@ -58,16 +58,14 @@ cat > \"\$REMOTE_DIR/proxy.env\" <<'EOF'
 HTTP_PROXY=http://127.0.0.1:7890
 HTTPS_PROXY=http://127.0.0.1:7890
 ALL_PROXY=socks5://127.0.0.1:7890
-NO_PROXY=127.0.0.1,localhost,$REMOTE_HOST,quantapi.51ifind.com,open.feishu.cn,api.deepseek.com,token-plan.cn-beijing.maas.aliyuncs.com,api.z.ai
+NO_PROXY=127.0.0.1,localhost,$REMOTE_HOST,open.feishu.cn,api.deepseek.com,token-plan.cn-beijing.maas.aliyuncs.com,api.z.ai
 EOF
 chown \"\$REMOTE_SERVICE_USER:\$REMOTE_SERVICE_USER\" \"\$REMOTE_DIR/proxy.env\"
 chmod 600 \"\$REMOTE_DIR/proxy.env\"
 cp /tmp/surveil-proxy-systemd/*.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable surveil-proxy.service
-systemctl restart surveil-overseas-media.timer
 /usr/local/bin/mihomo -v
-systemctl status --no-pager surveil-overseas-media.timer
 "
 
 echo "代理框架已安装。下一步运行 ./scripts/write_remote_proxy_subscription.sh 写入订阅链接并启动 surveil-proxy.service。"

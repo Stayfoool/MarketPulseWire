@@ -124,7 +124,6 @@ RULE_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "execution_mode": ORDERED_FIRST_MATCH,
         "hit_markers": ("international_bank_theme_strategy",),
         "priority": 90,
-        "external_config": "investment_bank_theme",
         "fields": (
             {"key": "enabled", "label": "启用", "type": "bool", "default": True},
             {"key": "priority", "label": "规则顺序", "type": "int", "default": 90, "min": 1, "max": 999},

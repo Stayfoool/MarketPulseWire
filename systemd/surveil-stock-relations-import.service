@@ -3,6 +3,7 @@ Description=Surveil stock relation config import
 After=surveil-db-init.service
 
 [Service]
+UMask=0077
 Type=oneshot
 User=surveil
 WorkingDirectory=/opt/surveil

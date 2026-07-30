@@ -31,7 +31,7 @@ flowchart LR
     Decision --> Interpretation["InterpretationResult"]
     Interpretation --> Store["market_reviews"]
     Store --> Delivery["market_delivery"]
-    Store --> View["Web / digest / signals"]
+    Store --> View["Web / digest"]
     Delivery --> Outcome["DeliveryOutcome"]
 ```
 
@@ -127,8 +127,6 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `source_profiles.py` | Source catalog, runtime ownership, health keys and editable source settings; Web-managed private overrides are atomically replaced as mode `0600` |
 | `rule_config_schema.py` | Side-effect-free parser for the production five-group range-admission configuration and Web configuration path |
 | `media_keyword_config.py` | Shared loader and atomic Web save path for the private rule configuration's `semiconductor_ai_keywords`, title-only subset and `exclude_keywords`; validates the complete rule file and preserves every unrelated rule section |
-| `migrate_media_keywords.py` | Operator-only preview/apply migration from the retired private base/include media-keyword fields into the reviewed `semiconductor_ai_keywords`; preview redacts values and apply creates a private backup |
-| `migrate_admission_simplification.py` | Operator-only preview/apply migration that installs a privately reviewed title-only subset, removes standalone generic AI terms and replaces legacy macro tiers with the old primary list; preview exposes counts and hashes only and apply creates a private backup |
 
 ## Production Sources
 
@@ -204,8 +202,7 @@ validated subset and limits those terms to title matches. The Web save path
 changes only those three fields, preserves all other rule groups, writes
 atomically with mode `0600` and creates a private backup. Retired code-default,
 base and extra-include lists have no runtime precedence or fallback. Their old
-private file is read only by the explicit one-time migration command documented
-in `docs/deployment.md`.
+private file is no longer a runtime or deployment input.
 
 The `international_bank_fed_rate_path_revision` rule is also source-neutral. It requires local attributed evidence that an audited major international bank changed its expected Federal Reserve hike/cut direction, count, timing, cumulative basis points or terminal rate. Material revisions produce `push`; a concrete current forecast without a provable revision produces `daily`. WallstreetCN identity and category metadata cannot create eligibility. Same-report reposts use the existing `rule_alert_dedup` reservation, while a later genuine path revision remains eligible.
 
@@ -263,47 +260,29 @@ New production items also use the canonical storage contract:
   normalized live item. An excluded row has no `DecisionResult` or
   `InterpretationResult`. An admitted row is completed with the exact results
   returned by the unified runtime before delivery. It also retains the bounded
-  compatibility payload needed to reproduce existing Web, digest, feedback and
-  signal views; private production LLM requests/responses remain outside
+  compatibility payload needed to reproduce existing Web, digest and feedback
+  views; private production LLM requests/responses remain outside
   SQLite.
 - `market_item_aliases` maps the unified item identity to stable
-  `article`, `official` and `event` source identities. Feishu feedback tokens,
-  signal source ids and Web links therefore remain valid during the storage
-  transition.
+  `article`, `official` and `event` source identities. Feishu feedback tokens
+  and Web links therefore retain stable external identities.
 - `deliveries` remains an execution audit, independent from decision
   authority. `market_item_id`, nullable `market_review_id`, `decision_action`
   and `attempted_at` link article, official-news and event delivery outcomes to
   the same item/review contract. Historical deliveries whose originating
   review could not be proven keep a null `market_review_id`.
 
-The completed historical migrations copied `seen_items`, article/official
-results, every event-analysis version and every event identity into the
-unified tables. Historical `legacy_store_kind`, `legacy_store_id` and
-`market_item_aliases` values remain as provenance and stable external identity
-metadata; they do not imply that a separate physical result table still
-exists. Missing body text, admission evidence and review links remain missing
-instead of being inferred.
+Historical `legacy_store_kind`, `legacy_store_id` and `market_item_aliases`
+values remain as provenance and stable external identity metadata; they do not
+imply that a separate physical result table still exists. Missing body text,
+admission evidence and review links remain missing instead of being inferred.
 
-Web Event Center, article/official daily output, feedback lookup/quality metrics
-and signal extraction read the unified tables through
-`market_canonical_reader.py`. When an item has multiple current task results,
-display and signal readers use the latest result while all versions remain
-stored. Existing external ids are resolved through `market_item_aliases`;
+Web Event Center, article/official daily output and feedback lookup/quality
+metrics read the unified tables through `market_canonical_reader.py`. When an
+item has multiple current task results, display readers use the latest result
+while all versions remain stored. Existing external ids are resolved through `market_item_aliases`;
 historical deliveries without a provable originating review link only to the
 item. New production processing reads and writes only unified result storage.
-
-The investment-signal review group is installed but disabled by default. Its
-four internal steps remain separate for diagnosis: signal extraction derives
-rows from the unified current review and delivery projection, outcome update
-loads later market prices, signal review compares the expected direction with
-those outcomes, and signal digest summarizes the reviews. Web Task Health shows
-the four steps together as one default-off group and does not expose per-step
-execution actions. Each derived signal stores a SHA-256 fingerprint covering
-the complete signal, related targets and evidence. When the whole group is
-explicitly enabled, a scheduled re-scan performs no SQLite update when that
-fingerprint is unchanged; a changed decision, interpretation, relation mapping
-or evidence changes the fingerprint and uses
-the existing idempotent upsert.
 
 For newly admitted production items, `market_reviews` is also the processed /
 retry/current-result authority. `market_runtime.py` reuses a completed current
@@ -326,7 +305,8 @@ The project keeps these current physical stores:
 - `rule_alert_dedup`, `deliveries` (`rule_alert_dedup` also records delivery-only intraday market-move, US macro event, bounded industry-fact, individual-equity investment-bank report and generic company-event fact-set reservations)
 - `market_feedback` (append-only Feishu feedback events; the latest valid operator/item event carries that operator's complete current label set)
 - `source_health`, `x_stream_health`
-- portfolio, relation, evidence and signal tables
+- `portfolio_holdings`, `stocks`, `stock_relations`, `relation_suggestions`,
+  `rule_config_audit` and bounded Web-evidence tables
 
 `article`, `official` and `event` are external display/feedback identities, not
 separate storage or decision paths. All three arrive through the unified runtime
@@ -365,7 +345,7 @@ writing discovery or lifecycle state.
 
 When Feishu market feedback is explicitly enabled, unified article, official-news and event cards are sent by the configured enterprise application bot and carry signed `特别有用` / `重复` / `无效` actions. The delivery audit retains the feedback-card base payload for cards sent after this feature is enabled. After a valid action, the official long-connection callback appends only to `market_feedback`; the new row records the clicked label and the complete selected-label set after independently toggling that label. It returns a replacement of the same Feishu card with `反馈状态` and a `✓` on every selected label. Removing the last label leaves an empty current set without deleting history. Existing rows without a selected-label set retain their original single-label or `cleared` meaning. It cannot modify decisions, delivery reservations, source settings or rule settings. Card reconstruction uses the current review payload and falls back to the corresponding sent delivery payload, which is the canonical location for event-card bases. If neither contains a base card, the durable feedback remains and the callback explicitly warns that card state was not updated. `FEISHU_FEEDBACK_LISTENER_ENABLED` may start that listener for an isolated test card while leaving natural unified delivery on the pre-existing custom webhook. Test-card rows and empty current selections are excluded from quality denominators and Event Center feedback projection. Current feedback is selected by Feishu action time, then insertion id, so delayed callbacks cannot overwrite or cancel a newer choice. The Web workbench exposes feedback coverage and observed labelled-card outcomes by source, primary rule, all rule associations and source-by-primary-rule. One item is labelled once when it has at least one active label; each label count is independent, so label rates may sum above 100 percent. Its Event Center also reads the same current projection through `item_kind + source + item_id`, showing feedback on the three active store adapters and filtering inside each store query before limits. This projection is read-only, excludes test cards and operator identities, and distinguishes delivered-but-unlabelled, not-delivered and unsupported-route rows.
 
-The Web workbench exposes a lightweight authenticated `/api/health/summary` projection for separate Task Health and Information Sources badges. One batched read-only `systemctl show` call pairs each production timer with its execution service; `task_failures` counts current logical-task failures, while `source_failures` counts only failing enabled profiles that are visible in the Information Sources view. Cut-over legacy units, the disabled-by-default JYGS path and disabled source profiles do not contribute. The browser refreshes this summary only while visible. The full Task Health view retains detailed systemd rows, raw source-health/X connection diagnostics and bounded log tails even when a raw diagnostic does not map to a source-profile badge count.
+The Web workbench exposes a lightweight authenticated `/api/health/summary` projection for separate Task Health and Information Sources badges. One batched read-only `systemctl show` call pairs each production timer with its execution service; `task_failures` counts current logical-task failures, while `source_failures` counts only failing enabled profiles that are visible in the Information Sources view. Disabled source profiles do not contribute. The browser refreshes this summary only while visible. The full Task Health view retains detailed systemd rows, raw source-health/X connection diagnostics and bounded log tails even when a raw diagnostic does not map to a source-profile badge count.
 
 The reviewed LLM degree rules are the only production action decision. There is
 no runtime selector, second action implementation or fallback. A
@@ -387,10 +367,7 @@ validation details to one service-account-private audit file under
 The file links directly to `market_item_id` and `market_review_id`; full prompts,
 article body and raw response do not enter SQLite, Web, Git or Feishu. The
 `surveil-llm-decision-audit-cleanup.timer` removes sensitive request/response
-content after 30 days while retaining bounded result metadata. The former
-15:30 new-versus-old report timer is disabled. Existing dated and combined
-comparison reports remain readable in the Web workbench as historical records,
-but production no longer creates or sends new comparison reports.
+content after 30 days while retaining bounded result metadata.
 
 The authenticated Web `/api/llm-decisions` view reads final action, article
 metadata and valid `DecisionResult` rule hits from unified SQLite. Failed model
@@ -414,12 +391,6 @@ Holdings preview always applies whole-list local structure validation, but marke
 `x_stream.py` keeps its dedicated stream, thread/media enrichment, `seen_posts` state and X card delivery. The general article/event stores do not currently represent those semantics cleanly. Regression coverage lives in `test_x_stream_health.py`.
 
 Review condition: reconsider convergence when X posts can be represented without losing thread/media rendering or stream retry state.
-
-### JYGS Actions
-
-`jygs_actions.py` remains a disabled-by-default legacy product path for JYGS action prediction and its dedicated card. It is not a general market-information source profile. Its direct LLM prediction contract is isolated in that module and covered by `test_jygs_actions.py`.
-
-Review condition: retire the path or move it behind `NormalizedMarketItem` and the production LLM decision before enabling it as a normal production source.
 
 ## Runtime And Deployment Facts
 

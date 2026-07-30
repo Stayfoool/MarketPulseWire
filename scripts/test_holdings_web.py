@@ -16,7 +16,6 @@ import holdings_web
 from holdings_web import (
     RUN_ONCE_TARGETS,
     SERVICE_UNITS,
-    SIGNAL_REVIEW_UNITS,
     HoldingsHandler,
     active_source_health_keys,
     build_health_summary,
@@ -145,16 +144,6 @@ def frontend_source() -> str:
             (holdings_web.WEB_ROOT / "app.js").read_text(encoding="utf-8"),
         )
     )
-
-
-def test_extracted_script_keeps_newline_escapes() -> None:
-    script = (holdings_web.WEB_ROOT / "app.js").read_text(encoding="utf-8")
-    assert "showView('overview');" in script
-    index = script.find("parsed.lessons.join")
-    assert index > 0
-    snippet = script[index : index + 40]
-    assert repr("\\n") in repr(snippet)
-    assert "parsed.lessons.join('\n')" not in script
 
 
 def test_page_uses_extracted_assets_and_bounded_placeholders() -> None:
@@ -294,10 +283,10 @@ def test_health_page_exposes_service_action_controls() -> None:
     assert "runServiceAction" in html
     assert "renderHealthTasks" in html
     assert "fetching_persistent" in html
-    assert "signal_review" in html
     assert "showShadowUnits" not in html
-    assert "showLegacyUnits" in html
-    assert "显示历史兼容单元" in html
+    assert "showLegacyUnits" not in html
+    assert "显示历史兼容单元" not in html
+    assert "信号复盘" not in html
     assert "调度状态" in html
     assert "最近执行" in html
     assert "重启定时器" in html
@@ -1066,10 +1055,9 @@ def test_source_profile_runtime_note_reports_effective_counts() -> None:
 
 
 def test_systemd_actions_are_whitelisted() -> None:
-    assert "restart" in unit_actions("surveil-rss-monitor.service")
-    assert "restart" in unit_actions("surveil-trendforce-page-monitor.service")
-    assert "restart_timer" in unit_actions("surveil-china-media.timer")
-    assert "run_once" in unit_actions("surveil-china-media.timer")
+    assert unit_actions("surveil-rss-monitor.service") == []
+    assert unit_actions("surveil-trendforce-page-monitor.service") == []
+    assert unit_actions("surveil-china-media.timer") == []
     assert "run_once" in unit_actions("surveil-research-collector.timer")
     assert RUN_ONCE_TARGETS["surveil-research-collector.timer"] == "surveil-research-collector.service"
     assert "run_once" in unit_actions("surveil-official-collector.timer")
@@ -1079,10 +1067,8 @@ def test_systemd_actions_are_whitelisted() -> None:
     assert "run_once" in unit_actions("surveil-value-directory.timer")
     assert RUN_ONCE_TARGETS["surveil-value-directory.timer"] == "surveil-value-directory.service"
     assert all("-shadow" not in unit for unit in holdings_web.ALLOWED_SYSTEMD_UNITS)
-    assert RUN_ONCE_TARGETS["surveil-china-media.timer"] == "surveil-china-media.service"
     assert "05:00 / 21:00" in holdings_web.UNIT_METADATA["surveil-value-directory.timer"]["schedule"]
     assert unit_actions("surveil-holdings-web.service") == ["status"]
-    assert all(unit_actions(unit) == ["status"] for unit in SIGNAL_REVIEW_UNITS)
     assert unit_actions("ssh.service") == []
     assert "surveil-company-disclosures.service" in SERVICE_UNITS
 
@@ -1177,61 +1163,6 @@ def test_health_summary_flags_disabled_production_timer_and_stopped_service() ->
     }
 
 
-def test_health_summary_excludes_legacy_and_default_disabled_jygs() -> None:
-    units = [
-        systemd_fixture(
-            "surveil-china-media.timer",
-            {"ActiveState": "inactive", "SubState": "dead", "Result": "success"},
-        ),
-        systemd_fixture(
-            "surveil-china-media.service",
-            {"ActiveState": "failed", "SubState": "failed", "Result": "failed", "ExecMainStatus": "1"},
-        ),
-        systemd_fixture(
-            "surveil-jygs-actions.timer",
-            {"ActiveState": "inactive", "SubState": "dead", "Result": "success"},
-        ),
-        systemd_fixture(
-            "surveil-jygs-actions.service",
-            {"ActiveState": "inactive", "SubState": "dead", "Result": "success", "ExecMainStatus": "0"},
-        ),
-    ]
-    assert build_health_summary(build_health_tasks(units), [])["total_failures"] == 0
-
-
-def test_signal_review_tasks_are_grouped_and_default_disabled_without_alerts() -> None:
-    units: list[dict[str, object]] = []
-    timer_names = (
-        "surveil-signals-extract.timer",
-        "surveil-signal-outcome.timer",
-        "surveil-signal-review.timer",
-        "surveil-signal-digest.timer",
-    )
-    for timer_name in timer_names:
-        units.append(
-            systemd_fixture(
-                timer_name,
-                {"ActiveState": "inactive", "SubState": "dead", "Result": "success"},
-            )
-        )
-        units.append(
-            systemd_fixture(
-                RUN_ONCE_TARGETS[timer_name],
-                {
-                    "ActiveState": "inactive",
-                    "SubState": "dead",
-                    "Result": "success",
-                    "ExecMainStatus": "0",
-                },
-            )
-        )
-    tasks = [task for task in build_health_tasks(units) if task["group"] == "signal_review"]
-    assert [task["label"] for task in tasks] == ["信号提取", "信号结果更新", "信号复盘", "信号摘要"]
-    assert all(task["schedule_status"] == "定时器未启用" for task in tasks)
-    assert all(task["health_issue"] is None for task in tasks)
-    assert build_health_summary(tasks, [])["total_failures"] == 0
-
-
 def test_health_summary_counts_only_enabled_failing_sources() -> None:
     profiles = [
         {
@@ -1275,31 +1206,6 @@ def test_health_summary_excludes_raw_x_detail_without_failing_source_profile() -
     assert build_health_summary([], enabled)["source_failures"] == 0
 
 
-def test_unit_display_metadata_translates_oneshot_success() -> None:
-    meta = unit_display_metadata(
-        "surveil-china-media.service",
-        {"ActiveState": "inactive", "SubState": "dead", "Result": "success"},
-    )
-    assert meta["group"] == "fetching_legacy"
-    assert meta["unit_type"] == "历史兼容"
-    assert meta["lifecycle"] == "legacy_cutover"
-    assert meta["default_visible"] is False
-    assert meta["replacement"] == "surveil-news-collector.timer"
-    assert meta["status_text"] == "上次运行成功"
-
-
-def test_unit_display_metadata_translates_waiting_timer() -> None:
-    meta = unit_display_metadata(
-        "surveil-overseas-media.timer",
-        {"ActiveState": "active", "SubState": "waiting", "Result": "success"},
-    )
-    assert meta["group"] == "fetching_legacy"
-    assert meta["unit_type"] == "历史兼容定时器"
-    assert meta["lifecycle"] == "legacy_cutover"
-    assert meta["replacement"] == "surveil-research-collector.timer"
-    assert meta["status_text"] == "等待下次触发"
-
-
 def test_unit_display_metadata_includes_research_production_collector() -> None:
     meta = unit_display_metadata(
         "surveil-research-collector.timer",
@@ -1333,7 +1239,6 @@ def test_unit_display_metadata_includes_news_production_collector() -> None:
 
 
 def main() -> int:
-    test_extracted_script_keeps_newline_escapes()
     test_page_uses_extracted_assets_and_bounded_placeholders()
     test_media_keywords_use_one_master_list_and_a_title_only_subset()
     test_static_asset_routes_are_allowlisted()
@@ -1362,9 +1267,6 @@ def main() -> int:
     test_systemd_actions_are_whitelisted()
     test_health_tasks_pair_timer_with_service_and_prefer_execution_result()
     test_health_tasks_show_disabled_timer_and_last_success_separately()
-    test_signal_review_tasks_are_grouped_and_default_disabled_without_alerts()
-    test_unit_display_metadata_translates_oneshot_success()
-    test_unit_display_metadata_translates_waiting_timer()
     test_unit_display_metadata_includes_research_production_collector()
     test_unit_display_metadata_includes_official_production_collector()
     test_unit_display_metadata_includes_news_production_collector()

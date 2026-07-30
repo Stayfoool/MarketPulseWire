@@ -20,23 +20,11 @@ import os
 env_path = Path(os.environ['REMOTE_ENV'])
 sensitive = {
     'LLM_API_KEY',
-    'OPENAI_API_KEY',
-    'DASHSCOPE_API_KEY',
-    'DEEPSEEK_API_KEY',
-    'IFIND_REFRESH_TOKEN',
-    'IFIND_ACCESS_TOKEN',
-    'IFIND_API_KEY',
 }
 visible = [
     'LLM_PROVIDER',
     'LLM_BASE_URL',
     'LLM_MODEL',
-    'OPENAI_BASE_URL',
-    'OPENAI_MODEL',
-    'IFIND_API_BASE_URL',
-    'PORTFOLIO_IMPORTANCE_THRESHOLD',
-    'SINA_FLASH_POLL_SECONDS',
-    'JYGS_RUN_TIMES',
 ]
 values = {}
 if env_path.exists():
@@ -67,10 +55,6 @@ printf "请输入模型 Base URL（回车保留现有值）: "
 IFS= read -r LLM_BASE_URL
 printf "请输入模型名称（回车保留现有值）: "
 IFS= read -r LLM_MODEL
-echo "iFinD 这里请输入账号详情页里的 Refresh Token，不是“密钥 / 个人令牌 / API 密钥”。"
-printf "请输入 iFinD Refresh Token（回车保留现有值）: "
-IFS= read -r -s IFIND_REFRESH_TOKEN
-echo
 
 PAYLOAD_FILE="$(mktemp)"
 REMOTE_PAYLOAD="/tmp/surveil-secrets-$$.json"
@@ -83,7 +67,6 @@ PAYLOAD_FILE="$PAYLOAD_FILE" \
 LLM_API_KEY="$LLM_API_KEY" \
 LLM_BASE_URL="$LLM_BASE_URL" \
 LLM_MODEL="$LLM_MODEL" \
-IFIND_REFRESH_TOKEN="$IFIND_REFRESH_TOKEN" \
 python3 - <<'PY'
 from pathlib import Path
 import json
@@ -93,7 +76,6 @@ payload = {
     "LLM_API_KEY": os.environ["LLM_API_KEY"],
     "LLM_BASE_URL": os.environ["LLM_BASE_URL"],
     "LLM_MODEL": os.environ["LLM_MODEL"],
-    "IFIND_REFRESH_TOKEN": os.environ["IFIND_REFRESH_TOKEN"],
 }
 path = Path(os.environ["PAYLOAD_FILE"])
 path.write_text(json.dumps(payload), encoding="utf-8")
@@ -117,28 +99,17 @@ payload = json.loads(payload_path.read_text(encoding='utf-8'))
 
 updates = {
     'LLM_PROVIDER': 'openai_compatible',
-    'IFIND_API_BASE_URL': 'https://quantapi.51ifind.com/api/v1',
-    'PORTFOLIO_IMPORTANCE_THRESHOLD': 'medium',
-    'SINA_FLASH_POLL_SECONDS': '10',
-    'JYGS_RUN_TIMES': '12:30,16:00',
 }
 
 llm_api_key = str(payload.get('LLM_API_KEY') or '').strip()
 llm_base_url = str(payload.get('LLM_BASE_URL') or '').strip()
 llm_model = str(payload.get('LLM_MODEL') or '').strip()
-ifind_refresh_token = str(payload.get('IFIND_REFRESH_TOKEN') or '').strip()
-
 if llm_api_key:
     updates['LLM_API_KEY'] = llm_api_key
-    updates['OPENAI_API_KEY'] = llm_api_key
 if llm_base_url:
     updates['LLM_BASE_URL'] = llm_base_url
-    updates['OPENAI_BASE_URL'] = llm_base_url
 if llm_model:
     updates['LLM_MODEL'] = llm_model
-    updates['OPENAI_MODEL'] = llm_model
-if ifind_refresh_token:
-    updates['IFIND_REFRESH_TOKEN'] = ifind_refresh_token
 
 lines = env_path.read_text(encoding='utf-8').splitlines() if env_path.exists() else []
 seen = set()
@@ -167,14 +138,12 @@ payload_path.unlink(missing_ok=True)
 changed_sensitive = []
 if llm_api_key:
     changed_sensitive.append('LLM_API_KEY=<redacted>')
-if ifind_refresh_token:
-    changed_sensitive.append('IFIND_REFRESH_TOKEN=<redacted>')
 changed_plain = [key for key in ('LLM_BASE_URL', 'LLM_MODEL') if key in updates]
 changed = changed_sensitive + changed_plain
 if changed:
     print(f'已更新 {env_path}: ' + ', '.join(changed))
 else:
-    print(f'已检查 {env_path}: 未输入新密钥，保留现有模型/iFinD 配置')
+    print(f'已检查 {env_path}: 未输入新值，保留现有模型配置')
 PY"
 
-unset LLM_API_KEY LLM_BASE_URL LLM_MODEL IFIND_REFRESH_TOKEN
+unset LLM_API_KEY LLM_BASE_URL LLM_MODEL

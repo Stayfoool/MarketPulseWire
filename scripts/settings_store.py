@@ -27,7 +27,7 @@ SETTING_GROUPS: list[dict[str, Any]] = [
     {
         "id": "llm",
         "title": "大模型",
-        "restart_hint": "保存后建议重启 X/RSS/TrendForce/海外媒体等常驻分析服务，使新模型配置立即生效。",
+        "restart_hint": "保存后建议重启统一 collector 和 X 常驻服务，使新模型配置立即生效。",
         "fields": [
             SettingField("LLM_PROVIDER", "供应商类型", "llm", placeholder="openai_compatible"),
             SettingField("LLM_BASE_URL", "Base URL", "llm", placeholder="https://api.deepseek.com"),
@@ -40,17 +40,6 @@ SETTING_GROUPS: list[dict[str, Any]] = [
             SettingField("ATTRIBUTED_RESEARCH_LLM_ENABLED", "媒体机构归因语义抽取", "llm", placeholder="1"),
             SettingField("ATTRIBUTED_RESEARCH_LLM_THINKING_TYPE", "媒体机构归因 thinking", "llm", placeholder="disabled"),
             SettingField("ATTRIBUTED_RESEARCH_LLM_MAX_OUTPUT_TOKENS", "媒体机构归因输出 tokens", "llm", placeholder="900"),
-        ],
-    },
-    {
-        "id": "ifind",
-        "title": "iFinD",
-        "restart_hint": "iFinD 定时任务下一次运行会读取新配置；如要立即验证，可手动运行 iFinD smoke test。",
-        "fields": [
-            SettingField("IFIND_API_BASE_URL", "API Base URL", "ifind", placeholder="https://quantapi.51ifind.com/api/v1"),
-            SettingField("IFIND_REFRESH_TOKEN", "Refresh Token", "ifind", sensitive=True, help="账号详情页 Refresh Token，不是 API 密钥。"),
-            SettingField("IFIND_ACCESS_TOKEN", "Access Token", "ifind", sensitive=True, help="可选；通常只需要 Refresh Token。"),
-            SettingField("IFIND_TIMEOUT_SECONDS", "超时秒数", "ifind", placeholder="20"),
         ],
     },
     {
@@ -79,7 +68,7 @@ SETTING_GROUPS: list[dict[str, Any]] = [
     {
         "id": "skeptic",
         "title": "Skeptic Evaluator",
-        "restart_hint": "保存后建议重启 RSS/TrendForce/中国财经媒体/X stream 等分析服务，使二次复核配置立即生效。",
+        "restart_hint": "保存后建议重启统一 collector 和 X 常驻服务，使二次复核配置立即生效。",
         "fields": [
             SettingField("SKEPTIC_EVALUATOR_ENABLED", "启用二次复核", "skeptic", placeholder="1"),
             SettingField("SKEPTIC_STALE_NEWS_DAYS", "旧闻天数阈值", "skeptic", placeholder="7"),
@@ -91,7 +80,7 @@ SETTING_GROUPS: list[dict[str, Any]] = [
     {
         "id": "web_evidence",
         "title": "联网证据检索",
-        "restart_hint": "保存后建议重启 RSS/TrendForce/中国财经媒体等分析服务，使联网证据检索配置立即生效。",
+        "restart_hint": "保存后建议重启统一 collector，使联网证据检索配置立即生效。",
         "fields": [
             SettingField("WEB_EVIDENCE_ENABLED", "启用证据检索", "web_evidence", placeholder="0"),
             SettingField("WEB_EVIDENCE_PROVIDER", "搜索 Provider", "web_evidence", placeholder="tavily"),
@@ -144,7 +133,7 @@ SETTING_GROUPS: list[dict[str, Any]] = [
     {
         "id": "network",
         "title": "网络 / RSS 抓取",
-        "restart_hint": "保存后建议重启 RSS/海外媒体/TrendForce 等抓取服务，使代理、超时、并发和健康告警配置立即生效。",
+        "restart_hint": "保存后建议重启统一 collector，使代理、超时、并发和健康告警配置立即生效。",
         "fields": [
             SettingField("SURVEIL_HTTP_PROXY", "HTTP 代理", "network", placeholder="http://127.0.0.1:7890"),
             SettingField("SURVEIL_USER_AGENT", "User-Agent", "network", placeholder="Mozilla/5.0 ..."),
@@ -173,18 +162,6 @@ SETTING_GROUPS: list[dict[str, Any]] = [
         ],
     },
     {
-        "id": "jygs",
-        "title": "韭研公社",
-        "restart_hint": "韭研公社 timer 下一次运行会读取新 Cookie；Cookie 过期时在这里覆盖写入即可。",
-        "fields": [
-            SettingField("JYGS_COOKIE", "完整 Cookie", "jygs", sensitive=True),
-            SettingField("JYGS_SESSION", "SESSION", "jygs", sensitive=True, help="只填 SESSION 时脚本会拼成 Cookie。"),
-            SettingField("JYGS_RUN_TIMES", "运行时间", "jygs", placeholder="12:30,16:00"),
-            SettingField("JYGS_PAGE_LIMIT", "单页数量", "jygs", placeholder="30"),
-            SettingField("JYGS_MAX_FETCH_ITEMS", "最大抓取条数", "jygs", placeholder="300"),
-        ],
-    },
-    {
         "id": "web",
         "title": "Web 工作台",
         "restart_hint": "HOLDINGS_WEB_TOKEN 变更后需要重启 surveil-holdings-web.service 才会用于鉴权。",
@@ -195,13 +172,6 @@ SETTING_GROUPS: list[dict[str, Any]] = [
 ]
 
 FIELDS_BY_KEY = {field.key: field for group in SETTING_GROUPS for field in group["fields"]}
-
-MIRROR_KEYS = {
-    "LLM_API_KEY": ("OPENAI_API_KEY",),
-    "LLM_BASE_URL": ("OPENAI_BASE_URL",),
-    "LLM_MODEL": ("OPENAI_MODEL",),
-}
-
 
 def parse_env_file(path: Path = ENV_PATH) -> dict[str, str]:
     values: dict[str, str] = {}
@@ -275,8 +245,6 @@ def build_updates(raw_values: dict[str, Any], current: dict[str, str]) -> tuple[
                 "new": "<redacted>" if field.sensitive and value else value,
             }
         )
-        for mirror_key in MIRROR_KEYS.get(key, ()):
-            updates[mirror_key] = value
     return updates, changes
 
 

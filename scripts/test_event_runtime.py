@@ -11,7 +11,6 @@ from types import SimpleNamespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import ifind_batch
 import company_disclosures
 import market_runtime
 import sina_flash
@@ -34,7 +33,7 @@ def test_runtime_selects_only_unified_adapters() -> None:
 
 
 def test_all_event_collectors_import_runtime_entrypoints() -> None:
-    for module in (sina_flash, sina_stock_news, ifind_batch, company_disclosures):
+    for module in (sina_flash, sina_stock_news, company_disclosures):
         assert module.process_market_item.__module__ == "market_runtime"
         source = inspect.getsource(module)
         for forbidden in (
@@ -46,26 +45,6 @@ def test_all_event_collectors_import_runtime_entrypoints() -> None:
         ):
             assert f"from {forbidden} import" not in source
             assert f"import {forbidden}" not in source
-
-
-def test_ifind_batch_only_builds_notice_events() -> None:
-    source = inspect.getsource(ifind_batch)
-    assert "ifind_report" not in source
-    assert "IFIND_RESEARCH" not in source
-    event = ifind_batch.event_from_notice_row(
-        {
-            "thscode": "300308.SZ",
-            "secName": "中际旭创",
-            "reportTitle": "关于重大合同的公告",
-            "reportDate": "2026-07-12",
-            "seq": "notice-1",
-        },
-        {"300308.SZ": {"symbol": "300308.SZ", "name": "中际旭创"}},
-        parse_pdf=False,
-    )
-    assert event["source"] == "ifind_notice"
-    assert event["event_type"] == "announcement"
-    assert event["symbols"] == ["300308.SZ"]
 
 
 def test_unified_upsert_preserves_store_contract() -> None:
@@ -278,7 +257,6 @@ def main() -> int:
     try:
         test_runtime_selects_only_unified_adapters()
         test_all_event_collectors_import_runtime_entrypoints()
-        test_ifind_batch_only_builds_notice_events()
         test_unified_upsert_preserves_store_contract()
         test_sina_flash_uses_news_media_flash_shape()
         test_sina_flash_current_admission_reports_macro_and_fed_families()

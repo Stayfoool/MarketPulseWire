@@ -72,41 +72,82 @@ if ! cd '$REMOTE_DIR' || ! sudo -u '$REMOTE_SERVICE_USER' env \
 fi
 cp /tmp/surveil-systemd/*.service /etc/systemd/system/
 cp /tmp/surveil-systemd/*.timer /etc/systemd/system/
-systemctl disable --now \
-  surveil-research-collector-shadow.timer \
-  surveil-official-collector-shadow.timer \
-  surveil-news-collector-shadow.timer \
-  surveil-collector-shadow-digest.timer \
-  surveil-rule-shadow-daily.timer >/dev/null 2>&1 || true
-systemctl stop \
-  surveil-research-collector-shadow.service \
-  surveil-official-collector-shadow.service \
-  surveil-news-collector-shadow.service \
-  surveil-collector-shadow-digest.service \
-  surveil-rule-shadow-daily.service >/dev/null 2>&1 || true
-rm -f \
-  /etc/systemd/system/surveil-research-collector-shadow.service \
-  /etc/systemd/system/surveil-research-collector-shadow.timer \
-  /etc/systemd/system/surveil-official-collector-shadow.service \
-  /etc/systemd/system/surveil-official-collector-shadow.timer \
-  /etc/systemd/system/surveil-news-collector-shadow.service \
-  /etc/systemd/system/surveil-news-collector-shadow.timer \
-  /etc/systemd/system/surveil-collector-shadow-digest.service \
-  /etc/systemd/system/surveil-collector-shadow-digest.timer \
-  /etc/systemd/system/surveil-rule-shadow-daily.service \
-  /etc/systemd/system/surveil-rule-shadow-daily.timer
+RETIRED_TIMERS=(
+  surveil-overseas-media.timer
+  surveil-china-media.timer
+  surveil-signals-extract.timer
+  surveil-signal-outcome.timer
+  surveil-signal-review.timer
+  surveil-signal-digest.timer
+  surveil-jygs-actions.timer
+  surveil-ifind-notice.timer
+  surveil-ifind-report.timer
+  surveil-research-collector-shadow.timer
+  surveil-official-collector-shadow.timer
+  surveil-news-collector-shadow.timer
+  surveil-collector-shadow-digest.timer
+  surveil-rule-shadow-daily.timer
+)
+RETIRED_SERVICES=(
+  surveil-rss-monitor.service
+  surveil-trendforce-page-monitor.service
+  surveil-overseas-media.service
+  surveil-china-media.service
+  surveil-signals-extract.service
+  surveil-signal-outcome.service
+  surveil-signal-review.service
+  surveil-signal-digest.service
+  surveil-jygs-actions.service
+  surveil-ifind-smoke.service
+  surveil-ifind-notice.service
+  surveil-ifind-report.service
+  surveil-research-collector-shadow.service
+  surveil-official-collector-shadow.service
+  surveil-news-collector-shadow.service
+  surveil-collector-shadow-digest.service
+  surveil-rule-shadow-daily.service
+)
+systemctl disable --now "\${RETIRED_TIMERS[@]}" >/dev/null 2>&1 || true
+systemctl stop "\${RETIRED_SERVICES[@]}" >/dev/null 2>&1 || true
+for unit in "\${RETIRED_TIMERS[@]}" "\${RETIRED_SERVICES[@]}"; do
+  rm -f "/etc/systemd/system/\$unit"
+done
 systemctl daemon-reload
+install -d -m 700 -o '$REMOTE_SERVICE_USER' -g '$REMOTE_SERVICE_USER' '$REMOTE_DIR/logs'
+RETIRED_LOGS=(
+  rss-monitor.log
+  rss-monitor.err.log
+  trendforce-page-monitor.log
+  trendforce-page-monitor.err.log
+  overseas-media.log
+  overseas-media.err.log
+  china-media.log
+  china-media.err.log
+  signals-extract.log
+  signals-extract.err.log
+  signal-outcome.log
+  signal-outcome.err.log
+  signal-review.log
+  signal-review.err.log
+  signal-digest.log
+  signal-digest.err.log
+  jygs-actions.log
+  jygs-actions.err.log
+  ifind-smoke.log
+  ifind-smoke.err.log
+)
+for log_name in "\${RETIRED_LOGS[@]}"; do
+  rm -f '$REMOTE_DIR/logs/'"\$log_name"
+done
+find '$REMOTE_DIR/logs' -maxdepth 1 -type f -exec chown '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' {} +
+find '$REMOTE_DIR/logs' -maxdepth 1 -type f -exec chmod 600 {} +
 SYSTEMCTL_BIN=\"\$(command -v systemctl)\"
 SUDOERS_PATH=/etc/sudoers.d/surveil-web-systemctl
 cat > \"\$SUDOERS_PATH\" <<SUDOERS
 Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-x-stream.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-feishu-feedback.service, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-rss-monitor.service, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-trendforce-page-monitor.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-sina-flash.service, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-overseas-media.service, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-china-media.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-sina-stock-news.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-article-daily.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-llm-decision-audit-cleanup.service, \\
@@ -116,23 +157,17 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-value-directory.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-proxy.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-sina-stock-news.timer, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-overseas-media.timer, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-china-media.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-article-daily.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-llm-decision-audit-cleanup.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-company-disclosures.timer, \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-jygs-actions.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-research-collector.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-news-collector.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-value-directory.timer, \\
     \$SYSTEMCTL_BIN --no-block start surveil-sina-stock-news.service, \\
-    \$SYSTEMCTL_BIN --no-block start surveil-overseas-media.service, \\
-    \$SYSTEMCTL_BIN --no-block start surveil-china-media.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-article-daily.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-llm-decision-audit-cleanup.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-company-disclosures.service, \\
-    \$SYSTEMCTL_BIN --no-block start surveil-jygs-actions.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-research-collector.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-official-collector.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-news-collector.service, \\
@@ -145,70 +180,19 @@ systemctl enable surveil-db-init.service
 systemctl start surveil-db-init.service
 systemctl is-enabled surveil-db-init.service
 journalctl -u surveil-db-init.service -n 20 --no-pager
-systemctl disable --now surveil-ifind-notice.timer >/dev/null 2>&1 || true
-systemctl stop surveil-ifind-notice.service >/dev/null 2>&1 || true
-rm -f /etc/systemd/system/surveil-ifind-notice.timer /etc/systemd/system/surveil-ifind-notice.service
-systemctl daemon-reload
 systemctl enable --now surveil-company-disclosures.timer
 systemctl enable --now surveil-sina-stock-news.timer
 systemctl restart surveil-sina-stock-news.timer
 if systemctl is-enabled --quiet surveil-value-directory.timer; then
   systemctl restart surveil-value-directory.timer
 fi
-if grep -Eq '^DISABLE_LEGACY_RESEARCH_MONITORS=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
-  systemctl disable --now surveil-overseas-media.timer >/dev/null 2>&1 || true
-  systemctl stop surveil-overseas-media.service >/dev/null 2>&1 || true
-  systemctl enable --now surveil-research-collector.timer
-  echo 'DISABLE_LEGACY_RESEARCH_MONITORS=1，保持旧 surveil-overseas-media.timer 停用。'
-else
-  systemctl enable --now surveil-overseas-media.timer
-fi
-if grep -Eq '^DISABLE_LEGACY_CHINA_MEDIA_MONITOR=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
-  systemctl disable --now surveil-china-media.timer >/dev/null 2>&1 || true
-  systemctl stop surveil-china-media.service >/dev/null 2>&1 || true
-  systemctl enable --now surveil-news-collector.timer
-  echo 'DISABLE_LEGACY_CHINA_MEDIA_MONITOR=1，保持旧 surveil-china-media.timer 停用。'
-else
-  systemctl enable --now surveil-china-media.timer
-fi
+systemctl enable --now surveil-research-collector.timer
+systemctl enable --now surveil-official-collector.timer
+systemctl enable --now surveil-news-collector.timer
 systemctl enable --now surveil-article-daily.timer
 systemctl enable --now surveil-llm-decision-audit-cleanup.timer
 echo '已启用每日 30 天大模型决策审计清理。'
-systemctl disable --now \
-  surveil-signals-extract.timer \
-  surveil-signal-outcome.timer \
-  surveil-signal-review.timer \
-  surveil-signal-digest.timer >/dev/null 2>&1 || true
-systemctl stop \
-  surveil-signals-extract.service \
-  surveil-signal-outcome.service \
-  surveil-signal-review.service \
-  surveil-signal-digest.service >/dev/null 2>&1 || true
-echo '投资信号复盘任务组默认关闭；信号提取、结果更新、复盘和摘要均未启动。'
 systemctl start surveil-stock-relations-import.service || true
-if grep -Eq '^DISABLE_LEGACY_RSS_MONITOR=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
-  systemctl disable --now surveil-rss-monitor.service >/dev/null 2>&1 || true
-  systemctl enable --now surveil-official-collector.timer
-  echo 'DISABLE_LEGACY_RSS_MONITOR=1，保持旧 surveil-rss-monitor.service 停用。'
-else
-  systemctl enable --now surveil-rss-monitor.service
-fi
-if grep -Eq '^DISABLE_LEGACY_RESEARCH_MONITORS=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
-  systemctl disable --now surveil-trendforce-page-monitor.service >/dev/null 2>&1 || true
-  systemctl enable --now surveil-research-collector.timer
-  echo 'DISABLE_LEGACY_RESEARCH_MONITORS=1，保持旧 surveil-trendforce-page-monitor.service 停用。'
-else
-  systemctl enable --now surveil-trendforce-page-monitor.service
-fi
-systemctl disable --now surveil-ifind-report.timer >/dev/null 2>&1 || true
-rm -f /etc/systemd/system/surveil-ifind-report.timer /etc/systemd/system/surveil-ifind-report.service
-systemctl daemon-reload
-if grep -Eq '^ENABLE_JYGS_TIMER=1$' '$REMOTE_DIR/.env' 2>/dev/null; then
-  systemctl enable --now surveil-jygs-actions.timer
-else
-  systemctl disable --now surveil-jygs-actions.timer >/dev/null 2>&1 || true
-  echo '韭研公社异动模块当前默认搁置；如需启用，请在 .env 设置 ENABLE_JYGS_TIMER=1。'
-fi
 systemctl enable --now surveil-holdings-web.service
 if grep -Eq '^FEISHU_FEEDBACK_(LISTENER_)?ENABLED=(1|true|yes|on)$' '$REMOTE_DIR/.env' 2>/dev/null; then
   touch '$REMOTE_DIR/logs/feishu-feedback.log' '$REMOTE_DIR/logs/feishu-feedback.err.log'
@@ -234,8 +218,6 @@ systemctl list-timers --all 'surveil-*' --no-pager
 systemctl --no-pager --full status surveil-sina-flash.service || true
 systemctl --no-pager --full status surveil-holdings-web.service || true
 systemctl --no-pager --full status surveil-feishu-feedback.service || true
-systemctl --no-pager --full status surveil-rss-monitor.service || true
-systemctl --no-pager --full status surveil-trendforce-page-monitor.service || true
 systemctl --no-pager --full status surveil-research-collector.timer || true
 systemctl --no-pager --full status surveil-official-collector.timer || true
 systemctl --no-pager --full status surveil-news-collector.timer || true
@@ -253,5 +235,5 @@ printf 'commit=%s\ninstalled_at=%s\n' \"\$REVISION_COMMIT\" \"\$(date -u +%Y-%m-
 chown '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' \"\$SYSTEMD_MARKER_TMP\"
 chmod 600 \"\$SYSTEMD_MARKER_TMP\"
 mv \"\$SYSTEMD_MARKER_TMP\" \"\$SYSTEMD_MARKER\"
-echo '已安装 surveil-db-init.service，启用公司公告、Sina 个股新闻、生产 collector timers（按 DISABLE_LEGACY_* 切换生产/历史入口）、文章日报、大模型审计清理和持仓 Web UI，并启动新浪快讯常驻服务；投资信号复盘任务组默认停用，历史影子任务和规则对比日报已删除。'
+echo '已安装生产 systemd 单元，启用公司公告、Sina 个股新闻、三个统一 collector timer、文章日报、大模型审计清理和持仓 Web UI，并启动新浪快讯常驻服务；已删除退役采集入口、投资信号复盘、JYGS、iFinD 和影子任务单元。'
 "

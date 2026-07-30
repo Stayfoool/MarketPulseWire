@@ -48,4 +48,4 @@ Suggested GitHub Secrets for deployment:
 - `DEPLOY_DIR`
 - `DEPLOY_SERVICE_USER`
 
-Avoid storing iFinD/X/Feishu/JYGS credentials in GitHub unless you fully accept that risk.
+Do not store X, Feishu, model-provider, Sina, browser-session, or proxy credentials in GitHub.

@@ -21,7 +21,6 @@ UNIFIED_ITEM_COLLECTORS = (
     "china_finance_media_monitor.py",
     "sina_flash.py",
     "sina_stock_news.py",
-    "ifind_batch.py",
     "company_disclosures.py",
     "value_directory_monitor.py",
 )
@@ -47,7 +46,6 @@ UNIFIED_STORAGE_RUNTIME_MODULES = {
     "official_collector.py",
     "official_news_daily.py",
     "rule_center.py",
-    "signals_extract.py",
     "sina_flash.py",
     "sina_stock_news.py",
     "value_directory_monitor.py",
@@ -93,6 +91,34 @@ REMOVED_COMPATIBILITY_MODULES = (
     "rule_core_shadow_combined.py",
     "rule_core_shadow_daily.py",
     "rule_shadow_report_store.py",
+    "ifind_batch.py",
+    "ifind_client.py",
+    "ifind_notice_pdf.py",
+    "jygs_actions.py",
+    "market_skills.py",
+    "monitor.py",
+    "portfolio_monitor.py",
+    "signal_digest.py",
+    "signal_outcome_update.py",
+    "signal_review.py",
+    "signal_store.py",
+    "signals_extract.py",
+    "smoke_ifind.py",
+    "backfill_llm_decision_web_projection.py",
+    "backfill_llm_insufficient_evidence.py",
+    "investment_bank_theme_taxonomy.py",
+    "migrate_admission_simplification.py",
+    "migrate_media_keywords.py",
+    "repair_market_feedback_snapshots.py",
+)
+
+REMOVED_OPERATOR_PATHS = (
+    SCRIPTS / "install_launchd.sh",
+    SCRIPTS / "uninstall_launchd.sh",
+    SCRIPTS / "write_remote_ifind_token.sh",
+    SCRIPTS / "write_remote_jygs_cookie.sh",
+    ROOT / "config" / "investment_bank_theme_rules.example.json",
+    ROOT / "docs" / "roadmap.md",
 )
 
 INDEPENDENT_ROUTE_EXCEPTIONS = {
@@ -100,11 +126,6 @@ INDEPENDENT_ROUTE_EXCEPTIONS = {
         "reason": "X thread/media semantics and stream retry state use a dedicated card route.",
         "boundary": "X collection, interpretation, seen_posts state, and delivery only.",
         "test": "test_x_stream_health.py",
-    },
-    "jygs_actions.py": {
-        "reason": "Optional JYGS action prediction remains a disabled-by-default legacy product path.",
-        "boundary": "JYGS action rows and their dedicated prediction card only.",
-        "test": "test_jygs_actions.py",
     },
 }
 
@@ -133,16 +154,6 @@ DIRECT_URLLIB_EXCEPTIONS = {
         "reason": "Feishu image upload and download paths carry bounded binary payloads and provider-specific errors.",
         "test": "test_market_delivery.py",
     },
-    "ifind_client.py": {
-        "kind": "legacy_bounded_request",
-        "reason": "The licensed iFinD client retains its current token and API error contract pending separate retirement or migration.",
-        "test": "test_analysis.py",
-    },
-    "jygs_actions.py": {
-        "kind": "independent_legacy_route",
-        "reason": "Disabled-by-default JYGS prediction is an explicit independent legacy route.",
-        "test": "test_jygs_actions.py",
-    },
     "link_enrichment.py": {
         "kind": "legacy_bounded_request",
         "reason": "Generic link probing has redirect and content-boundary behavior that needs a dedicated migration.",
@@ -152,11 +163,6 @@ DIRECT_URLLIB_EXCEPTIONS = {
         "kind": "provider_specialized",
         "reason": "LLM calls retain balance detection, provider response-body errors, model controls, and retry logging.",
         "test": "test_llm_analysis.py",
-    },
-    "portfolio_monitor.py": {
-        "kind": "legacy_bounded_request",
-        "reason": "Legacy portfolio enrichment combines several external API contracts and is not part of the CNINFO provider path.",
-        "test": "test_analysis.py",
     },
     "update_mihomo_config.py": {
         "kind": "operator_tool",
@@ -191,9 +197,7 @@ FORBIDDEN_ITEM_CALLS = {
     "send_card_with_response",
 }
 
-ALLOWED_OPERATIONAL_CALLS = {
-    ("ifind_batch.py", "send_batch_summary_card", "send_card"),
-}
+ALLOWED_OPERATIONAL_CALLS: set[tuple[str, str, str]] = set()
 
 
 class CallVisitor(ast.NodeVisitor):
@@ -356,6 +360,9 @@ def test_removed_compatibility_modules_do_not_return() -> None:
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imports.add(node.module.split(".")[0])
         assert not (imports & forbidden_imports), f"{path.name}: {sorted(imports & forbidden_imports)}"
+    for path in REMOVED_OPERATOR_PATHS:
+        assert not path.exists(), path
+    assert not list((ROOT / "launchd").glob("*.plist"))
 
 
 def test_independent_routes_are_explicit_and_tested() -> None:
@@ -393,7 +400,7 @@ def test_direct_urllib_request_usage_is_explicit_and_bounded() -> None:
             assert (SCRIPTS / test).exists(), (filename, test)
 
 
-def test_deployment_preserves_private_state_and_retires_shadow_units() -> None:
+def test_deployment_preserves_private_state_and_retires_unused_units() -> None:
     deploy = (SCRIPTS / "deploy_remote.sh").read_text(encoding="utf-8")
     installer = (SCRIPTS / "install_remote_systemd.sh").read_text(encoding="utf-8")
     sync = (SCRIPTS / "remote_code_sync.sh").read_text(encoding="utf-8")
@@ -413,8 +420,9 @@ def test_deployment_preserves_private_state_and_retires_shadow_units() -> None:
     assert "LLM_DECISION_RULE_CONFIG_PATH=" in installer
     assert "LLM_DECISION_RULE_CONFIG 文件权限必须为 0600" in installer
     assert "LLM_DECISION_RULE_CONFIG 内容校验失败" in installer
-    feedback_unit = (ROOT / "systemd" / "surveil-feishu-feedback.service").read_text(encoding="utf-8")
-    assert "UMask=0077" in feedback_unit
+    for service_path in (ROOT / "systemd").glob("*.service"):
+        assert "UMask=0077" in service_path.read_text(encoding="utf-8"), service_path.name
+    assert "find '$REMOTE_DIR/logs' -maxdepth 1 -type f -exec chmod 600 {} +" in installer
     assert "chmod 600 '$REMOTE_DIR/logs/feishu-feedback.log' '$REMOTE_DIR/logs/feishu-feedback.err.log'" in installer
     for service in ("surveil-feishu-feedback.service", "surveil-x-stream.service"):
         enable = f"systemctl enable --now {service}"
@@ -433,17 +441,66 @@ def test_deployment_preserves_private_state_and_retires_shadow_units() -> None:
         "surveil-collector-shadow-digest.timer",
         "surveil-rule-shadow-daily.service",
         "surveil-rule-shadow-daily.timer",
+        "surveil-rss-monitor.service",
+        "surveil-trendforce-page-monitor.service",
+        "surveil-overseas-media.service",
+        "surveil-overseas-media.timer",
+        "surveil-china-media.service",
+        "surveil-china-media.timer",
+        "surveil-signals-extract.service",
+        "surveil-signals-extract.timer",
+        "surveil-signal-outcome.service",
+        "surveil-signal-outcome.timer",
+        "surveil-signal-review.service",
+        "surveil-signal-review.timer",
+        "surveil-signal-digest.service",
+        "surveil-signal-digest.timer",
+        "surveil-jygs-actions.service",
+        "surveil-jygs-actions.timer",
+        "surveil-ifind-smoke.service",
     )
     for unit in retired_units:
-        assert f"/etc/systemd/system/{unit}" in installer
+        assert unit in installer
         assert not (ROOT / "systemd" / unit).exists()
         assert unit not in (SCRIPTS / "holdings_web.py").read_text(encoding="utf-8")
+    retired_logs = (
+        "rss-monitor.log",
+        "rss-monitor.err.log",
+        "trendforce-page-monitor.log",
+        "trendforce-page-monitor.err.log",
+        "overseas-media.log",
+        "overseas-media.err.log",
+        "china-media.log",
+        "china-media.err.log",
+        "signals-extract.log",
+        "signals-extract.err.log",
+        "signal-outcome.log",
+        "signal-outcome.err.log",
+        "signal-review.log",
+        "signal-review.err.log",
+        "signal-digest.log",
+        "signal-digest.err.log",
+        "jygs-actions.log",
+        "jygs-actions.err.log",
+        "ifind-smoke.log",
+        "ifind-smoke.err.log",
+    )
+    for log_name in retired_logs:
+        assert installer.count(f"  {log_name}\n") == 1
+    assert 'rm -f \'$REMOTE_DIR/logs/\'"\\$log_name"' in installer
+    for timer in (
+        "surveil-research-collector.timer",
+        "surveil-official-collector.timer",
+        "surveil-news-collector.timer",
+    ):
+        assert installer.count(f"systemctl enable --now {timer}") == 1
+    assert "DISABLE_LEGACY_" not in installer
+    assert "ENABLE_JYGS_TIMER" not in installer
 
 
 def test_interval_timer_activation_policy_after_deployment() -> None:
     expectations = {
         "surveil-sina-stock-news.timer": ("OnActiveSec=5min", "OnUnitActiveSec=30min"),
-        "surveil-signals-extract.timer": ("OnActiveSec=8min", "OnUnitActiveSec=10min"),
     }
     for filename, expected_lines in expectations.items():
         lines = {
@@ -461,19 +518,6 @@ def test_interval_timer_activation_policy_after_deployment() -> None:
         assert installer.count(enable) == 1
         assert installer.count(restart) == 1
         assert installer.index(enable) < installer.index(restart)
-
-    signal_timers = (
-        "surveil-signals-extract.timer",
-        "surveil-signal-outcome.timer",
-        "surveil-signal-review.timer",
-        "surveil-signal-digest.timer",
-    )
-    for unit in signal_timers:
-        assert f"systemctl enable --now {unit}" not in installer
-        assert f"systemctl restart {unit}" not in installer
-        assert unit in installer
-    assert "投资信号复盘任务组默认关闭" in installer
-
 
 def test_value_directory_runs_twice_daily_without_enabling_a_disabled_timer() -> None:
     timer = (ROOT / "systemd" / "surveil-value-directory.timer").read_text(encoding="utf-8")
@@ -525,7 +569,7 @@ def main() -> int:
     test_removed_compatibility_modules_do_not_return()
     test_independent_routes_are_explicit_and_tested()
     test_direct_urllib_request_usage_is_explicit_and_bounded()
-    test_deployment_preserves_private_state_and_retires_shadow_units()
+    test_deployment_preserves_private_state_and_retires_unused_units()
     test_interval_timer_activation_policy_after_deployment()
     test_value_directory_runs_twice_daily_without_enabling_a_disabled_timer()
     test_source_profiles_have_complete_runtime_ownership()

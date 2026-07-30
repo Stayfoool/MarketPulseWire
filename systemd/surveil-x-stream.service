@@ -4,6 +4,7 @@ After=network-online.target surveil-db-init.service surveil-proxy.service
 Wants=network-online.target surveil-proxy.service
 
 [Service]
+UMask=0077
 Type=simple
 User=surveil
 WorkingDirectory=/opt/surveil

@@ -43,7 +43,6 @@ from current_rules_web import current_rules_payload
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
 from market_view import article_view_from_row, event_view_from_row, official_view_from_row
 from settings_store import save_settings, settings_payload
-from signals_extract import extract_signals
 from source_profiles import save_source_profile_config, source_profiles_payload
 from stock_relations import (
     DEFAULT_CONFIG_PATH as STOCK_RELATIONS_CONFIG_PATH,
@@ -90,20 +89,11 @@ SYSTEMCTL_SHOW_FIELDS = {
 SERVICE_UNITS = [
     "surveil-x-stream.service",
     "surveil-feishu-feedback.service",
-    "surveil-rss-monitor.service",
-    "surveil-trendforce-page-monitor.service",
     "surveil-sina-flash.service",
-    "surveil-overseas-media.service",
-    "surveil-china-media.service",
     "surveil-sina-stock-news.service",
     "surveil-company-disclosures.service",
-    "surveil-jygs-actions.service",
     "surveil-article-daily.service",
     "surveil-llm-decision-audit-cleanup.service",
-    "surveil-signals-extract.service",
-    "surveil-signal-outcome.service",
-    "surveil-signal-review.service",
-    "surveil-signal-digest.service",
     "surveil-research-collector.service",
     "surveil-official-collector.service",
     "surveil-news-collector.service",
@@ -114,16 +104,9 @@ SERVICE_UNITS = [
 
 TIMER_UNITS = [
     "surveil-sina-stock-news.timer",
-    "surveil-overseas-media.timer",
-    "surveil-china-media.timer",
     "surveil-article-daily.timer",
     "surveil-llm-decision-audit-cleanup.timer",
-    "surveil-signals-extract.timer",
-    "surveil-signal-outcome.timer",
-    "surveil-signal-review.timer",
-    "surveil-signal-digest.timer",
     "surveil-company-disclosures.timer",
-    "surveil-jygs-actions.timer",
     "surveil-research-collector.timer",
     "surveil-official-collector.timer",
     "surveil-news-collector.timer",
@@ -132,109 +115,45 @@ TIMER_UNITS = [
 
 RUN_ONCE_TARGETS = {
     "surveil-sina-stock-news.timer": "surveil-sina-stock-news.service",
-    "surveil-overseas-media.timer": "surveil-overseas-media.service",
-    "surveil-china-media.timer": "surveil-china-media.service",
     "surveil-article-daily.timer": "surveil-article-daily.service",
     "surveil-llm-decision-audit-cleanup.timer": "surveil-llm-decision-audit-cleanup.service",
-    "surveil-signals-extract.timer": "surveil-signals-extract.service",
-    "surveil-signal-outcome.timer": "surveil-signal-outcome.service",
-    "surveil-signal-review.timer": "surveil-signal-review.service",
-    "surveil-signal-digest.timer": "surveil-signal-digest.service",
     "surveil-company-disclosures.timer": "surveil-company-disclosures.service",
-    "surveil-jygs-actions.timer": "surveil-jygs-actions.service",
     "surveil-research-collector.timer": "surveil-research-collector.service",
     "surveil-official-collector.timer": "surveil-official-collector.service",
     "surveil-news-collector.timer": "surveil-news-collector.service",
     "surveil-value-directory.timer": "surveil-value-directory.service",
 }
 
-SIGNAL_REVIEW_UNITS = {
-    "surveil-signals-extract.service",
-    "surveil-signals-extract.timer",
-    "surveil-signal-outcome.service",
-    "surveil-signal-outcome.timer",
-    "surveil-signal-review.service",
-    "surveil-signal-review.timer",
-    "surveil-signal-digest.service",
-    "surveil-signal-digest.timer",
-}
-
 ALLOWED_SYSTEMD_UNITS = set(SERVICE_UNITS) | set(TIMER_UNITS) | set(RUN_ONCE_TARGETS.values())
-
-LEGACY_CUTOVER_UNITS = {
-    "surveil-rss-monitor.service",
-    "surveil-trendforce-page-monitor.service",
-    "surveil-overseas-media.service",
-    "surveil-overseas-media.timer",
-    "surveil-china-media.service",
-    "surveil-china-media.timer",
-}
-
-LEGACY_REPLACEMENTS = {
-    "surveil-rss-monitor.service": "surveil-research-collector.timer / surveil-official-collector.timer",
-    "surveil-trendforce-page-monitor.service": "surveil-research-collector.timer",
-    "surveil-overseas-media.service": "surveil-research-collector.timer",
-    "surveil-overseas-media.timer": "surveil-research-collector.timer",
-    "surveil-china-media.service": "surveil-news-collector.timer",
-    "surveil-china-media.timer": "surveil-news-collector.timer",
-}
 
 UNIT_METADATA = {
     "surveil-x-stream.service": {"group": "fetching_persistent", "type": "常驻采集", "schedule": "X 长连接"},
-    "surveil-rss-monitor.service": {"group": "fetching_legacy", "type": "历史兼容", "schedule": "已切流；旧 300 秒 RSS 常驻"},
-    "surveil-trendforce-page-monitor.service": {"group": "fetching_legacy", "type": "历史兼容", "schedule": "已切流；旧 900 秒 TrendForce 页面常驻"},
     "surveil-sina-flash.service": {"group": "fetching_persistent", "type": "常驻采集", "schedule": "脚本内高频轮询"},
-    "surveil-overseas-media.service": {"group": "fetching_legacy", "type": "历史兼容", "schedule": "已切流；旧海外媒体批处理"},
-    "surveil-china-media.service": {"group": "fetching_legacy", "type": "历史兼容", "schedule": "已切流；旧中国财经媒体批处理"},
     "surveil-sina-stock-news.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 30 分钟"},
     "surveil-company-disclosures.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 08:00 / 20:00"},
-    "surveil-jygs-actions.service": {
-        "group": "fetching_scheduled",
-        "type": "定时采集",
-        "schedule": "默认停用；legacy product path",
-        "health_alert": False,
-    },
     "surveil-research-collector.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 5 分钟；页面源内部 15 分钟"},
     "surveil-official-collector.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 10 分钟"},
     "surveil-news-collector.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 2 分钟"},
     "surveil-value-directory.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每天 05:00 / 21:00；需先完成服务器浏览器登录"},
     "surveil-article-daily.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 20:50"},
     "surveil-llm-decision-audit-cleanup.service": {"group": "processing_scheduled", "type": "审计清理", "schedule": "每天 15:30 北京时间"},
-    "surveil-signals-extract.service": {"group": "signal_review", "type": "定时处理", "schedule": "默认关闭；启用后每 10 分钟", "health_alert": False},
-    "surveil-signal-outcome.service": {"group": "signal_review", "type": "定时处理", "schedule": "默认关闭；启用后交易日 16:20", "health_alert": False},
-    "surveil-signal-review.service": {"group": "signal_review", "type": "定时处理", "schedule": "默认关闭；启用后交易日 16:35", "health_alert": False},
-    "surveil-signal-digest.service": {"group": "signal_review", "type": "定时处理", "schedule": "默认关闭；启用后 20:35", "health_alert": False},
     "surveil-holdings-web.service": {"group": "infrastructure", "type": "基础设施", "schedule": "Web 工作台"},
     "surveil-feishu-feedback.service": {"group": "infrastructure", "type": "基础设施", "schedule": "飞书长连接"},
     "surveil-proxy.service": {"group": "infrastructure", "type": "基础设施", "schedule": "本地代理"},
     "surveil-sina-stock-news.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 30 分钟"},
-    "surveil-overseas-media.timer": {"group": "fetching_legacy", "type": "历史兼容定时器", "schedule": "已切流；旧每 5 分钟"},
-    "surveil-china-media.timer": {"group": "fetching_legacy", "type": "历史兼容定时器", "schedule": "已切流；旧每 2 分钟"},
     "surveil-company-disclosures.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "08:00 / 20:00"},
-    "surveil-jygs-actions.timer": {
-        "group": "fetching_scheduled",
-        "type": "定时器",
-        "schedule": "默认停用；legacy product path",
-        "health_alert": False,
-    },
     "surveil-research-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 5 分钟"},
     "surveil-official-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 10 分钟"},
     "surveil-news-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 2 分钟"},
     "surveil-value-directory.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每天 05:00 / 21:00；默认需人工启用"},
     "surveil-article-daily.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "20:50"},
     "surveil-llm-decision-audit-cleanup.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "每天 15:30 北京时间"},
-    "surveil-signals-extract.timer": {"group": "signal_review", "type": "定时器", "schedule": "默认关闭；启用后每 10 分钟", "health_alert": False},
-    "surveil-signal-outcome.timer": {"group": "signal_review", "type": "定时器", "schedule": "默认关闭；启用后交易日 16:20", "health_alert": False},
-    "surveil-signal-review.timer": {"group": "signal_review", "type": "定时器", "schedule": "默认关闭；启用后交易日 16:35", "health_alert": False},
-    "surveil-signal-digest.timer": {"group": "signal_review", "type": "定时器", "schedule": "默认关闭；启用后 20:35", "health_alert": False},
 }
 
 UNIT_GROUP_LABELS = {
     "fetching_persistent": "常驻采集服务",
     "fetching_scheduled": "定时采集任务",
-    "fetching_legacy": "历史兼容采集单元",
     "processing_scheduled": "非抓取处理/日报任务",
-    "signal_review": "投资信号复盘（默认关闭）",
     "infrastructure": "基础设施",
     "other": "其他",
 }
@@ -245,27 +164,18 @@ UNIT_TASK_LABELS = {
     "surveil-sina-flash": "新浪财经快讯",
     "surveil-sina-stock-news": "新浪持仓个股新闻",
     "surveil-company-disclosures": "公司公告 / 巨潮资讯",
-    "surveil-jygs-actions": "韭研公社异动",
     "surveil-research-collector": "研究机构 / 行业媒体采集",
     "surveil-official-collector": "公司官网采集",
     "surveil-news-collector": "新闻媒体采集",
     "surveil-value-directory": "价值目录",
     "surveil-article-daily": "文章日报",
     "surveil-llm-decision-audit-cleanup": "大模型决策审计清理",
-    "surveil-signals-extract": "信号提取",
-    "surveil-signal-outcome": "信号结果更新",
-    "surveil-signal-review": "信号复盘",
-    "surveil-signal-digest": "信号摘要",
     "surveil-holdings-web": "Surveil 工作台",
     "surveil-proxy": "网络代理",
 }
 
 LOG_FILES = [
     "x-stream.err.log",
-    "rss-monitor.err.log",
-    "trendforce-page-monitor.err.log",
-    "overseas-media.err.log",
-    "china-media.err.log",
     "research-collector.err.log",
     "official-collector.err.log",
     "news-collector.err.log",
@@ -274,33 +184,10 @@ LOG_FILES = [
     "sina-flash.err.log",
     "sina-stock-news.err.log",
     "company-disclosures.err.log",
-    "jygs-actions.err.log",
     "holdings-web.err.log",
     "feishu-feedback.err.log",
-    "signal-review.err.log",
-    "signal-digest.err.log",
     "stock-relations-import.err.log",
 ]
-
-SIGNAL_FEEDBACK_VERDICTS = {"hit", "partial", "miss", "too_early", "unverifiable"}
-SIGNAL_FEEDBACK_ERROR_TYPES = {
-    "stale_or_price_in",
-    "counter_supply_news",
-    "supply_expansion_bearish",
-    "wrong_relation",
-    "wrong_direction",
-    "timing_error",
-    "low_market_attention",
-    "quote_unavailable",
-    "window_not_ready",
-    "direction_uncertain",
-    "weak_follow_through",
-    "direction_or_relevance_error",
-    "timing_or_duration_error",
-    "none",
-    "unverifiable",
-    "other",
-}
 
 
 def env_flag(name: str, default: bool = False) -> bool:
@@ -629,42 +516,6 @@ def fetch_events_rows(
                         "baseline_only": False,
                     }
                 )
-        if not feedback_filter and table_exists(conn, "jygs_events"):
-            jygs_time_field = event_time_field(
-                basis=time_basis,
-                seen_field="first_seen_at",
-                published_field="trade_date",
-            )
-            for row in conn.execute(
-                f"""
-                SELECT id, trade_date, run_slot, symbol, name, themes, reason, url, first_seen_at
-                FROM jygs_events
-                WHERE datetime({jygs_time_field}) >= datetime(?)
-                  AND datetime({jygs_time_field}) < datetime(?)
-                ORDER BY first_seen_at DESC
-                LIMIT 100
-                """,
-                (start_utc, end_utc),
-            ):
-                rows.append(
-                    {
-                        "kind": "jygs",
-                        "source": f"jygs/{row['run_slot']}",
-                        "source_id": f"jygs/{row['run_slot']}",
-                        "id": row["id"],
-                        "title": f"{row['name']} {row['symbol'] or ''}".strip(),
-                        "summary": row["reason"] or row["themes"] or "",
-                        "url": row["url"] or "",
-                        "published_at": row["trade_date"] or "",
-                        "seen_at": normalize_time(row["first_seen_at"]),
-                        "importance": "",
-                        "classification": "",
-                        "push": False,
-                        "delivery_status": "",
-                        "baseline_only": False,
-                    }
-                )
-
     for item in rows:
         if "feedback_state" not in item:
             apply_event_feedback(item)
@@ -717,246 +568,6 @@ def fetch_llm_decision_rows(
     return {"rows": rows, "summary": llm_decision_summary(rows)}
 
 
-def fetch_signal_rows(
-    *,
-    q: str = "",
-    source: str = "",
-    symbol: str = "",
-    verdict: str = "",
-    importance: str = "",
-    limit: int = 100,
-) -> list[dict[str, Any]]:
-    q_lower = q.strip().lower()
-    source_lower = source.strip().lower()
-    symbol_upper = symbol.strip().upper()
-    verdict_lower = verdict.strip().lower()
-    importance_lower = importance.strip().lower()
-    rows: list[dict[str, Any]] = []
-    with connect_sqlite(DEFAULT_DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        if not table_exists(conn, "signals"):
-            return []
-        for row in conn.execute(
-            """
-            WITH latest_outcome AS (
-                SELECT signal_id, symbol, MAX(as_of_date) AS as_of_date
-                FROM signal_outcomes
-                GROUP BY signal_id, symbol
-            ), latest_review AS (
-                SELECT signal_id, COALESCE(symbol, '') AS symbol, MAX(id) AS review_id
-                FROM signal_reviews
-                GROUP BY signal_id, COALESCE(symbol, '')
-            )
-            SELECT s.id, s.source, s.title, s.url, s.published_at, s.created_at,
-                   s.importance, s.incremental_classification, s.direction,
-                   s.confidence, s.thesis,
-                   t.id AS target_id, t.symbol, t.name, t.target_role, t.relation_type, t.relation_reason,
-                   t.expected_direction, t.confidence AS target_confidence,
-                   o.as_of_date, o.return_1d, o.return_3d, o.return_5d, o.return_10d,
-                   o.return_20d, o.max_drawdown, o.max_runup, o.volume_change,
-                   o.outcome_status,
-                   r.review_type, r.verdict, r.error_type, r.review_text, r.lessons_json, r.created_at AS reviewed_at
-            FROM signals s
-            LEFT JOIN signal_targets t ON t.signal_id = s.id
-            LEFT JOIN latest_outcome lo ON lo.signal_id = s.id AND lo.symbol = t.symbol
-            LEFT JOIN signal_outcomes o
-              ON o.signal_id = lo.signal_id AND o.symbol = lo.symbol AND o.as_of_date = lo.as_of_date
-            LEFT JOIN latest_review lr ON lr.signal_id = s.id AND lr.symbol = COALESCE(t.symbol, '')
-            LEFT JOIN signal_reviews r ON r.id = lr.review_id
-            ORDER BY s.created_at DESC, s.id DESC
-            LIMIT 600
-            """
-        ):
-            item = {
-                "id": row["id"],
-                "target_id": row["target_id"],
-                "source": row["source"] or "",
-                "title": row["title"] or "",
-                "url": row["url"] or "",
-                "published_at": normalize_time(row["published_at"]),
-                "created_at": normalize_time(row["created_at"]),
-                "importance": row["importance"] or "",
-                "incremental_classification": row["incremental_classification"] or "",
-                "direction": row["direction"] or "",
-                "confidence": row["confidence"] or "",
-                "thesis": row["thesis"] or "",
-                "symbol": row["symbol"] or "",
-                "name": row["name"] or "",
-                "target_role": row["target_role"] or "",
-                "relation_type": row["relation_type"] or "",
-                "relation_reason": row["relation_reason"] or "",
-                "expected_direction": row["expected_direction"] or "",
-                "target_confidence": row["target_confidence"] or "",
-                "as_of_date": row["as_of_date"] or "",
-                "returns": {
-                    "1d": row["return_1d"],
-                    "3d": row["return_3d"],
-                    "5d": row["return_5d"],
-                    "10d": row["return_10d"],
-                    "20d": row["return_20d"],
-                },
-                "max_drawdown": row["max_drawdown"],
-                "max_runup": row["max_runup"],
-                "volume_change": row["volume_change"],
-                "outcome_status": row["outcome_status"] or "",
-                "review_type": row["review_type"] or "",
-                "verdict": row["verdict"] or "",
-                "error_type": row["error_type"] or "",
-                "review_text": row["review_text"] or "",
-                "lessons_json": row["lessons_json"] or "",
-                "reviewed_at": normalize_time(row["reviewed_at"]),
-            }
-            hay = json.dumps(item, ensure_ascii=False).lower()
-            if q_lower and q_lower not in hay:
-                continue
-            if source_lower and source_lower not in str(item["source"]).lower():
-                continue
-            if symbol_upper and symbol_upper not in str(item["symbol"]).upper() and symbol_upper not in str(item["name"]).upper():
-                continue
-            if verdict_lower and verdict_lower != str(item["verdict"]).lower():
-                continue
-            if importance_lower and importance_lower != str(item["importance"]).lower():
-                continue
-            rows.append(item)
-            if len(rows) >= max(1, min(limit, 300)):
-                break
-    return rows
-
-
-def save_signal_feedback(payload: dict[str, Any]) -> dict[str, Any]:
-    try:
-        signal_id = int(payload.get("signal_id") or 0)
-    except (TypeError, ValueError):
-        signal_id = 0
-    if signal_id <= 0:
-        raise HoldingsError("请求缺少有效 signal_id")
-
-    target_id_raw = payload.get("target_id")
-    target_id: int | None = None
-    if target_id_raw not in (None, ""):
-        try:
-            target_id = int(target_id_raw)
-        except (TypeError, ValueError):
-            target_id = None
-
-    verdict = str(payload.get("verdict") or "miss").strip().lower()
-    if verdict not in SIGNAL_FEEDBACK_VERDICTS:
-        raise HoldingsError("复盘结论无效")
-
-    error_type = str(payload.get("error_type") or "other").strip().lower()
-    if error_type not in SIGNAL_FEEDBACK_ERROR_TYPES:
-        error_type = "other"
-
-    symbol = str(payload.get("symbol") or "").strip().upper()
-    review_text = str(payload.get("review_text") or "").strip()
-    if not review_text:
-        raise HoldingsError("请填写反馈原因")
-    if len(review_text) > 3000:
-        raise HoldingsError("反馈原因过长")
-
-    lessons_raw = payload.get("lessons")
-    if isinstance(lessons_raw, list):
-        lessons = [str(item).strip() for item in lessons_raw if str(item).strip()]
-    else:
-        lessons = [
-            item.strip()
-            for item in str(lessons_raw or "").replace("；", "\n").replace(";", "\n").splitlines()
-            if item.strip()
-        ]
-    if not lessons:
-        lessons = [review_text]
-    lessons = lessons[:8]
-
-    tags_raw = payload.get("tags")
-    tags = [str(item).strip() for item in tags_raw if str(item).strip()] if isinstance(tags_raw, list) else []
-    now = datetime.now(timezone.utc).isoformat()
-    lessons_json = {
-        "manual": True,
-        "symbol": symbol,
-        "target_id": target_id,
-        "lessons": lessons,
-        "feedback_tags": tags,
-        "user_feedback": review_text,
-        "created_from": "holdings_web",
-    }
-    with connect_sqlite(DEFAULT_DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        existing = conn.execute("SELECT id FROM signals WHERE id = ?", (signal_id,)).fetchone()
-        if not existing:
-            raise HoldingsError("signal_id 不存在")
-        if target_id is None and symbol:
-            target_row = conn.execute(
-                """
-                SELECT id FROM signal_targets
-                WHERE signal_id = ? AND UPPER(COALESCE(symbol, '')) = ?
-                ORDER BY id DESC LIMIT 1
-                """,
-                (signal_id, symbol),
-            ).fetchone()
-            if target_row:
-                target_id = int(target_row["id"])
-                lessons_json["target_id"] = target_id
-        cur = conn.execute(
-            """
-            INSERT INTO signal_reviews (
-                signal_id, target_id, symbol, review_type, verdict, error_type, review_text,
-                lessons_json, model, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                signal_id,
-                target_id,
-                symbol,
-                "manual",
-                verdict,
-                error_type,
-                review_text,
-                json.dumps(lessons_json, ensure_ascii=False, sort_keys=True),
-                "human",
-                now,
-            ),
-        )
-        conn.commit()
-        return {"id": int(cur.lastrowid), "created_at": now}
-
-
-def fetch_signal_summary() -> dict[str, Any]:
-    with connect_sqlite(DEFAULT_DB_PATH) as conn:
-        conn.row_factory = sqlite3.Row
-        cards = [
-            {"label": "信号", "value": count_rows(conn, "signals")},
-            {"label": "影响标的", "value": count_rows(conn, "signal_targets")},
-            {"label": "行情结果", "value": count_rows(conn, "signal_outcomes")},
-            {"label": "复盘记录", "value": count_rows(conn, "signal_reviews")},
-            {"label": "关系映射", "value": count_rows(conn, "stock_relations", "enabled = 1")},
-        ]
-        verdicts = grouped_counts(conn, "signal_reviews", "verdict", "1=1", ())
-        source_scores: list[dict[str, Any]] = []
-        if table_exists(conn, "source_scores"):
-            for row in conn.execute(
-                """
-                SELECT source, window_days, signal_count, hit_rate, false_positive_rate,
-                       avg_excess_return, updated_at
-                FROM source_scores
-                WHERE window_days = 30
-                ORDER BY signal_count DESC, hit_rate DESC
-                LIMIT 12
-                """
-            ):
-                source_scores.append(
-                    {
-                        "source": row["source"] or "",
-                        "window_days": row["window_days"],
-                        "signal_count": row["signal_count"],
-                        "hit_rate": row["hit_rate"],
-                        "false_positive_rate": row["false_positive_rate"],
-                        "avg_excess_return": row["avg_excess_return"],
-                        "updated_at": row["updated_at"] or "",
-                    }
-                )
-    return {"cards": cards, "verdicts": verdicts, "source_scores": source_scores}
-
-
 def fetch_relation_rows(q: str = "", limit: int = 100, enabled: str = "all") -> list[dict[str, Any]]:
     return list_relations(db_path=DEFAULT_DB_PATH, q=q, enabled=enabled, limit=limit)
 
@@ -964,12 +575,6 @@ def fetch_relation_rows(q: str = "", limit: int = 100, enabled: str = "all") -> 
 def relation_snapshot_payload() -> dict[str, Any]:
     exported = export_relations(db_path=DEFAULT_DB_PATH, config_path=STOCK_RELATIONS_CONFIG_PATH)
     return {"snapshot": exported}
-
-
-def run_relation_backfill(days: int) -> dict[str, Any]:
-    safe_days = max(1, min(int(days or 7), 60))
-    counts = extract_signals(db_path=DEFAULT_DB_PATH, days=safe_days, dry_run=False)
-    return {"days": safe_days, "counts": counts}
 
 
 def overview_payload(day: str = "") -> dict[str, Any]:
@@ -1058,7 +663,6 @@ def overview_payload(day: str = "") -> dict[str, Any]:
             {"label": "统一事件", "value": event_count},
             {"label": "来源决策", "value": article_count},
             {"label": "X 新帖", "value": count_rows(conn, "seen_posts", "first_seen_at >= ? AND first_seen_at < ?", (start_utc, end_utc))},
-            {"label": "韭研异动", "value": count_rows(conn, "jygs_events", "first_seen_at >= ? AND first_seen_at < ?", (start_utc, end_utc))},
             {"label": "飞书失败", "value": deliveries_failed + article_failures},
         ]
         deliveries = grouped_counts(conn, "deliveries", "status", "sent_at >= ? AND sent_at < ?", (start_utc, end_utc))
@@ -1126,7 +730,7 @@ def systemctl_show(unit: str) -> dict[str, Any]:
 def unit_actions(unit: str) -> list[str]:
     if unit not in ALLOWED_SYSTEMD_UNITS:
         return []
-    if unit == "surveil-holdings-web.service" or unit in SIGNAL_REVIEW_UNITS:
+    if unit == "surveil-holdings-web.service":
         return ["status"]
     if unit.endswith(".timer"):
         actions = ["restart_timer"]
@@ -1142,16 +746,8 @@ def unit_display_metadata(unit: str, values: dict[str, Any]) -> dict[str, Any]:
     meta = dict(UNIT_METADATA.get(unit) or {})
     group = str(meta.get("group") or "other")
     unit_type = str(meta.get("type") or ("定时器" if unit.endswith(".timer") else "服务"))
-    if unit in LEGACY_CUTOVER_UNITS:
-        lifecycle = "legacy_cutover"
-        lifecycle_label = "历史兼容"
-        replacement = LEGACY_REPLACEMENTS.get(unit, "")
-        default_visible = False
-    else:
-        lifecycle = "production"
-        lifecycle_label = "生产"
-        replacement = ""
-        default_visible = True
+    lifecycle = "production"
+    lifecycle_label = "生产"
     active = str(values.get("ActiveState") or "")
     sub = str(values.get("SubState") or "")
     result = str(values.get("Result") or "")
@@ -1180,8 +776,8 @@ def unit_display_metadata(unit: str, values: dict[str, Any]) -> dict[str, Any]:
         "status_text": status_text,
         "lifecycle": lifecycle,
         "lifecycle_label": lifecycle_label,
-        "replacement": replacement,
-        "default_visible": default_visible,
+        "replacement": "",
+        "default_visible": True,
         "health_alert": bool(meta.get("health_alert", lifecycle == "production")),
     }
 
@@ -1823,52 +1419,6 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 return
             self.send_json({"ok": True, **current_rules_payload()})
             return
-        if parsed.path == "/api/signals":
-            if not self.require_auth():
-                return
-            try:
-                qs = parse_qs(parsed.query)
-                limit_raw = (qs.get("limit") or ["100"])[0]
-                try:
-                    limit = int(limit_raw)
-                except ValueError:
-                    limit = 100
-                self.send_json(
-                    {
-                        "ok": True,
-                        "summary": fetch_signal_summary(),
-                        "signals": fetch_signal_rows(
-                            q=(qs.get("q") or [""])[0],
-                            source=(qs.get("source") or [""])[0],
-                            symbol=(qs.get("symbol") or [""])[0],
-                            verdict=(qs.get("verdict") or [""])[0],
-                            importance=(qs.get("importance") or [""])[0],
-                            limit=limit,
-                        ),
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001
-                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
-            return
-        if parsed.path == "/api/signal-relations":
-            if not self.require_auth():
-                return
-            try:
-                qs = parse_qs(parsed.query)
-                limit_raw = (qs.get("limit") or ["100"])[0]
-                try:
-                    limit = int(limit_raw)
-                except ValueError:
-                    limit = 100
-                self.send_json(
-                    {
-                        "ok": True,
-                        "relations": fetch_relation_rows(q=(qs.get("q") or [""])[0], limit=limit),
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001
-                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
-            return
         if parsed.path == "/api/relations":
             if not self.require_auth():
                 return
@@ -2038,11 +1588,6 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 else:
                     self.send_json(response)
                 return
-            if parsed.path == "/api/signal-feedback":
-                saved = save_signal_feedback(payload)
-                saved["ok"] = True
-                self.send_json(saved)
-                return
             if parsed.path == "/api/relations/save":
                 relation = payload.get("relation")
                 if not isinstance(relation, dict):
@@ -2085,11 +1630,6 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 counts = import_relations(db_path=DEFAULT_DB_PATH, config_path=STOCK_RELATIONS_CONFIG_PATH)
                 response = {"ok": True, "counts": counts}
                 response.update(relation_snapshot_payload())
-                self.send_json(response)
-                return
-            if parsed.path == "/api/relations/backfill":
-                response = {"ok": True}
-                response.update(run_relation_backfill(int(payload.get("days") or 7)))
                 self.send_json(response)
                 return
             if parsed.path == "/api/relation-suggestions/accept":

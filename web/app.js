@@ -9,8 +9,6 @@ let holdingsBusyMode = '';
 let dragIndex = null;
 let managedRelations = [];
 let editingRelationId = null;
-let signalRowsCache = [];
-let editingSignalFeedback = null;
 let sourceProfileCache = {categories: [], profiles: []};
 let eventSourceOptionsLoaded = false;
 let eventOperationId = 0;
@@ -128,20 +126,13 @@ function serviceActionButtons(unit) {
 }
 
 function renderHealthTasks(tasks, groupLabels) {
-  const showLegacy = Boolean(document.getElementById('showLegacyUnits')?.checked);
   const allTasks = tasks || [];
-  const visibleTasks = allTasks.filter(task => {
-    if (task.lifecycle === 'legacy_cutover' && !showLegacy) return false;
-    return true;
-  });
-  const hiddenLegacy = allTasks.filter(task => task.lifecycle === 'legacy_cutover').length;
+  const visibleTasks = allTasks;
   const summary = document.getElementById('healthUnitSummary');
   if (summary) {
-    const parts = [`展示 ${visibleTasks.length} / ${allTasks.length} 个逻辑任务`];
-    if (!showLegacy && hiddenLegacy) parts.push(`隐藏历史兼容任务 ${hiddenLegacy} 个`);
-    summary.textContent = parts.join('；');
+    summary.textContent = `展示 ${visibleTasks.length} 个逻辑任务`;
   }
-  const order = ['fetching_persistent', 'fetching_scheduled', 'processing_scheduled', 'signal_review', 'infrastructure', 'fetching_legacy', 'other'];
+  const order = ['fetching_persistent', 'fetching_scheduled', 'processing_scheduled', 'infrastructure', 'other'];
   const byGroup = {};
   visibleTasks.forEach(task => {
     const group = task.group || 'other';
@@ -228,7 +219,6 @@ function showView(name) {
   if (name === 'llm-decisions') loadLlmDecisions();
   if (name === 'rules') loadCurrentRules();
   if (name === 'feedback') loadFeedbackQuality();
-  if (name === 'signals') loadSignals();
   if (name === 'relations') loadRelationManager();
   if (name === 'sources') {
     loadSourceProfiles();
@@ -775,126 +765,6 @@ async function loadLlmDecisions() {
   }
 }
 
-async function loadSignals() {
-  try {
-    const params = new URLSearchParams();
-    const source = document.getElementById('signalSource').value.trim();
-    const symbol = document.getElementById('signalSymbol').value.trim();
-    const verdict = document.getElementById('signalVerdict').value.trim();
-    const importance = document.getElementById('signalImportance').value.trim();
-    const q = document.getElementById('signalQuery').value.trim();
-    if (source) params.set('source', source);
-    if (symbol) params.set('symbol', symbol);
-    if (verdict) params.set('verdict', verdict);
-    if (importance) params.set('importance', importance);
-    if (q) params.set('q', q);
-    const data = await api('/api/signals?' + params.toString());
-    document.getElementById('signalMetrics').innerHTML = ((data.summary || {}).cards || []).map(item => `
-      <div class="metric">
-        <div class="label">${escapeHtml(item.label)}</div>
-        <div class="value">${escapeHtml(item.value)}</div>
-      </div>
-    `).join('');
-    signalRowsCache = data.signals || [];
-    document.getElementById('signalRows').innerHTML = signalRowsCache.map((item, index) => {
-      const returns = item.returns || {};
-      const returnText = [`1d ${formatPct(returns['1d'])}`, `3d ${formatPct(returns['3d'])}`, `5d ${formatPct(returns['5d'])}`].join('<br>');
-      const title = item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : escapeHtml(item.title || '');
-      return `
-        <tr>
-          <td>${badge(item.verdict || item.outcome_status || '-')}<div class="hint">${escapeHtml(item.error_type || '')}</div><div class="hint">${escapeHtml(item.review_type || '')}</div></td>
-          <td><strong>${escapeHtml(item.symbol || item.name || '-')}</strong><div class="hint">${escapeHtml(item.name || '')}</div></td>
-          <td>${returnText}<div class="hint">runup ${formatPct(item.max_runup)} / dd ${formatPct(item.max_drawdown)}</div></td>
-          <td class="summary-cell">
-            <div><strong>${title}</strong></div>
-            <div>${escapeHtml(shortText(item.thesis || '', 180))}</div>
-            <div class="hint">${escapeHtml(shortText(item.review_text || '', 220))}</div>
-          </td>
-          <td>${escapeHtml(item.source || '')}<div>${badge(item.importance || '')}</div><div class="hint">${formatTime(item.created_at)}</div></td>
-          <td>${escapeHtml(item.target_role || '')}<div class="hint">${escapeHtml(shortText(item.relation_type || item.relation_reason || '', 120))}</div></td>
-          <td><button onclick="openSignalFeedback(${index})">修正</button></td>
-        </tr>
-      `;
-    }).join('') || '<tr><td colspan="7">没有匹配信号。</td></tr>';
-    const scores = ((data.summary || {}).source_scores || []);
-    document.getElementById('signalSourceScores').innerHTML = ['<div class="list-row"><strong>来源评分（近 30 日）</strong></div>', ...scores.map(item => `
-      <div class="list-row">
-        <strong>${escapeHtml(item.source || '')}</strong>
-        <span class="summary">样本 ${item.signal_count} / 命中 ${formatRate(item.hit_rate)} / 未兑现 ${formatRate(item.false_positive_rate)}</span>
-        <div class="hint">平均方向收益：${escapeHtml(item.avg_excess_return ?? '-')}</div>
-      </div>
-    `)].join('');
-    await loadRelations();
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-function openSignalFeedback(index) {
-  const item = signalRowsCache[index];
-  if (!item) return;
-  editingSignalFeedback = item;
-  document.getElementById('signalFeedbackVerdict').value = item.verdict || 'miss';
-  document.getElementById('signalFeedbackErrorType').value = item.error_type || 'stale_or_price_in';
-  document.getElementById('signalFeedbackText').value = item.review_text || '';
-  let lessons = '';
-  try {
-    const parsed = item.lessons_json ? JSON.parse(item.lessons_json) : {};
-    if (Array.isArray(parsed.lessons)) lessons = parsed.lessons.join('\n');
-  } catch (err) {}
-  document.getElementById('signalFeedbackLessons').value = lessons;
-  document.getElementById('signalFeedbackMeta').textContent = `${item.symbol || '-'} / ${item.title || ''}`;
-  document.getElementById('signalFeedbackModal').style.display = 'flex';
-}
-
-function closeSignalFeedback() {
-  editingSignalFeedback = null;
-  document.getElementById('signalFeedbackModal').style.display = 'none';
-}
-
-async function saveSignalFeedback() {
-  if (!editingSignalFeedback) return;
-  try {
-    const payload = {
-      signal_id: editingSignalFeedback.id,
-      target_id: editingSignalFeedback.target_id || null,
-      symbol: editingSignalFeedback.symbol || '',
-      verdict: document.getElementById('signalFeedbackVerdict').value,
-      error_type: document.getElementById('signalFeedbackErrorType').value,
-      review_text: document.getElementById('signalFeedbackText').value.trim(),
-      lessons: document.getElementById('signalFeedbackLessons').value.trim()
-    };
-    await api('/api/signal-feedback', {method: 'POST', body: JSON.stringify(payload)});
-    closeSignalFeedback();
-    await loadSignals();
-    showStatus('已保存人工复盘反馈。');
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-async function loadRelations() {
-  try {
-    const params = new URLSearchParams();
-    const q = document.getElementById('relationQuery') ? document.getElementById('relationQuery').value.trim() : '';
-    if (q) params.set('q', q);
-    const data = await api('/api/signal-relations?' + params.toString());
-    document.getElementById('relationRows').innerHTML = (data.relations || []).map(item => `
-      <tr>
-        <td><strong>${escapeHtml(item.symbol || '')}</strong><div class="hint">${escapeHtml(item.symbol_name || '')}</div></td>
-        <td><strong>${escapeHtml(item.related_symbol || '')}</strong><div class="hint">${escapeHtml(item.related_name || '')}</div></td>
-        <td>${badge(item.impact_direction || '')}<div class="hint">${escapeHtml(item.confidence || '')}</div></td>
-        <td class="summary-cell">
-          <div>${escapeHtml(item.relation_type || '')} / ${escapeHtml(item.theme || '')}</div>
-          <div class="hint">${escapeHtml(shortText(item.reason || '', 180))}</div>
-        </td>
-      </tr>
-    `).join('') || '<tr><td colspan="4">暂无关系配置。可复制 config/stock_relations.example.json 为私有 config/stock_relations.json 后导入。</td></tr>';
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
 async function loadRelationManager() {
   try {
     const params = new URLSearchParams();
@@ -1069,17 +939,6 @@ async function diffRelationJson() {
     ].join('\n');
     document.getElementById('diffText').textContent = text;
     document.getElementById('diffModal').style.display = 'flex';
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-async function backfillRelations() {
-  if (!confirm('确认重跑最近 N 天信号抽取？这会按当前关系映射补充 related_stock。')) return;
-  try {
-    const days = Number(document.getElementById('relationBackfillDays').value || 7);
-    const data = await api('/api/relations/backfill', {method: 'POST', body: JSON.stringify({days})});
-    showStatus(`回填完成：最近 ${data.days} 天，${JSON.stringify(data.counts)}`);
   } catch (err) {
     showStatus(err.message, 'err');
   }
@@ -1493,7 +1352,7 @@ function settingsRestartAdvice(changedItems) {
   if (hasPrefix('WEB_EVIDENCE_') || hasAny(['TAVILY_API_KEY', 'BRAVE_SEARCH_API_KEY'])) {
     lines.push('Tavily/Web Evidence：新 collector 为 timer one-shot，下一轮会读取配置；如需马上验证，在任务健康页立即运行 surveil-research-collector.timer、surveil-official-collector.timer、surveil-news-collector.timer。');
   }
-  if (hasPrefix('LLM_') || hasPrefix('OPENAI_')) {
+  if (hasPrefix('LLM_')) {
     lines.push('大模型配置：重启常驻的 surveil-x-stream.service、surveil-sina-flash.service；研究机构/官网/新闻媒体 collector 下一轮自动读取，也可立即运行对应 timer。');
   }
   if (hasPrefix('VALUE_DIRECTORY_')) {
@@ -1504,9 +1363,6 @@ function settingsRestartAdvice(changedItems) {
   }
   if (hasPrefix('SINA_')) {
     lines.push('新浪配置：重启 surveil-sina-flash.service；可选立即运行 surveil-sina-stock-news.timer。');
-  }
-  if (hasPrefix('IFIND_')) {
-    lines.push('iFinD 行情/兼容配置：依赖该接口的任务下一轮读取；公司公告来源已迁移到巨潮资讯。');
   }
   if (hasAny(['SURVEIL_HTTP_PROXY', 'HTTPS_PROXY', 'HTTP_PROXY', 'ALL_PROXY'])) {
     lines.push('代理环境：重启使用代理的常驻服务；collector timer 下一轮自动读取。若修改 mihomo 配置，重启 surveil-proxy.service。');

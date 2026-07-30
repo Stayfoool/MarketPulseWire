@@ -15,9 +15,6 @@ from typing import Any
 
 import httpx
 
-from env_utils import get_env
-
-
 class LLMBalanceInsufficientError(RuntimeError):
     """Raised when the model provider reports insufficient balance."""
 
@@ -133,13 +130,9 @@ USER_PROMPT_TEMPLATE = """请分析以下内容，并输出 JSON：
 def llm_config() -> tuple[str, str, str] | None:
     if os.getenv("SURVEIL_DISABLE_LLM", "").strip() == "1":
         return None
-    api_key = get_env("LLM_API_KEY", "OPENAI_API_KEY", "DASHSCOPE_API_KEY", "DEEPSEEK_API_KEY")
-    base_url = get_env("LLM_BASE_URL", "OPENAI_BASE_URL", "DASHSCOPE_BASE_URL", "DEEPSEEK_BASE_URL")
-    model = get_env("LLM_MODEL", "OPENAI_MODEL", "DASHSCOPE_MODEL", "DEEPSEEK_MODEL")
-    if api_key and not base_url and (model.startswith("deepseek") or os.getenv("DEEPSEEK_API_KEY")):
-        base_url = "https://api.deepseek.com"
-    if api_key and base_url and not model:
-        model = "deepseek-chat" if "deepseek" in base_url.lower() else "gpt-4.1-mini"
+    api_key = os.getenv("LLM_API_KEY", "").strip()
+    base_url = os.getenv("LLM_BASE_URL", "").strip()
+    model = os.getenv("LLM_MODEL", "").strip()
     if not api_key or not base_url or not model:
         return None
     return api_key, base_url, model

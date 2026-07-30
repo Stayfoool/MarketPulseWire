@@ -4,10 +4,7 @@
 from __future__ import annotations
 
 import json
-import sqlite3
-
 from market_view import article_view_from_row, event_view_from_row, official_view_from_row
-from signals_extract import article_signal_from_row
 
 
 def test_article_view_prefers_unified_interpretation_and_decision_metadata() -> None:
@@ -143,72 +140,10 @@ def test_unified_action_overrides_conflicting_legacy_view_flags() -> None:
     assert event.push is False
 
 
-def test_article_signal_extraction_uses_market_view_thesis_and_targets() -> None:
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    conn.execute(
-        """
-        CREATE TABLE projected_market_rows (
-            market_review_id INTEGER, source TEXT, item_id TEXT, url TEXT, title TEXT, source_module TEXT,
-            published_at TEXT, importance TEXT, push_now INTEGER, market_impact TEXT,
-            incremental_classification TEXT, affected_targets_json TEXT, reason TEXT,
-            daily_summary TEXT, confidence TEXT, gate_json TEXT, pushed_at TEXT, created_at TEXT
-        )
-        """
-    )
-    gate = {
-        "raw": {
-            "core_content": "统一解读：液冷供应链关注度提升。",
-            "related_targets": [{"name": "液冷"}],
-            "decision_result": {
-                "action": "push",
-                "brief_reason": "产业硬变量规则命中。",
-                "rule_hits": [{"rule_id": "industry_quantified_hardline", "affected_targets": ["AI服务器"]}],
-            },
-        }
-    }
-    conn.execute(
-        """
-        INSERT INTO projected_market_rows VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            41,
-            "digitimes_tw_server",
-            "item-1",
-            "",
-            "液冷供应链新闻",
-            "DIGITIMES",
-            "2026-07-11T00:00:00+00:00",
-            "high",
-            1,
-            "",
-            "",
-            "[]",
-            "旧理由",
-            "旧摘要",
-            "",
-            json.dumps(gate, ensure_ascii=False),
-            "",
-            "2026-07-11T00:01:00+00:00",
-        ),
-    )
-    row = conn.execute("SELECT * FROM projected_market_rows").fetchone()
-    extracted = article_signal_from_row(conn, row)
-    assert extracted is not None
-    signal, targets, _evidence = extracted
-    assert signal["source_table"] == "market_reviews"
-    assert signal["source_id"] == "41"
-    assert signal["thesis"] == "统一解读：液冷供应链关注度提升。"
-    target_names = {target.get("name") for target in targets}
-    assert "液冷" in target_names
-    assert "AI服务器" in target_names
-
-
 def main() -> int:
     test_article_view_prefers_unified_interpretation_and_decision_metadata()
     test_official_and_event_views_read_prefixed_decision_metadata()
     test_unified_action_overrides_conflicting_legacy_view_flags()
-    test_article_signal_extraction_uses_market_view_thesis_and_targets()
     print("market view checks passed")
     return 0
 
