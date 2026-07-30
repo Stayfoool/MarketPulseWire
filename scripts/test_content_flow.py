@@ -9,7 +9,7 @@ import alphabstract_monitor
 import china_finance_media_monitor
 import market_flow
 import market_content_adapter
-import market_runtime
+import market_flow as market_flow
 import rss_monitor
 import trendforce_page_monitor
 import value_directory_monitor
@@ -26,25 +26,28 @@ def fake_interpretation(*args, **kwargs) -> InterpretationResult:
 
 
 def test_article_interpretation_cannot_override_decision_action() -> None:
+    item = {
+        "id": "macro-1",
+        "title": "美国 CPI 大幅低于市场预期，2年期美债收益率下跌",
+        "summary": "市场重新定价美联储降息路径。",
+        "published_at": "2026-07-12T00:00:00+00:00",
+    }
     original = market_flow.interpret_market_item
     try:
         market_flow.interpret_market_item = fake_interpretation
-        review = market_content_adapter.evaluate_article_review(
-            None,
-            "cls_telegraph_api",
-            {
-                "id": "macro-1",
-                "title": "美国 CPI 大幅低于市场预期，2年期美债收益率下跌",
-                "summary": "市场重新定价美联储降息路径。",
-                "published_at": "2026-07-12T00:00:00+00:00",
-            },
-            decision=DecisionResult(
+        flow_result = market_flow.evaluate_content_item(
+            market_flow.normalize_market_item("cls_telegraph_api", item, store_kind="article"),
+            item,
+            DecisionResult(
                 action="push",
                 importance="high",
                 reason="大模型程度决策命中。",
                 need_llm_interpretation=True,
             ),
+            official=False,
+            storage_ref={},
         )
+        review = market_content_adapter.project_article_review(item, flow_result)
     finally:
         market_flow.interpret_market_item = original
     assert review["push_now"] is True
@@ -56,25 +59,28 @@ def test_article_interpretation_cannot_override_decision_action() -> None:
 
 
 def test_official_flow_uses_same_decision_and_interpretation_contract() -> None:
+    item = {
+        "id": "rubin-1",
+        "title": "NVIDIA announces Rubin rack-scale AI platform with liquid cooling",
+        "summary": "NVIDIA details GPU systems, liquid cooling, and AI factory deployment.",
+        "published_at": "2026-07-12T00:00:00+00:00",
+    }
     original = market_flow.interpret_market_item
     try:
         market_flow.interpret_market_item = fake_interpretation
-        review = market_content_adapter.evaluate_official_review(
-            None,
-            "nvidia_blog",
-            {
-                "id": "rubin-1",
-                "title": "NVIDIA announces Rubin rack-scale AI platform with liquid cooling",
-                "summary": "NVIDIA details GPU systems, liquid cooling, and AI factory deployment.",
-                "published_at": "2026-07-12T00:00:00+00:00",
-            },
-            decision=DecisionResult(
+        flow_result = market_flow.evaluate_content_item(
+            market_flow.normalize_market_item("nvidia_blog", item, store_kind="official"),
+            item,
+            DecisionResult(
                 action="push",
                 importance="high",
                 reason="大模型程度决策命中。",
                 need_llm_interpretation=True,
             ),
+            official=True,
+            storage_ref={},
         )
+        review = market_content_adapter.project_official_review(item, flow_result)
     finally:
         market_flow.interpret_market_item = original
     assert review["should_push_now"] is True
@@ -83,11 +89,11 @@ def test_official_flow_uses_same_decision_and_interpretation_contract() -> None:
 
 
 def test_runtime_and_monitor_imports_use_one_unified_path() -> None:
-    assert market_runtime._selected_module("article").__name__ == "market_content_adapter"
-    assert market_runtime._selected_module("official").__name__ == "market_content_adapter"
-    assert market_runtime._selected_module("event").__name__ == "market_event_adapter"
+    assert market_flow.project_article_review.__module__ == "market_content_adapter"
+    assert market_flow.project_official_review.__module__ == "market_content_adapter"
+    assert market_flow.project_event_analysis.__module__ == "market_event_adapter"
     for module in (rss_monitor, china_finance_media_monitor, trendforce_page_monitor, alphabstract_monitor, value_directory_monitor):
-        assert module.process_market_item.__module__ == "market_runtime"
+        assert module.process_market_item.__module__ == "market_flow"
         source = inspect.getsource(module)
         for forbidden in (
             "content_runtime",
@@ -108,7 +114,7 @@ def test_runtime_and_monitor_imports_use_one_unified_path() -> None:
 def test_value_directory_uses_unified_runtime_after_private_enrichment() -> None:
     source = inspect.getsource(value_directory_monitor)
     assert "from article_gate import" not in source
-    assert value_directory_monitor.process_market_item.__module__ == "market_runtime"
+    assert value_directory_monitor.process_market_item.__module__ == "market_flow"
     assert "process_market_item(" in source
 
 

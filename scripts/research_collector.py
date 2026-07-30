@@ -4,7 +4,7 @@
 By default this collector runs in shadow mode: it does not send Feishu cards,
 run LLM interpretation, or write production dedupe/review tables. The explicit
 ``--production`` mode runs the RSS/page collectors; every item then enters the
-shared ``process_market_item`` runtime facade.
+shared ``market_flow.process_market_item`` entry point.
 """
 
 from __future__ import annotations

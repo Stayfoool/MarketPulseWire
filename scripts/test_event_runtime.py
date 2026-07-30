@@ -12,7 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import company_disclosures
-import market_runtime
+import market_flow as market_flow
 import sina_flash
 import sina_stock_news
 from market_db import init_db
@@ -24,9 +24,9 @@ TEST_RULE_CONFIG = ROOT / "config" / "rule_core_v1.test.json"
 
 
 def test_runtime_selects_only_unified_adapters() -> None:
-    assert market_runtime._selected_module("article").__name__ == "market_content_adapter"
-    assert market_runtime._selected_module("official").__name__ == "market_content_adapter"
-    assert market_runtime._selected_module("event").__name__ == "market_event_adapter"
+    assert market_flow.project_article_review.__module__ == "market_content_adapter"
+    assert market_flow.project_official_review.__module__ == "market_content_adapter"
+    assert market_flow.project_event_analysis.__module__ == "market_event_adapter"
     assert "SURVEIL_MARKET_FLOW_DIRECT_PATH" not in FIELDS_BY_KEY
     assert "SURVEIL_CONTENT_DIRECT_PATH" not in FIELDS_BY_KEY
     assert "SURVEIL_EVENT_DIRECT_PATH" not in FIELDS_BY_KEY
@@ -34,7 +34,7 @@ def test_runtime_selects_only_unified_adapters() -> None:
 
 def test_all_event_collectors_import_runtime_entrypoints() -> None:
     for module in (sina_flash, sina_stock_news, company_disclosures):
-        assert module.process_market_item.__module__ == "market_runtime"
+        assert module.process_market_item.__module__ == "market_flow"
         source = inspect.getsource(module)
         for forbidden in (
             "content_runtime",
@@ -60,8 +60,8 @@ def test_unified_upsert_preserves_store_contract() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "unified.sqlite3"
         init_db(db_path).close()
-        normalized = market_runtime.normalize_market_item("sina_flash", event, store_kind="event")
-        first = market_runtime.process_market_item(
+        normalized = market_flow.normalize_market_item("sina_flash", event, store_kind="event")
+        first = market_flow.process_market_item(
             normalized,
             event,
             store_kind="event",
@@ -82,7 +82,7 @@ def test_unified_upsert_preserves_store_contract() -> None:
         assert row[:3] == ("news_media", "news_media", "flash")
         assert json.loads(row[3])["source_event_id"] == "runtime-contract-1"
         assert alias == ("event", "sina_flash", "runtime-contract-1")
-        second = market_runtime.process_market_item(
+        second = market_flow.process_market_item(
             normalized,
             event,
             store_kind="event",
@@ -95,7 +95,7 @@ def test_unified_upsert_preserves_store_contract() -> None:
 
 
 def test_sina_flash_uses_news_media_flash_shape() -> None:
-    item = market_runtime.normalize_market_item(
+    item = market_flow.normalize_market_item(
         "sina_flash",
         {"source": "sina_flash", "source_event_id": "flash-1", "event_type": "flash_news", "title": "测试快讯"},
         store_kind="event",

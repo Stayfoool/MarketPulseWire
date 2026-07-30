@@ -13,6 +13,7 @@ from tempfile import TemporaryDirectory
 
 import llm_analysis
 import market_content_adapter
+import market_flow
 from llm_analysis import ChatCompletionResponse
 from llm_production_decision import (
     ProductionLLMDecisionError,
@@ -146,17 +147,19 @@ def test_valid_decisions_write_private_audits_and_keep_actions_authoritative() -
                 assert payload["decision"]["action"] == action
                 assert "PRIVATE_PRODUCTION_BODY" in json.dumps(payload["model_audit"], ensure_ascii=False)
 
-                conn = __import__("sqlite3").connect(":memory:")
-                try:
-                    review = market_content_adapter.evaluate_article_review(
-                        conn,
-                        item().source,
-                        item().raw | {"title": item().title, "summary": item().summary, "full_text": item().full_text},
-                        normalized_item=item(),
-                        decision=decision,
-                    )
-                finally:
-                    conn.close()
+                raw_item = item().raw | {
+                    "title": item().title,
+                    "summary": item().summary,
+                    "full_text": item().full_text,
+                }
+                flow_result = market_flow.evaluate_content_item(
+                    item(),
+                    raw_item,
+                    decision,
+                    official=False,
+                    storage_ref={},
+                )
+                review = market_content_adapter.project_article_review(raw_item, flow_result)
                 assert review["raw"]["decision_result"]["action"] == action
     finally:
         if original_revision is None:

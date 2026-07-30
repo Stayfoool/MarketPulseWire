@@ -1395,7 +1395,6 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
             normalized,
             enriched,
             store_kind="article",
-            source_profile_id=source,
             db_path=DB_PATH,
             production_admission=admission,
             production_portfolio=admission_context.portfolio,

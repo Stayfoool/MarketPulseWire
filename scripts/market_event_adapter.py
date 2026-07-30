@@ -7,13 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from decision_engine import attach_decision_result_to_event_analysis
-from market_flow import evaluate_market_item
 from market_flow_adapters import event_with_ingestion_audit, normalized_item_audit_payload
 from market_db import DEFAULT_DB_PATH
 from market_delivery import deliver_event, record_delivery
 from holdings_store import load_enabled_holdings as store_load_enabled_holdings
 from market_item import (
     DecisionResult,
+    MarketFlowResult,
     NormalizedMarketItem,
     decision_result_from_payload,
     event_content_hash,
@@ -81,34 +81,9 @@ def load_enabled_holdings(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any
     return store_load_enabled_holdings(db_path)
 
 
-def analyze_event(
-    normalized_item: NormalizedMarketItem,
-    task: str = "portfolio_event",
-    db_path: Path = DEFAULT_DB_PATH,
-    *,
-    decision: DecisionResult | None = None,
-) -> dict[str, Any]:
-    if decision is None:
-        raise RuntimeError(f"事件决策结果缺失：{normalized_item.source}/{normalized_item.title}")
-    decision_fields = attach_decision_result_to_event_analysis(decision, {})
-    flow_result = evaluate_market_item(
-        normalized_item,
-        decision=decision,
-        content=build_portfolio_event_input(normalized_item, db_path=db_path),
-        task="为一条已完成规则决策的公告、研报、快讯或异动信息生成极简实时摘要。",
-        intro="请解读以下持仓事件",
-        forbidden_mode="event",
-        extra_notes=["输入包含直接相关持仓和全部已配置持仓；只可使用给定关系，不要自行扩展股票映射。"],
-        user_agent="surveil-portfolio-event-llm/0.2",
-        force_interpretation=True,
-        storage_ref={
-            "store_kind": "market_reviews",
-            "item_kind": "event",
-            "source": normalized_item.source,
-            "item_id": str(normalized_item.raw.get("source_event_id") or ""),
-            "task": task,
-        },
-    )
+def project_event_analysis(flow_result: MarketFlowResult) -> dict[str, Any]:
+    """Project an authoritative flow result into the legacy event-analysis shape."""
+    decision_fields = attach_decision_result_to_event_analysis(flow_result.decision, {})
     interpretation = flow_result.interpretation
     parsed = {
         **decision_fields,
