@@ -604,13 +604,27 @@ def test_event_center_does_not_duplicate_seen_item_projected_to_event() -> None:
     ) == 1
 
 
-def test_event_center_source_filter_uses_grouped_dropdown() -> None:
+def test_list_filters_use_reusable_multi_selects() -> None:
     html = frontend_source()
-    assert '<select id="eventSource"' in html
+    assert 'id="eventSource" class="multi-select"' in html
+    assert 'id="eventFeedback" class="multi-select"' in html
+    assert 'id="llmDecisionSource" class="multi-select"' in html
+    assert 'id="llmDecisionAction" class="multi-select"' in html
+    assert 'id="llmDecisionStatus" class="multi-select"' in html
+    assert 'id="llmRuleFamily" class="multi-select"' in html
+    assert 'id="llmRuleAction" class="multi-select"' in html
+    assert 'id="sourceProfileCategory" class="multi-select"' in html
+    assert 'id="sourceProfileEnabled"' in html
+    assert '<option value="enabled" selected>已开通</option>' in html
     assert 'id="eventQueryButton"' in html
     assert '全部来源' in html
-    assert 'loadEventSourceOptions' in html
+    assert 'loadSourceFilterOptions' in html
+    assert "filter(profile => profile.enabled !== false)" in html
     assert 'eventSourceFilterValue' in html
+    assert 'initializeMultiSelect' in html
+    assert 'selectedMultiSelectValues' in html
+    assert "params.append('source', source)" in html
+    assert "params.append('feedback', value)" in html
     assert 'eventTimeBasis' in html
     assert 'eventFromDate' in html
     assert 'eventToDate' in html
@@ -757,10 +771,17 @@ def test_event_center_projects_current_feedback_across_active_stores() -> None:
         duplicate_rows = fetch_events_rows(day="2026-07-15", feedback="duplicate", db_path=db_path)
         invalid_rows = fetch_events_rows(day="2026-07-15", feedback="invalid", db_path=db_path)
         unlabelled_rows = fetch_events_rows(day="2026-07-15", feedback="unlabelled", db_path=db_path)
+        combined_rows = fetch_events_rows(
+            day="2026-07-15",
+            feedback=["duplicate", "unlabelled"],
+            source=["cls_telegraph_api", "nvidia_blog", "sina_flash"],
+            db_path=db_path,
+        )
         assert {str(row["id"]) for row in high_value_rows} == {"article-1", "event-1"}
         assert {str(row["id"]) for row in duplicate_rows} == {"article-1", "event-1"}
         assert invalid_rows == []
         assert {str(row["id"]) for row in unlabelled_rows} == {"official-1"}
+        assert {str(row["id"]) for row in combined_rows} == {"article-1", "official-1", "event-1"}
         with sqlite3.connect(db_path) as conn:
             assert conn.execute("SELECT COUNT(*) FROM market_feedback").fetchone()[0] == before
 
@@ -1254,7 +1275,7 @@ def main() -> int:
     test_event_center_can_show_baselines_and_filter_by_published_time()
     test_event_center_shows_company_disclosure_baseline_only_when_requested()
     test_event_center_does_not_duplicate_seen_item_projected_to_event()
-    test_event_center_source_filter_uses_grouped_dropdown()
+    test_list_filters_use_reusable_multi_selects()
     test_source_profiles_group_six_categories()
     test_source_profiles_aggregate_wildcard_health()
     test_source_profile_local_config_roundtrip()

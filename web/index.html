@@ -51,16 +51,8 @@
           <option value="seen">按采集/处理日期</option>
           <option value="published">按原文发布时间</option>
         </select>
-        <select id="eventSource" aria-label="来源过滤" style="width:320px" onchange="loadEvents()">
-          <option value="">全部来源</option>
-        </select>
-        <select id="eventFeedback" aria-label="反馈过滤" style="width:150px" onchange="loadEvents()">
-          <option value="">全部反馈</option>
-          <option value="high_value">特别有用</option>
-          <option value="duplicate">重复</option>
-          <option value="invalid">无效</option>
-          <option value="unlabelled">未反馈</option>
-        </select>
+        <div id="eventSource" class="multi-select" data-placeholder="全部来源" aria-label="来源过滤" style="width:320px"></div>
+        <div id="eventFeedback" class="multi-select" data-placeholder="全部反馈" aria-label="反馈过滤" style="width:150px"></div>
         <label class="source-checks"><input id="eventIncludeBaseline" type="checkbox" onchange="loadEvents()"> 显示基线条目</label>
         <input id="eventQuery" placeholder="搜索标题、摘要、标的" style="width:260px">
         <button id="eventQueryButton" class="primary" onclick="loadEvents()">查询</button>
@@ -90,21 +82,9 @@
       <div class="toolbar">
         <label class="date-range-field">开始日期<input id="llmDecisionFromDate" type="date" style="width:145px"></label>
         <label class="date-range-field">结束日期<input id="llmDecisionToDate" type="date" style="width:145px"></label>
-        <select id="llmDecisionAction" aria-label="最终 action" style="width:150px" onchange="loadLlmDecisions()">
-          <option value="">全部最终 action</option>
-          <option value="push">push</option>
-          <option value="daily">daily</option>
-          <option value="archive">archive</option>
-        </select>
-        <select id="llmDecisionStatus" aria-label="模型状态" style="width:180px" onchange="loadLlmDecisions()">
-          <option value="">全部模型状态</option>
-          <option value="completed">已完成</option>
-          <option value="insufficient_evidence">证据不足</option>
-          <option value="uncertain">历史 uncertain</option>
-          <option value="model_unavailable">大模型不可用</option>
-          <option value="pending">等待判断</option>
-        </select>
-        <input id="llmDecisionSource" placeholder="来源" style="width:220px">
+        <div id="llmDecisionAction" class="multi-select" data-placeholder="全部最终 action" aria-label="最终 action" style="width:170px"></div>
+        <div id="llmDecisionStatus" class="multi-select" data-placeholder="全部模型状态" aria-label="模型状态" style="width:190px"></div>
+        <div id="llmDecisionSource" class="multi-select" data-placeholder="全部来源" aria-label="来源过滤" style="width:260px"></div>
         <input id="llmDecisionQuery" placeholder="搜索标题、来源、编号" style="width:260px">
         <button class="primary" onclick="loadLlmDecisions()">查询</button>
       </div>
@@ -158,15 +138,8 @@
         <div id="llmRuleStatus"></div>
         <div id="llmRuleMetrics" class="metric-grid"></div>
         <div class="toolbar">
-          <select id="llmRuleFamily" aria-label="规则族" style="width:190px" onchange="renderLlmRules()">
-            <option value="">全部规则族</option>
-          </select>
-          <select id="llmRuleAction" aria-label="允许的 action" style="width:180px" onchange="renderLlmRules()">
-            <option value="">全部允许 action</option>
-            <option value="push">push</option>
-            <option value="daily">daily</option>
-            <option value="archive">archive</option>
-          </select>
+          <div id="llmRuleFamily" class="multi-select" data-placeholder="全部规则族" aria-label="规则族" style="width:210px"></div>
+          <div id="llmRuleAction" class="multi-select" data-placeholder="全部允许 action" aria-label="允许的 action" style="width:190px"></div>
           <input id="llmRuleQuery" placeholder="搜索标题、规则编号和规则内容" style="width:320px" oninput="renderLlmRules()">
         </div>
         <section class="panel rules-panel">
@@ -302,9 +275,12 @@
       </div>
       <div id="sourceProfileMetrics" class="metric-grid"></div>
       <div class="toolbar">
-        <select id="sourceProfileCategory" style="width:210px" onchange="renderSourceProfiles()">
-          <option value="">全部来源</option>
+        <select id="sourceProfileEnabled" aria-label="信息源状态" style="width:140px" onchange="renderSourceProfiles()">
+          <option value="enabled" selected>已开通</option>
+          <option value="disabled">已关闭</option>
+          <option value="all">全部状态</option>
         </select>
+        <div id="sourceProfileCategory" class="multi-select" data-placeholder="全部类别" aria-label="信息源类别" style="width:230px"></div>
         <input id="sourceProfileQuery" placeholder="搜索来源、处理层、服务、说明" style="width:320px" oninput="renderSourceProfiles()">
       </div>
       <section class="panel">

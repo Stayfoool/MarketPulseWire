@@ -147,6 +147,22 @@ def test_rows_show_terminal_insufficient_evidence_without_action() -> None:
         assert summary["uncertain_attempts"] == 1
         assert summary["current_insufficient_evidence"] == 1
         assert summary["current_failed_retryable"] == 0
+        conn.executescript(
+            """
+            INSERT INTO market_items VALUES (2, 'source-b', 'item-b', '第二条', 'https://example.com/b', '', '2026-07-26T02:00:00+00:00', 'article');
+            INSERT INTO market_reviews VALUES (13, 2, 1, 'admitted', 'succeeded', 'push', 'high', '{}', '2026-07-26T02:01:00+00:00', '2026-07-26T02:01:01+00:00');
+            """
+        )
+        filtered = llm_decision_rows(
+            conn,
+            start_utc="2026-07-26T00:00:00+00:00",
+            end_utc="2026-07-27T00:00:00+00:00",
+            action=["push", "daily"],
+            status=["completed", "model_unavailable"],
+            source=["source-b", "source-c"],
+            audit_dir=directory,
+        )
+        assert [row["market_review_id"] for row in filtered] == [13]
         conn.close()
 
 
