@@ -916,6 +916,11 @@ def test_source_profile_local_config_roundtrip() -> None:
     assert payload["config_exists"] is True
 
 
+def test_source_profile_table_preserves_readable_columns_on_narrow_screens() -> None:
+    styles = (Path(__file__).resolve().parents[1] / "web" / "styles.css").read_text(encoding="utf-8")
+    assert "#view-sources table { min-width: 1180px; }" in styles
+
+
 def test_source_profile_ignores_retired_runtime_fact_overrides() -> None:
     with TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
@@ -1268,6 +1273,7 @@ def main() -> int:
     test_source_profiles_group_six_categories()
     test_source_profiles_aggregate_wildcard_health()
     test_source_profile_local_config_roundtrip()
+    test_source_profile_table_preserves_readable_columns_on_narrow_screens()
     test_source_profile_ignores_retired_runtime_fact_overrides()
     test_source_profile_local_config_stays_private_across_replacement()
     test_source_profile_runtime_filters()
