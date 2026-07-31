@@ -140,6 +140,7 @@ td textarea { min-height: 38px; resize: vertical; }
 .rule-empty { padding: 24px 2px; color: var(--muted); font-size: 13px; text-align: center; }
 .market-information-table a { color: var(--accent); text-decoration: none; }
 .table-wrap { max-height: calc(100vh - 190px); overflow: auto; }
+#view-sources table { min-width: 1180px; }
 .health-table { min-width: 1180px; }
 .health-table td:last-child { white-space: nowrap; }
 .health-issue-summary { margin-bottom: 12px; padding: 10px 12px; border: 1px solid #f1b7b0; border-left: 4px solid var(--danger); background: #fff5f4; color: var(--danger); font-size: 13px; }
