@@ -13,7 +13,7 @@ from tempfile import TemporaryDirectory
 import market_delivery
 from feishu import FeishuResponse
 from market_db import init_db
-from market_item import AdmissionEvidence, AdmissionResult, DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem, decision_result_from_payload
+from market_item import AdmissionEvidence, AdmissionResult, DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem, decision_result_from_dict
 from market_store import complete_market_review, record_production_admission
 
 
@@ -119,9 +119,135 @@ def install_test_rating_report_extractor():
 
 
 def required_decision(payload: dict) -> DecisionResult:
-    decision = decision_result_from_payload(payload)
+    raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
+    analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}
+    serialized = (
+        payload.get("decision_result")
+        or payload.get("_decision_result")
+        or raw.get("decision_result")
+        or analysis.get("_decision_result")
+    )
+    decision = decision_result_from_dict(serialized)
     assert decision is not None
     return decision
+
+
+def admitted() -> AdmissionResult:
+    return AdmissionResult(
+        status="admitted",
+        reason_code="semiconductor_ai_match",
+        matched_families=("semiconductor_ai",),
+        evidence=(AdmissionEvidence("semiconductor_ai", "term", "HBM"),),
+        config_version="test-v1",
+    )
+
+
+def flow_result(
+    item: NormalizedMarketItem,
+    decision: DecisionResult,
+    payload: dict,
+) -> MarketFlowResult:
+    return MarketFlowResult(
+        item=item,
+        decision=decision,
+        interpretation=InterpretationResult(
+            core_content=str(payload.get("core_content") or payload.get("daily_summary") or item.summary),
+            brief_reason=str(payload.get("brief_reason") or ""),
+        ),
+    )
+
+
+def deliver_event(
+    item: NormalizedMarketItem,
+    analysis: dict,
+    *,
+    decision: DecisionResult,
+    db_path: Path,
+    market_item_id: int | None = None,
+    market_review_id: int | None = None,
+) -> str:
+    return market_delivery.deliver_event(
+        flow_result(item, decision, analysis),
+        db_path=db_path,
+        market_item_id=market_item_id,
+        market_review_id=market_review_id,
+    )
+
+
+def _content_delivery_ids(
+    source: str,
+    item: dict,
+    *,
+    official: bool,
+    db_path: Path,
+) -> tuple[NormalizedMarketItem, int, int]:
+    normalized = NormalizedMarketItem(
+        source=source,
+        source_category="official_company" if official else "news_media",
+        content_type="official_news" if official else "article",
+        title=str(item.get("title") or ""),
+        summary=str(item.get("summary") or ""),
+        full_text=str(item.get("full_text") or ""),
+        url=str(item.get("url") or ""),
+        published_at=str(item.get("published_at") or ""),
+        raw={"id": str(item.get("id") or item.get("url") or item.get("title") or "")},
+    )
+    market_item_id, market_review_id = record_production_admission(
+        normalized,
+        admitted(),
+        db_path=db_path,
+    )
+    return normalized, market_item_id, market_review_id
+
+
+def deliver_article(
+    source: str,
+    item: dict,
+    review: dict,
+    *,
+    decision: DecisionResult,
+    db_path: Path,
+    use_rule_dedup: bool = True,
+    already_sent: bool = False,
+    **_ignored,
+) -> str:
+    normalized, market_item_id, market_review_id = _content_delivery_ids(
+        source, item, official=False, db_path=db_path
+    )
+    return market_delivery.deliver_article_review(
+        source,
+        item,
+        flow_result(normalized, decision, review),
+        market_item_id=market_item_id,
+        market_review_id=market_review_id,
+        db_path=db_path,
+        use_rule_dedup=use_rule_dedup,
+        already_sent=already_sent,
+    )
+
+
+def deliver_official(
+    source: str,
+    item: dict,
+    review: dict,
+    *,
+    decision: DecisionResult,
+    db_path: Path,
+    already_sent: bool = False,
+    **_ignored,
+) -> str:
+    normalized, market_item_id, market_review_id = _content_delivery_ids(
+        source, item, official=True, db_path=db_path
+    )
+    return market_delivery.deliver_official_review(
+        source,
+        item,
+        flow_result(normalized, decision, review),
+        market_item_id=market_item_id,
+        market_review_id=market_review_id,
+        db_path=db_path,
+        already_sent=already_sent,
+    )
 
 
 def test_simple_event_card_formats_published_time_for_beijing() -> None:
@@ -153,10 +279,10 @@ def test_archive_and_missing_webhook_are_recorded_without_sending() -> None:
             push_id = insert_event(db_path, "push-1")
             archive = decision_analysis("archive")
             push = decision_analysis("push")
-            assert market_delivery.deliver_event(
+            assert deliver_event(
                 archive_id, archive, decision=required_decision(archive), db_path=db_path
             ) == "skipped"
-            assert market_delivery.deliver_event(
+            assert deliver_event(
                 push_id, push, decision=required_decision(push), db_path=db_path
             ) == "skipped"
             rows = delivery_rows(db_path)
@@ -199,7 +325,7 @@ def test_event_delivery_records_unified_item_and_result_directly() -> None:
             ),
             db_path=db_path,
         )
-        assert market_delivery.deliver_event(
+        assert deliver_event(
             event_item,
             decision_analysis("archive"),
             decision=decision,
@@ -225,7 +351,7 @@ def test_send_failure_releases_reservation_and_records_failure() -> None:
             init_db(db_path).close()
             event_id = insert_event(db_path, "failed-1")
             analysis = decision_analysis()
-            assert market_delivery.deliver_event(
+            assert deliver_event(
                 event_id, analysis, decision=required_decision(analysis), db_path=db_path
             ) == "failed"
             row = delivery_rows(db_path)[0]
@@ -262,10 +388,10 @@ def test_success_confirms_rule_dedup_and_duplicate_skips_second_send() -> None:
             first_id = insert_event(db_path, "dedup-1", "高盛做多中国 AI 价值链")
             second_id = insert_event(db_path, "dedup-2", "同一报告二次传播")
             analysis = decision_analysis(rule_hits=[rule_hit])
-            assert market_delivery.deliver_event(
+            assert deliver_event(
                 first_id, analysis, decision=required_decision(analysis), db_path=db_path
             ) == "sent"
-            assert market_delivery.deliver_event(
+            assert deliver_event(
                 second_id, analysis, decision=required_decision(analysis), db_path=db_path
             ) == "skipped"
             with sqlite3.connect(db_path) as conn:
@@ -298,7 +424,7 @@ def test_content_delivery_uses_decision_action() -> None:
             official_item = {"id": "official-1", "title": "测试官网新闻"}
             official_push = content_review("push", official=True)
             assert (
-                market_delivery.deliver_article_review(
+                deliver_article(
                     "cls_telegraph_api",
                     article_item,
                     archive_review,
@@ -309,7 +435,7 @@ def test_content_delivery_uses_decision_action() -> None:
                 == "skipped"
             )
             assert (
-                market_delivery.deliver_article_review(
+                deliver_article(
                     "cls_telegraph_api",
                     article_item,
                     push_review,
@@ -320,7 +446,7 @@ def test_content_delivery_uses_decision_action() -> None:
                 == "sent"
             )
             assert (
-                market_delivery.deliver_official_review(
+                deliver_official(
                     "nvidia_blog",
                     official_item,
                     official_push,
@@ -360,7 +486,7 @@ def test_feedback_enabled_event_uses_application_card_actions() -> None:
             init_db(db_path).close()
             event_id = insert_event(db_path, "feedback-event")
             analysis = decision_analysis()
-            assert market_delivery.deliver_event(
+            assert deliver_event(
                 event_id, analysis, decision=required_decision(analysis), db_path=db_path
             ) == "sent"
             payload = json.loads(delivery_rows(db_path)[0][2])
@@ -402,16 +528,17 @@ def test_feedback_enabled_article_and_official_keep_card_base_in_result() -> Non
             official_item = {"id": "feedback-official", "title": "反馈官网新闻", "summary": "正文"}
             article_review = content_review("push")
             official_review = content_review("push", official=True)
-            assert market_delivery.deliver_article_review(
+            assert deliver_article(
                 "cls_telegraph_api", article_item, article_review,
                 decision=required_decision(article_review), db_path=db_path, use_rule_dedup=False,
             ) == "sent"
-            assert market_delivery.deliver_official_review(
+            assert deliver_official(
                 "nvidia_blog", official_item, official_review,
                 decision=required_decision(official_review), analysis_lines=["核心内容：测试"], db_path=db_path,
             ) == "sent"
-        assert article_review["raw"]["_feedback_card_base"]["header"]["title"]["content"]
-        assert official_review["analysis"]["_feedback_card_base"]["header"]["title"]["content"]
+            payloads = [json.loads(row[2]) for row in delivery_rows(db_path)]
+        assert payloads[0]["_feedback_card_base"]["header"]["title"]["content"]
+        assert payloads[1]["_feedback_card_base"]["header"]["title"]["content"]
     finally:
         market_delivery.send_interactive_card = original_send
         for key, value in original_env.items():
@@ -432,7 +559,7 @@ def test_article_review_uses_nested_decision_action() -> None:
             item = {"id": "nested-archive", "title": "兼容字段冲突测试"}
             review = content_review("archive")
             assert review["push_now"] is True
-            status = market_delivery.deliver_article_review(
+            status = deliver_article(
                 "value_directory_ib_stocks",
                 item,
                 review,
@@ -463,7 +590,7 @@ def test_article_delivery_dedup_skips_without_changing_decision_action() -> None
             second_item = {"id": "article-dedup-2", "title": "同一报告再次传播"}
             review = content_review("push", rule_hits=[rule_hit])
             assert (
-                market_delivery.deliver_article_review(
+                deliver_article(
                     "cls_telegraph_api",
                     first_item,
                     review,
@@ -473,7 +600,7 @@ def test_article_delivery_dedup_skips_without_changing_decision_action() -> None
                 == "sent"
             )
             assert (
-                market_delivery.deliver_article_review(
+                deliver_article(
                     "jin10_rsshub_important",
                     second_item,
                     review,
@@ -483,7 +610,7 @@ def test_article_delivery_dedup_skips_without_changing_decision_action() -> None
                 == "duplicate"
             )
         assert len(calls) == 1
-        assert review["push_now"] is False
+        assert review["push_now"] is True
         assert review["raw"]["decision_result"]["action"] == "push"
     finally:
         market_delivery.send_card = original_send
@@ -512,18 +639,19 @@ def test_investment_bank_report_cross_source_article_dedup_preserves_push_decisi
             }
             first_review = content_review("push", rule_hits=[rating_report_rule(first_text)])
             second_review = content_review("push", rule_hits=[rating_report_rule(second_text)])
-            first_status = market_delivery.deliver_article_review(
+            first_status = deliver_article(
                 "source_a", first_item, first_review,
                 decision=required_decision(first_review), db_path=db_path,
             )
-            second_status = market_delivery.deliver_article_review(
+            second_status = deliver_article(
                 "source_b", second_item, second_review,
                 decision=required_decision(second_review), db_path=db_path,
             )
+            duplicate_payload = json.loads(delivery_rows(db_path)[-1][2])
         assert [first_status, second_status] == ["sent", "duplicate"]
         assert len(calls) == 1
         assert second_review["raw"]["decision_result"]["action"] == "push"
-        assert second_review["raw"]["rule_alert_dedup"]["rule_id"] == "investment_bank_report_dedup"
+        assert duplicate_payload["rule_id"] == "investment_bank_report_dedup"
     finally:
         market_delivery.send_card = original_send
         market_delivery.investment_bank_report_dedup_hit = original_extractor
@@ -548,7 +676,7 @@ def test_investment_bank_report_official_and_event_paths_share_identity() -> Non
                 "published_at": "2026-07-27T02:41:20+00:00",
             }
             official_review = content_review("push", rule_hits=[rating_report_rule(text)], official=True)
-            assert market_delivery.deliver_official_review(
+            assert deliver_official(
                 "research_wire", official_item, official_review,
                 decision=required_decision(official_review), analysis_lines=["核心内容：测试。"], db_path=db_path,
             ) == "sent"
@@ -557,12 +685,12 @@ def test_investment_bank_report_official_and_event_paths_share_identity() -> Non
                 summary=rewrite, published_at="2026-07-27T03:12:00+00:00",
             )
             analysis = decision_analysis(rule_hits=[rating_report_rule(rewrite)])
-            assert market_delivery.deliver_event(
+            assert deliver_event(
                 event_id, analysis, decision=required_decision(analysis), db_path=db_path,
             ) == "duplicate"
             rows = delivery_rows(db_path)
-        assert rows[0][0] == "duplicate"
-        payload = json.loads(rows[0][2])
+        assert [row[0] for row in rows] == ["sent", "duplicate"]
+        payload = json.loads(rows[1][2])
         assert payload["dedup_kind"] == "investment_bank_report"
         assert payload["first_source"] == "research_wire"
     finally:
@@ -587,12 +715,12 @@ def test_investment_bank_report_send_failure_releases_reservation() -> None:
             failed_item = {"id": "nomura-failed", "title": text, "published_at": "2026-07-27T02:41:20+00:00"}
             retry_item = {**failed_item, "id": "nomura-retry"}
             market_delivery.send_card = lambda card: False
-            assert market_delivery.deliver_article_review(
+            assert deliver_article(
                 "source_a", failed_item, review,
                 decision=required_decision(review), db_path=db_path,
             ) == "skipped"
             market_delivery.send_card = lambda card: True
-            assert market_delivery.deliver_article_review(
+            assert deliver_article(
                 "source_b", retry_item, review,
                 decision=required_decision(review), db_path=db_path,
             ) == "sent"
@@ -629,19 +757,20 @@ def test_intraday_market_move_cross_source_dedup_preserves_push_decision() -> No
             review = content_review("push", rule_hits=[rule_hit])
             assert required_decision(review).action == "push"
             assert (
-                market_delivery.deliver_article_review(
+                deliver_article(
                     "yicai_brief", first_item, review, decision=required_decision(review), db_path=db_path
                 )
                 == "sent"
             )
             assert (
-                market_delivery.deliver_article_review(
+                deliver_article(
                     "jin10_rsshub_important", second_item, review, decision=required_decision(review), db_path=db_path
                 )
                 == "duplicate"
             )
+            duplicate_payload = json.loads(delivery_rows(db_path)[-1][2])
         assert len(calls) == 1
-        assert review["raw"]["rule_alert_dedup"]["rule_id"] == "intraday_market_move"
+        assert duplicate_payload["rule_id"] == "intraday_market_move"
         assert review["raw"]["decision_result"]["action"] == "push"
     finally:
         market_delivery.send_card = original_send
@@ -668,13 +797,13 @@ def test_distinct_concepts_are_not_intraday_market_move_duplicates() -> None:
             cpo_review = content_review("push", rule_hits=[holding_market_move_rule("源杰科技", "688498.SH")])
             pcb_review = content_review("push", rule_hits=[holding_market_move_rule("铜冠铜箔", "301217.SZ")])
             assert (
-                market_delivery.deliver_article_review(
+                deliver_article(
                     "yicai_brief", cpo, cpo_review, decision=required_decision(cpo_review), db_path=db_path
                 )
                 == "sent"
             )
             assert (
-                market_delivery.deliver_article_review(
+                deliver_article(
                     "cls_telegraph_api", pcb, pcb_review, decision=required_decision(pcb_review), db_path=db_path
                 )
                 == "sent"
@@ -699,14 +828,14 @@ def test_intraday_market_move_send_failure_releases_reservation() -> None:
             init_db(db_path).close()
             market_delivery.send_card = lambda card: False
             assert (
-                market_delivery.deliver_article_review(
+                deliver_article(
                     "yicai_brief", first_item, review, decision=required_decision(review), db_path=db_path
                 )
                 == "skipped"
             )
             market_delivery.send_card = lambda card: True
             assert (
-                market_delivery.deliver_article_review(
+                deliver_article(
                     "jin10_rsshub_important", retry_item, review, decision=required_decision(review), db_path=db_path
                 )
                 == "sent"
@@ -740,8 +869,8 @@ def test_event_delivery_records_intraday_market_move_duplicate() -> None:
                 published_at="2026-07-14T05:16:48+00:00",
             )
             analysis = decision_analysis(rule_hits=[rule_hit])
-            assert market_delivery.deliver_event(first_id, analysis, decision=required_decision(analysis), db_path=db_path) == "sent"
-            assert market_delivery.deliver_event(second_id, analysis, decision=required_decision(analysis), db_path=db_path) == "duplicate"
+            assert deliver_event(first_id, analysis, decision=required_decision(analysis), db_path=db_path) == "sent"
+            assert deliver_event(second_id, analysis, decision=required_decision(analysis), db_path=db_path) == "duplicate"
             rows = delivery_rows(db_path)
         assert [row[0] for row in rows] == ["sent", "duplicate"]
         assert json.loads(rows[1][2])["first_source"] == "yicai_brief"
@@ -802,7 +931,7 @@ def test_macro_release_and_reaction_each_send_once_while_warsh_speech_is_retaine
                 "jin10_rsshub_important",
             )
             statuses = [
-                market_delivery.deliver_article_review(
+                deliver_article(
                     source, item, review, decision=required_decision(review), db_path=db_path
                 )
                 for source, item in zip(sources, items, strict=True)
@@ -813,7 +942,7 @@ def test_macro_release_and_reaction_each_send_once_while_warsh_speech_is_retaine
                 ).fetchall()
         assert statuses == ["sent", "duplicate", "sent", "duplicate", "sent", "sent"]
         assert len(calls) == 4
-        assert review["push_now"] is False
+        assert review["push_now"] is True
         assert review["raw"]["decision_result"]["action"] == "push"
         assert dedup_rows == [("macro_data_release", "sent"), ("macro_market_reaction", "sent")]
     finally:
@@ -840,15 +969,16 @@ def test_cross_asset_fed_policy_reactions_deliver_once() -> None:
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
             statuses = [
-                market_delivery.deliver_article_review(
+                deliver_article(
                     source, item, review, decision=required_decision(review), db_path=db_path
                 )
                 for source, item in (("cls_telegraph_api", gold), ("wallstreetcn_news", bitcoin))
             ]
+            duplicate_payload = json.loads(delivery_rows(db_path)[-1][2])
         assert statuses == ["sent", "duplicate"]
         assert len(calls) == 1
         assert review["raw"]["decision_result"]["action"] == "push"
-        assert review["raw"]["rule_alert_dedup"]["rule_id"] == "fed_policy_market_reaction"
+        assert duplicate_payload["rule_id"] == "fed_policy_market_reaction"
     finally:
         market_delivery.send_card = original_send
 
@@ -874,14 +1004,14 @@ def test_company_event_cross_rule_article_dedup_preserves_push_decision() -> Non
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
             statuses = [
-                market_delivery.deliver_article_review(
+                deliver_article(
                     "cls_telegraph_api",
                     first,
                     first_review,
                     decision=required_decision(first_review),
                     db_path=db_path,
                 ),
-                market_delivery.deliver_article_review(
+                deliver_article(
                     "wallstreetcn_news",
                     second,
                     second_review,
@@ -889,11 +1019,12 @@ def test_company_event_cross_rule_article_dedup_preserves_push_decision() -> Non
                     db_path=db_path,
                 ),
             ]
+            duplicate_payload = json.loads(delivery_rows(db_path)[-1][2])
         assert statuses == ["sent", "duplicate"]
         assert len(calls) == 1
-        assert second_review["push_now"] is False
+        assert second_review["push_now"] is True
         assert second_review["raw"]["decision_result"]["action"] == "push"
-        assert second_review["raw"]["rule_alert_dedup"]["rule_id"] == "company_event_dedup"
+        assert duplicate_payload["rule_id"] == "company_event_dedup"
     finally:
         market_delivery.send_card = original_send
 
@@ -912,11 +1043,11 @@ def test_company_event_send_failure_releases_reservation() -> None:
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
             market_delivery.send_card = lambda card: False
-            assert market_delivery.deliver_article_review(
+            assert deliver_article(
                 "cls_telegraph_api", first, review, decision=required_decision(review), db_path=db_path
             ) == "skipped"
             market_delivery.send_card = lambda card: True
-            assert market_delivery.deliver_article_review(
+            assert deliver_article(
                 "jin10_rsshub_important", retry, review, decision=required_decision(review), db_path=db_path
             ) == "sent"
     finally:
@@ -952,10 +1083,10 @@ def test_multi_company_event_fact_set_is_order_independent() -> None:
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
-            first_status = market_delivery.deliver_article_review(
+            first_status = deliver_article(
                 "sina_stock_news", first, review, decision=required_decision(review), db_path=db_path
             )
-            second_status = market_delivery.deliver_article_review(
+            second_status = deliver_article(
                 "yicai_brief", second, review, decision=required_decision(review), db_path=db_path
             )
             with sqlite3.connect(db_path) as conn:
@@ -963,12 +1094,13 @@ def test_multi_company_event_fact_set_is_order_independent() -> None:
                     "SELECT dedup_key, status FROM rule_alert_dedup WHERE rule_id=? ORDER BY dedup_key",
                     ("company_event_dedup",),
                 ).fetchall()
+            duplicate_payload = json.loads(delivery_rows(db_path)[-1][2])
         assert [first_status, second_status] == ["sent", "duplicate"]
         assert len(calls) == 1
         assert len(reservations) == 2
         assert {row[1] for row in reservations} == {"sent"}
-        assert review["push_now"] is False
-        dedup = review["raw"]["rule_alert_dedup"]
+        assert review["push_now"] is True
+        dedup = duplicate_payload
         assert len(dedup["dedup_keys"]) == 2
         assert len(dedup["covered"]) == 2
         assert review["raw"]["decision_result"]["action"] == "push"
@@ -994,7 +1126,7 @@ def test_multi_company_event_send_failure_releases_every_reservation() -> None:
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
             market_delivery.send_card = lambda card: False
-            assert market_delivery.deliver_article_review(
+            assert deliver_article(
                 "sina_stock_news", item, review, decision=required_decision(review), db_path=db_path
             ) == "skipped"
             with sqlite3.connect(db_path) as conn:
@@ -1002,7 +1134,7 @@ def test_multi_company_event_send_failure_releases_every_reservation() -> None:
                     "SELECT COUNT(*) FROM rule_alert_dedup WHERE rule_id=?", ("company_event_dedup",)
                 ).fetchone()[0] == 0
             market_delivery.send_card = lambda card: True
-            assert market_delivery.deliver_article_review(
+            assert deliver_article(
                 "yicai_brief", retry, review, decision=required_decision(review), db_path=db_path
             ) == "sent"
             with sqlite3.connect(db_path) as conn:
@@ -1033,7 +1165,7 @@ def test_official_company_event_dedup_uses_the_same_fact_set() -> None:
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
-            first_status = market_delivery.deliver_official_review(
+            first_status = deliver_official(
                 "company_site_a",
                 first,
                 review,
@@ -1041,7 +1173,7 @@ def test_official_company_event_dedup_uses_the_same_fact_set() -> None:
                 analysis_lines=["核心内容：业绩预告"],
                 db_path=db_path,
             )
-            second_status = market_delivery.deliver_official_review(
+            second_status = deliver_official(
                 "company_site_b",
                 second,
                 review,
@@ -1049,11 +1181,12 @@ def test_official_company_event_dedup_uses_the_same_fact_set() -> None:
                 analysis_lines=["核心内容：业绩预告"],
                 db_path=db_path,
             )
+            duplicate_payload = json.loads(delivery_rows(db_path)[-1][2])
         assert [first_status, second_status] == ["sent", "duplicate"]
         assert len(calls) == 1
-        assert review["should_push_now"] is False
+        assert review["should_push_now"] is True
         assert review["analysis"]["_decision_result"]["action"] == "push"
-        assert review["analysis"]["rule_alert_dedup"]["rule_id"] == "company_event_dedup"
+        assert duplicate_payload["rule_id"] == "company_event_dedup"
     finally:
         market_delivery.send_card = original_send
 
@@ -1083,10 +1216,10 @@ def test_event_delivery_records_company_event_duplicate() -> None:
             )
             first_analysis = decision_analysis(rule_hits=[industry_rule()])
             second_analysis = decision_analysis(rule_hits=[industry_rule()])
-            assert market_delivery.deliver_event(
+            assert deliver_event(
                 first_id, first_analysis, decision=required_decision(first_analysis), db_path=db_path
             ) == "sent"
-            assert market_delivery.deliver_event(
+            assert deliver_event(
                 second_id, second_analysis, decision=required_decision(second_analysis), db_path=db_path
             ) == "duplicate"
             rows = delivery_rows(db_path)
@@ -1126,10 +1259,10 @@ def test_event_delivery_records_macro_release_duplicate() -> None:
                 published_at="2026-07-14T12:34:00+00:00",
             )
             analysis = decision_analysis(rule_hits=[macro_rule()])
-            assert market_delivery.deliver_event(
+            assert deliver_event(
                 first_id, analysis, decision=required_decision(analysis), db_path=db_path
             ) == "sent"
-            assert market_delivery.deliver_event(
+            assert deliver_event(
                 second_id, analysis, decision=required_decision(analysis), db_path=db_path
             ) == "duplicate"
             rows = delivery_rows(db_path)
@@ -1166,17 +1299,18 @@ def test_ibm_industry_fact_cross_source_article_dedup_preserves_push_decision() 
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
-            first_status = market_delivery.deliver_article_review(
+            first_status = deliver_article(
                 "cls_telegraph_api", first, review, decision=required_decision(review), db_path=db_path
             )
-            second_status = market_delivery.deliver_article_review(
+            second_status = deliver_article(
                 "wallstreetcn_news", second, review, decision=required_decision(review), db_path=db_path
             )
+            duplicate_payload = json.loads(delivery_rows(db_path)[-1][2])
         assert [first_status, second_status] == ["sent", "duplicate"]
         assert len(calls) == 1
-        assert review["push_now"] is False
+        assert review["push_now"] is True
         assert review["raw"]["decision_result"]["action"] == "push"
-        assert review["raw"]["rule_alert_dedup"]["rule_id"] == "industry_fact_dedup"
+        assert duplicate_payload["rule_id"] == "industry_fact_dedup"
     finally:
         market_delivery.send_card = original_send
 
@@ -1205,10 +1339,10 @@ def test_event_delivery_records_ibm_industry_fact_duplicate() -> None:
                 summary="IBM客户将支出转向服务器和内存采购以保障供应。",
             )
             analysis = decision_analysis(rule_hits=[industry_rule()])
-            assert market_delivery.deliver_event(
+            assert deliver_event(
                 first_id, analysis, decision=required_decision(analysis), db_path=db_path
             ) == "sent"
-            assert market_delivery.deliver_event(
+            assert deliver_event(
                 second_id, analysis, decision=required_decision(analysis), db_path=db_path
             ) == "duplicate"
             rows = delivery_rows(db_path)
@@ -1245,17 +1379,18 @@ def test_coreweave_hedge_cross_source_article_dedup_preserves_push_decision() ->
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "surveil.sqlite3"
             init_db(db_path).close()
-            first_status = market_delivery.deliver_article_review(
+            first_status = deliver_article(
                 "sina_finance_articles", first, review, decision=required_decision(review), db_path=db_path
             )
-            second_status = market_delivery.deliver_article_review(
+            second_status = deliver_article(
                 "jin10_rsshub_important", second, review, decision=required_decision(review), db_path=db_path
             )
+            duplicate_payload = json.loads(delivery_rows(db_path)[-1][2])
         assert [first_status, second_status] == ["sent", "duplicate"]
         assert len(calls) == 1
-        assert review["push_now"] is False
+        assert review["push_now"] is True
         assert review["raw"]["decision_result"]["action"] == "push"
-        assert review["raw"]["rule_alert_dedup"]["dedup_key"] == (
+        assert duplicate_payload["dedup_key"] == (
             "industry_fact:coreweave:price_risk_hedge:exploring:storage_chip:down"
         )
     finally:

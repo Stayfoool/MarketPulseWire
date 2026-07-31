@@ -170,9 +170,6 @@ def parse_rule_config(payload: Mapping[str, Any]) -> RuleConfig:
     }
     unknown = set(payload) - expected
     missing = expected - set(payload)
-    # The title-only subset is optional for one deployment step so an old
-    # private config can be read before its explicit migration is applied.
-    missing.discard("semiconductor_ai_title_keywords")
     if unknown or missing:
         raise RuleConfigError(
             f"rule config keys invalid: missing={sorted(missing)} unknown={sorted(unknown)}"
@@ -185,7 +182,7 @@ def parse_rule_config(payload: Mapping[str, Any]) -> RuleConfig:
     raw_macro = payload.get("macro_data")
     if not isinstance(raw_macro, dict):
         raise RuleConfigError("macro_data must be an object")
-    unknown_macro = set(raw_macro) - {"indicators", "context_aliases", "tiers"}
+    unknown_macro = set(raw_macro) - {"indicators", "context_aliases"}
     missing_macro = {"indicators", "context_aliases"} - set(raw_macro)
     if unknown_macro or missing_macro:
         raise RuleConfigError(
@@ -208,21 +205,11 @@ def parse_rule_config(payload: Mapping[str, Any]) -> RuleConfig:
         {"corridors", "instruments", "stages", "focus_industries"},
     )
     indicators = tuple_strings(macro.get("indicators"), "macro_data.indicators")
-    tiers = macro.get("tiers")
-    if tiers is not None:
-        tiers = mapping(tiers, "macro_data.tiers", {"primary", "secondary"})
-        primary = tuple_strings(tiers.get("primary"), "macro_data.tiers.primary")
-        secondary = tuple_strings(tiers.get("secondary"), "macro_data.tiers.secondary")
-        if not set(primary + secondary).issubset(set(indicators)):
-            raise RuleConfigError("macro tiers must reference configured indicators")
-        # Transitional compatibility: old configs retain their primary list,
-        # while secondary indicators stop entering production admission.
-        indicators = primary
     semiconductor_keywords = tuple_strings(
         payload.get("semiconductor_ai_keywords"), "semiconductor_ai_keywords"
     )
     title_keywords = tuple_strings(
-        payload.get("semiconductor_ai_title_keywords", []),
+        payload.get("semiconductor_ai_title_keywords"),
         "semiconductor_ai_title_keywords",
     )
     semiconductor_keyword_keys = {value.casefold() for value in semiconductor_keywords}

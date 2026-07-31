@@ -540,10 +540,10 @@ def notify_item(item: dict) -> None:
             print(f"{profile_id} 证据不足，当前条目终止处理：title={prepared.get('title', '')}", flush=True)
             return
         raise
-    review = outcome.payload
+    decision = outcome.flow_result.decision
     print(
-        f"{profile_id} 决策层：importance={review.get('importance')} "
-        f"push={review.get('push_now')} title={enriched.get('title', '')}",
+        f"{profile_id} 决策层：importance={decision.importance} "
+        f"action={decision.action} title={enriched.get('title', '')}",
         flush=True,
     )
 

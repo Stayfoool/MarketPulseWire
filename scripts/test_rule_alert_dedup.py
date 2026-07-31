@@ -4,25 +4,27 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from market_db import init_db
+from market_item import DecisionResult
 from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert, reserve_rule_alert_set
 
 
-def review_with_rule(key: str, rule_id: str = "international_bank_theme_strategy") -> dict:
-    return {
-        "raw": {
-            "rule_hits": [
-                {
-                    "rule_id": rule_id,
-                    "dedup_key": key,
-                    "dedup_lookback_days": 14,
-                }
-            ]
-        }
-    }
+def decision_with_rule(key: str, rule_id: str = "international_bank_theme_strategy") -> DecisionResult:
+    return DecisionResult(
+        action="push",
+        importance="high",
+        rule_hits=[
+            {
+                "rule_id": rule_id,
+                "dedup_key": key,
+                "dedup_lookback_days": 14,
+            }
+        ],
+    )
 
 
 def test_reserve_confirm_and_duplicate() -> None:
@@ -30,7 +32,7 @@ def test_reserve_confirm_and_duplicate() -> None:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
         first = reserve_rule_alert(
-            review_with_rule("ib_theme:first"),
+            decision_with_rule("ib_theme:first"),
             source="cls_telegraph_api",
             item_id="1",
             title="高盛做多中国 AI",
@@ -40,7 +42,7 @@ def test_reserve_confirm_and_duplicate() -> None:
         assert first["reserved"] is True
         confirm_rule_alert(first, db_path=db_path)
         duplicate = reserve_rule_alert(
-            review_with_rule("ib_theme:first"),
+            decision_with_rule("ib_theme:first"),
             source="sina_stock_news",
             item_id="2",
             title="高盛中国 AI 策略转载",
@@ -56,7 +58,7 @@ def test_release_makes_failed_send_retryable() -> None:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
         first = reserve_rule_alert(
-            review_with_rule("ib_theme:retry"),
+            decision_with_rule("ib_theme:retry"),
             source="cls_telegraph_api",
             item_id="1",
             title="策略",
@@ -65,7 +67,7 @@ def test_release_makes_failed_send_retryable() -> None:
         )
         release_rule_alert(first, db_path=db_path)
         retry = reserve_rule_alert(
-            review_with_rule("ib_theme:retry"),
+            decision_with_rule("ib_theme:retry"),
             source="cls_telegraph_api",
             item_id="1",
             title="策略",
@@ -80,7 +82,7 @@ def test_fed_path_rule_uses_cross_source_reservation() -> None:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
         first = reserve_rule_alert(
-            review_with_rule("ib_fed_path:test", rule_id="international_bank_fed_rate_path_revision"),
+            decision_with_rule("ib_fed_path:test", rule_id="international_bank_fed_rate_path_revision"),
             source="wallstreetcn_news",
             item_id="article:3775241",
             title="美银转为预计美联储加息三次",
@@ -90,7 +92,7 @@ def test_fed_path_rule_uses_cross_source_reservation() -> None:
         assert first["reserved"] is True
         confirm_rule_alert(first, db_path=db_path)
         duplicate = reserve_rule_alert(
-            review_with_rule("ib_fed_path:test", rule_id="international_bank_fed_rate_path_revision"),
+            decision_with_rule("ib_fed_path:test", rule_id="international_bank_fed_rate_path_revision"),
             source="sina_finance_articles",
             item_id="repost-1",
             title="美银加息预测转载",
@@ -106,7 +108,7 @@ def test_attributed_research_rule_uses_the_same_cross_source_reservation() -> No
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
         first = reserve_rule_alert(
-            review_with_rule(
+            decision_with_rule(
                 "attributed_research:semianalysis:test",
                 rule_id="attributed_research_hard_variable",
             ),
@@ -118,7 +120,7 @@ def test_attributed_research_rule_uses_the_same_cross_source_reservation() -> No
         )
         confirm_rule_alert(first, db_path=db_path)
         duplicate = reserve_rule_alert(
-            review_with_rule(
+            decision_with_rule(
                 "attributed_research:semianalysis:test",
                 rule_id="attributed_research_hard_variable",
             ),
@@ -139,7 +141,7 @@ def test_delivery_alias_migrates_legacy_reservation_to_canonical_key() -> None:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
         first = reserve_rule_alert(
-            {},
+            None,
             source="cls_telegraph_api",
             item_id="legacy-1",
             title="美国CPI发布后美股期货上涨",
@@ -153,7 +155,7 @@ def test_delivery_alias_migrates_legacy_reservation_to_canonical_key() -> None:
         )
         confirm_rule_alert(first, db_path=db_path)
         duplicate = reserve_rule_alert(
-            {},
+            None,
             source="wallstreetcn_news",
             item_id="canonical-2",
             title="美国6月CPI发布后黄金上涨",
@@ -175,6 +177,90 @@ def test_delivery_alias_migrates_legacy_reservation_to_canonical_key() -> None:
                 (canonical_key,),
             ).fetchone()
         assert migrated == ("sent", "cls_telegraph_api")
+
+
+def test_canonical_window_stays_90_days_but_old_alias_expires_after_30_days() -> None:
+    canonical_key = "macro:canonical:window"
+    alias_key = "macro:old-alias:window"
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
+        canonical = reserve_rule_alert(
+            None,
+            source="source-a",
+            item_id="canonical-1",
+            title="canonical",
+            published_at="2026-07-01T00:00:00+00:00",
+            delivery_hit={
+                "rule_id": "macro_market_reaction",
+                "dedup_key": canonical_key,
+                "dedup_lookback_days": 90,
+            },
+            db_path=db_path,
+        )
+        confirm_rule_alert(canonical, db_path=db_path)
+        old_alias = reserve_rule_alert(
+            None,
+            source="source-a",
+            item_id="alias-1",
+            title="alias",
+            published_at="2026-07-01T00:00:00+00:00",
+            delivery_hit={
+                "rule_id": "macro_market_reaction",
+                "dedup_key": alias_key,
+                "dedup_lookback_days": 90,
+            },
+            db_path=db_path,
+        )
+        confirm_rule_alert(old_alias, db_path=db_path)
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "UPDATE rule_alert_dedup SET created_at=? WHERE dedup_key=?",
+                ((datetime.now(timezone.utc) - timedelta(days=60)).isoformat(), canonical_key),
+            )
+            conn.execute(
+                "UPDATE rule_alert_dedup SET created_at=? WHERE dedup_key=?",
+                ((datetime.now(timezone.utc) - timedelta(days=31)).isoformat(), alias_key),
+            )
+            conn.commit()
+
+        canonical_duplicate = reserve_rule_alert(
+            None,
+            source="source-b",
+            item_id="canonical-2",
+            title="canonical repost",
+            published_at="2026-07-31T00:00:00+00:00",
+            delivery_hit={
+                "rule_id": "macro_market_reaction",
+                "dedup_key": canonical_key,
+                "dedup_lookback_days": 90,
+            },
+            db_path=db_path,
+        )
+        assert canonical_duplicate["duplicate"] is True
+
+        alias_expired = reserve_rule_alert(
+            None,
+            source="source-b",
+            item_id="new-1",
+            title="new event",
+            published_at="2026-07-31T00:00:00+00:00",
+            delivery_hit={
+                "rule_id": "macro_market_reaction",
+                "dedup_key": "macro:new-canonical",
+                "dedup_alias_keys": [alias_key],
+                "dedup_lookback_days": 90,
+            },
+            db_path=db_path,
+        )
+        assert alias_expired["reserved"] is True
+        with sqlite3.connect(db_path) as conn:
+            keys = {
+                str(row[0])
+                for row in conn.execute("SELECT dedup_key FROM rule_alert_dedup")
+            }
+        assert "macro:new-canonical" in keys
+        assert keys == {canonical_key, alias_key, "macro:new-canonical"}
 
 
 def test_fact_set_reserves_all_new_keys_and_duplicates_regardless_of_order() -> None:
@@ -251,6 +337,7 @@ def main() -> int:
     test_fed_path_rule_uses_cross_source_reservation()
     test_attributed_research_rule_uses_the_same_cross_source_reservation()
     test_delivery_alias_migrates_legacy_reservation_to_canonical_key()
+    test_canonical_window_stays_90_days_but_old_alias_expires_after_30_days()
     test_fact_set_reserves_all_new_keys_and_duplicates_regardless_of_order()
     test_fact_set_with_one_new_identity_sends_and_failure_releases_only_new_keys()
     print("rule alert dedup checks passed")

@@ -1410,14 +1410,14 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
         processing_error="",
         processed_at=datetime.now(timezone.utc).isoformat(),
     )
-    review = outcome.payload
+    decision = outcome.flow_result.decision
     if not deliver:
         print(
             f"{source} 历史可重试条目已完成准入、决策和保存，但不再即时推送：title={enriched.get('title', '')}",
             flush=True,
         )
     print(
-        f"{source} 决策层：importance={review.get('importance')} push={review.get('push_now')} title={enriched.get('title', '')}",
+        f"{source} 决策层：importance={decision.importance} action={decision.action} title={enriched.get('title', '')}",
         flush=True,
     )
     if outcome.delivery_status == "duplicate":

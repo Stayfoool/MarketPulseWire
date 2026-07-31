@@ -1329,8 +1329,10 @@ def run_once(
                 print(f"baseline event #{event_id}: {event['title']}", flush=True)
                 continue
             print(f"new event #{event_id}: {event['title']}", flush=True)
-            analysis = outcome.payload
-            print(f"analysis #{event_id}: {analysis.get('core_content', '')}", flush=True)
+            print(
+                f"analysis #{event_id}: {outcome.flow_result.interpretation.core_content}",
+                flush=True,
+            )
             print(f"delivery #{event_id}: {outcome.delivery_status}", flush=True)
         if sleep_seconds:
             time.sleep(sleep_seconds)

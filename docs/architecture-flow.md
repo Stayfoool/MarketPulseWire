@@ -15,7 +15,7 @@ collector
 -> process_market_item
 -> decision_engine
 -> market_interpreter
--> review store adapter
+-> market_reviews
 -> market_delivery
 -> Web / digest / Feishu
 ```
@@ -96,12 +96,10 @@ The former direct/compat route switch and these wrapper modules have been remove
 | Module | Current responsibility |
 |---|---|
 | `market_flow.py` | Normalization boundary and the single `process_market_item` owner: one-time pre-decision evidence preparation, production LLM decision through `decision_engine`, interpretation, unified storage, delivery and fail-closed handling |
-| `market_content_adapter.py` | Article and official-news display/delivery payload projection from an existing authoritative `MarketFlowResult`; it cannot call the decision or interpretation flow |
-| `market_event_adapter.py` | Event normalization, display/delivery payload projection and event delivery from an existing authoritative `MarketFlowResult`; it cannot call the decision or interpretation flow |
 | `decision_engine.py` | Single production decision boundary. It delegates admitted items to the reviewed LLM decision and returns the only authoritative `DecisionResult`; no deterministic action implementation or fallback remains |
 | `production_admission.py` | Sole production entry for the five range-admission groups; validates `RULE_CORE_CONFIG`, converts current Web-managed SQLite holdings to `PortfolioRuleConfig`, applies ordinary/holding-only/official-trade source boundaries and returns the auditable `AdmissionResult`; it cannot decide action, write reviews or deliver |
 | `admission_rules.py` | Side-effect-free five-group range-admission implementation. It returns bounded `AdmissionResult` evidence and cannot assign action, write reviews or deliver |
-| `llm_rule_catalog.py` | Strict loader and schema validator for the gitignored private LLM decision-rule JSON selected by `LLM_DECISION_RULE_CONFIG`; accepts legacy single-group v1 and current multi-group v2 files, exports validated rules to the prompt builder and fails closed when the file is missing or invalid |
+| `llm_rule_catalog.py` | Strict loader and schema validator for the gitignored private LLM decision-rule JSON selected by `LLM_DECISION_RULE_CONFIG`; accepts only the current multi-group v2 format, exports validated rules to the prompt builder and fails closed when the file is missing or invalid |
 | `llm_rule_decision.py` | LLM decision contract: selects only the rules applicable to an existing admitted `AdmissionResult`, accepts title/summary/body with body code-bounded to 3,000 characters, divides model-visible text into numbered segments, and strictly validates per-rule JSON, allowed actions and exact evidence before mechanically aggregating the final action |
 | `llm_rule_execution.py` | Side-effect-free LLM rule execution below the production wrapper. It builds one prompt, performs strict validation and permits one correction request containing only the original response and validation errors |
 | `llm_production_decision.py` | Production deadline and private-audit wrapper. It enforces one 120-second total budget across retries and correction, writes one mode-`0600` audit linked by market item/review ids, and fails closed when no valid audited decision exists |
@@ -114,8 +112,6 @@ The former direct/compat route switch and these wrapper modules have been remove
 | `disclosure_providers.py` / `cninfo_disclosure_provider.py` | Provider-neutral disclosure contract and CNINFO public-query transport |
 | `disclosure_document.py` | Shared bounded PDF download, SHA-256 and `pypdf` text extraction |
 | `market_interpreter.py` | Decision-downstream generation and strict normalization of the single `core_content` field; it cannot generate reasons, risks, targets or action judgements |
-| `market_content_adapter.py` | Article and official-news payload projection for cards and unified storage |
-| `market_event_adapter.py` | Event payload projection for cards and unified storage |
 | `market_store.py` | Current `market_items`, `market_reviews`, aliases and linked delivery persistence |
 | `market_delivery.py` | Rule/fact dedup reservation and DecisionResult-based Feishu push execution; it writes only unified delivery audits |
 | `market_feedback.py` | Cross-source append-only human feedback, signed item identity, per-operator multi-label toggle projection and quality aggregates |
@@ -260,10 +256,11 @@ New production items also use the canonical storage contract:
 - `market_reviews` stores a versioned production `AdmissionResult` for every
   normalized live item. An excluded row has no `DecisionResult` or
   `InterpretationResult`. An admitted row is completed with the exact results
-  returned by the unified runtime before delivery. It also retains the bounded
-  compatibility payload needed to reproduce existing Web, digest and feedback
-  views; private production LLM requests/responses remain outside
-  SQLite.
+  returned by the unified runtime before delivery. Current results use
+  `decision_json` and `interpretation_json`; new reviews do not write
+  `legacy_payload_json`. Existing historical payloads remain only for bounded
+  historical-reader fallback. Private production LLM requests/responses remain
+  outside SQLite.
 - `market_item_aliases` maps the unified item identity to stable
   `article`, `official` and `event` source identities. Feishu feedback tokens
   and Web links therefore retain stable external identities.
@@ -278,8 +275,8 @@ values remain as provenance and stable external identity metadata; they do not
 imply that a separate physical result table still exists. Missing body text,
 admission evidence and review links remain missing instead of being inferred.
 
-Web Event Center, article/official daily output and feedback lookup/quality
-metrics read the unified tables through `market_canonical_reader.py`. When an
+Web Event Center, article daily output and feedback lookup/quality metrics read
+the unified tables through `market_canonical_reader.py`. When an
 item has multiple current task results, display readers use the latest result
 while all versions remain stored. Existing external ids are resolved through `market_item_aliases`;
 historical deliveries without a provable originating review link only to the
@@ -351,9 +348,20 @@ again; completed and baseline rows are not retried. The research collector's
 read-only report path may still perform complete public-page enrichment without
 writing discovery or lifecycle state.
 
-`push_now`, `should_push_now` and `should_push` remain compatibility columns for historical readers and old rows. New delivery code does not read them as action inputs. `pushed_at` and delivery rows record what happened, not what should be sent.
+`push_now`, `should_push_now` and `should_push` remain compatibility fields only
+inside historical projections. New delivery code does not read or write them as
+action inputs. `pushed_at` and delivery rows record what happened, not what
+should be sent. The historical reader uses current `decision_json`,
+`interpretation_json` and sent delivery payloads first, then falls back to the
+old review payload only when those current fields cannot supply a historical
+display field.
 
-When Feishu market feedback is explicitly enabled, unified article, official-news and event cards are sent by the configured enterprise application bot and carry signed `特别有用` / `重复` / `无效` actions. The delivery audit retains the feedback-card base payload for cards sent after this feature is enabled. After a valid action, the official long-connection callback appends only to `market_feedback`; the new row records the clicked label and the complete selected-label set after independently toggling that label. It returns a replacement of the same Feishu card with `反馈状态` and a `✓` on every selected label. Removing the last label leaves an empty current set without deleting history. Existing rows without a selected-label set retain their original single-label or `cleared` meaning. It cannot modify decisions, delivery reservations, source settings or rule settings. Card reconstruction uses the current review payload and falls back to the corresponding sent delivery payload, which is the canonical location for event-card bases. If neither contains a base card, the durable feedback remains and the callback explicitly warns that card state was not updated. `FEISHU_FEEDBACK_LISTENER_ENABLED` may start that listener for an isolated test card while leaving natural unified delivery on the pre-existing custom webhook. Test-card rows and empty current selections are excluded from quality denominators and Event Center feedback projection. Current feedback is selected by Feishu action time, then insertion id, so delayed callbacks cannot overwrite or cancel a newer choice. The Web workbench exposes feedback coverage and observed labelled-card outcomes by source, primary rule, all rule associations and source-by-primary-rule. One item is labelled once when it has at least one active label; each label count is independent, so label rates may sum above 100 percent. Its Event Center also reads the same current projection through `item_kind + source + item_id`, showing feedback on the three active store adapters and filtering inside each store query before limits. This projection is read-only, excludes test cards and operator identities, and distinguishes delivered-but-unlabelled, not-delivered and unsupported-route rows.
+Delivery-only dedup aliases are migration lookups, not a second identity store.
+The canonical key keeps each rule's existing lookback. An old alias is queried
+for at most 30 days, is never inserted for new deliveries, and is removed only
+after a separate selective export and audit once that window has elapsed.
+
+When Feishu market feedback is explicitly enabled, unified article, official-news and event cards are sent by the configured enterprise application bot and carry signed `特别有用` / `重复` / `无效` actions. The delivery audit retains the feedback-card base payload for cards sent after this feature is enabled. After a valid action, the official long-connection callback appends only to `market_feedback`; the new row records the clicked label and the complete selected-label set after independently toggling that label. It returns a replacement of the same Feishu card with `反馈状态` and a `✓` on every selected label. Removing the last label leaves an empty current set without deleting history. Existing rows without a selected-label set retain their original single-label or `cleared` meaning. It cannot modify decisions, delivery reservations, source settings or rule settings. Card reconstruction reads a retained historical review payload when present, then the corresponding sent delivery payload; the delivery payload is the canonical location for new card bases. If neither contains a base card, the durable feedback remains and the callback explicitly warns that card state was not updated. `FEISHU_FEEDBACK_LISTENER_ENABLED` may start that listener for an isolated test card while leaving natural unified delivery on the pre-existing custom webhook. Test-card rows and empty current selections are excluded from quality denominators and Event Center feedback projection. Current feedback is selected by Feishu action time, then insertion id, so delayed callbacks cannot overwrite or cancel a newer choice. The Web workbench exposes feedback coverage and observed labelled-card outcomes by source, primary rule, all rule associations and source-by-primary-rule. One item is labelled once when it has at least one active label; each label count is independent, so label rates may sum above 100 percent. Its Event Center also reads the same current projection through `item_kind + source + item_id`, showing feedback on the three external identities and filtering inside each query before limits. This projection is read-only, excludes test cards and operator identities, and distinguishes delivered-but-unlabelled, not-delivered and unsupported-route rows.
 
 The Web workbench exposes a lightweight authenticated `/api/health/summary` projection for separate Task Health and Information Sources badges. One batched read-only `systemctl show` call pairs each production timer with its execution service; `task_failures` counts current logical-task failures, while `source_failures` counts only failing enabled profiles that are visible in the Information Sources view. Disabled source profiles do not contribute. The browser refreshes this summary only while visible. The full Task Health view retains detailed systemd rows, raw source-health/X connection diagnostics and bounded log tails even when a raw diagnostic does not map to a source-profile badge count.
 

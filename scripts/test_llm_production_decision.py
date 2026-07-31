@@ -12,7 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import llm_analysis
-import market_content_adapter
+from market_card_view import market_result_view
 import market_flow
 from llm_analysis import ChatCompletionResponse
 from llm_production_decision import (
@@ -159,8 +159,7 @@ def test_valid_decisions_write_private_audits_and_keep_actions_authoritative() -
                     official=False,
                     storage_ref={},
                 )
-                review = market_content_adapter.project_article_review(raw_item, flow_result)
-                assert review["raw"]["decision_result"]["action"] == action
+                assert market_result_view(flow_result)["decision_result"]["action"] == action
     finally:
         if original_revision is None:
             os.environ.pop("SURVEIL_REVISION", None)

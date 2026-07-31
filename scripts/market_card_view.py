@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from market_item import MarketFlowResult
 from market_interpreter import normalize_interpretation_payload
 
 
@@ -48,6 +49,14 @@ def decision_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(analysis.get("_decision_result"), dict):
         return analysis["_decision_result"]
     return {}
+
+
+def market_result_view(flow_result: MarketFlowResult) -> dict[str, Any]:
+    """Return the current in-memory card/read projection without legacy push fields."""
+    return {
+        "decision_result": flow_result.decision.to_dict(),
+        "interpretation_result": flow_result.interpretation.to_dict(),
+    }
 
 
 def decision_rule_hits(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -112,7 +121,11 @@ def decision_targets(payload: dict[str, Any]) -> list[str]:
 def interpretation_payload(review_or_analysis: dict[str, Any]) -> dict[str, Any]:
     analysis = review_analysis(review_or_analysis)
     raw = review_or_analysis.get("raw") if isinstance(review_or_analysis.get("raw"), dict) else {}
-    unified = analysis.get("_interpretation_result")
+    unified = analysis.get("interpretation_result")
+    if not isinstance(unified, dict):
+        unified = analysis.get("_interpretation_result")
+    if not isinstance(unified, dict):
+        unified = review_or_analysis.get("interpretation_result")
     if not isinstance(unified, dict):
         unified = review_or_analysis.get("_interpretation_result")
     if not isinstance(unified, dict):

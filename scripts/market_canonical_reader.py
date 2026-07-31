@@ -24,13 +24,14 @@ def _json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
-def _payload_parts(row: sqlite3.Row) -> tuple[dict[str, Any], dict[str, Any]]:
+def _historical_payload_parts(row: sqlite3.Row) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read the retained payload only for records created by older revisions."""
     payload = _json_dict(row["legacy_payload_json"])
     legacy = payload.get("_legacy_row")
     return payload, legacy if isinstance(legacy, dict) else {}
 
 
-def _payload_without_legacy_row(payload: dict[str, Any]) -> dict[str, Any]:
+def _payload_without_historical_row(payload: dict[str, Any]) -> dict[str, Any]:
     clean = dict(payload)
     clean.pop("_legacy_row", None)
     return clean
@@ -44,14 +45,14 @@ def _interpretation(row: sqlite3.Row) -> dict[str, Any]:
     return _json_dict(row["interpretation_json"])
 
 
-def _with_unified_results(payload: dict[str, Any], row: sqlite3.Row) -> dict[str, Any]:
-    result = _payload_without_legacy_row(payload)
+def _result_projection(row: sqlite3.Row, historical_payload: dict[str, Any]) -> dict[str, Any]:
+    result = _payload_without_historical_row(historical_payload)
     decision = _decision(row)
     interpretation = _interpretation(row)
-    if decision and not isinstance(result.get("decision_result"), dict):
+    if decision:
         result["decision_result"] = decision
-    if interpretation and not isinstance(result.get("_interpretation_result"), dict):
-        result["_interpretation_result"] = interpretation
+    if interpretation:
+        result["interpretation_result"] = interpretation
     return result
 
 
@@ -215,7 +216,7 @@ def canonical_event_rows(
         aliases = alias_map.get(int(row["id"]), [])
         item_alias = _preferred_alias(aliases, str(row["content_type"] or ""))
         item_kind = item_alias["item_kind"]
-        payload, legacy = _payload_parts(row)
+        historical_payload, historical_row = _historical_payload_parts(row)
         review_status = str(row["review_status"] or "")
         admission_status = str(row["admission_status"] or "")
         baseline = str(row["collection_class"] or "") == "baseline"
@@ -262,16 +263,16 @@ def canonical_event_rows(
 
         decision = _decision(row)
         interpretation = _interpretation(row)
-        sent_at = _sent_at(row, legacy)
-        source_label = str(legacy.get("source_module") or row["source"] or "")
+        sent_at = _sent_at(row, historical_row)
+        source_label = str(historical_row.get("source_module") or row["source"] or "")
         legacy_item_id = item_alias["legacy_item_id"] or str(row["source_item_id"])
         if item_kind == "event":
-            kind = _event_kind(row, legacy)
+            kind = _event_kind(row, historical_row)
         elif item_kind == "official":
             kind = "official_news"
         else:
             kind = "article"
-        related_payload = _with_unified_results(payload, row)
+        related_payload = _result_projection(row, historical_payload)
         result.append(
             {
                 "kind": kind,
@@ -281,7 +282,7 @@ def canonical_event_rows(
                 "title": str(row["title"] or ""),
                 "summary": str(
                     interpretation.get("core_content")
-                    or legacy.get("daily_summary")
+                    or historical_row.get("daily_summary")
                     or row["summary"]
                     or interpretation.get("brief_reason")
                     or decision.get("reason")
@@ -290,10 +291,10 @@ def canonical_event_rows(
                 "url": str(row["url"] or ""),
                 "published_at": published_at,
                 "seen_at": seen_at,
-                "importance": str(row["importance"] or legacy.get("importance") or ""),
+                "importance": str(row["importance"] or historical_row.get("importance") or ""),
                 "classification": str(
-                    legacy.get("incremental_classification")
-                    or legacy.get("classification")
+                    historical_row.get("incremental_classification")
+                    or historical_row.get("classification")
                     or row["decision_action"]
                     or ""
                 ),
@@ -372,131 +373,69 @@ def _review_rows_for_kind(
     )
 
 
-def _article_legacy_row(row: sqlite3.Row) -> dict[str, Any]:
-    payload, legacy = _payload_parts(row)
-    gate = _with_unified_results(payload, row)
+def _article_digest_row(row: sqlite3.Row) -> dict[str, Any]:
+    historical_payload, historical_row = _historical_payload_parts(row)
+    gate = _result_projection(row, historical_payload)
     interpretation = _interpretation(row)
-    sent_at = _sent_at(row, legacy)
-    affected = legacy.get("affected_targets_json")
+    sent_at = _sent_at(row, historical_row)
+    affected = historical_row.get("affected_targets_json")
     if not affected:
         affected = _json_text(card_targets(gate))
     return {
         "market_review_id": int(row["review_id"]),
         "source": str(row["alias_source"] or row["source"]),
         "item_id": str(row["legacy_item_id"]),
-        "url": str(row["url"] or legacy.get("url") or ""),
-        "title": str(row["title"] or legacy.get("title") or ""),
-        "source_module": str(legacy.get("source_module") or row["source"] or ""),
-        "published_at": str(row["published_at"] or legacy.get("published_at") or ""),
-        "importance": str(row["importance"] or legacy.get("importance") or ""),
+        "url": str(row["url"] or historical_row.get("url") or ""),
+        "title": str(row["title"] or historical_row.get("title") or ""),
+        "source_module": str(historical_row.get("source_module") or row["source"] or ""),
+        "published_at": str(row["published_at"] or historical_row.get("published_at") or ""),
+        "importance": str(row["importance"] or historical_row.get("importance") or ""),
         "push_now": int(str(row["decision_action"] or "") == "push"),
-        "market_impact": str(legacy.get("market_impact") or payload.get("market_impact") or ""),
+        "market_impact": str(
+            historical_row.get("market_impact") or historical_payload.get("market_impact") or ""
+        ),
         "incremental_classification": str(
-            legacy.get("incremental_classification")
-            or payload.get("incremental_classification")
+            historical_row.get("incremental_classification")
+            or historical_payload.get("incremental_classification")
             or ""
         ),
         "affected_targets_json": str(affected or "[]"),
-        "reason": str(legacy.get("reason") or payload.get("reason") or ""),
+        "reason": str(
+            historical_row.get("reason")
+            or historical_payload.get("reason")
+            or _decision(row).get("brief_reason")
+            or _decision(row).get("reason")
+            or ""
+        ),
         "daily_summary": str(
-            legacy.get("daily_summary")
-            or payload.get("daily_summary")
+            historical_row.get("daily_summary")
+            or historical_payload.get("daily_summary")
             or interpretation.get("core_content")
             or ""
         ),
-        "confidence": str(legacy.get("confidence") or payload.get("confidence") or ""),
+        "confidence": str(
+            historical_row.get("confidence") or historical_payload.get("confidence") or ""
+        ),
         "gate_json": _json_text(gate),
         "pushed_at": sent_at,
         "created_at": str(row["review_created_at"] or ""),
     }
 
 
-def _official_analysis(payload: dict[str, Any], row: sqlite3.Row) -> dict[str, Any]:
-    nested = payload.get("analysis")
-    analysis = dict(nested) if isinstance(nested, dict) else _payload_without_legacy_row(payload)
-    decision = _decision(row)
-    interpretation = _interpretation(row)
-    if decision and not isinstance(analysis.get("_decision_result"), dict):
-        analysis["_decision_result"] = decision
-    if interpretation and not isinstance(analysis.get("_interpretation_result"), dict):
-        analysis["_interpretation_result"] = interpretation
-    return analysis
-
-
-def _official_legacy_row(row: sqlite3.Row) -> dict[str, Any]:
-    payload, legacy = _payload_parts(row)
-    analysis = _official_analysis(payload, row)
-    interpretation = _interpretation(row)
-    return {
-        "market_review_id": int(row["review_id"]),
-        "source": str(row["alias_source"] or row["source"]),
-        "item_id": str(row["legacy_item_id"]),
-        "url": str(row["url"] or legacy.get("url") or ""),
-        "title": str(row["title"] or legacy.get("title") or ""),
-        "published_at": str(row["published_at"] or legacy.get("published_at") or ""),
-        "importance": str(row["importance"] or legacy.get("importance") or ""),
-        "should_push_now": int(str(row["decision_action"] or "") == "push"),
-        "reason": str(legacy.get("reason") or payload.get("reason") or ""),
-        "daily_summary": str(
-            legacy.get("daily_summary")
-            or payload.get("daily_summary")
-            or interpretation.get("core_content")
-            or ""
-        ),
-        "analysis_json": _json_text(analysis),
-        "pushed_at": _sent_at(row, legacy),
-        "created_at": str(row["review_created_at"] or ""),
-    }
-
-
-def _event_legacy_row(row: sqlite3.Row) -> dict[str, Any]:
-    payload, legacy = _payload_parts(row)
-    analysis = _with_unified_results(payload, row)
-    return {
-        "market_review_id": int(row["review_id"]),
-        "id": int(row["legacy_item_id"]) if str(row["legacy_item_id"]).isdigit() else row["legacy_item_id"],
-        "source": str(row["alias_source"] or row["source"]),
-        "source_event_id": str(row["source_item_id"] or ""),
-        "event_type": _event_kind(row, legacy),
-        "title": str(row["title"] or ""),
-        "summary": str(row["summary"] or ""),
-        "full_text": str(row["full_text"] or ""),
-        "url": str(row["url"] or ""),
-        "published_at": str(row["published_at"] or ""),
-        "first_seen_at": str(row["first_seen_at"] or ""),
-        "symbols_json": str(row["symbols_json"] or "[]"),
-        "themes_json": str(row["themes_json"] or "[]"),
-        "model": str(legacy.get("model") or payload.get("_model") or ""),
-        "importance": str(row["importance"] or legacy.get("importance") or ""),
-        "classification": str(legacy.get("classification") or ""),
-        "direction": str(legacy.get("direction") or ""),
-        "impact_duration": str(legacy.get("impact_duration") or ""),
-        "should_push": int(str(row["decision_action"] or "") == "push"),
-        "analysis_json": _json_text(analysis),
-        "analysis_created_at": str(row["review_created_at"] or ""),
-        "pushed_at": _sent_at(row, legacy),
-    }
-
-
 def canonical_digest_rows(
     conn: sqlite3.Connection,
     *,
-    item_kind: str,
     start_utc: str,
     end_utc: str,
 ) -> list[dict[str, Any]]:
-    if item_kind not in {"article", "official"}:
-        raise ValueError(f"unsupported digest item kind: {item_kind}")
     result: list[dict[str, Any]] = []
-    for row in _review_rows_for_kind(
-        conn, item_kind, start_utc=start_utc, end_utc=end_utc
-    ):
-        projected = _article_legacy_row(row) if item_kind == "article" else _official_legacy_row(row)
+    for row in _review_rows_for_kind(conn, "article", start_utc=start_utc, end_utc=end_utc):
+        projected = _article_digest_row(row)
         if projected["pushed_at"]:
             continue
         result.append(projected)
     importance_order = {"medium": 0, "low": 1}
-    # The legacy query sorts timestamps descending within each importance group.
+    # Preserve the historical digest ordering within each importance group.
     grouped: list[dict[str, Any]] = []
     for rank in (0, 1, 2):
         group = [item for item in result if importance_order.get(str(item.get("importance") or ""), 2) == rank]
@@ -534,12 +473,16 @@ def canonical_feedback_snapshot(
     ).fetchone()
     if not row:
         return None
-    payload = _json_dict(row[1])
-    legacy = payload.get("_legacy_row") if isinstance(payload.get("_legacy_row"), dict) else {}
-    historically_sent = bool(str(legacy.get("pushed_at") or ""))
+    historical_payload = _json_dict(row[1])
+    historical_row = (
+        historical_payload.get("_legacy_row")
+        if isinstance(historical_payload.get("_legacy_row"), dict)
+        else {}
+    )
+    historically_sent = bool(str(historical_row.get("pushed_at") or ""))
     return {
         "decision": _json_dict(row[0]),
-        "legacy_payload": payload,
+        "historical_payload": historical_payload,
         "delivery_payload": _json_dict(row[5]),
         "application_revision": str(row[2] or ""),
         "delivery_id": row[3],
@@ -552,8 +495,8 @@ def canonical_delivered_items(conn: sqlite3.Connection, cutoff: str) -> list[dic
     items: list[dict[str, Any]] = []
     for item_kind in ITEM_KINDS:
         for row in _review_rows_for_kind(conn, item_kind):
-            payload, legacy = _payload_parts(row)
-            sent_at = _sent_at(row, legacy)
+            _historical_payload, historical_row = _historical_payload_parts(row)
+            sent_at = _sent_at(row, historical_row)
             if not sent_at or sent_at < cutoff:
                 continue
             decision = _decision(row)

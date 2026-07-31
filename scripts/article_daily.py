@@ -34,9 +34,7 @@ def day_window(day: str) -> tuple[str, str]:
 def fetch_digest_rows(conn: sqlite3.Connection, day: str) -> list[sqlite3.Row]:
     start_utc, end_utc = day_window(day)
     conn.row_factory = sqlite3.Row
-    return canonical_digest_rows(
-        conn, item_kind="article", start_utc=start_utc, end_utc=end_utc
-    )  # type: ignore[return-value]
+    return canonical_digest_rows(conn, start_utc=start_utc, end_utc=end_utc)  # type: ignore[return-value]
 
 
 def targets_text(row: sqlite3.Row) -> str:

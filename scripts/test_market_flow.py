@@ -8,15 +8,12 @@ import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import market_content_adapter
-import market_event_adapter
 import market_flow
-import market_flow as market_flow
 from llm_production_decision import ProductionLLMInsufficientEvidence
 from market_flow import evaluate_market_item
 from market_db import init_db
 from market_item import AdmissionEvidence, AdmissionResult, DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem
-from market_store import processing_failure_status, record_production_admission
+from market_store import processing_failure_status, record_article_delivery, record_production_admission
 
 
 def canonical_items() -> list[NormalizedMarketItem]:
@@ -149,7 +146,7 @@ def test_supplied_source_interpretation_skips_second_llm_call() -> None:
     assert result.audit_json["interpreter_called"] is False
 
 
-def test_value_directory_enrichment_is_preserved_in_review_audit() -> None:
+def test_value_directory_enrichment_is_preserved_in_normalized_item() -> None:
     raw_item = {
         "id": "value-flow-1",
         "title": "瑞银-亚太科技策略：Agentic AI to carry Semis&Hardware further",
@@ -189,14 +186,13 @@ def test_value_directory_enrichment_is_preserved_in_review_audit() -> None:
             official=False,
             storage_ref={},
         )
-        review = market_content_adapter.project_article_review(raw_item, flow_result)
     finally:
         market_flow.interpret_market_item = original_interpreter
-    enrichment = review["raw"]["_source_enrichment"]
+    enrichment = flow_result.item.raw
     facts = enrichment["value_directory_preview"]["facts"]
     assert facts["research_action"] == "overweight"
     assert facts["ocr"]["text"] == "Agentic AI to carry Semis further"
-    assert review["raw"]["_market_flow_result"]["audit"]["source_interpretation_supplied"] is True
+    assert flow_result.audit_json["source_interpretation_supplied"] is True
 
 
 
@@ -211,7 +207,6 @@ def admitted() -> AdmissionResult:
 
 
 def test_production_content_runtime_uses_unified_result_for_existing_and_delivery() -> None:
-    original_project = market_flow.project_article_review
     original_deliver = market_flow.deliver_article_review
     original_interpreter = market_flow.interpret_market_item
     original_prepare = market_flow.prepare_item_for_decision
@@ -220,20 +215,26 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
     decision = DecisionResult(action="push", importance="high", reason="HBM扩产")
 
     try:
-        def fake_project(item, flow_result):
+        def fake_decide(*_args, **_kwargs):
             calls["evaluate"] += 1
-            return original_project(item, flow_result)
+            return decision
 
-        market_flow.project_article_review = fake_project
         market_flow.interpret_market_item = lambda *_args, **_kwargs: InterpretationResult(
             core_content="HBM扩产"
         )
         market_flow.prepare_item_for_decision = lambda value: value
-        market_flow.decide_market_item_with_llm = lambda *_args, **_kwargs: decision
+        market_flow.decide_market_item_with_llm = fake_decide
 
         def fake_deliver(*_args, **kwargs):
             calls["deliver"] += 1
             assert kwargs["already_sent"] is False
+            record_article_delivery(
+                kwargs["market_item_id"],
+                kwargs["market_review_id"],
+                status="sent",
+                decision_action="push",
+                db_path=kwargs["db_path"],
+            )
             return "sent"
 
         market_flow.deliver_article_review = fake_deliver
@@ -285,7 +286,6 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
             assert second.inserted is False
             assert second.delivery_status == "existing"
     finally:
-        market_flow.project_article_review = original_project
         market_flow.deliver_article_review = original_deliver
         market_flow.interpret_market_item = original_interpreter
         market_flow.prepare_item_for_decision = original_prepare
@@ -294,25 +294,22 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
 
 
 def test_production_event_runtime_completes_only_unified_result() -> None:
-    original_project = market_flow.project_event_analysis
     original_interpreter = market_flow.interpret_market_item
     original_prepare = market_flow.prepare_item_for_decision
     original_decider = market_flow.decide_market_item_with_llm
     calls = {"analyze": 0}
     decision = DecisionResult(action="daily", importance="medium", reason="公告跟踪")
 
-    def fake_project(flow_result):
+    def fake_decide(*_args, **_kwargs):
         calls["analyze"] += 1
-        assert flow_result.decision is decision
-        return original_project(flow_result)
+        return decision
 
     try:
-        market_flow.project_event_analysis = fake_project
         market_flow.interpret_market_item = lambda *_args, **_kwargs: InterpretationResult(
             core_content="公告跟踪"
         )
         market_flow.prepare_item_for_decision = lambda value: value
-        market_flow.decide_market_item_with_llm = lambda *_args, **_kwargs: decision
+        market_flow.decide_market_item_with_llm = fake_decide
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "event-runtime.sqlite3"
             init_db(db_path).close()
@@ -366,7 +363,6 @@ def test_production_event_runtime_completes_only_unified_result() -> None:
             assert second.inserted is False
             assert second.delivery_status == "existing"
     finally:
-        market_flow.project_event_analysis = original_project
         market_flow.interpret_market_item = original_interpreter
         market_flow.prepare_item_for_decision = original_prepare
         market_flow.decide_market_item_with_llm = original_decider
@@ -429,7 +425,6 @@ def test_production_official_runtime_uses_only_unified_result() -> None:
 
 
 def test_production_llm_failure_retries_same_review_without_delivery() -> None:
-    original_project = market_flow.project_article_review
     original_interpreter = market_flow.interpret_market_item
     original_decider = market_flow.decide_market_item_with_llm
     calls = {"evaluate": 0}
@@ -440,13 +435,11 @@ def test_production_llm_failure_retries_same_review_without_delivery() -> None:
         audit_json={"production_authority": True},
     )
 
-    def fake_project(item, flow_result):
+    def successful_decide(*_args, **_kwargs):
         calls["evaluate"] += 1
-        assert flow_result.decision is decision
-        return original_project(item, flow_result)
+        return decision
 
     try:
-        market_flow.project_article_review = fake_project
         market_flow.interpret_market_item = lambda *_args, **_kwargs: InterpretationResult(
             core_content="模型固定响应"
         )
@@ -491,7 +484,7 @@ def test_production_llm_failure_retries_same_review_without_delivery() -> None:
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='article_reviews'"
                 ).fetchone()[0] == 0
 
-            market_flow.decide_market_item_with_llm = lambda *_args, **_kwargs: decision
+            market_flow.decide_market_item_with_llm = successful_decide
             outcome = market_flow.process_market_item(
                 item,
                 raw_item,
@@ -509,7 +502,6 @@ def test_production_llm_failure_retries_same_review_without_delivery() -> None:
             assert outcome.market_review_id == review_id
             assert outcome.flow_result.decision.action == "daily"
     finally:
-        market_flow.project_article_review = original_project
         market_flow.interpret_market_item = original_interpreter
         market_flow.decide_market_item_with_llm = original_decider
     assert calls == {"evaluate": 1}
@@ -661,7 +653,7 @@ def main() -> int:
     test_five_content_types_share_one_decision_and_interpretation_contract()
     test_interpretation_failure_preserves_decision_action()
     test_supplied_source_interpretation_skips_second_llm_call()
-    test_value_directory_enrichment_is_preserved_in_review_audit()
+    test_value_directory_enrichment_is_preserved_in_normalized_item()
     test_production_content_runtime_uses_unified_result_for_existing_and_delivery()
     test_production_event_runtime_completes_only_unified_result()
     test_production_official_runtime_uses_only_unified_result()

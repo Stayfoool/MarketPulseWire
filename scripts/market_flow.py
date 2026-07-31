@@ -2,22 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from attributed_research import prepare_item_for_decision
 from db_utils import connect_sqlite
 from decision_engine import decide_market_item_with_llm
-from market_content_adapter import (
-    analysis_lines_from_review,
-    gate_lines,
-    project_article_review,
-    project_official_review,
-)
-from market_event_adapter import build_portfolio_event_input, maybe_deliver_event, project_event_analysis
+from holdings_store import load_enabled_holdings
 from market_db import DEFAULT_DB_PATH
-from market_delivery import deliver_article_review, deliver_official_review
+from market_delivery import deliver_article_review, deliver_event, deliver_official_review
 from market_item import (
     AdmissionResult,
     DecisionResult,
@@ -25,7 +20,7 @@ from market_item import (
     MarketFlowResult,
     NormalizedMarketItem,
     article_item_id,
-    decision_result_from_payload,
+    decision_result_from_dict,
     item_from_article_mapping,
     item_from_event_mapping,
     official_news_item_id,
@@ -36,7 +31,6 @@ from market_store import (
     complete_market_review,
     ensure_market_item_alias,
     fail_market_review,
-    record_article_delivery,
     record_baseline_item,
     record_production_admission,
     market_review_snapshot,
@@ -144,7 +138,7 @@ EVENT_SOURCE_CONTEXT: dict[str, tuple[str, str, str]] = {
     "ifind_notice": ("company_disclosures", "ifind_batch", "notice"),
     "company_disclosures": ("company_disclosures", "company_disclosures", "announcement"),
 }
-ARTICLE_COMPAT_SOURCE_CATEGORIES = {"trendforce_page": "research_industry_media"}
+ARTICLE_SOURCE_CATEGORY_DEFAULTS = {"trendforce_page": "research_industry_media"}
 
 
 @dataclass
@@ -152,7 +146,6 @@ class MarketProcessOutcome:
     flow_result: MarketFlowResult
     inserted: bool
     storage_ref: dict[str, Any]
-    payload: dict[str, Any] = field(default_factory=dict)
     delivery_status: str = "not_requested"
     market_item_id: int | None = None
     market_review_id: int | None = None
@@ -224,7 +217,7 @@ def normalize_market_item(
     category = str(
         raw_item.get("source_category")
         or profile.get("category")
-        or ("official_company" if official else ARTICLE_COMPAT_SOURCE_CATEGORIES.get(source, ""))
+        or ("official_company" if official else ARTICLE_SOURCE_CATEGORY_DEFAULTS.get(source, ""))
     )
     return item_from_article_mapping(
         source,
@@ -239,7 +232,14 @@ def normalize_market_item(
 def _interpretation_from_payload(payload: dict[str, Any]) -> InterpretationResult:
     raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
     analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}
-    source = raw.get("_interpretation_result") or analysis.get("_interpretation_result") or raw or analysis
+    source = (
+        payload.get("interpretation_result")
+        or payload.get("_interpretation_result")
+        or raw.get("_interpretation_result")
+        or analysis.get("_interpretation_result")
+        or raw
+        or analysis
+    )
     if not isinstance(source, dict):
         source = {}
     return InterpretationResult(
@@ -261,7 +261,8 @@ def _flow_result(
     default_action: str = "archive",
     missing_is_contract_error: bool = True,
 ) -> MarketFlowResult:
-    decision = decision_result_from_payload(payload)
+    decision_payload = payload.get("decision_result")
+    decision = decision_result_from_dict(decision_payload)
     if decision is None:
         reason = (
             "缺少统一 DecisionResult，已按关闭式策略禁止推送。"
@@ -302,6 +303,31 @@ def _source_enrichment_interpretation(item: NormalizedMarketItem) -> Interpretat
         model=str(facts.get("model") or "value_directory_preview"),
         prompt_version="value_directory_preview_v1",
     )
+
+
+def build_portfolio_event_input(item: NormalizedMarketItem, db_path: Path = DEFAULT_DB_PATH) -> str:
+    symbol_set = {str(symbol).upper() for symbol in item.symbols if str(symbol).strip()}
+    holdings = load_enabled_holdings(db_path)
+    related_holdings = [
+        holding
+        for holding in holdings
+        if str(holding.get("symbol", "")).upper() in symbol_set
+    ]
+    context = {
+        "event": item.to_dict(),
+        "event_symbols": sorted(symbol_set),
+        "directly_related_holdings": related_holdings,
+        "all_configured_holdings": [
+            {
+                "symbol": holding.get("symbol", ""),
+                "name": holding.get("name", ""),
+                "full_name": holding.get("full_name", ""),
+                "aliases": holding.get("aliases", []),
+            }
+            for holding in holdings
+        ],
+    }
+    return json.dumps(context, ensure_ascii=False, indent=2)
 
 
 def evaluate_content_item(
@@ -360,7 +386,7 @@ def _process_content_item(
         raise InsufficientEvidenceError("market review is already terminal with insufficient evidence")
     canonical_existing = bool(snapshot and snapshot["review_status"] == "succeeded")
     if canonical_existing and not reprocess_existing:
-        payload = dict(snapshot["payload"])
+        evaluated_flow_result = _flow_result(decision_item, dict(snapshot["payload"]), {})
         inserted = False
     elif market_review_id is not None:
         if production_admission is None or production_portfolio is None:
@@ -389,24 +415,19 @@ def _process_content_item(
             official=store_kind == "official",
             storage_ref=item_storage_ref,
         )
-        payload = (
-            project_official_review(raw_item, evaluated_flow_result)
-            if store_kind == "official"
-            else project_article_review(raw_item, evaluated_flow_result)
-        )
         inserted = not canonical_existing
     else:
         raise RuntimeError("content processing requires a unified production review identity")
-    if snapshot and snapshot["delivered"]:
-        payload = dict(payload)
-        payload["pushed_at"] = "unified_delivery"
     storage_ref = {
         "store_kind": "market_reviews",
         "item_kind": "official" if store_kind == "official" else "article",
         "source": source,
         "item_id": item_id,
     }
-    flow_result = evaluated_flow_result or _flow_result(decision_item, payload, storage_ref)
+    if evaluated_flow_result is None:
+        raise RuntimeError("content processing did not produce a unified result")
+    flow_result = evaluated_flow_result
+    flow_result.storage_ref = storage_ref
 
     if (
         market_review_id is not None
@@ -420,7 +441,6 @@ def _process_content_item(
             market_review_id,
             flow_result,
             db_path=db_path,
-            legacy_payload=payload,
             alias=(item_kind, source, item_id, "market_items"),
         )
     status = "not_requested"
@@ -431,41 +451,34 @@ def _process_content_item(
         elif flow_result.decision.audit_json.get("contract_error") == "missing_decision_result":
             status = "missing_decision"
         elif store_kind == "official":
+            if market_item_id is None or market_review_id is None:
+                raise RuntimeError("official delivery requires unified item and review identities")
             status = deliver_official_review(
                 source,
                 raw_item,
-                payload,
-                decision=flow_result.decision,
-                analysis_lines=analysis_lines_from_review(payload),
+                flow_result,
+                market_item_id=market_item_id,
+                market_review_id=market_review_id,
                 already_sent=False,
                 db_path=db_path,
             )
         else:
+            if market_item_id is None or market_review_id is None:
+                raise RuntimeError("article delivery requires unified item and review identities")
             status = deliver_article_review(
                 source,
                 raw_item,
-                payload,
-                decision=flow_result.decision,
+                flow_result,
+                market_item_id=market_item_id,
+                market_review_id=market_review_id,
                 db_path=db_path,
-                analysis_lines_prefix=gate_lines(payload),
                 use_rule_dedup=use_rule_dedup,
                 already_sent=False,
-            )
-        if market_item_id is not None and market_review_id is not None and status != "existing":
-            record_article_delivery(
-                market_item_id,
-                market_review_id,
-                status=status,
-                decision_action=flow_result.decision.action,
-                payload={"item_kind": storage_ref["item_kind"], "source": source, "item_id": item_id},
-                legacy_payload=payload,
-                db_path=db_path,
             )
     return MarketProcessOutcome(
         flow_result=flow_result,
         inserted=inserted,
         storage_ref=storage_ref,
-        payload=payload,
         delivery_status=status,
         market_item_id=market_item_id,
         market_review_id=market_review_id,
@@ -544,15 +557,13 @@ def _process_event_item(
         raise InsufficientEvidenceError("market review is already terminal with insufficient evidence")
     canonical_existing = bool(snapshot and snapshot["review_status"] == "succeeded")
     inserted = not canonical_existing if market_review_id is not None else not bool(alias_exists)
-    empty_payload: dict[str, Any] = {}
     if canonical_existing and not reprocess_existing:
-        payload = dict(snapshot["payload"])
+        flow_result = _flow_result(item, dict(snapshot["payload"]), storage_ref)
         return MarketProcessOutcome(
-            flow_result=_flow_result(item, payload, storage_ref),
+            flow_result=flow_result,
             inserted=False,
             storage_ref=storage_ref,
             delivery_status="existing",
-            payload=payload,
             market_item_id=market_item_id,
             market_review_id=market_review_id,
         )
@@ -560,7 +571,7 @@ def _process_event_item(
         return MarketProcessOutcome(
             flow_result=_flow_result(
                 item,
-                empty_payload,
+                {},
                 storage_ref,
                 default_action="baseline" if baseline_only else "archive",
                 missing_is_contract_error=False,
@@ -577,7 +588,7 @@ def _process_event_item(
         )
     decision_item = prepare_item_for_decision(item)
     partial = MarketProcessOutcome(
-        flow_result=_flow_result(decision_item, empty_payload, storage_ref, missing_is_contract_error=False),
+        flow_result=_flow_result(decision_item, {}, storage_ref, missing_is_contract_error=False),
         inserted=inserted,
         storage_ref=storage_ref,
     )
@@ -602,7 +613,6 @@ def _process_event_item(
             db_path=db_path,
             storage_ref=storage_ref,
         )
-        analysis = project_event_analysis(flow_result)
     except Exception as exc:  # noqa: BLE001 - preserve the inserted event reference for batch recovery
         raise MarketItemProcessingError(str(exc), partial, cause=exc) from exc
     if market_review_id is not None and not flow_result.decision.audit_json.get("contract_error"):
@@ -612,7 +622,6 @@ def _process_event_item(
             market_review_id,
             flow_result,
             db_path=db_path,
-            legacy_payload=analysis,
             alias=("event", item.source, item_id, "market_items"),
         )
     if not deliver:
@@ -620,11 +629,9 @@ def _process_event_item(
     elif snapshot and snapshot["delivered"]:
         status = "existing"
     else:
-        status = maybe_deliver_event(
-            decision_item,
-            analysis,
+        status = deliver_event(
+            flow_result,
             db_path=db_path,
-            decision=flow_result.decision,
             market_item_id=market_item_id,
             market_review_id=market_review_id,
         )
@@ -632,7 +639,6 @@ def _process_event_item(
         flow_result=flow_result,
         inserted=inserted,
         storage_ref=storage_ref,
-        payload=analysis,
         delivery_status=status,
         market_item_id=market_item_id,
         market_review_id=market_review_id,

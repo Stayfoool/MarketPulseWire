@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from market_db import DEFAULT_DB_PATH
-from market_item import decision_result_from_payload
+from market_item import DecisionResult
 
 
 RULE_IDS = {
@@ -18,32 +18,67 @@ RULE_IDS = {
     "international_bank_theme_strategy",
     "attributed_research_hard_variable",
 }
+LEGACY_ALIAS_LOOKBACK_DAYS = 30
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def rule_hit(payload: dict[str, Any]) -> dict[str, Any] | None:
-    raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
-    structured_decision = decision_result_from_payload(payload)
-    decision = payload.get("_decision_result")
-    if not isinstance(decision, dict):
-        decision = payload.get("decision_result") if isinstance(payload.get("decision_result"), dict) else {}
-    candidates = (
-        list(structured_decision.rule_hits if structured_decision else [])
-        + list(decision.get("rule_hits") or [])
-        + list(raw.get("rule_hits") or [])
-        + list(payload.get("rule_hits") or [])
-    )
-    for candidate in candidates:
+def rule_hit(decision: DecisionResult) -> dict[str, Any] | None:
+    for candidate in decision.rule_hits:
         if isinstance(candidate, dict) and candidate.get("rule_id") in RULE_IDS and candidate.get("dedup_key"):
             return candidate
     return None
 
 
+def _lookback_minutes(hit: dict[str, Any]) -> int:
+    value = hit.get("dedup_lookback_minutes")
+    if value is None:
+        value = max(1, min(int(hit.get("dedup_lookback_days") or 14), 90)) * 24 * 60
+    return max(1, min(int(value), 90 * 24 * 60))
+
+
+def _existing_reservation(
+    conn: sqlite3.Connection,
+    *,
+    dedup_key: str,
+    alias_keys: list[str],
+    now: datetime,
+    lookback_minutes: int,
+) -> sqlite3.Row | tuple[Any, ...] | None:
+    cutoff = (now - timedelta(minutes=lookback_minutes)).isoformat()
+    row = conn.execute(
+        """
+        SELECT dedup_key, status, first_source, first_item_id, first_title,
+               first_published_at, updated_at
+        FROM rule_alert_dedup
+        WHERE dedup_key = ? AND created_at >= ?
+        LIMIT 1
+        """,
+        (dedup_key, cutoff),
+    ).fetchone()
+    if row or not alias_keys:
+        return row
+    alias_cutoff = (
+        now - timedelta(minutes=min(lookback_minutes, LEGACY_ALIAS_LOOKBACK_DAYS * 24 * 60))
+    ).isoformat()
+    placeholders = ",".join("?" for _ in alias_keys)
+    return conn.execute(
+        f"""
+        SELECT dedup_key, status, first_source, first_item_id, first_title,
+               first_published_at, updated_at
+        FROM rule_alert_dedup
+        WHERE dedup_key IN ({placeholders}) AND created_at >= ?
+        ORDER BY created_at
+        LIMIT 1
+        """,
+        (*alias_keys, alias_cutoff),
+    ).fetchone()
+
+
 def reserve_rule_alert(
-    review_or_analysis: dict[str, Any],
+    decision: DecisionResult | None,
     *,
     source: str,
     item_id: str,
@@ -59,7 +94,8 @@ def reserve_rule_alert(
     the item eligible to push. A reservation makes concurrent collectors
     deterministic; expired records are reused after the configured window.
     """
-    hit = rule_hit(review_or_analysis) or delivery_hit
+    hit = rule_hit(decision) if decision is not None else None
+    hit = hit or delivery_hit
     if not hit:
         return {"reserved": False, "applicable": False}
     dedup_key = str(hit.get("dedup_key") or "")
@@ -71,28 +107,19 @@ def reserve_rule_alert(
         for value in hit.get("dedup_alias_keys") or []
         if str(value).strip() and str(value) != dedup_key
     ][:16]
-    candidate_keys = [dedup_key, *dict.fromkeys(alias_keys)]
-    lookback_minutes = hit.get("dedup_lookback_minutes")
-    if lookback_minutes is None:
-        lookback_minutes = max(1, min(int(hit.get("dedup_lookback_days") or 14), 90)) * 24 * 60
-    lookback_minutes = max(1, min(int(lookback_minutes), 90 * 24 * 60))
+    lookback_minutes = _lookback_minutes(hit)
     now = datetime.now(timezone.utc)
-    cutoff = (now - timedelta(minutes=lookback_minutes)).isoformat()
     conn = sqlite3.connect(db_path, timeout=60, isolation_level="IMMEDIATE")
     try:
         conn.execute("PRAGMA busy_timeout = 60000")
         conn.execute("BEGIN IMMEDIATE")
-        placeholders = ",".join("?" for _ in candidate_keys)
-        row = conn.execute(
-            f"""
-            SELECT dedup_key, status, first_source, first_item_id, first_title, first_published_at, updated_at
-            FROM rule_alert_dedup
-            WHERE dedup_key IN ({placeholders}) AND created_at >= ?
-            ORDER BY CASE WHEN dedup_key = ? THEN 0 ELSE 1 END, created_at
-            LIMIT 1
-            """,
-            (*candidate_keys, cutoff, dedup_key),
-        ).fetchone()
+        row = _existing_reservation(
+            conn,
+            dedup_key=dedup_key,
+            alias_keys=alias_keys,
+            now=now,
+            lookback_minutes=lookback_minutes,
+        )
         if row:
             matched_key = str(row[0])
             if matched_key != dedup_key and row[1] == "sent":
@@ -216,24 +243,14 @@ def reserve_rule_alert_set(
                 for value in hit.get("dedup_alias_keys") or []
                 if str(value).strip() and str(value) != dedup_key
             ][:16]
-            candidate_keys = [dedup_key, *dict.fromkeys(alias_keys)]
-            lookback_minutes = hit.get("dedup_lookback_minutes")
-            if lookback_minutes is None:
-                lookback_minutes = max(1, min(int(hit.get("dedup_lookback_days") or 14), 90)) * 24 * 60
-            lookback_minutes = max(1, min(int(lookback_minutes), 90 * 24 * 60))
-            cutoff = (now - timedelta(minutes=lookback_minutes)).isoformat()
-            placeholders = ",".join("?" for _ in candidate_keys)
-            row = conn.execute(
-                f"""
-                SELECT dedup_key, status, first_source, first_item_id, first_title,
-                       first_published_at, updated_at
-                FROM rule_alert_dedup
-                WHERE dedup_key IN ({placeholders}) AND created_at >= ?
-                ORDER BY CASE WHEN dedup_key = ? THEN 0 ELSE 1 END, created_at
-                LIMIT 1
-                """,
-                (*candidate_keys, cutoff, dedup_key),
-            ).fetchone()
+            lookback_minutes = _lookback_minutes(hit)
+            row = _existing_reservation(
+                conn,
+                dedup_key=dedup_key,
+                alias_keys=alias_keys,
+                now=now,
+                lookback_minutes=lookback_minutes,
+            )
             if not row:
                 new_hits.append(hit)
                 continue
