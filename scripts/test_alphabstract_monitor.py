@@ -170,11 +170,15 @@ def test_normalized_item_uses_unified_research_shape() -> None:
 
 
 def test_source_profile_registers_alphabstract() -> None:
-    profile = runtime_source_profile("alphabstract_summaries")
-    assert profile is not None
-    assert profile["category"] == "research_industry_media"
-    assert "alphabstract_monitor.py" in profile["fetcher"]
-    assert profile["health_keys"] == [{"monitor": "alphabstract", "source": "alphabstract_summaries"}]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        profile = runtime_source_profile(
+            "alphabstract_summaries",
+            config_path=Path(tmpdir) / "source_profiles.local.json",
+        )
+        assert profile is not None
+        assert profile["category"] == "research_industry_media"
+        assert "alphabstract_monitor.py" in profile["fetcher"]
+        assert profile["health_keys"] == [{"monitor": "alphabstract", "source": "alphabstract_summaries"}]
 
 
 def test_notify_item_uses_process_market_item() -> None:

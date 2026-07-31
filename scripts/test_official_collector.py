@@ -16,10 +16,12 @@ TEST_RULE_CONFIG = ROOT / "config" / "rule_core_v1.test.json"
 
 
 def test_official_sources_include_expected_company_feeds() -> None:
-    feeds = official_collector.official_rss_feeds()
-    assert {"openai_news", "nvidia_blog", "samsung_semiconductor_news", "skhynix_newsroom"} <= set(feeds)
-    assert "semianalysis" not in feeds
-    assert "trendforce_semiconductors" not in feeds
+    with TemporaryDirectory() as tmpdir:
+        config_path = Path(tmpdir) / "source_profiles.local.json"
+        feeds = official_collector.official_rss_feeds(config_path=config_path)
+        assert {"openai_news", "nvidia_blog", "samsung_semiconductor_news", "skhynix_newsroom"} <= set(feeds)
+        assert "semianalysis" not in feeds
+        assert "trendforce_semiconductors" not in feeds
 
 
 def test_disabled_source_is_filtered() -> None:
