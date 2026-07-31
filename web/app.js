@@ -263,6 +263,26 @@ function serviceActionButtons(unit) {
   `).join(' ');
 }
 
+function taskRunReportHtml(task) {
+  const report = task.run_report;
+  if (!report) return '';
+  if (report.read_error) {
+    return `<div class="hint">最近报告读取异常：${escapeHtml(shortText(report.read_error, 160))}</div>`;
+  }
+  const counts = report.counts || {};
+  const summary = [
+    `读取 ${Number(counts.raw_items || 0)}`,
+    `基线 ${Number(counts.baseline_items || 0)}`,
+    `新条目 ${Number(counts.new_items || 0)}`,
+    `处理 ${Number(counts.reviewed_items || 0)}`,
+    `推送 ${Number(counts.pushed_items || 0)}`
+  ].join(' / ');
+  const errors = (report.source_errors || []).map(item =>
+    `<div class="hint">${escapeHtml(item.source || '来源')}：${escapeHtml(shortText(item.error || '', 180))}</div>`
+  ).join('');
+  return `<div class="hint">最近报告：${summary}</div>${errors}`;
+}
+
 function renderHealthTasks(tasks, groupLabels) {
   const allTasks = tasks || [];
   const visibleTasks = allTasks;
@@ -308,13 +328,14 @@ function renderHealthTasks(tasks, groupLabels) {
           ${rawLines.map(line => `<div>${escapeHtml(line)}</div>`).join('')}
         </details>` : '';
       const nextTrigger = task.next_trigger ? `<div class="hint">下次：${escapeHtml(task.next_trigger)}</div>` : '';
+      const runReport = taskRunReportHtml(task);
       const issueClass = task.health_issue ? ' class="health-issue-row"' : '';
       rows.push(`
         <tr${issueClass}>
           <td><strong>${escapeHtml(task.label || task.Id || '')}</strong><div class="hint">${escapeHtml(task.Id || '')}</div>${rawDetails}</td>
           <td>${escapeHtml(task.unit_type || '')}${lifecycle}${replacement}</td>
           <td>${badge(task.schedule_status || '未知')}</td>
-          <td>${badge(task.execution_status || '未知')}</td>
+          <td>${badge(task.execution_status || '未知')}${runReport}</td>
           <td>${escapeHtml(task.schedule || '')}${nextTrigger}</td>
           <td>${escapeHtml(task.NRestarts || '')}</td>
           <td>${escapeHtml(task.last_execution || '')}</td>

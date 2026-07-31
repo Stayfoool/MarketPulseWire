@@ -1131,6 +1131,63 @@ def test_health_tasks_show_disabled_timer_and_last_success_separately() -> None:
     assert task["execution_status"] == "上次运行成功"
 
 
+def test_value_directory_task_projects_latest_bounded_report() -> None:
+    timer = systemd_fixture(
+        "surveil-value-directory.timer",
+        {"ActiveState": "active", "SubState": "waiting", "Result": "success"},
+    )
+    service = systemd_fixture(
+        "surveil-value-directory.service",
+        {"ActiveState": "inactive", "SubState": "dead", "Result": "success", "ExecMainStatus": "0"},
+    )
+    with TemporaryDirectory() as tmpdir:
+        report_root = Path(tmpdir)
+        (report_root / "value-directory-production-20260731-130025.json").write_text(
+            json.dumps(
+                {
+                    "ok": False,
+                    "started_at": "2026-07-31T13:00:02+00:00",
+                    "finished_at": "2026-07-31T13:00:25+00:00",
+                    "counts": {
+                        "raw_items": 10,
+                        "baseline_items": 10,
+                        "new_items": 0,
+                        "reviewed_items": 0,
+                        "pushed_items": 0,
+                    },
+                    "errors": ["top-level details must not be projected"],
+                    "sources": [
+                        {
+                            "source": "value_directory_ib_stocks",
+                            "errors": ["AccessBlocked: state=login"],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        task = next(
+            item
+            for item in build_health_tasks([timer, service], report_root=report_root)
+            if item["Id"] == "surveil-value-directory"
+        )
+
+    report = task["run_report"]
+    assert report["ok"] is False
+    assert report["counts"] == {
+        "raw_items": 10,
+        "baseline_items": 10,
+        "new_items": 0,
+        "reviewed_items": 0,
+        "pushed_items": 0,
+    }
+    assert report["source_errors"] == [
+        {"source": "value_directory_ib_stocks", "error": "AccessBlocked: state=login"}
+    ]
+    assert "top-level details" not in json.dumps(report, ensure_ascii=False)
+
+
 def test_health_summary_counts_one_failed_logical_task() -> None:
     timer = systemd_fixture(
         "surveil-value-directory.timer",
@@ -1276,6 +1333,7 @@ def main() -> int:
     test_systemd_actions_are_whitelisted()
     test_health_tasks_pair_timer_with_service_and_prefer_execution_result()
     test_health_tasks_show_disabled_timer_and_last_success_separately()
+    test_value_directory_task_projects_latest_bounded_report()
     test_unit_display_metadata_includes_research_production_collector()
     test_unit_display_metadata_includes_official_production_collector()
     test_unit_display_metadata_includes_news_production_collector()
