@@ -321,7 +321,13 @@ def ensure_rule(username: str, token: str) -> None:
     print(f"已添加 Filtered Stream rule：{json.dumps(result, ensure_ascii=False)}", flush=True)
 
 
-def save_post(conn: sqlite3.Connection, username: str, post: dict[str, Any]) -> bool:
+def save_post(
+    conn: sqlite3.Connection,
+    username: str,
+    post: dict[str, Any],
+    *,
+    delivery_status: str = "pending",
+) -> bool:
     post_id = str(post["id"])
     text = post_text(post).strip()
     url = f"https://x.com/{username}/status/{post_id}"
@@ -340,7 +346,7 @@ def save_post(conn: sqlite3.Connection, username: str, post: dict[str, Any]) -> 
                 text,
                 post.get("created_at"),
                 now,
-                "pending",
+                delivery_status,
             ),
         )
     except sqlite3.IntegrityError:
@@ -408,12 +414,38 @@ def load_pending_deliveries(username: str, limit: int = 10) -> list[dict[str, An
     return retry_on_locked(operation)
 
 
-def save_post_with_retry(username: str, post: dict[str, Any]) -> bool:
+def save_post_with_retry(
+    username: str,
+    post: dict[str, Any],
+    *,
+    delivery_status: str = "pending",
+) -> bool:
     def operation() -> bool:
         with connect_db() as conn:
-            return save_post(conn, username, post)
+            return save_post(conn, username, post, delivery_status=delivery_status)
 
     return retry_on_locked(operation)
+
+
+def x_backfill_baseline_exists(username: str) -> bool:
+    with connect_db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM seen_sources WHERE source = ?",
+            (f"x_stream:{username.casefold()}",),
+        ).fetchone()
+    return row is not None
+
+
+def mark_x_backfill_baseline(username: str) -> None:
+    def operation() -> None:
+        with connect_db() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO seen_sources (source, first_seen_at) VALUES (?, ?)",
+                (f"x_stream:{username.casefold()}", utc_now_iso()),
+            )
+            conn.commit()
+
+    retry_on_locked(operation)
 
 
 def attach_media(post: dict[str, Any], payload: dict[str, Any]) -> None:
@@ -686,12 +718,22 @@ def backfill_recent_posts(username: str) -> int:
         print(f"X REST 补漏失败：{error_text}", flush=True)
         record_stream_failure(error_text, phase="rest_backfill")
         return 0
+    baseline_only = not x_backfill_baseline_exists(username)
     count = 0
     for post in sorted(posts, key=lambda item: item.get("created_at", "")):
-        if save_post_with_retry(username, post):
+        if save_post_with_retry(
+            username,
+            post,
+            delivery_status="baseline" if baseline_only else "pending",
+        ):
             count += 1
-            print(f"REST 补漏发现 X 新帖：{post['url']}", flush=True)
-            deliver_post(username, post)
+            if not baseline_only:
+                print(f"REST 补漏发现 X 新帖：{post['url']}", flush=True)
+                deliver_post(username, post)
+    if baseline_only:
+        mark_x_backfill_baseline(username)
+        print(f"X REST 补漏：首次建立基线 {count} 条，默认不发送旧帖子。", flush=True)
+        return 0
     if count == 0:
         print("X REST 补漏：没有发现新帖。", flush=True)
     return count

@@ -264,31 +264,27 @@ New production items also use the canonical storage contract:
 - `market_reviews` stores a versioned production `AdmissionResult` for every
   normalized live item. An excluded row has no `DecisionResult` or
   `InterpretationResult`. An admitted row is completed with the exact results
-  returned by the unified runtime before delivery. Current results use
-  `decision_json` and `interpretation_json`; new reviews do not write
-  `legacy_payload_json`. Existing historical payloads remain only for bounded
-  historical-reader fallback. Private production LLM requests/responses remain
-  outside SQLite.
+  returned by the unified runtime before delivery. Results use only
+  `decision_json` and `interpretation_json`; private production LLM
+  requests/responses remain outside SQLite.
 - `market_item_aliases` maps the unified item identity to stable
   `article`, `official` and `event` source identities. Feishu feedback tokens
   and Web links therefore retain stable external identities.
 - `deliveries` remains an execution audit, independent from decision
   authority. `market_item_id`, nullable `market_review_id`, `decision_action`
   and `attempted_at` link article, official-news and event delivery outcomes to
-  the same item/review contract. Historical deliveries whose originating
-  review could not be proven keep a null `market_review_id`.
+  the same item/review contract.
 
-Historical `legacy_store_kind`, `legacy_store_id` and `market_item_aliases`
-values remain as provenance and stable external identity metadata; they do not
-imply that a separate physical result table still exists. Missing body text,
-admission evidence and review links remain missing instead of being inferred.
+`market_item_aliases` remains the stable external identity mapping used by Web
+and feedback. Its retained `legacy_item_id` and `legacy_store_kind` column names
+are storage names only; item and review tables have no old-result provenance or
+payload fields.
 
 Web Event Center, article daily output and feedback lookup/quality metrics read
 the unified tables through `market_canonical_reader.py`. When an
 item has multiple current task results, display readers use the latest result
 while all versions remain stored. Existing external ids are resolved through `market_item_aliases`;
-historical deliveries without a provable originating review link only to the
-item. New production processing reads and writes only unified result storage.
+production processing reads and writes only unified result storage.
 
 For newly admitted production items, `market_reviews` is also the processed /
 retry/current-result authority. `market_flow.py` reuses a completed current
@@ -330,17 +326,15 @@ news, event and event-analysis result tables have been retired after explicit
 mapping verification and a production backup. Supported rollback begins with a
 revision that already uses unified storage and does not require those tables.
 
-`seen_items` keeps discovery identity as its primary responsibility. Additive
-compatibility columns record `collection_class`, processability, admission and
-processing status for newly collected domestic finance-media, RSS, TrendForce,
+`seen_items` keeps discovery identity as its primary responsibility. Its
+lifecycle columns record `collection_class`, processability, admission and
+processing status for collected domestic finance-media, RSS, TrendForce,
 AlphaAbstract, ValueList, official trade-policy and Sina 7x24 items. Admission
 audit fields retain matched groups, bounded evidence, configuration version,
 rule-contract version and evaluation time; Sina 7x24 may additionally retain the
-resulting event id. Existing rows are migrated as `legacy_unclassified`; no
-historical baseline/exclusion/failure state is inferred, except that existing
-Sina 7x24 event identities are explicitly projected as already admitted legacy
-events. `DecisionResult.action` and delivery status are not copied into this
-ledger and remain authoritative in the existing review/delivery paths.
+resulting event id. Current lifecycle values are explicit; no unclassified
+compatibility state exists. `DecisionResult.action` and delivery status are not
+copied into this ledger and remain authoritative in the review/delivery paths.
 
 AlphaAbstract reads its public sitemap into bounded discovery records containing
 the stable summary URL identity and sitemap timestamp, then reserves those
@@ -414,7 +408,12 @@ Holdings preview always applies whole-list local structure validation, but marke
 
 ### X / Serenity
 
-`x_stream.py` keeps its dedicated stream, thread/media enrichment, `seen_posts` state and X card delivery. The general article/event stores do not currently represent those semantics cleanly. Regression coverage lives in `test_x_stream_health.py`.
+`x_stream.py` keeps its dedicated stream, thread/media enrichment, `seen_posts`
+state and X card delivery. Its first successful REST backfill records the
+currently visible posts as `baseline` and sends none; later REST and stream
+discoveries use the existing delivery path. The general article/event stores do
+not currently represent those semantics cleanly. Regression coverage lives in
+`test_x_stream_health.py`.
 
 Review condition: reconsider convergence when X posts can be represented without losing thread/media rendering or stream retry state.
 

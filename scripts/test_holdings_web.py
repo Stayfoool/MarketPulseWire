@@ -54,7 +54,6 @@ def insert_unified_result(
     delivered: bool = False,
     collection_class: str = "live",
     content_type: str = "article",
-    source_label: str = "",
 ) -> int:
     cur = conn.execute(
         """
@@ -97,7 +96,6 @@ def insert_unified_result(
         return market_item_id
     decision = {"action": action, "importance": importance, "reason": "测试决策"}
     interpretation = {"core_content": summary, "model": "fixed-test"}
-    legacy_payload = {"_legacy_row": {"source_module": source_label or source}}
     review_id = int(
         conn.execute(
             """
@@ -105,10 +103,10 @@ def insert_unified_result(
                 market_item_id,task,run_key,is_current,review_status,
                 admission_status,admission_reason,admission_matched_families_json,
                 admission_evidence_json,admission_json,decision_action,importance,
-                decision_json,interpretation_json,legacy_payload_json,
+                decision_json,interpretation_json,
                 application_revision,created_at,completed_at
             ) VALUES (?, 'production', ?, 1, 'succeeded', 'admitted', 'test',
-                      '[]', '[]', '{}', ?, ?, ?, ?, ?, 'test', ?, ?)
+                      '[]', '[]', '{}', ?, ?, ?, ?, 'test', ?, ?)
             """,
             (
                 market_item_id,
@@ -117,7 +115,6 @@ def insert_unified_result(
                 importance,
                 json.dumps(decision, ensure_ascii=False),
                 json.dumps(interpretation, ensure_ascii=False),
-                json.dumps(legacy_payload, ensure_ascii=False),
                 seen_at,
                 seen_at,
             ),
@@ -391,7 +388,6 @@ def test_event_center_search_filters_before_per_pipeline_limit() -> None:
                 published_at="2026-07-09T03:57:30+00:00",
                 seen_at="2026-07-09T03:57:58.693585+00:00",
                 importance="medium",
-                source_label="财联社 / 电报 API",
             )
             for index in range(301):
                 insert_unified_result(
@@ -403,12 +399,11 @@ def test_event_center_search_filters_before_per_pipeline_limit() -> None:
                     summary="普通内容",
                     published_at="2026-07-09T15:00:00+00:00",
                     seen_at=f"2026-07-09T15:00:00.{index:03d}+00:00",
-                    source_label="财联社 / 电报 API",
                 )
 
         rows = fetch_events_rows(
             day="2026-07-09",
-            source="财联社",
+            source="cls_telegraph_api",
             q="高盛重磅发声",
             db_path=db_path,
         )
@@ -490,7 +485,6 @@ def test_event_center_can_show_baselines_and_filter_by_published_time() -> None:
                 published_at="2026-07-10T15:00:00+00:00",
                 seen_at="2026-07-11T00:00:10+00:00",
                 importance="medium",
-                source_label="价值目录 / 国际投行-个股",
             )
 
         default_rows = fetch_events_rows(
@@ -692,7 +686,6 @@ def test_event_center_projects_current_feedback_across_active_stores() -> None:
                 action="push",
                 importance="high",
                 delivered=True,
-                source_label="财联社",
             )
             insert_unified_result(
                 conn,
@@ -702,7 +695,6 @@ def test_event_center_projects_current_feedback_across_active_stores() -> None:
                 title="未投递文章",
                 published_at="2026-07-15T09:01:00+00:00",
                 seen_at="2026-07-15T09:01:01+00:00",
-                source_label="财联社",
             )
             insert_unified_result(
                 conn,
@@ -804,7 +796,6 @@ def test_event_center_feedback_filter_applies_before_article_limit() -> None:
                     action="push",
                     importance="high",
                     delivered=True,
-                    source_label="财联社",
                 )
             insert_feedback(conn, event_id="oldest-feedback", item_kind="article", source="cls_telegraph_api", item_id="article-0", label="duplicate", operator="operator-a", clicked_at_us=100)
             conn.commit()

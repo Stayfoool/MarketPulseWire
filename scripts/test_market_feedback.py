@@ -66,13 +66,10 @@ def insert_delivered_article(db_path: Path) -> None:
             """,
             (item_id, "2026-07-15T00:00:00+00:00"),
         )
-        legacy_payload = {
-            "raw": {
-                "decision_result": decision,
-                "_feedback_card_base": {
-                    "header": {"title": {"tag": "plain_text", "content": "Feedback fixture"}},
-                    "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": "fixture"}}],
-                },
+        feedback_card = {
+            "_feedback_card_base": {
+                "header": {"title": {"tag": "plain_text", "content": "Feedback fixture"}},
+                "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": "fixture"}}],
             }
         }
         review_id = int(conn.execute(
@@ -81,16 +78,15 @@ def insert_delivered_article(db_path: Path) -> None:
                 market_item_id,task,run_key,is_current,review_status,
                 admission_status,admission_reason,admission_matched_families_json,
                 admission_evidence_json,admission_json,decision_action,importance,
-                decision_json,interpretation_json,legacy_payload_json,
+                decision_json,interpretation_json,
                 application_revision,created_at,completed_at
             ) VALUES (?, 'production', 'feedback-fixture', 1, 'succeeded', 'admitted',
-                      'test', '[]', '[]', '{}', 'push', 'high', ?, '{}', ?,
+                      'test', '[]', '[]', '{}', 'push', 'high', ?, '{}',
                       'test-revision', ?, ?)
             """,
             (
                 item_id,
                 json.dumps(decision),
-                json.dumps(legacy_payload),
                 "2026-07-15T00:00:00+00:00",
                 "2026-07-15T00:00:00+00:00",
             ),
@@ -100,9 +96,15 @@ def insert_delivered_article(db_path: Path) -> None:
             INSERT INTO deliveries (
                 market_item_id,market_review_id,channel,status,
                 decision_action,attempted_at,sent_at,payload_json
-            ) VALUES (?, ?, 'feishu', 'sent', 'push', ?, ?, '{}')
+            ) VALUES (?, ?, 'feishu', 'sent', 'push', ?, ?, ?)
             """,
-            (item_id, review_id, "2026-07-15T00:00:00+00:00", "2026-07-15T00:00:00+00:00"),
+            (
+                item_id,
+                review_id,
+                "2026-07-15T00:00:00+00:00",
+                "2026-07-15T00:00:00+00:00",
+                json.dumps(feedback_card),
+            ),
         )
         conn.commit()
 
@@ -512,7 +514,7 @@ def test_every_feedback_label_combination_is_rendered_and_counted() -> None:
                 assert quality["summary"][label] == int(label in expected)
 
 
-def test_legacy_single_selection_becomes_multiselect_without_rewriting_history() -> None:
+def test_existing_single_selection_becomes_multiselect_without_rewriting_history() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "feedback.sqlite3"
         insert_delivered_article(db_path)
@@ -553,7 +555,6 @@ def test_current_review_card_is_recovered_from_sent_delivery_payload() -> None:
             "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": "event"}}],
         }
         with sqlite3.connect(db_path) as conn:
-            conn.execute("UPDATE market_reviews SET legacy_payload_json=NULL")
             conn.execute(
                 "UPDATE market_item_aliases SET item_kind='event',source='sina_flash'"
             )
@@ -579,7 +580,7 @@ def test_unified_review_without_card_snapshot_keeps_toast_only() -> None:
         db_path = Path(tmp) / "feedback.sqlite3"
         insert_delivered_article(db_path)
         with sqlite3.connect(db_path) as conn:
-            conn.execute("UPDATE market_reviews SET legacy_payload_json=NULL")
+            conn.execute("UPDATE deliveries SET payload_json='{}'")
             conn.commit()
         identity = FeedbackIdentity("article", "cls_telegraph_api", "item-1")
         assert feedback_card_for_callback(identity, "duplicate", secret=TEST_SIGNING_KEY, db_path=db_path) is None
@@ -666,7 +667,7 @@ def main() -> None:
     test_test_card_feedback_is_audited_but_excluded_from_quality_metrics()
     test_more_reason_is_stored_with_invalid_feedback()
     test_every_feedback_label_combination_is_rendered_and_counted()
-    test_legacy_single_selection_becomes_multiselect_without_rewriting_history()
+    test_existing_single_selection_becomes_multiselect_without_rewriting_history()
     test_current_review_card_is_recovered_from_sent_delivery_payload()
     test_unified_review_without_card_snapshot_keeps_toast_only()
     test_callback_response_replaces_card_when_snapshot_is_available()

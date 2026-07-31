@@ -693,11 +693,7 @@ def _feedback_card_base(conn: sqlite3.Connection, identity: FeedbackIdentity) ->
     )
     if canonical is None:
         return None
-    payload = canonical["historical_payload"]
-    raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else payload
-    card = raw.get("_feedback_card_base")
-    if not isinstance(card, dict):
-        card = canonical.get("delivery_payload", {}).get("_feedback_card_base")
+    card = canonical.get("delivery_payload", {}).get("_feedback_card_base")
     return card if isinstance(card, dict) else None
 
 
