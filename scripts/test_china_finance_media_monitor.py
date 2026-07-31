@@ -477,7 +477,7 @@ def test_wallstreetcn_stale_processing_retry_keeps_processing_but_skips_delivery
                 assert cfm.SEEN_ITEM_RETRY_FIRST_SEEN_KEY not in raw_item
                 return SimpleNamespace(
                     flow_result=SimpleNamespace(
-                        decision=SimpleNamespace(importance="medium", action="daily")
+                        decision=SimpleNamespace(action="daily")
                     ),
                     delivery_status="not_requested",
                 )

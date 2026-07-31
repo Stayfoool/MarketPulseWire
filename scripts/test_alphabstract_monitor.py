@@ -94,7 +94,7 @@ def temporary_database() -> Iterator[Path]:
 
 
 def fake_outcome(action: str = "push") -> SimpleNamespace:
-    decision = SimpleNamespace(importance="high", action=action)
+    decision = SimpleNamespace(action=action)
     return SimpleNamespace(flow_result=SimpleNamespace(decision=decision), delivery_status="sent")
 
 

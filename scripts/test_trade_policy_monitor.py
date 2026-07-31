@@ -154,7 +154,7 @@ def test_notify_item_uses_unified_process_market_item() -> None:
 
     def fake_process(normalized, raw_item, **kwargs):
         calls.append((normalized, raw_item, kwargs))
-        decision = SimpleNamespace(importance="high", action="push")
+        decision = SimpleNamespace(action="push")
         return SimpleNamespace(flow_result=SimpleNamespace(decision=decision), delivery_status="sent")
 
     with TemporaryDirectory() as tmpdir:

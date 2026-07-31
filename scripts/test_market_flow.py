@@ -69,11 +69,9 @@ def test_five_content_types_share_one_decision_and_interpretation_contract() -> 
     calls = {"interpretation": 0}
     decision = DecisionResult(
         action="push",
-        importance="high",
         reason="大模型程度决策命中。",
         brief_reason="大模型程度决策命中。",
         rule_hits=[{"rule_id": "canonical_rule"}],
-        need_llm_interpretation=True,
     )
 
     def fake_interpreter(*args, **kwargs):
@@ -82,14 +80,17 @@ def test_five_content_types_share_one_decision_and_interpretation_contract() -> 
 
     try:
         market_flow.interpret_market_item = fake_interpreter
-        results = [evaluate_market_item(item, decision=decision) for item in canonical_items()]
+        results = [
+            evaluate_market_item(item, decision=decision, force_interpretation=True)
+            for item in canonical_items()
+        ]
     finally:
         market_flow.interpret_market_item = original_interpreter
 
     assert calls == {"interpretation": 5}
     assert all(isinstance(result, MarketFlowResult) for result in results)
     assert all(result.decision.action == "push" for result in results)
-    assert all(result.delivery_intent["should_deliver"] is True for result in results)
+    assert all("delivery_intent" not in result.audit_payload() for result in results)
     assert all("should_push" not in result.interpretation.to_dict() for result in results)
     sina = next(result for result in results if result.item.source == "sina_flash")
     assert sina.item.source_category == "news_media"
@@ -104,16 +105,15 @@ def test_interpretation_failure_preserves_decision_action() -> None:
             canonical_items()[2],
             decision=DecisionResult(
                 action="push",
-                importance="high",
                 reason="hard rule",
-                need_llm_interpretation=True,
             ),
+            force_interpretation=True,
         )
     finally:
         market_flow.interpret_market_item = original_interpreter
     assert result.decision.action == "push"
     assert result.interpretation.llm_judgement == "failed"
-    assert result.delivery_intent["should_deliver"] is True
+    assert "delivery_intent" not in result.audit_payload()
     assert result.audit_json["interpretation_failed"] is True
 
 
@@ -131,7 +131,7 @@ def test_supplied_source_interpretation_skips_second_llm_call() -> None:
                 content_type="research_index",
                 title="瑞银亚太科技策略",
             ),
-            decision=DecisionResult(action="push", importance="high", reason="硬规则命中。"),
+            decision=DecisionResult(action="push", reason="硬规则命中。"),
             source_interpretation=InterpretationResult(
                 core_content="瑞银认为智能体 AI 将继续推动半导体与硬件上行。",
                 model="preview-model",
@@ -181,7 +181,7 @@ def test_value_directory_enrichment_is_preserved_in_normalized_item() -> None:
                 raw_item,
             ),
             raw_item,
-            DecisionResult(action="daily", importance="medium", reason="模型判断为日报。"),
+            DecisionResult(action="daily", reason="模型判断为日报。"),
             storage_ref={},
         )
     finally:
@@ -210,7 +210,7 @@ def test_production_runtime_uses_unified_result_for_existing_and_delivery() -> N
     original_prepare = market_flow.prepare_item_for_decision
     original_decider = market_flow.decide_market_item_with_llm
     calls = {"evaluate": 0, "deliver": 0}
-    decision = DecisionResult(action="push", importance="high", reason="HBM扩产")
+    decision = DecisionResult(action="push", reason="HBM扩产")
 
     try:
         def fake_decide(*_args, **_kwargs):
@@ -296,7 +296,7 @@ def test_production_event_runtime_completes_only_unified_result() -> None:
     original_prepare = market_flow.prepare_item_for_decision
     original_decider = market_flow.decide_market_item_with_llm
     calls = {"analyze": 0}
-    decision = DecisionResult(action="daily", importance="medium", reason="公告跟踪")
+    decision = DecisionResult(action="daily", reason="公告跟踪")
 
     def fake_decide(*_args, **_kwargs):
         calls["analyze"] += 1
@@ -371,7 +371,7 @@ def test_production_official_runtime_uses_only_unified_result() -> None:
     original_interpreter = market_flow.interpret_market_item
     original_prepare = market_flow.prepare_item_for_decision
     original_decider = market_flow.decide_market_item_with_llm
-    decision = DecisionResult(action="archive", importance="low", reason="例行官网更新")
+    decision = DecisionResult(action="archive", reason="例行官网更新")
 
     try:
         market_flow.interpret_market_item = lambda *_args, **_kwargs: InterpretationResult(
@@ -427,7 +427,6 @@ def test_production_llm_failure_retries_same_review_without_delivery() -> None:
     calls = {"evaluate": 0}
     decision = DecisionResult(
         action="daily",
-        importance="medium",
         reason="模型固定响应",
         audit_json={"production_authority": True},
     )

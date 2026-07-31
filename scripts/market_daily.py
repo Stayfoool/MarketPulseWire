@@ -51,7 +51,7 @@ def build_digest_card(rows: list[sqlite3.Row], day: str) -> dict:
     display_day = day or datetime.now(BJ).strftime("%Y-%m-%d")
     elements = [
         div_markdown(f"**日期**：{md_escape(display_day)}"),
-        div_markdown("**范围**：RSS / TrendForce / 海外半导体媒体监控中未即时推送的条目"),
+        div_markdown("**范围**：已开通信息源中未即时推送的市场信息"),
         div_markdown(f"**条数**：{len(rows)}"),
         {"tag": "hr"},
     ]
@@ -62,14 +62,10 @@ def build_digest_card(rows: list[sqlite3.Row], day: str) -> dict:
         parts = [
             f"**{index}. {md_escape(row['title'])}**",
             f"来源：{md_escape(row['source_module'] or row['source'])}",
-            f"重要性：{md_escape(row['importance'])}；置信度：{md_escape(row['confidence'] or '未知')}",
+            f"程度决策：{md_escape(row['decision_action'])}",
         ]
         if row["daily_summary"]:
             parts.append(f"摘要：{md_escape(row['daily_summary'])}")
-        if row["incremental_classification"]:
-            parts.append(f"增量判断：{md_escape(row['incremental_classification'])}")
-        if row["market_impact"]:
-            parts.append(f"市场影响：{md_escape(row['market_impact'])}")
         if targets:
             parts.append(f"涉及标的/环节：{md_escape(targets)}")
         if row["reason"]:

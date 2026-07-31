@@ -87,7 +87,6 @@ def _decision_summary(decision: DecisionResult | None) -> dict[str, Any]:
     if decision is None:
         return {
             "action": None,
-            "importance": None,
             "brief_reason": "",
             "reason": "",
             "rule_ids": [],
@@ -95,7 +94,6 @@ def _decision_summary(decision: DecisionResult | None) -> dict[str, Any]:
         }
     return {
         "action": decision.action,
-        "importance": decision.importance,
         "brief_reason": _clean(decision.brief_reason, 500),
         "reason": _clean(decision.reason, 800),
         "rule_ids": _rule_ids(decision),
@@ -176,7 +174,6 @@ def _evaluation_base(admission: AdmissionResult) -> dict[str, Any]:
         "evaluation_status": "not_admitted" if admission.status != "admitted" else "pending",
         "failure_reason": "",
         "action": None,
-        "importance": None,
         "brief_reason": "",
         "reason": "",
         "rule_ids": [],

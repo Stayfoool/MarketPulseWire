@@ -503,8 +503,7 @@ def notify_item(source: str, item: dict) -> None:
     item = enriched
     decision = outcome.flow_result.decision
     print(
-        f"{source} 决策层：importance={decision.importance} "
-        f"action={decision.action} title={item.get('title', '')}",
+        f"{source} 决策层：action={decision.action} title={item.get('title', '')}",
         flush=True,
     )
     if outcome.delivery_status == "duplicate":

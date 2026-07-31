@@ -631,7 +631,6 @@ def _decision_result(
     hits = [rule_hit(assessment) for assessment in matched]
     return DecisionResult(
         action=action,
-        importance={"push": "high", "daily": "medium", "archive": "low"}[action],
         reason=reason,
         brief_reason=reason,
         rule_hits=hits,

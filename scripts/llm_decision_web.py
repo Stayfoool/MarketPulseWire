@@ -298,7 +298,7 @@ def llm_decision_rows(
         SELECT m.id AS market_item_id, m.source, m.source_item_id, m.title, m.url,
                m.published_at, m.first_seen_at, m.content_type,
                r.id AS market_review_id, r.review_status, r.decision_action,
-               r.importance, r.decision_json, r.created_at, r.completed_at
+               r.decision_json, r.created_at, r.completed_at
         FROM market_reviews r
         JOIN market_items m ON m.id=r.market_item_id
         WHERE r.is_current=1 AND r.admission_status='admitted'
@@ -350,7 +350,6 @@ def llm_decision_rows(
                 "review_created_at": str(row["created_at"] or ""),
                 "review_status": review_status,
                 "decision_action": final_action,
-                "importance": str(row["importance"] or ""),
                 "model_status": model_status,
                 "decision_reason": _text(decision.get("brief_reason") or decision.get("reason"), MAX_REASON_CHARS),
                 "rule_assessments": _decision_assessments(decision),

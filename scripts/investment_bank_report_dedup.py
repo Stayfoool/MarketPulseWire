@@ -338,7 +338,7 @@ def investment_bank_report_dedup_hit(
     institutions: Sequence[tuple[str, Sequence[str]]] | None = None,
 ) -> dict[str, Any] | None:
     """Return one report identity only for a pure rating/target-price push."""
-    if not decision.should_push:
+    if decision.action != "push":
         return None
     hits = _winning_hits(decision)
     if not hits or any(str(hit.get("rule_id") or "") not in RATING_RULE_IDS for hit in hits):

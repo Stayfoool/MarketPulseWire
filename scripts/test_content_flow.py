@@ -39,9 +39,7 @@ def test_interpretation_cannot_override_decision_action() -> None:
             item,
             DecisionResult(
                 action="push",
-                importance="high",
                 reason="大模型程度决策命中。",
-                need_llm_interpretation=True,
             ),
             storage_ref={},
         )
@@ -70,9 +68,7 @@ def test_different_source_uses_same_decision_and_interpretation_contract() -> No
             item,
             DecisionResult(
                 action="push",
-                importance="high",
                 reason="大模型程度决策命中。",
-                need_llm_interpretation=True,
             ),
             storage_ref={},
         )

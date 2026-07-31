@@ -340,8 +340,8 @@ def review_and_maybe_push(
     )
     decision = outcome.flow_result.decision
     print(
-        f"{source.source_id} 统一决策：importance={decision.importance} "
-        f"action={decision.action} delivery={outcome.delivery_status} title={item.get('title', '')}",
+        f"{source.source_id} 统一决策：action={decision.action} "
+        f"delivery={outcome.delivery_status} title={item.get('title', '')}",
         flush=True,
     )
     return outcome.delivery_status == "sent"

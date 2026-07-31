@@ -676,13 +676,13 @@ async function loadOverview() {
     breakdown.push('<div class="list-row"><strong>来源分布</strong></div>');
     (data.by_source || []).forEach(item => breakdown.push(`<div class="list-row">${escapeHtml(item.key)} <span class="summary">${item.count}</span></div>`));
     breakdown.push('<div class="list-row"><strong>程度分布</strong></div>');
-    (data.decision_importance || []).forEach(item => breakdown.push(`<div class="list-row">${badge(item.key)} <span class="summary">${item.count}</span></div>`));
+    (data.decision_actions || []).forEach(item => breakdown.push(`<div class="list-row">${badge(item.key)} <span class="summary">${item.count}</span></div>`));
     breakdown.push('<div class="list-row"><strong>飞书状态</strong></div>');
     (data.deliveries || []).forEach(item => breakdown.push(`<div class="list-row">${escapeHtml(item.key)} <span class="summary">${item.count}</span></div>`));
     document.getElementById('overviewBreakdown').innerHTML = breakdown.join('') || '<div class="list-row">暂无统计。</div>';
     document.getElementById('overviewLatest').innerHTML = ['<div class="list-row"><strong>最近信息</strong></div>', ...(data.latest || []).map(item => `
       <div class="list-row">
-        <div>${badge(item.importance)} <strong>${escapeHtml(shortText(item.title, 120))}</strong></div>
+        <div>${badge(item.decision_action)} <strong>${escapeHtml(shortText(item.title, 120))}</strong></div>
         <div class="hint">${escapeHtml(item.source)} / ${formatTime(item.seen_at)}</div>
       </div>
     `)].join('');
@@ -748,8 +748,8 @@ async function loadMarketItems() {
           <div><strong>${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : escapeHtml(item.title || '')}</strong></div>
           <div>${escapeHtml(shortText(item.summary || '', 220))}</div>
         </td>
-        <td>${badge(item.importance)}<div class="hint">${escapeHtml(item.classification || '')}</div></td>
-        <td>${escapeHtml(item.delivery_status || '')}${item.push ? '<div class="hint">push</div>' : ''}</td>
+        <td>${badge(item.decision_action)}</td>
+        <td>${escapeHtml(item.delivery_status || '')}</td>
         <td>${feedbackBadge(item)}</td>
       </tr>
     `).join('') || '<tr><td colspan="6">没有匹配信息。</td></tr>';
@@ -883,7 +883,7 @@ async function loadLlmDecisions() {
           <td>${escapeHtml(formatTime(item.review_created_at || ''))}</td>
           <td>${escapeHtml(item.source || '')}</td>
           <td class="summary-cell"><div><strong>${title}</strong></div><div class="hint">${escapeHtml(item.source_item_id || '')}</div>${llmDecisionDetailsHtml(item)}</td>
-          <td>${action}<div class="hint">${escapeHtml(item.importance || '')}</div></td>
+          <td>${action}</td>
           <td>${badge(llmDecisionStatusLabel(item.model_status || ''))}<div class="hint">${escapeHtml(item.review_status || '')}</div></td>
           <td>${attempts ? `${attempts} 次` : '—'}</td>
         </tr>

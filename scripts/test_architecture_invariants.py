@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import ast
 import re
+from dataclasses import fields
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from market_db import init_db
+from market_item import DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem
 from source_profiles import build_profiles
 
 
@@ -398,6 +400,27 @@ def test_market_information_contract_has_no_type_routing() -> None:
     assert "item.kind" not in frontend
 
 
+def test_decision_result_has_no_retired_derived_fields() -> None:
+    retired_decision_fields = {
+        "importance",
+        "need_llm_interpretation",
+        "need_limited_llm_judgement",
+        "should_push",
+    }
+    assert retired_decision_fields.isdisjoint(field.name for field in fields(DecisionResult))
+    decision = DecisionResult(action="push")
+    assert not hasattr(decision, "should_push")
+    assert retired_decision_fields.isdisjoint(decision.to_dict())
+
+    result = MarketFlowResult(
+        item=NormalizedMarketItem(source="test", title="test"),
+        decision=decision,
+        interpretation=InterpretationResult(),
+    )
+    assert "delivery_intent" not in {field.name for field in fields(MarketFlowResult)}
+    assert "delivery_intent" not in result.audit_payload()
+
+
 def test_production_collectors_have_no_shadow_path() -> None:
     assert not (SCRIPTS / "overseas_media_monitor.py").exists()
     for filename in (
@@ -654,6 +677,7 @@ def main() -> int:
     test_live_unified_collector_calls_cannot_omit_production_admission()
     test_production_decision_boundary_is_llm_only()
     test_market_information_contract_has_no_type_routing()
+    test_decision_result_has_no_retired_derived_fields()
     test_production_collectors_have_no_shadow_path()
     test_removed_compatibility_modules_do_not_return()
     test_retired_management_flows_do_not_return()

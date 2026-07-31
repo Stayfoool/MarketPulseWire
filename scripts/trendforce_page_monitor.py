@@ -540,8 +540,7 @@ def notify_item(item: dict) -> None:
         raise
     decision = outcome.flow_result.decision
     print(
-        f"{profile_id} 决策层：importance={decision.importance} "
-        f"action={decision.action} title={enriched.get('title', '')}",
+        f"{profile_id} 决策层：action={decision.action} title={enriched.get('title', '')}",
         flush=True,
     )
 

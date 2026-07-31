@@ -16,7 +16,6 @@ from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rul
 def decision_with_rule(key: str, rule_id: str = "international_bank_theme_strategy") -> DecisionResult:
     return DecisionResult(
         action="push",
-        importance="high",
         rule_hits=[
             {
                 "rule_id": rule_id,

@@ -15,7 +15,6 @@ from market_item import DecisionResult
 
 MACRO_DECISION = DecisionResult(
     action="push",
-    importance="high",
     rule_hits=[{"rule_id": "macro_policy_line"}],
 )
 

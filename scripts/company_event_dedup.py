@@ -649,7 +649,7 @@ EXTRACTORS: tuple[Callable[[dict[str, Any], str, dict[str, str]], dict[str, Any]
 
 def company_event_dedup_hits(item: dict[str, Any], decision: DecisionResult) -> list[dict[str, Any]]:
     """Return every defensible company-event identity after a push decision."""
-    if not decision.should_push:
+    if decision.action != "push":
         return []
     if not any(str(hit.get("rule_id") or "") in ELIGIBLE_RULE_IDS for hit in decision.rule_hits):
         return []

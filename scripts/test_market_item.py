@@ -6,9 +6,9 @@ from __future__ import annotations
 from market_item import (
     DecisionResult,
     InterpretationResult,
+    decision_result_from_dict,
     item_from_mapping,
     normalize_action,
-    normalize_importance,
     normalize_llm_judgement,
     stable_dedupe_key,
 )
@@ -74,18 +74,34 @@ def test_mapping_uses_generic_source_item_id_and_symbols() -> None:
 def test_decision_result_normalizes_current_fields() -> None:
     decision = DecisionResult(
         action="push",
-        importance="高",
         reason="命中持仓关联关键词。",
         brief_reason="关联关键词命中。",
         rule_hits=[{"rule_id": "holding_keyword_immediate_alert"}],
-        need_llm_interpretation=True,
     )
-    assert decision.should_push is True
-    assert decision.importance == "high"
     payload = decision.to_dict()
     assert payload["action"] == "push"
-    assert payload["importance"] == "high"
     assert payload["rule_hits"][0]["rule_id"] == "holding_keyword_immediate_alert"
+    assert "importance" not in payload
+    assert "need_llm_interpretation" not in payload
+    assert "need_limited_llm_judgement" not in payload
+
+
+def test_decision_result_ignores_historical_extra_fields() -> None:
+    decision = decision_result_from_dict(
+        {
+            "action": "daily",
+            "importance": "medium",
+            "need_llm_interpretation": True,
+            "need_limited_llm_judgement": True,
+            "reason": "历史决策。",
+        }
+    )
+    assert decision is not None
+    assert decision.action == "daily"
+    assert decision.reason == "历史决策。"
+    assert set(decision.to_dict()).isdisjoint(
+        {"importance", "need_llm_interpretation", "need_limited_llm_judgement"}
+    )
 
 
 def test_interpretation_result_restricts_llm_judgement_values() -> None:
@@ -106,9 +122,7 @@ def test_interpretation_result_restricts_llm_judgement_values() -> None:
 
 def test_invalid_enums_fall_back_to_safe_defaults() -> None:
     assert normalize_action("send-now") == "archive"
-    assert normalize_importance("very-high") == "unknown"
     assert normalize_llm_judgement("freeform bullish") == "not_needed"
-    assert DecisionResult(importance="unknown").to_dict()["importance"] == "unknown"
 
 
 def test_stable_dedupe_key_prefers_source_item_id_then_url() -> None:
@@ -123,6 +137,7 @@ def main() -> int:
     test_mapping_preserves_source_context_and_dedupe_key()
     test_mapping_uses_generic_source_item_id_and_symbols()
     test_decision_result_normalizes_current_fields()
+    test_decision_result_ignores_historical_extra_fields()
     test_interpretation_result_restricts_llm_judgement_values()
     test_invalid_enums_fall_back_to_safe_defaults()
     test_stable_dedupe_key_prefers_source_item_id_then_url()

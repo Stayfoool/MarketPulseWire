@@ -39,7 +39,7 @@ flowchart LR
 
 `source_category`, `publisher_role` and `content_type` describe collection,
 display and audit facts. They do not select a decision, review, storage or
-delivery path, and they cannot create importance or push eligibility. Terms
+delivery path, and they cannot create push eligibility. Terms
 such as report, company feed, flash, announcement and policy release remain
 source facts only; they are not separate information models.
 
@@ -136,6 +136,12 @@ feedback and delivery use direct unified integer identities.
 `/api/market-items`, daily digest and feedback projections all use this reader.
 The Web page is named `信息中心`; it does not route or filter through an item
 kind. A source filter is a display condition only.
+
+New reviews persist `DecisionResult.action` without the retired derived
+`importance`, interpretation-switch or push-boolean fields. Existing Alibaba
+SQLite rows and their extra JSON fields remain untouched for non-destructive
+compatibility, but current runtime readers and writers ignore them. Physical
+removal of an existing production column is a separate database operation.
 
 ## Feedback And Web
 

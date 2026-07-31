@@ -9,12 +9,10 @@ from market_item import DecisionResult
 
 INDUSTRY_DECISION = DecisionResult(
     action="push",
-    importance="high",
     rule_hits=[{"rule_id": "industry_price_supply_change"}],
 )
 LEGACY_INDUSTRY_DECISION = DecisionResult(
     action="push",
-    importance="high",
     rule_hits=[{"rule_id": "semiconductor_price_supply_change"}],
 )
 

@@ -36,7 +36,6 @@ def insert_delivered_article(db_path: Path) -> None:
     init_db(db_path).close()
     decision = {
         "action": "push",
-        "importance": "high",
         "brief_reason": "test",
         "rule_hits": [{"rule_id": "industry_quantified_hardline"}],
         "audit_json": {"decision_version": "test-v1"},
@@ -69,11 +68,11 @@ def insert_delivered_article(db_path: Path) -> None:
             INSERT INTO market_reviews (
                 market_item_id,task,run_key,is_current,review_status,
                 admission_status,admission_reason,admission_matched_families_json,
-                admission_evidence_json,admission_json,decision_action,importance,
+                admission_evidence_json,admission_json,decision_action,
                 decision_json,interpretation_json,
                 application_revision,created_at,completed_at
             ) VALUES (?, 'production', 'feedback-fixture', 1, 'succeeded', 'admitted',
-                      'test', '[]', '[]', '{}', 'push', 'high', ?, '{}',
+                      'test', '[]', '[]', '{}', 'push', ?, '{}',
                       'test-revision', ?, ?)
             """,
             (

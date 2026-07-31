@@ -16,7 +16,6 @@ INSTITUTIONS = (("nomura", ("野村", "野村证券", "Nomura")),)
 def decision(*quotes: str, rule_ids: tuple[str, ...] = ("equity_rating_revision",)) -> DecisionResult:
     return DecisionResult(
         action="push",
-        importance="high",
         rule_hits=[
             {
                 "rule_id": rule_id,
@@ -73,7 +72,6 @@ def test_unlisted_mizuho_report_converges_without_admission_allowlist() -> None:
             {"source": f"source-{index}", "title": text},
             DecisionResult(
                 action="push",
-                importance="high",
                 rule_hits=decision(text).rule_hits,
                 audit_json=admission,
             ),
