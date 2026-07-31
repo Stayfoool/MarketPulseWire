@@ -1303,9 +1303,15 @@ def run_once(
                     task="sina_stock_news_portfolio",
                     db_path=DEFAULT_DB_PATH,
                     baseline_only=baseline_only,
-                    production_admission=admission if admission.status == "admitted" else None,
+                    production_admission=(
+                        admission
+                        if not baseline_only and admission.status == "admitted"
+                        else None
+                    ),
                     production_portfolio=(
-                        admission_context.portfolio if admission.status == "admitted" else None
+                        admission_context.portfolio
+                        if not baseline_only and admission.status == "admitted"
+                        else None
                     ),
                     market_item_id=admission_context.market_item_id,
                     market_review_id=admission_context.market_review_id,

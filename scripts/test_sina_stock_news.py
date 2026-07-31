@@ -3,14 +3,18 @@
 
 from __future__ import annotations
 
+import os
+import sqlite3
 import tempfile
 from pathlib import Path
 
+import sina_stock_news as sina_stock_news_module
 from db_utils import connect_sqlite
 from market_db import init_db
 from market_flow import normalize_market_item
 from market_item import AdmissionEvidence, AdmissionResult
 from market_store import record_production_admission
+from production_admission import ProductionAdmissionContext
 from sina_stock_news import (
     canonical_article_url,
     freshness_hint,
@@ -23,6 +27,67 @@ from sina_stock_news import (
     source_event_id_for_item,
     stored_market_event,
 )
+
+
+def assert_first_run_baseline_creates_no_review() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
+        holding = {
+            "symbol": "300308.SZ",
+            "name": "中际旭创",
+            "full_name": "中际旭创股份有限公司",
+            "aliases": [],
+            "news_keywords": ["光模块"],
+            "news_exclude_keywords": [],
+            "business_summary": "光模块",
+            "raw": {},
+        }
+        item = {
+            "title": "中际旭创发布光模块业务进展",
+            "published_at": "2026-07-31T08:00:00+00:00",
+            "url": "https://finance.sina.com.cn/stock/s/example.shtml",
+            "content": "中际旭创发布光模块业务进展。",
+        }
+        admission = AdmissionResult(
+            status="admitted",
+            reason_code="holding_match",
+            matched_families=("holding",),
+            evidence=(AdmissionEvidence("holding", "entity", "中际旭创"),),
+            config_version="test-config",
+        )
+        replacements = {
+            "DEFAULT_DB_PATH": db_path,
+            "source_profile_enabled": lambda _source: True,
+            "import_holdings": lambda *_args, **_kwargs: None,
+            "load_enabled_holdings": lambda _path: [holding],
+            "news_provider": lambda: "zy_api",
+            "fetch_sina_zy_stock_news": lambda _symbol, _limit: [item],
+            "production_admission_context": lambda *_args, **_kwargs: ProductionAdmissionContext(
+                result=admission,
+                portfolio=object(),
+            ),
+        }
+        originals = {name: getattr(sina_stock_news_module, name) for name in replacements}
+        previous_sleep = os.environ.get("SINA_STOCK_NEWS_SLEEP_SECONDS")
+        os.environ["SINA_STOCK_NEWS_SLEEP_SECONDS"] = "0"
+        try:
+            for name, value in replacements.items():
+                setattr(sina_stock_news_module, name, value)
+            assert sina_stock_news_module.run_once(baseline=True) == 1
+        finally:
+            for name, value in originals.items():
+                setattr(sina_stock_news_module, name, value)
+            if previous_sleep is None:
+                os.environ.pop("SINA_STOCK_NEWS_SLEEP_SECONDS", None)
+            else:
+                os.environ["SINA_STOCK_NEWS_SLEEP_SECONDS"] = previous_sleep
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute(
+                "SELECT collection_class FROM market_items"
+            ).fetchall() == [("baseline",)]
+            assert conn.execute("SELECT COUNT(*) FROM market_reviews").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
 
 
 def assert_retryable_review_uses_stored_event() -> None:
@@ -81,6 +146,7 @@ def assert_retryable_review_uses_stored_event() -> None:
 
 
 def main() -> int:
+    assert_first_run_baseline_creates_no_review()
     assert_retryable_review_uses_stored_event()
     fiber_item = {
         "title": "算力时代拉动光纤刚需，苏州光纤企业产能排至2027年，自主研发加车载新场景赋能光通信长效发展"
