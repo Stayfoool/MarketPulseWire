@@ -152,11 +152,10 @@ def test_valid_decisions_write_private_audits_and_keep_actions_authoritative() -
                     "summary": item().summary,
                     "full_text": item().full_text,
                 }
-                flow_result = market_flow.evaluate_content_item(
+                flow_result = market_flow.evaluate_item(
                     item(),
                     raw_item,
                     decision,
-                    official=False,
                     storage_ref={},
                 )
                 assert market_result_view(flow_result)["decision_result"]["action"] == action

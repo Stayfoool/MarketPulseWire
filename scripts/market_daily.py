@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Daily digest for gated article sources that were not pushed instantly."""
+"""Daily digest for market information that was not pushed instantly."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def build_digest_card(rows: list[sqlite3.Row], day: str) -> dict:
         {"tag": "hr"},
     ]
     if not rows:
-        elements.append(div_markdown("今日暂无需要汇总的文章监控条目。"))
+        elements.append(div_markdown("今日暂无需要汇总的市场信息。"))
     for index, row in enumerate(rows[:40], start=1):
         targets = targets_text(row)
         parts = [
@@ -78,12 +78,12 @@ def build_digest_card(rows: list[sqlite3.Row], day: str) -> dict:
             parts.append(f"[打开原文]({row['url']})")
         elements.append(div_markdown("\n".join(parts)))
     if len(rows) > 40:
-        elements.append(div_markdown(f"其余 {len(rows) - 40} 条已省略，可在 Web 事件中心查看。"))
+        elements.append(div_markdown(f"其余 {len(rows) - 40} 条已省略，可在 Web 信息中心查看。"))
     return {
         "config": {"wide_screen_mode": True},
         "header": {
             "template": "blue",
-            "title": {"tag": "plain_text", "content": "文章监控日报"},
+            "title": {"tag": "plain_text", "content": "市场信息日报"},
         },
         "elements": elements,
     }
@@ -91,7 +91,7 @@ def build_digest_card(rows: list[sqlite3.Row], day: str) -> dict:
 
 def main() -> int:
     load_env(ENV_PATH)
-    parser = argparse.ArgumentParser(description="发送文章监控日报")
+    parser = argparse.ArgumentParser(description="发送市场信息日报")
     parser.add_argument("--date", default="", help="北京时间日期 YYYY-MM-DD，默认今天")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -103,7 +103,7 @@ def main() -> int:
         print(json.dumps(card, ensure_ascii=False, indent=2))
         return 0
     send_card(card)
-    print(f"已发送文章监控日报：{len(rows)} 条")
+    print(f"已发送市场信息日报：{len(rows)} 条")
     return 0
 
 

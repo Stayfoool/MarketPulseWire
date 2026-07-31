@@ -19,6 +19,7 @@ def test_default_keeps_the_existing_production_command_only() -> None:
     assert batch.run_batch("news", env={}, runner=runner) == 0
     assert len(calls) == 1
     assert calls[0][1:] == list(batch.collector_command("news"))
+    assert "--production" not in calls[0]
 
 
 def test_production_units_use_the_wrapper_entrypoint() -> None:

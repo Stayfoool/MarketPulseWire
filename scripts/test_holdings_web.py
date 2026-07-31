@@ -20,8 +20,8 @@ from holdings_web import (
     active_source_health_keys,
     build_health_summary,
     build_health_tasks,
-    event_feedback_summary,
-    fetch_events_rows,
+    market_feedback_summary,
+    fetch_market_rows,
     html_page,
     parse_systemctl_show_output,
     utc_window_for_range,
@@ -42,7 +42,6 @@ from source_profiles import (
 def insert_unified_result(
     conn: sqlite3.Connection,
     *,
-    item_kind: str,
     source: str,
     item_id: str,
     title: str,
@@ -84,14 +83,6 @@ def insert_unified_result(
         ),
     )
     market_item_id = int(cur.lastrowid)
-    conn.execute(
-        """
-        INSERT INTO market_item_aliases (
-            market_item_id,item_kind,source,legacy_item_id,legacy_store_kind,created_at
-        ) VALUES (?, ?, ?, ?, 'market_items', ?)
-        """,
-        (market_item_id, item_kind, source, item_id, seen_at),
-    )
     if collection_class == "baseline":
         return market_item_id
     decision = {"action": action, "importance": importance, "reason": "测试决策"}
@@ -373,14 +364,13 @@ def test_holdings_page_marks_environment_and_related_keywords() -> None:
         holdings_web.ROOT = original_root
 
 
-def test_event_center_search_filters_before_per_pipeline_limit() -> None:
+def test_information_center_search_filters_before_result_limit() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
         with sqlite3.connect(db_path) as conn:
-            insert_unified_result(
+            market_item_id = insert_unified_result(
                 conn,
-                item_kind="article",
                 source="cls_telegraph_api",
                 item_id="2421358",
                 title="高盛重磅发声：做多中国AI价值链",
@@ -392,7 +382,6 @@ def test_event_center_search_filters_before_per_pipeline_limit() -> None:
             for index in range(301):
                 insert_unified_result(
                     conn,
-                    item_kind="article",
                     source="cls_telegraph_api",
                     item_id=f"noise-{index}",
                     title=f"噪音新闻 {index}",
@@ -401,7 +390,7 @@ def test_event_center_search_filters_before_per_pipeline_limit() -> None:
                     seen_at=f"2026-07-09T15:00:00.{index:03d}+00:00",
                 )
 
-        rows = fetch_events_rows(
+        rows = fetch_market_rows(
             day="2026-07-09",
             source="cls_telegraph_api",
             q="高盛重磅发声",
@@ -410,10 +399,10 @@ def test_event_center_search_filters_before_per_pipeline_limit() -> None:
 
     assert len(rows) == 1
     assert rows[0]["id"] == "2421358"
-    assert rows[0]["kind"] == "article"
+    assert rows[0]["source"] == "cls_telegraph_api"
 
 
-def test_event_center_date_range_is_inclusive_in_beijing_time() -> None:
+def test_information_center_date_range_is_inclusive_in_beijing_time() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
@@ -425,7 +414,6 @@ def test_event_center_date_range_is_inclusive_in_beijing_time() -> None:
             ):
                 insert_unified_result(
                     conn,
-                    item_kind="article",
                     source="source",
                     item_id=item_id,
                     title=title,
@@ -433,8 +421,8 @@ def test_event_center_date_range_is_inclusive_in_beijing_time() -> None:
                     seen_at=seen_at,
                 )
 
-        selected = fetch_events_rows(start_day="2026-07-01", end_day="2026-07-02", db_path=db_path)
-        same_day = fetch_events_rows(day="2026-07-01", db_path=db_path)
+        selected = fetch_market_rows(start_day="2026-07-01", end_day="2026-07-02", db_path=db_path)
+        same_day = fetch_market_rows(day="2026-07-01", db_path=db_path)
 
     assert [row["id"] for row in selected] == ["end", "start"]
     assert [row["id"] for row in same_day] == ["start"]
@@ -445,28 +433,27 @@ def test_event_center_date_range_is_inclusive_in_beijing_time() -> None:
     assert (display_start, display_end) == ("2026-07-01", "2026-07-02")
 
 
-def test_event_center_date_range_rejects_partial_or_inverted_dates() -> None:
+def test_information_center_date_range_rejects_partial_or_inverted_dates() -> None:
     for kwargs, expected in (
         ({"start_day": "2026-07-01"}, "必须同时填写"),
         ({"start_day": "2026-07-03", "end_day": "2026-07-01"}, "不能晚于"),
         ({"start_day": "2026/07/01", "end_day": "2026-07-01"}, "YYYY-MM-DD"),
     ):
         try:
-            fetch_events_rows(**kwargs)
+            fetch_market_rows(**kwargs)
         except ValueError as exc:
             assert expected in str(exc)
         else:
             raise AssertionError(f"expected ValueError for {kwargs}")
 
 
-def test_event_center_can_show_baselines_and_filter_by_published_time() -> None:
+def test_information_center_can_show_baselines_and_filter_by_published_time() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
         with sqlite3.connect(db_path) as conn:
             insert_unified_result(
                 conn,
-                item_kind="article",
                 source="value_directory_ib_stocks",
                 item_id="baseline-1",
                 title="价值目录首次基线研报",
@@ -475,9 +462,8 @@ def test_event_center_can_show_baselines_and_filter_by_published_time() -> None:
                 seen_at="2026-07-10T08:52:24+00:00",
                 collection_class="baseline",
             )
-            insert_unified_result(
+            company_item_id = insert_unified_result(
                 conn,
-                item_kind="article",
                 source="value_directory_ib_stocks",
                 item_id="reviewed-1",
                 title="价值目录后续研报",
@@ -487,18 +473,18 @@ def test_event_center_can_show_baselines_and_filter_by_published_time() -> None:
                 importance="medium",
             )
 
-        default_rows = fetch_events_rows(
+        default_rows = fetch_market_rows(
             day="2026-07-10",
             source="value_directory_ib_stocks",
             db_path=db_path,
         )
-        baseline_rows = fetch_events_rows(
+        baseline_rows = fetch_market_rows(
             day="2026-07-10",
             source="value_directory_ib_stocks",
             include_baseline=True,
             db_path=db_path,
         )
-        published_rows = fetch_events_rows(
+        published_rows = fetch_market_rows(
             day="2026-07-10",
             source="value_directory_ib_stocks",
             time_basis="published",
@@ -508,7 +494,6 @@ def test_event_center_can_show_baselines_and_filter_by_published_time() -> None:
     assert default_rows == []
     assert len(baseline_rows) == 1
     assert baseline_rows[0]["id"] == "baseline-1"
-    assert baseline_rows[0]["kind"] == "baseline"
     assert baseline_rows[0]["baseline_only"] is True
     assert len(published_rows) == 1
     assert published_rows[0]["id"] == "reviewed-1"
@@ -516,14 +501,13 @@ def test_event_center_can_show_baselines_and_filter_by_published_time() -> None:
     assert published_rows[0]["source_id"] == "value_directory_ib_stocks"
 
 
-def test_event_center_shows_company_disclosure_baseline_only_when_requested() -> None:
+def test_information_center_shows_company_disclosure_baseline_only_when_requested() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
         with sqlite3.connect(db_path) as conn:
             insert_unified_result(
                 conn,
-                item_kind="event",
                 source="company_disclosures",
                 item_id="announcement:1225426155",
                 title="股票交易异常波动公告",
@@ -534,12 +518,12 @@ def test_event_center_shows_company_disclosure_baseline_only_when_requested() ->
                 content_type="announcement",
             )
 
-        hidden = fetch_events_rows(
+        hidden = fetch_market_rows(
             day="2026-07-16",
             source="company_disclosures",
             db_path=db_path,
         )
-        visible = fetch_events_rows(
+        visible = fetch_market_rows(
             day="2026-07-16",
             source="company_disclosures",
             include_baseline=True,
@@ -551,17 +535,16 @@ def test_event_center_shows_company_disclosure_baseline_only_when_requested() ->
     assert visible[0]["id"] == "announcement:1225426155"
     assert visible[0]["source_id"] == "company_disclosures"
     assert visible[0]["baseline_only"] is True
-    assert visible[0]["delivery_status"] == ""
+    assert visible[0]["delivery_status"] == "baseline"
 
 
-def test_event_center_does_not_duplicate_seen_item_projected_to_event() -> None:
+def test_information_center_does_not_duplicate_market_items() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
         with sqlite3.connect(db_path) as conn:
             insert_unified_result(
                 conn,
-                item_kind="event",
                 source="sina_flash",
                 item_id="flash-admitted",
                 title="已准入快讯",
@@ -572,7 +555,6 @@ def test_event_center_does_not_duplicate_seen_item_projected_to_event() -> None:
             )
             insert_unified_result(
                 conn,
-                item_kind="event",
                 source="sina_flash",
                 item_id="flash-excluded",
                 title="未准入快讯",
@@ -583,7 +565,7 @@ def test_event_center_does_not_duplicate_seen_item_projected_to_event() -> None:
                 content_type="flash",
             )
 
-        rows = fetch_events_rows(
+        rows = fetch_market_rows(
             day="2026-07-23",
             source="sina_flash",
             include_baseline=True,
@@ -591,18 +573,15 @@ def test_event_center_does_not_duplicate_seen_item_projected_to_event() -> None:
         )
 
     assert len(rows) == 2
-    assert sum(row["kind"] == "flash" and row["title"] == "已准入快讯" for row in rows) == 1
-    assert sum(row["kind"] == "baseline" and row["id"] == "flash-admitted" for row in rows) == 0
-    assert sum(
-        row["kind"] == "flash" and row["id"] == "flash-excluded" and row["baseline_only"]
-        for row in rows
-    ) == 1
+    assert sum(row["title"] == "已准入快讯" for row in rows) == 1
+    assert sum(row["id"] == "flash-admitted" and row["baseline_only"] for row in rows) == 0
+    assert sum(row["id"] == "flash-excluded" and row["baseline_only"] for row in rows) == 1
 
 
 def test_list_filters_use_reusable_multi_selects() -> None:
     html = frontend_source()
-    assert 'id="eventSource" class="multi-select"' in html
-    assert 'id="eventFeedback" class="multi-select"' in html
+    assert 'id="marketSource" class="multi-select"' in html
+    assert 'id="marketFeedback" class="multi-select"' in html
     assert 'id="llmDecisionSource" class="multi-select"' in html
     assert 'id="llmDecisionAction" class="multi-select"' in html
     assert 'id="llmDecisionStatus" class="multi-select"' in html
@@ -611,25 +590,25 @@ def test_list_filters_use_reusable_multi_selects() -> None:
     assert 'id="sourceProfileCategory" class="multi-select"' in html
     assert 'id="sourceProfileEnabled"' in html
     assert '<option value="enabled" selected>已开通</option>' in html
-    assert 'id="eventQueryButton"' in html
+    assert 'id="marketQueryButton"' in html
     assert '全部来源' in html
     assert 'loadSourceFilterOptions' in html
     assert "filter(profile => profile.enabled !== false)" in html
-    assert 'eventSourceFilterValue' in html
+    assert 'marketSourceFilterValue' in html
     assert 'initializeMultiSelect' in html
     assert 'selectedMultiSelectValues' in html
     assert "params.append('source', source)" in html
     assert "params.append('feedback', value)" in html
-    assert 'eventTimeBasis' in html
-    assert 'eventFromDate' in html
-    assert 'eventToDate' in html
+    assert 'marketTimeBasis' in html
+    assert 'marketFromDate' in html
+    assert 'marketToDate' in html
     assert "params.set('from', startDate)" in html
-    assert "eventAbortController?.abort()" in html
-    assert "operationId !== eventOperationId" in html
+    assert "marketAbortController?.abort()" in html
+    assert "operationId !== marketOperationId" in html
     assert "正在查询..." in html
     assert "queryButton.disabled = true" in html
     assert "params.set('to', endDate)" in html
-    assert 'eventIncludeBaseline' in html
+    assert 'marketIncludeBaseline' in html
     assert '显示基线条目' in html
     assert "x:serenity" in html
 
@@ -638,9 +617,7 @@ def insert_feedback(
     conn: sqlite3.Connection,
     *,
     event_id: str,
-    item_kind: str,
-    source: str,
-    item_id: str,
+    market_item_id: int,
     label: str,
     operator: str,
     clicked_at_us: int,
@@ -650,15 +627,13 @@ def insert_feedback(
     conn.execute(
         """
         INSERT INTO market_feedback (
-            feedback_event_id, item_kind, source, item_id, label, active_labels_json, reason_tags_json,
+            feedback_event_id, market_item_id, label, active_labels_json, reason_tags_json,
             operator_id, rule_ids_json, clicked_at_us, received_at, raw_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, '{}')
+        ) VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?, '{}')
         """,
         (
             event_id,
-            item_kind,
-            source,
-            item_id,
+            market_item_id,
             label,
             active_labels,
             reasons,
@@ -669,14 +644,13 @@ def insert_feedback(
     )
 
 
-def test_event_center_projects_current_feedback_across_active_stores() -> None:
+def test_information_center_projects_current_feedback_across_active_stores() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
         with sqlite3.connect(db_path) as conn:
-            insert_unified_result(
+            market_item_id = insert_unified_result(
                 conn,
-                item_kind="article",
                 source="cls_telegraph_api",
                 item_id="article-1",
                 title="文章",
@@ -689,16 +663,14 @@ def test_event_center_projects_current_feedback_across_active_stores() -> None:
             )
             insert_unified_result(
                 conn,
-                item_kind="article",
                 source="cls_telegraph_api",
                 item_id="article-unsent",
                 title="未投递文章",
                 published_at="2026-07-15T09:01:00+00:00",
                 seen_at="2026-07-15T09:01:01+00:00",
             )
-            insert_unified_result(
+            company_item_id = insert_unified_result(
                 conn,
-                item_kind="official",
                 source="nvidia_blog",
                 item_id="official-1",
                 title="官网新闻",
@@ -710,9 +682,8 @@ def test_event_center_projects_current_feedback_across_active_stores() -> None:
                 delivered=True,
                 content_type="official_news",
             )
-            event_id = insert_unified_result(
+            flash_item_id = insert_unified_result(
                 conn,
-                item_kind="event",
                 source="sina_flash",
                 item_id="event-1",
                 title="事件",
@@ -726,7 +697,6 @@ def test_event_center_projects_current_feedback_across_active_stores() -> None:
             )
             insert_unified_result(
                 conn,
-                item_kind="article",
                 source="baseline_source",
                 item_id="baseline-1",
                 title="基线",
@@ -734,16 +704,16 @@ def test_event_center_projects_current_feedback_across_active_stores() -> None:
                 seen_at="2026-07-15T09:04:01+00:00",
                 collection_class="baseline",
             )
-            insert_feedback(conn, event_id="f1", item_kind="article", source="cls_telegraph_api", item_id="article-1", label="high_value", operator="operator-a", clicked_at_us=100)
-            insert_feedback(conn, event_id="f2", item_kind="article", source="cls_telegraph_api", item_id="article-1", label="duplicate", operator="operator-a", clicked_at_us=300, reasons='["stale"]', active_labels='["high_value", "duplicate"]')
-            insert_feedback(conn, event_id="f3", item_kind="article", source="cls_telegraph_api", item_id="article-1", label="high_value", operator="operator-b", clicked_at_us=200)
-            insert_feedback(conn, event_id="f4", item_kind="official", source="nvidia_blog", item_id="official-1", label="invalid", operator="operator-a", clicked_at_us=400, reasons='["weak_evidence"]')
-            insert_feedback(conn, event_id="f5", item_kind="official", source="nvidia_blog", item_id="official-1", label="cleared", operator="operator-a", clicked_at_us=500)
-            insert_feedback(conn, event_id="f6", item_kind="event", source="sina_flash", item_id="event-1", label="duplicate", operator="operator-a", clicked_at_us=600, active_labels='["high_value", "duplicate"]')
+            insert_feedback(conn, event_id="f1", market_item_id=market_item_id, label="high_value", operator="operator-a", clicked_at_us=100)
+            insert_feedback(conn, event_id="f2", market_item_id=market_item_id, label="duplicate", operator="operator-a", clicked_at_us=300, reasons='["stale"]', active_labels='["high_value", "duplicate"]')
+            insert_feedback(conn, event_id="f3", market_item_id=market_item_id, label="high_value", operator="operator-b", clicked_at_us=200)
+            insert_feedback(conn, event_id="f4", market_item_id=company_item_id, label="invalid", operator="operator-a", clicked_at_us=400, reasons='["weak_evidence"]')
+            insert_feedback(conn, event_id="f5", market_item_id=company_item_id, label="cleared", operator="operator-a", clicked_at_us=500)
+            insert_feedback(conn, event_id="f6", market_item_id=flash_item_id, label="duplicate", operator="operator-a", clicked_at_us=600, active_labels='["high_value", "duplicate"]')
             conn.commit()
             before = conn.execute("SELECT COUNT(*) FROM market_feedback").fetchone()[0]
 
-        rows = fetch_events_rows(day="2026-07-15", include_baseline=True, limit=20, db_path=db_path)
+        rows = fetch_market_rows(day="2026-07-15", include_baseline=True, limit=20, db_path=db_path)
         by_id = {str(row["id"]): row for row in rows}
         article = by_id["article-1"]
         assert article["feedback_state"] == "mixed"
@@ -757,14 +727,14 @@ def test_event_center_projects_current_feedback_across_active_stores() -> None:
         assert by_id["article-unsent"]["feedback_state"] == "not_delivered"
         assert by_id["baseline-1"]["feedback_state"] == "not_applicable"
         assert "operator_id" not in article and "operator-a" not in str(article)
-        summary = event_feedback_summary(rows)
+        summary = market_feedback_summary(rows)
         assert summary == {"delivered": 3, "labelled": 2, "high_value": 2, "duplicate": 2, "invalid": 0}
 
-        high_value_rows = fetch_events_rows(day="2026-07-15", feedback="high_value", db_path=db_path)
-        duplicate_rows = fetch_events_rows(day="2026-07-15", feedback="duplicate", db_path=db_path)
-        invalid_rows = fetch_events_rows(day="2026-07-15", feedback="invalid", db_path=db_path)
-        unlabelled_rows = fetch_events_rows(day="2026-07-15", feedback="unlabelled", db_path=db_path)
-        combined_rows = fetch_events_rows(
+        high_value_rows = fetch_market_rows(day="2026-07-15", feedback="high_value", db_path=db_path)
+        duplicate_rows = fetch_market_rows(day="2026-07-15", feedback="duplicate", db_path=db_path)
+        invalid_rows = fetch_market_rows(day="2026-07-15", feedback="invalid", db_path=db_path)
+        unlabelled_rows = fetch_market_rows(day="2026-07-15", feedback="unlabelled", db_path=db_path)
+        combined_rows = fetch_market_rows(
             day="2026-07-15",
             feedback=["duplicate", "unlabelled"],
             source=["cls_telegraph_api", "nvidia_blog", "sina_flash"],
@@ -779,15 +749,15 @@ def test_event_center_projects_current_feedback_across_active_stores() -> None:
             assert conn.execute("SELECT COUNT(*) FROM market_feedback").fetchone()[0] == before
 
 
-def test_event_center_feedback_filter_applies_before_article_limit() -> None:
+def test_information_center_feedback_filter_applies_before_result_limit() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
         with sqlite3.connect(db_path) as conn:
+            first_item_id = 0
             for index in range(301):
-                insert_unified_result(
+                market_item_id = insert_unified_result(
                     conn,
-                    item_kind="article",
                     source="cls_telegraph_api",
                     item_id=f"article-{index}",
                     title=f"文章 {index}",
@@ -797,9 +767,11 @@ def test_event_center_feedback_filter_applies_before_article_limit() -> None:
                     importance="high",
                     delivered=True,
                 )
-            insert_feedback(conn, event_id="oldest-feedback", item_kind="article", source="cls_telegraph_api", item_id="article-0", label="duplicate", operator="operator-a", clicked_at_us=100)
+                if index == 0:
+                    first_item_id = market_item_id
+            insert_feedback(conn, event_id="oldest-feedback", market_item_id=first_item_id, label="duplicate", operator="operator-a", clicked_at_us=100)
             conn.commit()
-        rows = fetch_events_rows(day="2026-07-15", feedback="duplicate", db_path=db_path)
+        rows = fetch_market_rows(day="2026-07-15", feedback="duplicate", db_path=db_path)
     assert [row["id"] for row in rows] == ["article-0"]
 
 
@@ -1254,12 +1226,12 @@ def main() -> int:
     test_retired_management_flows_are_not_exposed()
     test_feedback_quality_view_is_exposed()
     test_holdings_page_marks_environment_and_related_keywords()
-    test_event_center_search_filters_before_per_pipeline_limit()
-    test_event_center_projects_current_feedback_across_active_stores()
-    test_event_center_feedback_filter_applies_before_article_limit()
-    test_event_center_can_show_baselines_and_filter_by_published_time()
-    test_event_center_shows_company_disclosure_baseline_only_when_requested()
-    test_event_center_does_not_duplicate_seen_item_projected_to_event()
+    test_information_center_search_filters_before_result_limit()
+    test_information_center_projects_current_feedback_across_active_stores()
+    test_information_center_feedback_filter_applies_before_result_limit()
+    test_information_center_can_show_baselines_and_filter_by_published_time()
+    test_information_center_shows_company_disclosure_baseline_only_when_requested()
+    test_information_center_does_not_duplicate_market_items()
     test_list_filters_use_reusable_multi_selects()
     test_source_profiles_group_six_categories()
     test_source_profiles_aggregate_wildcard_health()

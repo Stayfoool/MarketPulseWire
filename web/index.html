@@ -14,7 +14,7 @@
   </header>
   <nav class="tabs">
     <button id="tab-overview" onclick="showView('overview')">今日总览</button>
-    <button id="tab-events" onclick="showView('events')">事件中心</button>
+    <button id="tab-information" onclick="showView('information')">信息中心</button>
     <button id="tab-llm-decisions" onclick="showView('llm-decisions')">大模型决策回顾</button>
     <button id="tab-rules" onclick="showView('rules')">规则</button>
     <button id="tab-feedback" onclick="showView('feedback')">反馈质量</button>
@@ -43,36 +43,35 @@
       </div>
     </section>
 
-    <section id="view-events" class="view">
+    <section id="view-information" class="view">
       <div class="toolbar">
-        <label class="date-range-field">开始日期<input id="eventFromDate" type="date" style="width:145px"></label>
-        <label class="date-range-field">结束日期<input id="eventToDate" type="date" style="width:145px"></label>
-        <select id="eventTimeBasis" aria-label="日期依据" style="width:170px" onchange="loadEvents()">
+        <label class="date-range-field">开始日期<input id="marketFromDate" type="date" style="width:145px"></label>
+        <label class="date-range-field">结束日期<input id="marketToDate" type="date" style="width:145px"></label>
+        <select id="marketTimeBasis" aria-label="日期依据" style="width:170px" onchange="loadMarketItems()">
           <option value="seen">按采集/处理日期</option>
           <option value="published">按原文发布时间</option>
         </select>
-        <div id="eventSource" class="multi-select" data-placeholder="全部来源" aria-label="来源过滤" style="width:320px"></div>
-        <div id="eventFeedback" class="multi-select" data-placeholder="全部反馈" aria-label="反馈过滤" style="width:150px"></div>
-        <label class="source-checks"><input id="eventIncludeBaseline" type="checkbox" onchange="loadEvents()"> 显示基线条目</label>
-        <input id="eventQuery" placeholder="搜索标题、摘要、标的" style="width:260px">
-        <button id="eventQueryButton" class="primary" onclick="loadEvents()">查询</button>
+        <div id="marketSource" class="multi-select" data-placeholder="全部来源" aria-label="来源过滤" style="width:320px"></div>
+        <div id="marketFeedback" class="multi-select" data-placeholder="全部反馈" aria-label="反馈过滤" style="width:150px"></div>
+        <label class="source-checks"><input id="marketIncludeBaseline" type="checkbox" onchange="loadMarketItems()"> 显示基线条目</label>
+        <input id="marketQuery" placeholder="搜索标题、摘要、标的" style="width:260px">
+        <button id="marketQueryButton" class="primary" onclick="loadMarketItems()">查询</button>
       </div>
       <section class="panel">
-        <div id="eventFeedbackSummary" class="event-feedback-summary"></div>
+        <div id="marketFeedbackSummary" class="market-feedback-summary"></div>
         <div class="table-wrap">
-          <table class="events-table">
+          <table class="market-information-table">
             <thead>
               <tr>
-                <th id="eventTimeHeader" style="width:150px">采集/处理时间</th>
+                <th id="marketTimeHeader" style="width:150px">采集/处理时间</th>
                 <th style="width:130px">来源</th>
-                <th style="width:90px">类型</th>
                 <th>标题/摘要</th>
                 <th style="width:110px">重要性</th>
                 <th style="width:130px">状态</th>
                 <th style="width:130px">反馈</th>
               </tr>
             </thead>
-            <tbody id="eventRows"></tbody>
+            <tbody id="marketRows"></tbody>
           </table>
         </div>
       </section>
@@ -91,12 +90,12 @@
       <section class="panel">
         <div id="llmDecisionMetrics" class="metric-grid"></div>
         <div class="table-wrap">
-          <table class="events-table">
+          <table class="market-information-table">
             <thead>
               <tr>
                 <th style="width:150px">判断时间</th>
                 <th style="width:150px">来源</th>
-                <th>文章</th>
+                <th>信息</th>
                 <th style="width:150px">最终 action</th>
                 <th style="width:180px">模型状态</th>
                 <th style="width:120px">尝试</th>

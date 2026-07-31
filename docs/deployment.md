@@ -132,6 +132,34 @@ fresh database and idempotently verifies current tables and indexes with
 runtime. Direct upgrades from databases created by older revisions are not
 supported. Initialization and deployment never delete data.
 
+### Approved Empty-Database Rebuild
+
+A schema-breaking cleanup is a separate production operation, never part of
+normal db-init. Perform it only after explicit approval and after verifying a
+private configuration backup containing `.env`, the source-profile override,
+the range-admission rules and the LLM decision rules. Record only version,
+ownership, mode and SHA-256; do not print file contents.
+
+After the approved revision has been deployed to Alibaba Cloud:
+
+1. Stop the collector timers and persistent services that can read or write
+   SQLite. Do not operate on Huawei Cloud.
+2. Move `surveil.sqlite3` and any `-wal` / `-shm` companions into a private
+   mode-`0700` retirement directory. This is the short rollback boundary; do
+   not mix files from different timestamps.
+3. Run `scripts/market_db.py` as the production service account and verify the
+   fresh schema, `PRAGMA quick_check`, foreign keys and expected table list.
+4. Install/restart the current systemd units, then verify Web APIs, enabled
+   source profiles, private-rule version/SHA-256, service health and natural new
+   collection.
+5. After the verification window, delete the retirement directory if historical
+   information is intentionally not retained.
+
+Before step 5, rollback requires stopping the same services, deploying the
+preceding revision and restoring the complete retired SQLite file set. After
+step 5, rollback can restore code and private configuration and create another
+fresh current database, but cannot restore historical collected information.
+
 Use it to verify whether your Mac, GitHub, and server are aligned:
 
 ```bash
@@ -172,10 +200,9 @@ After pruning, `prune_remote_code.sh` restores the deployment root to the
 configured service account and mode `0700`, because rsync otherwise applies the
 checkout root metadata to that directory.
 
-The installer stops, disables and removes the retired research, official and
-news collector shadow units, the collector shadow digest units and the retired
-rule-comparison daily units before reloading systemd. The production collectors
-use the shared runtime directly.
+The research, company-feed and media collectors expose only their production
+entry. Retired shadow collector code and units are not part of the current
+runtime.
 After five-group range admission, `decision_engine.py` calls the reviewed LLM
 degree rules and returns the only production `DecisionResult`. There is no
 configuration selector or retained deterministic action code, and
@@ -230,7 +257,7 @@ metadata and validation details for all calls under
 SQLite without storing its complete content there. The cleanup task removes
 sensitive request/response content after 30 days while retaining bounded result
 metadata. Web, Git, Feishu and local report copies never receive complete model
-input, article body or raw provider response.
+input, source body or raw provider response.
 
 The authenticated Web workbench's `大模型决策` view reads completed
 `DecisionResult` fields from unified SQLite and joins failed attempts to the
@@ -248,12 +275,10 @@ The installer also copies the production collector units:
 - `surveil-news-collector.timer`
 
 All general collectors construct `NormalizedMarketItem` and call
-`process_market_item(...)`. Production processing, Web Event Center, daily
-output, feedback and operational tools read and write `market_items`,
-`market_reviews`, `market_item_aliases` and linked `deliveries`. The former
-direct/compat runtime switch and compatibility wrappers have been removed;
-rollback uses the normal Git/PR/deployment process instead of selecting a
-second runtime.
+`process_market_item(...)`. Production processing, Web `信息中心`, daily output,
+feedback and operational tools use direct `market_items`, `market_reviews` and
+linked `deliveries` identities. There is no alias table, item-kind routing,
+runtime selector or compatibility wrapper.
 The LLM decision cutover follows the same rule: there is no runtime selector
 back to another decision implementation. For later deployments, record the
 preceding supported Git revision before deployment. If rollback criteria are
@@ -270,7 +295,7 @@ The news collector also runs public official trade-policy sources through
 Commission Press Corner RSS, MOFCOM policy releases, and MOFCOM spokesperson
 statements. Each source establishes its own first-run baseline, records
 `trade_policy/<source_id>` health, and sends new items through the same unified
-article runtime. The common `trade_friction_escalation` decision rule also applies
+market-information flow. The common `trade_friction_escalation` decision rule also applies
 to every existing and future normalized source; official-source identity alone
 does not create push eligibility.
 The same news collector runs WallstreetCN as a peer general news-media source.
@@ -483,7 +508,7 @@ Keep these only in server `.env` or local `.env`:
 
 Feedback-enabled cards use an enterprise self-built Feishu application rather than the existing custom-bot webhook. A group can contain both: the old custom webhook (for example, a historical `surveil-huawei` display name) remains in place, while the enterprise application bot (currently `stocksurveil`) sends cards with actionable feedback buttons. A custom webhook is not an application bot and therefore normally does not appear in the Feishu application-bot list.
 
-Use listener-only mode for the first real-group test. `FEISHU_FEEDBACK_LISTENER_ENABLED=1` starts only the callback long connection and permits one explicit test card; it does not switch natural market cards away from the existing webhook. `FEISHU_FEEDBACK_ENABLED=1` is the later, separate switch that sends unified article/official/event cards through the application bot with feedback actions.
+Use listener-only mode for the first real-group test. `FEISHU_FEEDBACK_LISTENER_ENABLED=1` starts only the callback long connection and permits one explicit test card; it does not switch natural market cards away from the existing webhook. `FEISHU_FEEDBACK_ENABLED=1` is the later, separate switch that sends unified market-information cards through the application bot with feedback actions.
 
 Required private settings:
 
@@ -513,7 +538,7 @@ The feedback service runs the official SDK at warning level so temporary
 WebSocket connection credentials are not written in INFO connection URLs. Its
 stdout and stderr log files are owned by the production service account and
 mode `0600`; the unit also uses `UMask=0077`. Bounded callback logs contain only
-result class, card-update outcome, item kind and elapsed milliseconds.
+result class, card-update outcome, market item identity and elapsed milliseconds.
 
 Official dependency provenance:
 

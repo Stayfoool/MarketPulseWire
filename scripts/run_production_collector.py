@@ -14,9 +14,9 @@ from typing import Any, Callable, Mapping, Sequence
 ROOT = Path(__file__).resolve().parents[1]
 
 COLLECTOR_COMMANDS: dict[str, tuple[str, ...]] = {
-    "research": ("scripts/research_collector.py", "--production", "--page-min-interval", "900"),
-    "official": ("scripts/official_collector.py", "--production"),
-    "news": ("scripts/news_collector.py", "--production"),
+    "research": ("scripts/research_collector.py", "--page-min-interval", "900"),
+    "official": ("scripts/official_collector.py",),
+    "news": ("scripts/news_collector.py",),
 }
 
 

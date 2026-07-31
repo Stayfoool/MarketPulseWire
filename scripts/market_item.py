@@ -48,15 +48,11 @@ VALID_RULE_FAMILIES: set[str] = {
 }
 
 
-def article_item_id(item: dict[str, Any]) -> str:
+def raw_item_id(item: dict[str, Any]) -> str:
     return str(item.get("id") or item.get("url") or item.get("title") or "")
 
 
-def official_news_item_id(item: dict[str, Any]) -> str:
-    return article_item_id(item)
-
-
-def event_content_hash(*parts: str) -> str:
+def content_hash(*parts: str) -> str:
     joined = "\n".join(part.strip() for part in parts if part and part.strip())
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 VALID_EVIDENCE_SCOPES: set[str] = {*VALID_RULE_FAMILIES, "global"}
@@ -118,14 +114,14 @@ def stable_dedupe_key(
     *,
     source: str,
     content_type: str = "",
-    source_event_id: str = "",
+    source_item_id: str = "",
     url: str = "",
     title: str = "",
     published_at: str = "",
 ) -> str:
     """Build a stable best-effort key for audit and cross-path adapters."""
-    if source_event_id:
-        return f"{source}:{source_event_id}"
+    if source_item_id:
+        return f"{source}:{source_item_id}"
     if url:
         return f"{source}:{url}"
     raw = "\n".join([source, content_type, title, published_at])
@@ -172,7 +168,7 @@ class NormalizedMarketItem:
             self.dedupe_key = stable_dedupe_key(
                 source=self.source,
                 content_type=self.content_type,
-                source_event_id=str(self.raw.get("source_event_id") or self.raw.get("id") or ""),
+                source_item_id=str(self.raw.get("id") or ""),
                 url=self.url,
                 title=self.title,
                 published_at=self.published_at,
@@ -442,14 +438,14 @@ class MarketFlowResult:
         }
 
 
-def item_from_article_mapping(
+def item_from_mapping(
     source: str,
     item: dict[str, Any],
     *,
     source_category: str = "",
     publisher_role: str = "",
     collector: str = "",
-    content_type: str = "article",
+    content_type: str = "",
 ) -> NormalizedMarketItem:
     raw = dict(item.get("raw") or {})
     raw.setdefault("id", item.get("id") or item.get("item_id") or item.get("url") or item.get("title") or "")
@@ -460,7 +456,7 @@ def item_from_article_mapping(
         source_category=source_category,
         publisher_role=publisher_role,
         collector=collector,
-        content_type=content_type,
+        content_type=str(content_type or item.get("content_type") or "unknown"),
         title=str(item.get("title") or ""),
         summary=str(item.get("summary") or item.get("content") or ""),
         full_text=str(item.get("full_text") or ""),
@@ -472,34 +468,4 @@ def item_from_article_mapping(
         raw=raw,
         dedupe_key=str(item.get("dedupe_key") or ""),
         access_note=str(item.get("access_note") or ""),
-    )
-
-def item_from_event_mapping(
-    event: dict[str, Any],
-    *,
-    source_category: str = "",
-    publisher_role: str = "",
-    collector: str = "",
-) -> NormalizedMarketItem:
-    raw = dict(event.get("raw") or {})
-    raw.setdefault("source_event_id", event.get("source_event_id") or "")
-    if event.get("body_source"):
-        raw.setdefault("body_source", str(event.get("body_source")))
-    return NormalizedMarketItem(
-        source=str(event.get("source") or ""),
-        source_category=source_category,
-        publisher_role=publisher_role,
-        collector=collector,
-        content_type=str(event.get("event_type") or "event"),
-        title=str(event.get("title") or ""),
-        summary=str(event.get("summary") or ""),
-        full_text=str(event.get("full_text") or ""),
-        url=str(event.get("url") or ""),
-        published_at=str(event.get("published_at") or ""),
-        first_seen_at=str(event.get("first_seen_at") or ""),
-        symbols=_string_list(event.get("symbols") or []),
-        themes=_string_list(event.get("themes") or []),
-        raw=raw,
-        dedupe_key=str(event.get("dedupe_key") or ""),
-        access_note=str(event.get("access_note") or ""),
     )

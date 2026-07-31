@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression checks for the single unified event runtime."""
+"""Regression checks for collectors using the single market-information flow."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def test_runtime_uses_only_unified_flow() -> None:
     assert "SURVEIL_EVENT_DIRECT_PATH" not in FIELDS_BY_KEY
 
 
-def test_all_event_collectors_import_runtime_entrypoints() -> None:
+def test_collectors_import_unified_entrypoints() -> None:
     for module in (sina_flash, sina_stock_news, company_disclosures):
         assert module.process_market_item.__module__ == "market_flow"
         source = inspect.getsource(module)
@@ -46,10 +46,10 @@ def test_all_event_collectors_import_runtime_entrypoints() -> None:
 
 
 def test_unified_upsert_preserves_store_contract() -> None:
-    event = {
+    raw_item = {
         "source": "sina_flash",
-        "source_event_id": "runtime-contract-1",
-        "event_type": "flash_news",
+        "id": "runtime-contract-1",
+        "content_type": "flash_news",
         "title": "美国 CPI 大幅低于预期",
         "summary": "美债收益率下跌。",
         "published_at": "2026-07-12T00:00:00+00:00",
@@ -58,15 +58,14 @@ def test_unified_upsert_preserves_store_contract() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "unified.sqlite3"
         init_db(db_path).close()
-        normalized = market_flow.normalize_market_item("sina_flash", event, store_kind="event")
+        normalized = market_flow.normalize_market_item("sina_flash", raw_item)
         first = market_flow.process_market_item(
             normalized,
-            event,
-            store_kind="event",
+            raw_item,
             db_path=db_path,
             baseline_only=True,
         )
-        assert first.event_id == 1
+        assert first.market_item_id == 1
         assert first.inserted is True
         assert first.delivery_status == "baseline"
         assert first.flow_result.decision.action == "baseline"
@@ -74,20 +73,19 @@ def test_unified_upsert_preserves_store_contract() -> None:
             row = conn.execute(
                 "SELECT source_category,publisher_role,content_type,raw_json FROM market_items WHERE id=1"
             ).fetchone()
-            alias = conn.execute(
-                "SELECT item_kind,source,legacy_item_id FROM market_item_aliases WHERE market_item_id=1"
-            ).fetchone()
-        assert row[:3] == ("news_media", "news_media", "flash")
-        assert json.loads(row[3])["source_event_id"] == "runtime-contract-1"
-        assert alias == ("event", "sina_flash", "runtime-contract-1")
+            alias_table = conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='market_item_aliases'"
+            ).fetchone()[0]
+        assert row[:3] == ("news_media", "news_media", "flash_news")
+        assert json.loads(row[3])["id"] == "runtime-contract-1"
+        assert alias_table == 0
         second = market_flow.process_market_item(
             normalized,
-            event,
-            store_kind="event",
+            raw_item,
             db_path=db_path,
             baseline_only=True,
         )
-        assert second.event_id == first.event_id
+        assert second.market_item_id == first.market_item_id
         assert second.inserted is False
         assert second.delivery_status == "existing"
 
@@ -95,12 +93,11 @@ def test_unified_upsert_preserves_store_contract() -> None:
 def test_sina_flash_uses_news_media_flash_shape() -> None:
     item = market_flow.normalize_market_item(
         "sina_flash",
-        {"source": "sina_flash", "source_event_id": "flash-1", "event_type": "flash_news", "title": "测试快讯"},
-        store_kind="event",
+        {"source": "sina_flash", "id": "flash-1", "content_type": "flash_news", "title": "测试快讯"},
     )
     assert item.source_category == "news_media"
     assert item.publisher_role == "news_media"
-    assert item.content_type == "flash"
+    assert item.content_type == "flash_news"
 
 
 def test_sina_flash_current_admission_reports_macro_and_fed_families() -> None:
@@ -177,7 +174,7 @@ def test_sina_flash_reserves_all_discoveries_before_current_admission() -> None:
             def fake_process(normalized, raw_item, **kwargs):
                 process_calls.append({"normalized": normalized, "raw_item": raw_item, **kwargs})
                 return SimpleNamespace(
-                    event_id=1,
+                    market_item_id=1,
                     inserted=True,
                     flow_result=SimpleNamespace(
                         interpretation=SimpleNamespace(core_content="test")
@@ -188,7 +185,7 @@ def test_sina_flash_reserves_all_discoveries_before_current_admission() -> None:
             sina_flash.process_market_item = fake_process
             assert sina_flash.run_once() == 1
             assert len(process_calls) == 1
-            assert process_calls[0]["raw_item"]["source_event_id"] == "new-related"
+            assert process_calls[0]["raw_item"]["id"] == "new-related"
             assert process_calls[0]["production_admission"].status == "admitted"
             assert process_calls[0]["production_admission"].matched_families == ("holding",)
             with sqlite3.connect(db_path) as conn:
@@ -256,7 +253,7 @@ def main() -> int:
     os.environ["RULE_CORE_CONFIG"] = str(TEST_RULE_CONFIG)
     try:
         test_runtime_uses_only_unified_flow()
-        test_all_event_collectors_import_runtime_entrypoints()
+        test_collectors_import_unified_entrypoints()
         test_unified_upsert_preserves_store_contract()
         test_sina_flash_uses_news_media_flash_shape()
         test_sina_flash_current_admission_reports_macro_and_fed_families()
@@ -267,7 +264,7 @@ def main() -> int:
             os.environ.pop("RULE_CORE_CONFIG", None)
         else:
             os.environ["RULE_CORE_CONFIG"] = previous
-    print("event runtime checks passed")
+    print("collector market flow checks passed")
     return 0
 
 

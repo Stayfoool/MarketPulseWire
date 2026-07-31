@@ -1384,7 +1384,7 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
         processing_status="not_applicable",
     )
     try:
-        normalized = normalize_market_item(source, enriched, store_kind="article", source_profile_id=source)
+        normalized = normalize_market_item(source, enriched, source_profile_id=source)
         admission_context = persist_production_admission_context(normalized, production_admission_context(normalized, db_path=DB_PATH), db_path=DB_PATH)
         admission = admission_context.result
     except Exception as exc:
@@ -1419,7 +1419,6 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
         outcome = process_market_item(
             normalized,
             enriched,
-            store_kind="article",
             db_path=DB_PATH,
             production_admission=admission,
             production_portfolio=admission_context.portfolio,

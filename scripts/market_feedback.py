@@ -40,7 +40,7 @@ FEEDBACK_REASON_LABELS = {
     "wrong_attribution": "归因错误",
     "wrong_interpretation": "解读错误",
 }
-TOKEN_VERSION = 1
+TOKEN_VERSION = 2
 
 
 class FeedbackError(ValueError):
@@ -49,9 +49,7 @@ class FeedbackError(ValueError):
 
 @dataclass(frozen=True)
 class FeedbackIdentity:
-    item_kind: str
-    source: str
-    item_id: str
+    market_item_id: int
 
 
 def _json_bytes(value: dict[str, Any]) -> bytes:
@@ -75,9 +73,7 @@ def build_feedback_token(identity: FeedbackIdentity, *, secret: str, issued_at: 
         raise FeedbackError("FEISHU_FEEDBACK_TOKEN_SECRET 未配置")
     payload = {
         "v": TOKEN_VERSION,
-        "k": identity.item_kind,
-        "s": identity.source,
-        "i": identity.item_id,
+        "m": int(identity.market_item_id),
         "t": int(issued_at if issued_at is not None else time.time()),
     }
     encoded = _b64encode(_json_bytes(payload))
@@ -100,14 +96,11 @@ def parse_feedback_token(token: str, *, secret: str) -> FeedbackIdentity:
         raise FeedbackError("反馈标识格式无效") from exc
     if payload.get("v") != TOKEN_VERSION:
         raise FeedbackError("反馈标识版本不受支持")
-    identity = FeedbackIdentity(
-        item_kind=str(payload.get("k") or "").strip(),
-        source=str(payload.get("s") or "").strip(),
-        item_id=str(payload.get("i") or "").strip(),
-    )
-    if identity.item_kind not in {"article", "official", "event", "test"}:
-        raise FeedbackError("反馈对象类型无效")
-    if not identity.source or not identity.item_id:
+    try:
+        identity = FeedbackIdentity(market_item_id=int(payload.get("m")))
+    except (TypeError, ValueError) as exc:
+        raise FeedbackError("反馈对象标识无效") from exc
+    if identity.market_item_id < 0:
         raise FeedbackError("反馈对象标识不完整")
     return identity
 
@@ -266,78 +259,6 @@ def _decision_snapshot(payload: dict[str, Any]) -> tuple[str, list[str], str]:
     return decision.action, list(dict.fromkeys(rule_ids)), version
 
 
-def repair_missing_feedback_snapshots(
-    conn: sqlite3.Connection,
-    *,
-    apply: bool = False,
-) -> dict[str, int]:
-    """Repair empty feedback decision snapshots from their exact sent delivery."""
-    rows = conn.execute(
-        """
-        SELECT f.id,d.status,r.decision_json,r.application_revision,f.decision_version,
-               EXISTS (
-                   SELECT 1 FROM market_item_aliases a
-                   WHERE a.market_item_id=d.market_item_id
-                     AND a.item_kind=f.item_kind
-                     AND a.source=f.source
-                     AND a.legacy_item_id=f.item_id
-               ) identity_matches
-        FROM market_feedback f
-        LEFT JOIN deliveries d ON d.id=f.delivery_id
-        LEFT JOIN market_reviews r
-          ON r.id=d.market_review_id AND r.market_item_id=d.market_item_id
-        WHERE f.item_kind<>'test' AND COALESCE(f.decision_action,'')=''
-        ORDER BY f.id
-        """
-    ).fetchall()
-    result = {
-        "candidates": len(rows),
-        "repairable": 0,
-        "unresolved": 0,
-        "updated": 0,
-    }
-    repairs: list[tuple[str, str, str, int]] = []
-    for row in rows:
-        (
-            feedback_id,
-            delivery_status,
-            decision_json,
-            application_revision,
-            existing_version,
-            identity_matches,
-        ) = row
-        action, rule_ids, version = _decision_snapshot(_load_json(decision_json))
-        if delivery_status != "sent" or not identity_matches or action not in {
-            "push",
-            "daily",
-            "archive",
-            "ignore",
-        }:
-            result["unresolved"] += 1
-            continue
-        result["repairable"] += 1
-        repairs.append(
-            (
-                action,
-                json.dumps(rule_ids, ensure_ascii=False),
-                version or str(application_revision or existing_version or ""),
-                int(feedback_id),
-            )
-        )
-    if apply and repairs:
-        changes_before = conn.total_changes
-        conn.executemany(
-            """
-            UPDATE market_feedback
-            SET decision_action=?,rule_ids_json=?,decision_version=?
-            WHERE id=? AND COALESCE(decision_action,'')=''
-            """,
-            repairs,
-        )
-        result["updated"] = conn.total_changes - changes_before
-    return result
-
-
 def runtime_revision() -> str:
     explicit = os.getenv("SURVEIL_REVISION", "").strip()
     if explicit:
@@ -354,7 +275,7 @@ def resolve_feedback_snapshot(
     conn: sqlite3.Connection,
     identity: FeedbackIdentity,
 ) -> dict[str, Any]:
-    if identity.item_kind == "test":
+    if identity.market_item_id == 0:
         return {
             "decision_action": "test",
             "rule_ids": [],
@@ -362,9 +283,7 @@ def resolve_feedback_snapshot(
             "delivery_status": "sent",
             "delivery_id": None,
         }
-    canonical = canonical_feedback_snapshot(
-        conn, identity.item_kind, identity.source, identity.item_id
-    )
+    canonical = canonical_feedback_snapshot(conn, identity.market_item_id)
     if canonical is None:
         raise FeedbackError("统一处理结果中未找到对应审计记录")
     action, rule_ids, version = _decision_snapshot(canonical["decision"])
@@ -386,11 +305,11 @@ def _current_feedback_row(
         """
         SELECT id, label, clicked_at_us, reason_tags_json, active_labels_json
         FROM market_feedback
-        WHERE item_kind = ? AND source = ? AND item_id = ? AND operator_id = ?
+        WHERE market_item_id IS ? AND operator_id = ?
         ORDER BY clicked_at_us DESC, id DESC
         LIMIT 1
         """,
-        (identity.item_kind, identity.source, identity.item_id, operator_id),
+        (identity.market_item_id or None, operator_id),
     ).fetchone()
 
 
@@ -471,17 +390,15 @@ def record_feedback(
         cursor = conn.execute(
             """
             INSERT INTO market_feedback (
-                feedback_event_id, item_kind, source, item_id, delivery_id, label, active_labels_json,
+                feedback_event_id, market_item_id, delivery_id, label, active_labels_json,
                 reason_tags_json, note, operator_id, message_id, chat_id,
                 decision_action, rule_ids_json, delivery_status, decision_version,
                 clicked_at_us, received_at, supersedes_id, raw_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 feedback_event_id,
-                identity.item_kind,
-                identity.source,
-                identity.item_id,
+                identity.market_item_id or None,
                 snapshot.get("delivery_id"),
                 label,
                 json.dumps(active_labels, ensure_ascii=False),
@@ -528,9 +445,7 @@ def current_feedback_rows_from_conn(conn: sqlite3.Connection) -> list[dict[str, 
             FROM market_feedback f
             WHERE NOT EXISTS (
                 SELECT 1 FROM market_feedback newer
-                WHERE newer.item_kind = f.item_kind
-                  AND newer.source = f.source
-                  AND newer.item_id = f.item_id
+                WHERE newer.market_item_id IS f.market_item_id
                   AND newer.operator_id = f.operator_id
                   AND (
                     newer.clicked_at_us > f.clicked_at_us
@@ -550,20 +465,20 @@ def current_feedback_rows(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any
         return current_feedback_rows_from_conn(conn)
 
 
-def feedback_projection_by_item(conn: sqlite3.Connection) -> dict[tuple[str, str, str], dict[str, Any]]:
-    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+def feedback_projection_by_item(conn: sqlite3.Connection) -> dict[int, dict[str, Any]]:
+    grouped: dict[int, list[dict[str, Any]]] = {}
     for row in current_feedback_rows_from_conn(conn):
-        item_kind = str(row.get("item_kind") or "")
-        if item_kind == "test":
+        market_item_id = row.get("market_item_id")
+        if market_item_id is None:
             continue
         active_labels = _active_labels_from_values(row.get("label"), row.get("active_labels_json"))
         if not active_labels:
             continue
         row["active_labels"] = active_labels
-        key = (item_kind, str(row.get("source") or ""), str(row.get("item_id") or ""))
+        key = int(market_item_id)
         grouped.setdefault(key, []).append(row)
 
-    projection: dict[tuple[str, str, str], dict[str, Any]] = {}
+    projection: dict[int, dict[str, Any]] = {}
     label_order = tuple(FEEDBACK_LABELS)
     for key, rows in grouped.items():
         counts = {label: 0 for label in label_order}
@@ -686,11 +601,9 @@ def handle_feedback_callback(
 
 
 def _feedback_card_base(conn: sqlite3.Connection, identity: FeedbackIdentity) -> dict[str, Any] | None:
-    if identity.item_kind == "test":
+    if identity.market_item_id == 0:
         return feedback_test_card_base()
-    canonical = canonical_feedback_snapshot(
-        conn, identity.item_kind, identity.source, identity.item_id
-    )
+    canonical = canonical_feedback_snapshot(conn, identity.market_item_id)
     if canonical is None:
         return None
     card = canonical.get("delivery_payload", {}).get("_feedback_card_base")
@@ -760,7 +673,7 @@ def feedback_quality_payload(*, db_path: Path = DEFAULT_DB_PATH, days: int = 30)
         delivered = _delivered_items(conn, cutoff)
         current_by_item = feedback_projection_by_item(conn)
     for item in delivered:
-        feedback = current_by_item.get((item["item_kind"], item["source"], item["item_id"]))
+        feedback = current_by_item.get(int(item["market_item_id"]))
         item["feedback_labels"] = _ordered_feedback_labels(feedback.get("labels") or []) if feedback else []
         item["feedback_at"] = str(feedback.get("received_at") or "") if feedback else ""
         reason_tags = list(feedback.get("reason_tags") or []) if feedback else []

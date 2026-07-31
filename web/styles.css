@@ -87,8 +87,8 @@ td.sort-cell .move-btn:hover { background: #eef2f6; }
 td.name { width: 110px; }
 td.full { width: 170px; }
 td textarea { min-height: 38px; resize: vertical; }
-.events-table td.summary-cell { color: var(--muted); }
-.event-feedback-summary { display: flex; gap: 14px; flex-wrap: wrap; margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+.market-information-table td.summary-cell { color: var(--muted); }
+.market-feedback-summary { display: flex; gap: 14px; flex-wrap: wrap; margin: 0 0 10px; color: var(--muted); font-size: 12px; }
 .feedback-chip { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; font-size: 12px; background: #f8fafc; color: #526273; }
 .feedback-chip.high_value { color: #075985; border-color: #7dd3fc; background: #f0f9ff; }
 .feedback-chip.duplicate { color: #92400e; border-color: #fcd34d; background: #fffbeb; }
@@ -138,7 +138,7 @@ td textarea { min-height: 38px; resize: vertical; }
 .rule-boundary p { margin: 5px 0 0; color: #526273; font-size: 13px; line-height: 1.5; }
 .rule-code-values { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 8px; }
 .rule-empty { padding: 24px 2px; color: var(--muted); font-size: 13px; text-align: center; }
-.events-table a { color: var(--accent); text-decoration: none; }
+.market-information-table a { color: var(--accent); text-decoration: none; }
 .table-wrap { max-height: calc(100vh - 190px); overflow: auto; }
 .health-table { min-width: 1180px; }
 .health-table td:last-child { white-space: nowrap; }

@@ -56,7 +56,7 @@ These public official sources are defined in `scripts/trade_policy_sources.py` a
 | `mofcom_policy_releases` | 中华人民共和国商务部 / 政策发布 | Public policy list and new-item detail pages |
 | `mofcom_spokesperson_statements` | 中华人民共和国商务部 / 新闻发言人谈话 | Public news-release list and new-item detail pages |
 
-The first production discovery for each source is a baseline and does not replay historical items by default. New items normalize to `official_policy` content and enter the unified article store/runtime. The `trade_friction_escalation` rule is source-neutral and therefore also evaluates domestic media, industry media, research summaries, flashes and future sources. Reuters, FT and Bloomberg are not part of this source batch.
+The first production discovery for each source is a baseline and does not replay historical items by default. New items retain `official_policy` as source metadata and enter the unified market-information flow. The `trade_friction_escalation` rule is source-neutral and therefore also evaluates domestic media, industry media, research summaries, flashes and future sources. Reuters, FT and Bloomberg are not part of this source batch.
 
 ## TrendForce
 

@@ -105,7 +105,6 @@ class SourceAdmissionPolicy:
 HOLDING_ONLY_SOURCES = {
     "company_disclosures",
     "company_disclosure",
-    "ifind_notice",
     "sina_stock_news",
 }
 HOLDING_ONLY_SOURCE_CATEGORIES = {

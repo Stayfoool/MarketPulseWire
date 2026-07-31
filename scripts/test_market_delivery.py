@@ -1,135 +1,25 @@
 #!/usr/bin/env python3
-"""Regression checks for event delivery execution and dedup transactions."""
+"""Regression checks for the single market-information delivery path."""
 
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
-from types import SimpleNamespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
 import market_delivery
-from feishu import FeishuResponse
 from market_db import init_db
-from market_item import AdmissionEvidence, AdmissionResult, DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem, decision_result_from_dict
-from market_store import complete_market_review, record_production_admission
-
-
-def insert_event(
-    db_path: Path,
-    source_event_id: str,
-    title: str = "测试事件",
-    *,
-    source: str = "sina_flash",
-    summary: str = "测试摘要。",
-    published_at: str = "2026-07-12T12:00:00+00:00",
-) -> NormalizedMarketItem:
-    del db_path
-    return NormalizedMarketItem(
-        source=source,
-        source_category="news_media",
-        publisher_role="news_media",
-        collector="test",
-        content_type="flash_news",
-        title=title,
-        summary=summary,
-        published_at=published_at,
-        raw={"source_event_id": source_event_id},
-    )
-
-
-def decision_analysis(action: str = "push", *, rule_hits: list[dict] | None = None) -> dict:
-    return {
-        "core_content": "测试事件核心内容。",
-        "brief_reason": "确定性规则命中。",
-        "_decision_result": {
-            "action": action,
-            "importance": "high" if action == "push" else "low",
-            "rule_hits": rule_hits or [],
-        },
-    }
-
-
-def delivery_rows(db_path: Path) -> list[tuple]:
-    with sqlite3.connect(db_path) as conn:
-        return conn.execute("SELECT status, error, payload_json FROM deliveries ORDER BY id").fetchall()
-
-
-def content_review(action: str = "push", *, rule_hits: list[dict] | None = None, official: bool = False) -> dict:
-    decision = {
-        "action": action,
-        "importance": "high" if action == "push" else "low",
-        "reason": "确定性规则命中。",
-        "rule_hits": rule_hits or [],
-    }
-    review = {
-        "importance": decision["importance"],
-        "push_now": True,
-        "should_push_now": True,
-        "reason": decision["reason"],
-        "daily_summary": "测试摘要。",
-        "affected_targets": [],
-        "raw": {"decision_result": decision},
-        "analysis": {"_decision_result": decision},
-    }
-    if official:
-        review.pop("push_now")
-    return review
-
-
-def holding_market_move_rule(target_name: str, target_code: str) -> dict:
-    return {
-        "rule_id": "holding_keyword_immediate_alert",
-        "related_targets": [{"name": target_name, "code": target_code, "relation": "直接持仓"}],
-    }
-
-
-def macro_rule() -> dict:
-    return {"rule_id": "macro_policy_line"}
-
-
-def industry_rule() -> dict:
-    return {"rule_id": "industry_quantified_hardline"}
-
-
-def rating_report_rule(text: str) -> dict:
-    return {
-        "rule_id": "holding_rating_revision",
-        "decision_action": "push",
-        "evidence": [{"evidence_id": "B1", "field": "full_text", "quote": text}],
-    }
-
-
-def install_test_rating_report_extractor():
-    original = market_delivery.investment_bank_report_dedup_hit
-
-    def extract(item: dict, decision: DecisionResult):
-        from investment_bank_report_dedup import investment_bank_report_dedup_hit
-
-        return investment_bank_report_dedup_hit(
-            item,
-            decision,
-            institutions=(("nomura", ("野村", "野村证券", "Nomura")),),
-        )
-
-    market_delivery.investment_bank_report_dedup_hit = extract
-    return original
-
-
-def required_decision(payload: dict) -> DecisionResult:
-    raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
-    analysis = payload.get("analysis") if isinstance(payload.get("analysis"), dict) else {}
-    serialized = (
-        payload.get("decision_result")
-        or payload.get("_decision_result")
-        or raw.get("decision_result")
-        or analysis.get("_decision_result")
-    )
-    decision = decision_result_from_dict(serialized)
-    assert decision is not None
-    return decision
+from market_item import (
+    AdmissionEvidence,
+    AdmissionResult,
+    DecisionResult,
+    InterpretationResult,
+    MarketFlowResult,
+    NormalizedMarketItem,
+)
+from market_store import record_production_admission
 
 
 def admitted() -> AdmissionResult:
@@ -142,1291 +32,283 @@ def admitted() -> AdmissionResult:
     )
 
 
-def flow_result(
-    item: NormalizedMarketItem,
-    decision: DecisionResult,
-    payload: dict,
-) -> MarketFlowResult:
-    return MarketFlowResult(
-        item=item,
-        decision=decision,
-        interpretation=InterpretationResult(
-            core_content=str(payload.get("core_content") or payload.get("daily_summary") or item.summary),
-            brief_reason=str(payload.get("brief_reason") or ""),
-        ),
-    )
-
-
-def deliver_event(
-    item: NormalizedMarketItem,
-    analysis: dict,
+def decision(
+    action: str = "push",
     *,
-    decision: DecisionResult,
-    db_path: Path,
-    market_item_id: int | None = None,
-    market_review_id: int | None = None,
-) -> str:
-    return market_delivery.deliver_event(
-        flow_result(item, decision, analysis),
-        db_path=db_path,
-        market_item_id=market_item_id,
-        market_review_id=market_review_id,
+    rule_hits: list[dict] | None = None,
+) -> DecisionResult:
+    return DecisionResult(
+        action=action,
+        importance={"push": "high", "daily": "medium", "archive": "low"}[action],
+        reason="固定测试决策。",
+        rule_hits=rule_hits or [],
     )
 
 
-def _content_delivery_ids(
+def item(
     source: str,
-    item: dict,
+    source_item_id: str,
     *,
-    official: bool,
-    db_path: Path,
-) -> tuple[NormalizedMarketItem, int, int]:
-    normalized = NormalizedMarketItem(
+    source_category: str = "news_media",
+    content_type: str = "unknown",
+    title: str = "HBM 产能扩张",
+) -> NormalizedMarketItem:
+    return NormalizedMarketItem(
         source=source,
-        source_category="official_company" if official else "news_media",
-        content_type="official_news" if official else "article",
-        title=str(item.get("title") or ""),
-        summary=str(item.get("summary") or ""),
-        full_text=str(item.get("full_text") or ""),
-        url=str(item.get("url") or ""),
-        published_at=str(item.get("published_at") or ""),
-        raw={"id": str(item.get("id") or item.get("url") or item.get("title") or "")},
+        source_category=source_category,
+        publisher_role="news_media",
+        collector="test",
+        content_type=content_type,
+        title=title,
+        summary="公司确认新增 HBM 产线。",
+        full_text="公司确认新增 HBM 产线并扩大产能。",
+        url=f"https://example.com/{source_item_id}",
+        published_at="2026-07-31T00:00:00+00:00",
+        raw={"id": source_item_id},
     )
-    market_item_id, market_review_id = record_production_admission(
+
+
+def deliver(
+    db_path: Path,
+    normalized: NormalizedMarketItem,
+    result: DecisionResult,
+    *,
+    use_rule_dedup: bool = True,
+) -> tuple[str, int, int]:
+    market_item_id, review_id = record_production_admission(
         normalized,
         admitted(),
         db_path=db_path,
     )
-    return normalized, market_item_id, market_review_id
-
-
-def deliver_article(
-    source: str,
-    item: dict,
-    review: dict,
-    *,
-    decision: DecisionResult,
-    db_path: Path,
-    use_rule_dedup: bool = True,
-    already_sent: bool = False,
-    **_ignored,
-) -> str:
-    normalized, market_item_id, market_review_id = _content_delivery_ids(
-        source, item, official=False, db_path=db_path
+    flow = MarketFlowResult(
+        item=normalized,
+        decision=result,
+        interpretation=InterpretationResult(core_content=normalized.summary),
     )
-    return market_delivery.deliver_article_review(
-        source,
-        item,
-        flow_result(normalized, decision, review),
+    status = market_delivery.deliver_market_item(
+        normalized.to_dict(),
+        flow,
         market_item_id=market_item_id,
-        market_review_id=market_review_id,
+        market_review_id=review_id,
         db_path=db_path,
         use_rule_dedup=use_rule_dedup,
-        already_sent=already_sent,
     )
+    return status, market_item_id, review_id
 
 
-def deliver_official(
-    source: str,
-    item: dict,
-    review: dict,
-    *,
-    decision: DecisionResult,
-    db_path: Path,
-    already_sent: bool = False,
-    **_ignored,
-) -> str:
-    normalized, market_item_id, market_review_id = _content_delivery_ids(
-        source, item, official=True, db_path=db_path
-    )
-    return market_delivery.deliver_official_review(
-        source,
-        item,
-        flow_result(normalized, decision, review),
-        market_item_id=market_item_id,
-        market_review_id=market_review_id,
-        db_path=db_path,
-        already_sent=already_sent,
-    )
+def delivery_rows(db_path: Path) -> list[tuple]:
+    with sqlite3.connect(db_path) as conn:
+        return conn.execute(
+            "SELECT market_item_id,market_review_id,status,decision_action,error,payload_json "
+            "FROM deliveries ORDER BY id"
+        ).fetchall()
 
 
-def test_simple_event_card_formats_published_time_for_beijing() -> None:
-    card = market_delivery.simple_event_card(
-        "sina_stock_news",
-        "测试事件",
-        "测试摘要。",
-        "",
-        "2026-07-14T11:31:00+00:00",
-        ["核心内容：测试。"],
-    )
-    expected_time = "**发布时间**：2026-07-14 19:31:00 北京时间（UTC 2026-07-14 11:31:00）"
-    assert card["elements"][1]["text"]["content"] == expected_time
-
-    invalid_card = market_delivery.simple_event_card("source", "title", "text", "", "not-a-time", [])
-    assert invalid_card["elements"][1]["text"]["content"] == "**发布时间**：not-a-time"
-
-    unknown_card = market_delivery.simple_event_card("source", "title", "text", "", "", [])
-    assert unknown_card["elements"][1]["text"]["content"] == "**发布时间**：unknown"
-
-
-def test_archive_and_missing_webhook_are_recorded_without_sending() -> None:
-    original_webhook = os.environ.pop("FEISHU_WEBHOOK", None)
-    try:
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            archive_id = insert_event(db_path, "archive-1")
-            push_id = insert_event(db_path, "push-1")
-            archive = decision_analysis("archive")
-            push = decision_analysis("push")
-            assert deliver_event(
-                archive_id, archive, decision=required_decision(archive), db_path=db_path
-            ) == "skipped"
-            assert deliver_event(
-                push_id, push, decision=required_decision(push), db_path=db_path
-            ) == "skipped"
-            rows = delivery_rows(db_path)
-        assert json.loads(rows[0][2])["decision_action"] == "archive"
-        assert json.loads(rows[1][2])["reason"] == "FEISHU_WEBHOOK 未配置"
-    finally:
-        if original_webhook is not None:
-            os.environ["FEISHU_WEBHOOK"] = original_webhook
-
-
-def test_event_delivery_records_unified_item_and_result_directly() -> None:
-    with TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "surveil.sqlite3"
-        init_db(db_path).close()
-        event_item = insert_event(db_path, "linked-event")
-        normalized = NormalizedMarketItem(
-            source="sina_flash",
-            source_category="news_media",
-            content_type="flash",
-            title="测试事件",
-            raw={"source_event_id": "linked-event"},
-        )
-        admission = AdmissionResult(
-            status="admitted",
-            reason_code="macro_data_match",
-            matched_families=("macro_data",),
-            evidence=(AdmissionEvidence("macro_data", "term", "CPI"),),
-            config_version="test-v1",
-        )
-        market_item_id, market_review_id = record_production_admission(
-            normalized, admission, db_path=db_path, task="portfolio_event"
-        )
-        decision = DecisionResult(action="archive", importance="low", reason="普通跟踪")
-        complete_market_review(
-            market_review_id,
-            MarketFlowResult(
-                item=normalized,
-                decision=decision,
-                interpretation=InterpretationResult(core_content="普通跟踪"),
-            ),
-            db_path=db_path,
-        )
-        assert deliver_event(
-            event_item,
-            decision_analysis("archive"),
-            decision=decision,
-            market_item_id=market_item_id,
-            market_review_id=market_review_id,
-            db_path=db_path,
-        ) == "skipped"
-        with sqlite3.connect(db_path) as conn:
-            row = conn.execute(
-                "SELECT market_item_id,market_review_id,status,decision_action FROM deliveries"
-            ).fetchone()
-        assert row == (market_item_id, market_review_id, "skipped", "archive")
-
-
-def test_send_failure_releases_reservation_and_records_failure() -> None:
-    original_webhook = os.environ.get("FEISHU_WEBHOOK")
-    original_send = market_delivery.send_card_with_response
-    try:
-        os.environ["FEISHU_WEBHOOK"] = "https://example.invalid/webhook"
-        market_delivery.send_card_with_response = lambda card: (_ for _ in ()).throw(RuntimeError("send failed"))
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            event_id = insert_event(db_path, "failed-1")
-            analysis = decision_analysis()
-            assert deliver_event(
-                event_id, analysis, decision=required_decision(analysis), db_path=db_path
-            ) == "failed"
-            row = delivery_rows(db_path)[0]
-        assert row[0] == "failed"
-        assert row[1] == "send failed"
-    finally:
-        market_delivery.send_card_with_response = original_send
-        if original_webhook is None:
-            os.environ.pop("FEISHU_WEBHOOK", None)
-        else:
-            os.environ["FEISHU_WEBHOOK"] = original_webhook
-
-
-def test_success_confirms_rule_dedup_and_duplicate_skips_second_send() -> None:
-    original_webhook = os.environ.get("FEISHU_WEBHOOK")
-    original_send = market_delivery.send_card_with_response
-    calls: list[dict] = []
-    rule_hit = {
-        "rule_id": "international_bank_theme_strategy",
-        "dedup_key": "ib_theme:test-convergence",
-        "dedup_lookback_days": 14,
+def holding_rule() -> dict:
+    return {
+        "rule_id": "ai_compute_supply_demand",
+        "decision_action": "push",
+        "reason": "持仓公司确认 HBM 扩产。",
+        "dedup_key": "ai_compute_supply_demand:test-company:hbm-expansion",
+        "dedup_lookback_minutes": 60,
+        "related_targets": [
+            {"name": "测试公司", "code": "000001.SZ", "relation": "直接持仓"}
+        ],
     }
-    try:
-        os.environ["FEISHU_WEBHOOK"] = "https://example.invalid/webhook"
-
-        def fake_send(card: dict) -> FeishuResponse:
-            calls.append(card)
-            return FeishuResponse(True, 0, "ok", '{"code":0}')
-
-        market_delivery.send_card_with_response = fake_send
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            first_id = insert_event(db_path, "dedup-1", "高盛做多中国 AI 价值链")
-            second_id = insert_event(db_path, "dedup-2", "同一报告二次传播")
-            analysis = decision_analysis(rule_hits=[rule_hit])
-            assert deliver_event(
-                first_id, analysis, decision=required_decision(analysis), db_path=db_path
-            ) == "sent"
-            assert deliver_event(
-                second_id, analysis, decision=required_decision(analysis), db_path=db_path
-            ) == "skipped"
-            with sqlite3.connect(db_path) as conn:
-                dedup_status = conn.execute(
-                    "SELECT status FROM rule_alert_dedup WHERE dedup_key = ?", (rule_hit["dedup_key"],)
-                ).fetchone()[0]
-            rows = delivery_rows(db_path)
-        assert len(calls) == 1
-        assert dedup_status == "sent"
-        assert [row[0] for row in rows] == ["sent", "skipped"]
-        assert json.loads(rows[1][2])["reason"] == "同一规则观点跨来源去重"
-    finally:
-        market_delivery.send_card_with_response = original_send
-        if original_webhook is None:
-            os.environ.pop("FEISHU_WEBHOOK", None)
-        else:
-            os.environ["FEISHU_WEBHOOK"] = original_webhook
 
 
-def test_content_delivery_uses_decision_action() -> None:
+def test_non_push_action_is_recorded_without_sending() -> None:
     original_send = market_delivery.send_card
+    calls = 0
+
+    def unexpected_send(_card):
+        nonlocal calls
+        calls += 1
+        return True
+
+    market_delivery.send_card = unexpected_send
     try:
-        market_delivery.send_card = lambda card: True
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            article_item = {"id": "article-1", "title": "测试文章"}
-            archive_review = content_review("archive")
-            push_review = content_review("push")
-            official_item = {"id": "official-1", "title": "测试官网新闻"}
-            official_push = content_review("push", official=True)
-            assert (
-                deliver_article(
-                    "cls_telegraph_api",
-                    article_item,
-                    archive_review,
-                    decision=required_decision(archive_review),
-                    db_path=db_path,
-                    use_rule_dedup=False,
-                )
-                == "skipped"
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "db.sqlite3"
+            init_db(path).close()
+            status, market_item_id, review_id = deliver(
+                path,
+                item("source-a", "daily-1"),
+                decision("daily"),
             )
-            assert (
-                deliver_article(
-                    "cls_telegraph_api",
-                    article_item,
-                    push_review,
-                    decision=required_decision(push_review),
-                    db_path=db_path,
-                    use_rule_dedup=False,
-                )
-                == "sent"
-            )
-            assert (
-                deliver_official(
-                    "nvidia_blog",
-                    official_item,
-                    official_push,
-                    decision=required_decision(official_push),
-                    analysis_lines=["核心内容：测试"],
-                    db_path=db_path,
-                )
-                == "sent"
-            )
+            row = delivery_rows(path)[0]
+        assert status == "skipped"
+        assert row[:4] == (market_item_id, review_id, "skipped", "daily")
+        assert json.loads(row[5])["reason"] == "DecisionResult.action 不是 push"
+        assert calls == 0
     finally:
         market_delivery.send_card = original_send
 
 
-def test_feedback_enabled_event_uses_application_card_actions() -> None:
-    keys = {
-        "FEISHU_FEEDBACK_ENABLED": "1",
-        "FEISHU_APP_ID": "cli_test",
-        "FEISHU_APP_SECRET": "app_secret",
-        "FEISHU_FEEDBACK_CHAT_ID": "oc_test",
-        "FEISHU_FEEDBACK_TOKEN_SECRET": "feedback_secret",
-        "FEISHU_FEEDBACK_ALLOWED_OPEN_IDS": "ou_test",
-    }
-    original_env = {key: os.environ.get(key) for key in keys}
-    original_send = market_delivery.send_interactive_card
-    calls: list[dict] = []
-    try:
-        os.environ.update(keys)
-        market_delivery.send_interactive_card = lambda card: calls.append(card) or SimpleNamespace(
-            ok=True,
-            code=0,
-            message="ok",
-            message_id="om_feedback",
-            body='{"code":0}',
-        )
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            event_id = insert_event(db_path, "feedback-event")
-            analysis = decision_analysis()
-            assert deliver_event(
-                event_id, analysis, decision=required_decision(analysis), db_path=db_path
-            ) == "sent"
-            payload = json.loads(delivery_rows(db_path)[0][2])
-        assert payload["feishu_message_id"] == "om_feedback"
-        assert payload["_feedback_card_base"]["header"]["title"]["content"] == "测试事件"
-        assert len(calls) == 1
-        buttons = calls[0]["elements"][-1]["actions"]
-        assert [button["value"]["label"] for button in buttons[:3]] == ["high_value", "duplicate", "invalid"]
-        assert buttons[3]["tag"] == "overflow"
-    finally:
-        market_delivery.send_interactive_card = original_send
-        for key, value in original_env.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-
-
-def test_feedback_enabled_article_and_official_keep_card_base_in_result() -> None:
-    keys = {
-        "FEISHU_FEEDBACK_ENABLED": "1",
-        "FEISHU_APP_ID": "cli_test",
-        "FEISHU_APP_SECRET": "app_secret",
-        "FEISHU_FEEDBACK_CHAT_ID": "oc_test",
-        "FEISHU_FEEDBACK_TOKEN_SECRET": "feedback_secret",
-        "FEISHU_FEEDBACK_ALLOWED_OPEN_IDS": "ou_test",
-    }
-    original_env = {key: os.environ.get(key) for key in keys}
-    original_send = market_delivery.send_interactive_card
-    try:
-        os.environ.update(keys)
-        market_delivery.send_interactive_card = lambda _card: SimpleNamespace(
-            ok=True, code=0, message="ok", message_id="om_feedback", body='{"code":0}'
-        )
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            article_item = {"id": "feedback-article", "title": "反馈文章", "summary": "正文"}
-            official_item = {"id": "feedback-official", "title": "反馈官网新闻", "summary": "正文"}
-            article_review = content_review("push")
-            official_review = content_review("push", official=True)
-            assert deliver_article(
-                "cls_telegraph_api", article_item, article_review,
-                decision=required_decision(article_review), db_path=db_path, use_rule_dedup=False,
-            ) == "sent"
-            assert deliver_official(
-                "nvidia_blog", official_item, official_review,
-                decision=required_decision(official_review), analysis_lines=["核心内容：测试"], db_path=db_path,
-            ) == "sent"
-            payloads = [json.loads(row[2]) for row in delivery_rows(db_path)]
-        assert payloads[0]["_feedback_card_base"]["header"]["title"]["content"]
-        assert payloads[1]["_feedback_card_base"]["header"]["title"]["content"]
-    finally:
-        market_delivery.send_interactive_card = original_send
-        for key, value in original_env.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-
-
-def test_article_review_uses_nested_decision_action() -> None:
+def test_push_uses_direct_unified_identity_and_one_card_builder() -> None:
     original_send = market_delivery.send_card
-    calls: list[dict] = []
+    cards: list[dict] = []
+    market_delivery.send_card = lambda card: cards.append(card) or True
     try:
-        market_delivery.send_card = lambda card: calls.append(card) or True
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            item = {"id": "nested-archive", "title": "兼容字段冲突测试"}
-            review = content_review("archive")
-            assert review["push_now"] is True
-            status = deliver_article(
-                "value_directory_ib_stocks",
-                item,
-                review,
-                decision=required_decision(review),
-                db_path=db_path,
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "db.sqlite3"
+            init_db(path).close()
+            status, market_item_id, review_id = deliver(
+                path,
+                item("source-b", "push-1", content_type="flash_news"),
+                decision(),
                 use_rule_dedup=False,
             )
-        assert status == "skipped"
-        assert calls == []
-    finally:
-        market_delivery.send_card = original_send
-
-
-def test_article_delivery_dedup_skips_without_changing_decision_action() -> None:
-    original_send = market_delivery.send_card
-    calls: list[dict] = []
-    rule_hit = {
-        "rule_id": "international_bank_theme_strategy",
-        "dedup_key": "ib_theme:article-adapter",
-        "dedup_lookback_days": 14,
-    }
-    try:
-        market_delivery.send_card = lambda card: calls.append(card) or True
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            first_item = {"id": "article-dedup-1", "title": "高盛做多 AI 价值链"}
-            second_item = {"id": "article-dedup-2", "title": "同一报告再次传播"}
-            review = content_review("push", rule_hits=[rule_hit])
-            assert (
-                deliver_article(
-                    "cls_telegraph_api",
-                    first_item,
-                    review,
-                    decision=required_decision(review),
-                    db_path=db_path,
-                )
-                == "sent"
-            )
-            assert (
-                deliver_article(
-                    "jin10_rsshub_important",
-                    second_item,
-                    review,
-                    decision=required_decision(review),
-                    db_path=db_path,
-                )
-                == "duplicate"
-            )
-        assert len(calls) == 1
-        assert review["push_now"] is True
-        assert review["raw"]["decision_result"]["action"] == "push"
-    finally:
-        market_delivery.send_card = original_send
-
-
-def test_investment_bank_report_cross_source_article_dedup_preserves_push_decision() -> None:
-    original_send = market_delivery.send_card
-    original_extractor = install_test_rating_report_extractor()
-    calls: list[dict] = []
-    first_text = "野村证券首次覆盖长鑫科技，给予买入评级和116元目标价。"
-    second_text = "野村对长鑫科技给出目标价为人民币116元，属于首次覆盖并给予买入评级。"
-    try:
-        market_delivery.send_card = lambda card: calls.append(card) or True
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            first_item = {
-                "id": "nomura-report-1",
-                "title": first_text,
-                "published_at": "2026-07-27T02:41:20+00:00",
-            }
-            second_item = {
-                "id": "nomura-report-2",
-                "title": second_text,
-                "published_at": "2026-07-27T03:12:00+00:00",
-            }
-            first_review = content_review("push", rule_hits=[rating_report_rule(first_text)])
-            second_review = content_review("push", rule_hits=[rating_report_rule(second_text)])
-            first_status = deliver_article(
-                "source_a", first_item, first_review,
-                decision=required_decision(first_review), db_path=db_path,
-            )
-            second_status = deliver_article(
-                "source_b", second_item, second_review,
-                decision=required_decision(second_review), db_path=db_path,
-            )
-            duplicate_payload = json.loads(delivery_rows(db_path)[-1][2])
-        assert [first_status, second_status] == ["sent", "duplicate"]
-        assert len(calls) == 1
-        assert second_review["raw"]["decision_result"]["action"] == "push"
-        assert duplicate_payload["rule_id"] == "investment_bank_report_dedup"
-    finally:
-        market_delivery.send_card = original_send
-        market_delivery.investment_bank_report_dedup_hit = original_extractor
-
-
-def test_investment_bank_report_official_and_event_paths_share_identity() -> None:
-    original_webhook = os.environ.get("FEISHU_WEBHOOK")
-    original_send = market_delivery.send_card
-    original_event_send = market_delivery.send_card_with_response
-    original_extractor = install_test_rating_report_extractor()
-    text = "野村证券首次覆盖长鑫科技，给予买入评级和116元目标价。"
-    rewrite = "野村对长鑫科技首次覆盖，评级买入，目标价人民币116元。"
-    try:
-        os.environ["FEISHU_WEBHOOK"] = "https://example.invalid/webhook"
-        market_delivery.send_card = lambda card: True
-        market_delivery.send_card_with_response = lambda card: FeishuResponse(True, 0, "ok", '{"code":0}')
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            official_item = {
-                "id": "nomura-official-1", "title": text,
-                "published_at": "2026-07-27T02:41:20+00:00",
-            }
-            official_review = content_review("push", rule_hits=[rating_report_rule(text)], official=True)
-            assert deliver_official(
-                "research_wire", official_item, official_review,
-                decision=required_decision(official_review), analysis_lines=["核心内容：测试。"], db_path=db_path,
-            ) == "sent"
-            event_id = insert_event(
-                db_path, "nomura-event-2", rewrite, source="news_wire",
-                summary=rewrite, published_at="2026-07-27T03:12:00+00:00",
-            )
-            analysis = decision_analysis(rule_hits=[rating_report_rule(rewrite)])
-            assert deliver_event(
-                event_id, analysis, decision=required_decision(analysis), db_path=db_path,
-            ) == "duplicate"
-            rows = delivery_rows(db_path)
-        assert [row[0] for row in rows] == ["sent", "duplicate"]
-        payload = json.loads(rows[1][2])
-        assert payload["dedup_kind"] == "investment_bank_report"
-        assert payload["first_source"] == "research_wire"
-    finally:
-        market_delivery.send_card = original_send
-        market_delivery.send_card_with_response = original_event_send
-        market_delivery.investment_bank_report_dedup_hit = original_extractor
-        if original_webhook is None:
-            os.environ.pop("FEISHU_WEBHOOK", None)
-        else:
-            os.environ["FEISHU_WEBHOOK"] = original_webhook
-
-
-def test_investment_bank_report_send_failure_releases_reservation() -> None:
-    original_send = market_delivery.send_card
-    original_extractor = install_test_rating_report_extractor()
-    text = "野村证券首次覆盖长鑫科技，给予买入评级和116元目标价。"
-    review = content_review("push", rule_hits=[rating_report_rule(text)])
-    try:
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            failed_item = {"id": "nomura-failed", "title": text, "published_at": "2026-07-27T02:41:20+00:00"}
-            retry_item = {**failed_item, "id": "nomura-retry"}
-            market_delivery.send_card = lambda card: False
-            assert deliver_article(
-                "source_a", failed_item, review,
-                decision=required_decision(review), db_path=db_path,
-            ) == "skipped"
-            market_delivery.send_card = lambda card: True
-            assert deliver_article(
-                "source_b", retry_item, review,
-                decision=required_decision(review), db_path=db_path,
-            ) == "sent"
-            with sqlite3.connect(db_path) as conn:
-                status = conn.execute(
-                    "SELECT status FROM rule_alert_dedup WHERE rule_id=?",
-                    ("investment_bank_report_dedup",),
-                ).fetchone()[0]
+            row = delivery_rows(path)[0]
         assert status == "sent"
-    finally:
-        market_delivery.send_card = original_send
-        market_delivery.investment_bank_report_dedup_hit = original_extractor
-
-
-def test_intraday_market_move_cross_source_dedup_preserves_push_decision() -> None:
-    original_send = market_delivery.send_card
-    calls: list[dict] = []
-    first_item = {
-        "id": "yicai-cpo-1",
-        "title": "CPO概念股午后直线拉升，则成电子涨超27%，源杰科技涨超10%。",
-        "published_at": "2026-07-14T05:17:35+00:00",
-    }
-    second_item = {
-        "id": "jin10-cpo-1",
-        "title": "A股CPO概念股午后直线拉升，源杰科技、则成电子等涨超10%。",
-        "published_at": "2026-07-14T05:16:48+00:00",
-    }
-    rule_hit = holding_market_move_rule("源杰科技", "688498.SH")
-    try:
-        market_delivery.send_card = lambda card: calls.append(card) or True
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            review = content_review("push", rule_hits=[rule_hit])
-            assert required_decision(review).action == "push"
-            assert (
-                deliver_article(
-                    "yicai_brief", first_item, review, decision=required_decision(review), db_path=db_path
-                )
-                == "sent"
-            )
-            assert (
-                deliver_article(
-                    "jin10_rsshub_important", second_item, review, decision=required_decision(review), db_path=db_path
-                )
-                == "duplicate"
-            )
-            duplicate_payload = json.loads(delivery_rows(db_path)[-1][2])
-        assert len(calls) == 1
-        assert duplicate_payload["rule_id"] == "intraday_market_move"
-        assert review["raw"]["decision_result"]["action"] == "push"
+        assert row[:4] == (market_item_id, review_id, "sent", "push")
+        payload = json.loads(row[5])
+        assert payload["market_item_id"] == market_item_id
+        assert payload["source_item_id"] == "push-1"
+        assert len(cards) == 1
+        card_text = json.dumps(cards[0], ensure_ascii=False)
+        assert "HBM 产能扩张" in card_text
+        assert "公司确认新增 HBM 产线" in card_text
     finally:
         market_delivery.send_card = original_send
 
 
-def test_distinct_concepts_are_not_intraday_market_move_duplicates() -> None:
+def test_different_source_metadata_does_not_select_a_delivery_path() -> None:
     original_send = market_delivery.send_card
-    calls: list[dict] = []
-    cpo = {
-        "id": "cpo-1",
-        "title": "CPO概念股午后直线拉升，源杰科技涨超10%。",
-        "published_at": "2026-07-14T05:17:35+00:00",
-    }
-    pcb = {
-        "id": "pcb-1",
-        "title": "PCB概念涨势扩大，铜冠铜箔涨超10%。",
-        "published_at": "2026-07-14T05:34:16+00:00",
-    }
+    cards: list[dict] = []
+    market_delivery.send_card = lambda card: cards.append(card) or True
     try:
-        market_delivery.send_card = lambda card: calls.append(card) or True
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            cpo_review = content_review("push", rule_hits=[holding_market_move_rule("源杰科技", "688498.SH")])
-            pcb_review = content_review("push", rule_hits=[holding_market_move_rule("铜冠铜箔", "301217.SZ")])
-            assert (
-                deliver_article(
-                    "yicai_brief", cpo, cpo_review, decision=required_decision(cpo_review), db_path=db_path
-                )
-                == "sent"
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "db.sqlite3"
+            init_db(path).close()
+            first = deliver(
+                path,
+                item("research-source", "same-1", content_type="research_index"),
+                decision(),
+                use_rule_dedup=False,
             )
-            assert (
-                deliver_article(
-                    "cls_telegraph_api", pcb, pcb_review, decision=required_decision(pcb_review), db_path=db_path
-                )
-                == "sent"
-            )
-        assert len(calls) == 2
-    finally:
-        market_delivery.send_card = original_send
-
-
-def test_intraday_market_move_send_failure_releases_reservation() -> None:
-    original_send = market_delivery.send_card
-    first_item = {
-        "id": "cpo-failed-1",
-        "title": "CPO概念股午后直线拉升，源杰科技涨超10%。",
-        "published_at": "2026-07-14T05:17:35+00:00",
-    }
-    retry_item = {**first_item, "id": "cpo-retry-1"}
-    review = content_review("push", rule_hits=[holding_market_move_rule("源杰科技", "688498.SH")])
-    try:
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            market_delivery.send_card = lambda card: False
-            assert (
-                deliver_article(
-                    "yicai_brief", first_item, review, decision=required_decision(review), db_path=db_path
-                )
-                == "skipped"
-            )
-            market_delivery.send_card = lambda card: True
-            assert (
-                deliver_article(
-                    "jin10_rsshub_important", retry_item, review, decision=required_decision(review), db_path=db_path
-                )
-                == "sent"
-            )
-    finally:
-        market_delivery.send_card = original_send
-
-
-def test_event_delivery_records_intraday_market_move_duplicate() -> None:
-    original_webhook = os.environ.get("FEISHU_WEBHOOK")
-    original_send = market_delivery.send_card_with_response
-    rule_hit = holding_market_move_rule("源杰科技", "688498.SH")
-    try:
-        os.environ["FEISHU_WEBHOOK"] = "https://example.invalid/webhook"
-        market_delivery.send_card_with_response = lambda card: FeishuResponse(True, 0, "ok", '{"code":0}')
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            first_id = insert_event(
-                db_path,
-                "event-cpo-1",
-                "CPO概念股午后直线拉升，源杰科技涨超10%。",
-                source="yicai_brief",
-                published_at="2026-07-14T05:17:35+00:00",
-            )
-            second_id = insert_event(
-                db_path,
-                "event-cpo-2",
-                "A股CPO概念股午后直线拉升，源杰科技涨超10%。",
-                source="jin10_rsshub_important",
-                published_at="2026-07-14T05:16:48+00:00",
-            )
-            analysis = decision_analysis(rule_hits=[rule_hit])
-            assert deliver_event(first_id, analysis, decision=required_decision(analysis), db_path=db_path) == "sent"
-            assert deliver_event(second_id, analysis, decision=required_decision(analysis), db_path=db_path) == "duplicate"
-            rows = delivery_rows(db_path)
-        assert [row[0] for row in rows] == ["sent", "duplicate"]
-        assert json.loads(rows[1][2])["first_source"] == "yicai_brief"
-    finally:
-        market_delivery.send_card_with_response = original_send
-        if original_webhook is None:
-            os.environ.pop("FEISHU_WEBHOOK", None)
-        else:
-            os.environ["FEISHU_WEBHOOK"] = original_webhook
-
-
-def test_macro_release_and_reaction_each_send_once_while_warsh_speech_is_retained() -> None:
-    original_send = market_delivery.send_card
-    calls: list[dict] = []
-    release_one = {
-        "id": "cpi-release-1",
-        "title": "美国6月CPI环比下降0.4%，同比增长3.5%，均低于预期。",
-        "published_at": "2026-07-14T12:32:47+00:00",
-    }
-    release_two = {
-        "id": "cpi-release-2",
-        "title": "美国6月消费者价格指数同比增长3.5%，环比下降0.4%。",
-        "published_at": "2026-07-14T12:34:27+00:00",
-    }
-    reaction_one = {
-        "id": "cpi-reaction-1",
-        "title": "美国6月CPI环比下降0.4%超预期，美股期货跳涨，纳指期货涨1.3%。",
-        "published_at": "2026-07-14T12:34:32+00:00",
-    }
-    reaction_two = {
-        "id": "cpi-reaction-2",
-        "title": "美国6月CPI同比增长3.5%，美元走低，美债收益率下跌。",
-        "published_at": "2026-07-14T12:42:00+00:00",
-    }
-    warsh = {
-        "id": "cpi-warsh-1",
-        "title": "美国6月CPI环比下降0.4%。美联储主席沃什表示，不会容忍通胀过高。",
-        "published_at": "2026-07-14T12:46:37+00:00",
-    }
-    mixed_warsh_reaction = {
-        "id": "cpi-warsh-reaction-1",
-        "title": "美联储主席沃什表示通胀任务未完成；美国6月CPI公布后美元走低。",
-        "published_at": "2026-07-14T13:02:00+00:00",
-    }
-    review = content_review("push", rule_hits=[macro_rule()])
-    try:
-        market_delivery.send_card = lambda card: calls.append(card) or True
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            items = (release_one, release_two, reaction_one, reaction_two, warsh, mixed_warsh_reaction)
-            sources = (
-                "cls_telegraph_api",
-                "yicai_brief",
-                "cls_telegraph_api",
-                "wallstreetcn_news",
-                "sina_finance_articles",
-                "jin10_rsshub_important",
-            )
-            statuses = [
-                deliver_article(
-                    source, item, review, decision=required_decision(review), db_path=db_path
-                )
-                for source, item in zip(sources, items, strict=True)
-            ]
-            with sqlite3.connect(db_path) as conn:
-                dedup_rows = conn.execute(
-                    "SELECT rule_id, status FROM rule_alert_dedup ORDER BY created_at"
-                ).fetchall()
-        assert statuses == ["sent", "duplicate", "sent", "duplicate", "sent", "sent"]
-        assert len(calls) == 4
-        assert review["push_now"] is True
-        assert review["raw"]["decision_result"]["action"] == "push"
-        assert dedup_rows == [("macro_data_release", "sent"), ("macro_market_reaction", "sent")]
-    finally:
-        market_delivery.send_card = original_send
-
-
-def test_cross_asset_fed_policy_reactions_deliver_once() -> None:
-    original_send = market_delivery.send_card
-    calls: list[dict] = []
-    gold = {
-        "id": "fed-gold-reaction-1",
-        "title": "美联储降息预期升温，黄金上涨1.5%。",
-        "published_at": "2026-07-14T12:40:00+00:00",
-    }
-    bitcoin = {
-        "id": "fed-bitcoin-reaction-1",
-        "title": "交易员重新定价美联储降息路径，比特币上涨3.2%。",
-        "published_at": "2026-07-15T01:20:00+00:00",
-    }
-    review = content_review("push", rule_hits=[macro_rule()])
-    try:
-        market_delivery.send_card = lambda card: calls.append(card) or True
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            statuses = [
-                deliver_article(
-                    source, item, review, decision=required_decision(review), db_path=db_path
-                )
-                for source, item in (("cls_telegraph_api", gold), ("wallstreetcn_news", bitcoin))
-            ]
-            duplicate_payload = json.loads(delivery_rows(db_path)[-1][2])
-        assert statuses == ["sent", "duplicate"]
-        assert len(calls) == 1
-        assert review["raw"]["decision_result"]["action"] == "push"
-        assert duplicate_payload["rule_id"] == "fed_policy_market_reaction"
-    finally:
-        market_delivery.send_card = original_send
-
-
-def test_company_event_cross_rule_article_dedup_preserves_push_decision() -> None:
-    original_send = market_delivery.send_card
-    calls: list[dict] = []
-    first = {
-        "id": "shijia-placement-1",
-        "title": "仕佳光子：拟定增募资不超过28亿元，用于高速AWG芯片产能建设",
-        "published_at": "2026-07-15T11:09:43+00:00",
-    }
-    second = {
-        "id": "shijia-placement-2",
-        "title": "仕佳光子公告，拟向特定对象发行A股，募集资金不超28亿元",
-        "published_at": "2026-07-15T11:10:29+00:00",
-    }
-    first_review = content_review("push", rule_hits=[industry_rule()])
-    second_review = content_review("push", rule_hits=[holding_market_move_rule("仕佳光子", "688313.SH")])
-    try:
-        market_delivery.send_card = lambda card: calls.append(card) or True
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            statuses = [
-                deliver_article(
-                    "cls_telegraph_api",
-                    first,
-                    first_review,
-                    decision=required_decision(first_review),
-                    db_path=db_path,
+            second = deliver(
+                path,
+                item(
+                    "company-source",
+                    "same-2",
+                    source_category="official_company",
+                    content_type="company_update",
                 ),
-                deliver_article(
-                    "wallstreetcn_news",
-                    second,
-                    second_review,
-                    decision=required_decision(second_review),
-                    db_path=db_path,
-                ),
-            ]
-            duplicate_payload = json.loads(delivery_rows(db_path)[-1][2])
-        assert statuses == ["sent", "duplicate"]
-        assert len(calls) == 1
-        assert second_review["push_now"] is True
-        assert second_review["raw"]["decision_result"]["action"] == "push"
-        assert duplicate_payload["rule_id"] == "company_event_dedup"
+                decision(),
+                use_rule_dedup=False,
+            )
+        assert first[0] == second[0] == "sent"
+        assert len(cards) == 2
+        assert [card["config"] for card in cards] == [
+            {"wide_screen_mode": True},
+            {"wide_screen_mode": True},
+        ]
     finally:
         market_delivery.send_card = original_send
 
 
-def test_company_event_send_failure_releases_reservation() -> None:
+def test_duplicate_reservation_blocks_second_send_without_changing_action() -> None:
     original_send = market_delivery.send_card
-    first = {
-        "id": "biwin-failed-1",
-        "title": "佰维存储预计2026年半年度净利润70亿元至75亿元",
-        "published_at": "2026-07-15T09:35:06+00:00",
-    }
-    retry = {**first, "id": "biwin-retry-1", "published_at": "2026-07-15T09:35:35+00:00"}
-    review = content_review("push", rule_hits=[holding_market_move_rule("佰维存储", "688525.SH")])
+    calls = 0
+
+    def send(_card):
+        nonlocal calls
+        calls += 1
+        return True
+
+    market_delivery.send_card = send
     try:
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            market_delivery.send_card = lambda card: False
-            assert deliver_article(
-                "cls_telegraph_api", first, review, decision=required_decision(review), db_path=db_path
-            ) == "skipped"
-            market_delivery.send_card = lambda card: True
-            assert deliver_article(
-                "jin10_rsshub_important", retry, review, decision=required_decision(review), db_path=db_path
-            ) == "sent"
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "db.sqlite3"
+            init_db(path).close()
+            result = decision(rule_hits=[holding_rule()])
+            first = deliver(path, item("source-c", "dup-1"), result)
+            second = deliver(path, item("source-d", "dup-2"), result)
+            rows = delivery_rows(path)
+        assert first[0] == "sent"
+        assert second[0] == "duplicate"
+        assert calls == 1
+        assert [row[2:4] for row in rows] == [("sent", "push"), ("duplicate", "push")]
+        duplicate_payload = json.loads(rows[1][5])
+        assert duplicate_payload["first_source"] == "source-c"
     finally:
         market_delivery.send_card = original_send
 
 
-def test_multi_company_event_fact_set_is_order_independent() -> None:
+def test_send_exception_releases_reservation_for_retry() -> None:
     original_send = market_delivery.send_card
-    calls: list[dict] = []
-    first = {
-        "id": "storage-roundup-1",
-        "title": "深圳存储军团上半年业绩集体爆发",
-        "full_text": (
-            "佰维存储预计2026年半年度实现归母净利润70亿元至75亿元。"
-            "大普微预计2026年上半年净利润12亿元至13.5亿元，实现扭亏。"
-        ),
-        "published_at": "2026-07-15T12:19:35+00:00",
-    }
-    second = {
-        "id": "storage-roundup-2",
-        "title": "存储企业成绩单亮眼",
-        "full_text": (
-            "大普微公告，预计上半年净利润12亿元-13.5亿元，同比扭亏。"
-            "佰维存储公告称，预计2026年上半年净利润70亿元-75亿元。"
-        ),
-        "published_at": "2026-07-15T12:19:51+00:00",
-    }
-    review = content_review(
-        "push", rule_hits=[holding_market_move_rule("江波龙", "301308.SZ"), industry_rule()]
+    attempts = 0
+
+    def send(_card):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("temporary Feishu failure")
+        return True
+
+    market_delivery.send_card = send
+    try:
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "db.sqlite3"
+            init_db(path).close()
+            result = decision(rule_hits=[holding_rule()])
+            first = deliver(path, item("source-e", "retry-1"), result)
+            second = deliver(path, item("source-f", "retry-2"), result)
+            rows = delivery_rows(path)
+        assert first[0] == "failed"
+        assert second[0] == "sent"
+        assert attempts == 2
+        assert [row[2] for row in rows] == ["failed", "sent"]
+        assert "temporary Feishu failure" in rows[0][4]
+    finally:
+        market_delivery.send_card = original_send
+
+
+def test_feedback_card_uses_market_item_id_and_retains_card_base() -> None:
+    original_enabled = market_delivery.feedback_enabled
+    original_configured = market_delivery.feishu_app_configured
+    original_send = market_delivery.send_interactive_card
+    original_append = market_delivery.append_feedback_actions
+    sent_cards: list[dict] = []
+    identities = []
+    market_delivery.feedback_enabled = lambda: True
+    market_delivery.feishu_app_configured = lambda: True
+    market_delivery.append_feedback_actions = (
+        lambda card, identity: identities.append(identity) or {**card, "elements": [*(card.get("elements") or []), {"tag": "action", "actions": []}]}
     )
+    market_delivery.send_interactive_card = lambda card: sent_cards.append(card) or SimpleNamespace(ok=True)
     try:
-        market_delivery.send_card = lambda card: calls.append(card) or True
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            first_status = deliver_article(
-                "sina_stock_news", first, review, decision=required_decision(review), db_path=db_path
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "db.sqlite3"
+            init_db(path).close()
+            status, market_item_id, _ = deliver(
+                path,
+                item("source-g", "feedback-1"),
+                decision(),
+                use_rule_dedup=False,
             )
-            second_status = deliver_article(
-                "yicai_brief", second, review, decision=required_decision(review), db_path=db_path
-            )
-            with sqlite3.connect(db_path) as conn:
-                reservations = conn.execute(
-                    "SELECT dedup_key, status FROM rule_alert_dedup WHERE rule_id=? ORDER BY dedup_key",
-                    ("company_event_dedup",),
-                ).fetchall()
-            duplicate_payload = json.loads(delivery_rows(db_path)[-1][2])
-        assert [first_status, second_status] == ["sent", "duplicate"]
-        assert len(calls) == 1
-        assert len(reservations) == 2
-        assert {row[1] for row in reservations} == {"sent"}
-        assert review["push_now"] is True
-        dedup = duplicate_payload
-        assert len(dedup["dedup_keys"]) == 2
-        assert len(dedup["covered"]) == 2
-        assert review["raw"]["decision_result"]["action"] == "push"
+            row = delivery_rows(path)[0]
+        assert status == "sent"
+        assert len(sent_cards) == 1
+        assert identities[0].market_item_id == market_item_id
+        payload = json.loads(row[5])
+        assert payload["market_item_id"] == market_item_id
+        assert payload["_feedback_card_base"]["config"] == {"wide_screen_mode": True}
     finally:
-        market_delivery.send_card = original_send
-
-
-def test_multi_company_event_send_failure_releases_every_reservation() -> None:
-    original_send = market_delivery.send_card
-    item = {
-        "id": "storage-failure-1",
-        "title": "存储公司业绩综述",
-        "full_text": (
-            "佰维存储预计2026年半年度净利润70亿元至75亿元。"
-            "大普微预计2026年上半年净利润12亿元至13.5亿元。"
-        ),
-        "published_at": "2026-07-15T12:19:35+00:00",
-    }
-    retry = {**item, "id": "storage-retry-1", "published_at": "2026-07-15T12:20:00+00:00"}
-    review = content_review("push", rule_hits=[industry_rule()])
-    try:
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            market_delivery.send_card = lambda card: False
-            assert deliver_article(
-                "sina_stock_news", item, review, decision=required_decision(review), db_path=db_path
-            ) == "skipped"
-            with sqlite3.connect(db_path) as conn:
-                assert conn.execute(
-                    "SELECT COUNT(*) FROM rule_alert_dedup WHERE rule_id=?", ("company_event_dedup",)
-                ).fetchone()[0] == 0
-            market_delivery.send_card = lambda card: True
-            assert deliver_article(
-                "yicai_brief", retry, review, decision=required_decision(review), db_path=db_path
-            ) == "sent"
-            with sqlite3.connect(db_path) as conn:
-                statuses = conn.execute(
-                    "SELECT status FROM rule_alert_dedup WHERE rule_id=?", ("company_event_dedup",)
-                ).fetchall()
-        assert statuses == [("sent",), ("sent",)]
-    finally:
-        market_delivery.send_card = original_send
-
-
-def test_official_company_event_dedup_uses_the_same_fact_set() -> None:
-    original_send = market_delivery.send_card
-    calls: list[dict] = []
-    first = {
-        "id": "official-earnings-1",
-        "title": "测试科技预计2026年半年度净利润4亿元至5亿元",
-        "published_at": "2026-07-15T12:00:00+00:00",
-    }
-    second = {
-        "id": "official-earnings-2",
-        "title": "测试科技公告，预计上半年净利润4亿元-5亿元",
-        "published_at": "2026-07-15T12:03:00+00:00",
-    }
-    review = content_review("push", rule_hits=[industry_rule()], official=True)
-    try:
-        market_delivery.send_card = lambda card: calls.append(card) or True
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            first_status = deliver_official(
-                "company_site_a",
-                first,
-                review,
-                decision=required_decision(review),
-                analysis_lines=["核心内容：业绩预告"],
-                db_path=db_path,
-            )
-            second_status = deliver_official(
-                "company_site_b",
-                second,
-                review,
-                decision=required_decision(review),
-                analysis_lines=["核心内容：业绩预告"],
-                db_path=db_path,
-            )
-            duplicate_payload = json.loads(delivery_rows(db_path)[-1][2])
-        assert [first_status, second_status] == ["sent", "duplicate"]
-        assert len(calls) == 1
-        assert review["should_push_now"] is True
-        assert review["analysis"]["_decision_result"]["action"] == "push"
-        assert duplicate_payload["rule_id"] == "company_event_dedup"
-    finally:
-        market_delivery.send_card = original_send
-
-
-def test_event_delivery_records_company_event_duplicate() -> None:
-    original_webhook = os.environ.get("FEISHU_WEBHOOK")
-    original_send = market_delivery.send_card_with_response
-    try:
-        os.environ["FEISHU_WEBHOOK"] = "https://example.invalid/webhook"
-        market_delivery.send_card_with_response = lambda card: FeishuResponse(True, 0, "ok", '{"code":0}')
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            first_id = insert_event(
-                db_path,
-                "event-dapustor-1",
-                "大普微：预计2026年半年度净利润12亿元-13.5亿元",
-                source="cls_telegraph_api",
-                published_at="2026-07-15T10:04:46+00:00",
-            )
-            second_id = insert_event(
-                db_path,
-                "event-dapustor-2",
-                "大普微公告，预计上半年净利润12亿元至13.5亿元",
-                source="yicai_brief",
-                published_at="2026-07-15T10:08:53+00:00",
-            )
-            first_analysis = decision_analysis(rule_hits=[industry_rule()])
-            second_analysis = decision_analysis(rule_hits=[industry_rule()])
-            assert deliver_event(
-                first_id, first_analysis, decision=required_decision(first_analysis), db_path=db_path
-            ) == "sent"
-            assert deliver_event(
-                second_id, second_analysis, decision=required_decision(second_analysis), db_path=db_path
-            ) == "duplicate"
-            rows = delivery_rows(db_path)
-        duplicate = json.loads(rows[1][2])
-        assert [row[0] for row in rows] == ["sent", "duplicate"]
-        assert duplicate["dedup_kind"] == "company_event_fact_set"
-        assert duplicate["first_source"] == "cls_telegraph_api"
-    finally:
-        market_delivery.send_card_with_response = original_send
-        if original_webhook is None:
-            os.environ.pop("FEISHU_WEBHOOK", None)
-        else:
-            os.environ["FEISHU_WEBHOOK"] = original_webhook
-
-
-def test_event_delivery_records_macro_release_duplicate() -> None:
-    original_webhook = os.environ.get("FEISHU_WEBHOOK")
-    original_send = market_delivery.send_card_with_response
-    try:
-        os.environ["FEISHU_WEBHOOK"] = "https://example.invalid/webhook"
-        market_delivery.send_card_with_response = lambda card: FeishuResponse(True, 0, "ok", '{"code":0}')
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            first_id = insert_event(
-                db_path,
-                "event-cpi-1",
-                "美国6月CPI环比下降0.4%，同比增长3.5%。",
-                source="cls_telegraph_api",
-                published_at="2026-07-14T12:32:47+00:00",
-            )
-            second_id = insert_event(
-                db_path,
-                "event-cpi-2",
-                "美国6月消费者价格指数同比增长3.5%，环比下降0.4%。",
-                source="sina_flash",
-                published_at="2026-07-14T12:34:00+00:00",
-            )
-            analysis = decision_analysis(rule_hits=[macro_rule()])
-            assert deliver_event(
-                first_id, analysis, decision=required_decision(analysis), db_path=db_path
-            ) == "sent"
-            assert deliver_event(
-                second_id, analysis, decision=required_decision(analysis), db_path=db_path
-            ) == "duplicate"
-            rows = delivery_rows(db_path)
-        duplicate = json.loads(rows[1][2])
-        assert [row[0] for row in rows] == ["sent", "duplicate"]
-        assert duplicate["dedup_kind"] == "macro_data_release"
-        assert duplicate["first_source"] == "cls_telegraph_api"
-    finally:
-        market_delivery.send_card_with_response = original_send
-        if original_webhook is None:
-            os.environ.pop("FEISHU_WEBHOOK", None)
-        else:
-            os.environ["FEISHU_WEBHOOK"] = original_webhook
-
-
-def test_ibm_industry_fact_cross_source_article_dedup_preserves_push_decision() -> None:
-    original_send = market_delivery.send_card
-    calls: list[dict] = []
-    first = {
-        "id": "ibm-thesis-1",
-        "title": "IBM称客户将资本支出转向服务器、存储和内存采购",
-        "summary": "企业为在涨价前锁定供应紧张的基础设施而调整预算。",
-        "published_at": "2026-07-14T11:04:49+00:00",
-    }
-    second = {
-        "id": "ibm-thesis-2",
-        "title": "IBM暴跌验证存储短缺，企业IT支出转向硬件",
-        "summary": "IBM客户将预算转向服务器、存储和内存采购以保障供应。",
-        "published_at": "2026-07-14T17:13:45+00:00",
-    }
-    review = content_review("push", rule_hits=[industry_rule()])
-    try:
-        market_delivery.send_card = lambda card: calls.append(card) or True
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            first_status = deliver_article(
-                "cls_telegraph_api", first, review, decision=required_decision(review), db_path=db_path
-            )
-            second_status = deliver_article(
-                "wallstreetcn_news", second, review, decision=required_decision(review), db_path=db_path
-            )
-            duplicate_payload = json.loads(delivery_rows(db_path)[-1][2])
-        assert [first_status, second_status] == ["sent", "duplicate"]
-        assert len(calls) == 1
-        assert review["push_now"] is True
-        assert review["raw"]["decision_result"]["action"] == "push"
-        assert duplicate_payload["rule_id"] == "industry_fact_dedup"
-    finally:
-        market_delivery.send_card = original_send
-
-
-def test_event_delivery_records_ibm_industry_fact_duplicate() -> None:
-    original_webhook = os.environ.get("FEISHU_WEBHOOK")
-    original_send = market_delivery.send_card_with_response
-    try:
-        os.environ["FEISHU_WEBHOOK"] = "https://example.invalid/webhook"
-        market_delivery.send_card_with_response = lambda card: FeishuResponse(True, 0, "ok", '{"code":0}')
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            first_id = insert_event(
-                db_path,
-                "event-ibm-1",
-                "IBM称客户将资本支出转向服务器、存储和内存采购",
-                source="cls_telegraph_api",
-                summary="企业为锁定供应紧张的基础设施而调整预算。",
-            )
-            second_id = insert_event(
-                db_path,
-                "event-ibm-2",
-                "IBM暴跌验证存储短缺，企业IT支出转向硬件",
-                source="wallstreetcn_news",
-                summary="IBM客户将支出转向服务器和内存采购以保障供应。",
-            )
-            analysis = decision_analysis(rule_hits=[industry_rule()])
-            assert deliver_event(
-                first_id, analysis, decision=required_decision(analysis), db_path=db_path
-            ) == "sent"
-            assert deliver_event(
-                second_id, analysis, decision=required_decision(analysis), db_path=db_path
-            ) == "duplicate"
-            rows = delivery_rows(db_path)
-        duplicate = json.loads(rows[1][2])
-        assert [row[0] for row in rows] == ["sent", "duplicate"]
-        assert duplicate["dedup_kind"] == "industry_fact"
-        assert duplicate["first_source"] == "cls_telegraph_api"
-    finally:
-        market_delivery.send_card_with_response = original_send
-        if original_webhook is None:
-            os.environ.pop("FEISHU_WEBHOOK", None)
-        else:
-            os.environ["FEISHU_WEBHOOK"] = original_webhook
-
-
-def test_coreweave_hedge_cross_source_article_dedup_preserves_push_decision() -> None:
-    original_send = market_delivery.send_card
-    calls: list[dict] = []
-    first = {
-        "id": "coreweave-hedge-1",
-        "title": "人工智能云计算公司CoreWeave借鉴华尔街策略 对冲内存芯片价格风险",
-        "summary": "CoreWeave正在探索使用看跌期权，对冲未来存储芯片价格下跌风险。",
-        "published_at": "2026-07-14T23:47:24+00:00",
-    }
-    second = {
-        "id": "coreweave-hedge-2",
-        "title": "消息人士称，Coreweave(CRWV.O)正在探索使用金融衍生品",
-        "summary": "该公司拟以衍生品对冲未来存储芯片价格下跌的风险。",
-        "published_at": "2026-07-14T23:48:36+00:00",
-    }
-    review = content_review("push", rule_hits=[industry_rule()])
-    try:
-        market_delivery.send_card = lambda card: calls.append(card) or True
-        with TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "surveil.sqlite3"
-            init_db(db_path).close()
-            first_status = deliver_article(
-                "sina_finance_articles", first, review, decision=required_decision(review), db_path=db_path
-            )
-            second_status = deliver_article(
-                "jin10_rsshub_important", second, review, decision=required_decision(review), db_path=db_path
-            )
-            duplicate_payload = json.loads(delivery_rows(db_path)[-1][2])
-        assert [first_status, second_status] == ["sent", "duplicate"]
-        assert len(calls) == 1
-        assert review["push_now"] is True
-        assert review["raw"]["decision_result"]["action"] == "push"
-        assert duplicate_payload["dedup_key"] == (
-            "industry_fact:coreweave:price_risk_hedge:exploring:storage_chip:down"
-        )
-    finally:
-        market_delivery.send_card = original_send
+        market_delivery.feedback_enabled = original_enabled
+        market_delivery.feishu_app_configured = original_configured
+        market_delivery.send_interactive_card = original_send
+        market_delivery.append_feedback_actions = original_append
 
 
 def main() -> int:
-    test_simple_event_card_formats_published_time_for_beijing()
-    test_archive_and_missing_webhook_are_recorded_without_sending()
-    test_event_delivery_records_unified_item_and_result_directly()
-    test_send_failure_releases_reservation_and_records_failure()
-    test_success_confirms_rule_dedup_and_duplicate_skips_second_send()
-    test_content_delivery_uses_decision_action()
-    test_article_review_uses_nested_decision_action()
-    test_article_delivery_dedup_skips_without_changing_decision_action()
-    test_investment_bank_report_cross_source_article_dedup_preserves_push_decision()
-    test_investment_bank_report_official_and_event_paths_share_identity()
-    test_investment_bank_report_send_failure_releases_reservation()
-    test_intraday_market_move_cross_source_dedup_preserves_push_decision()
-    test_distinct_concepts_are_not_intraday_market_move_duplicates()
-    test_intraday_market_move_send_failure_releases_reservation()
-    test_event_delivery_records_intraday_market_move_duplicate()
-    test_macro_release_and_reaction_each_send_once_while_warsh_speech_is_retained()
-    test_cross_asset_fed_policy_reactions_deliver_once()
-    test_company_event_cross_rule_article_dedup_preserves_push_decision()
-    test_company_event_send_failure_releases_reservation()
-    test_multi_company_event_fact_set_is_order_independent()
-    test_multi_company_event_send_failure_releases_every_reservation()
-    test_official_company_event_dedup_uses_the_same_fact_set()
-    test_event_delivery_records_company_event_duplicate()
-    test_event_delivery_records_macro_release_duplicate()
-    test_ibm_industry_fact_cross_source_article_dedup_preserves_push_decision()
-    test_event_delivery_records_ibm_industry_fact_duplicate()
-    test_coreweave_hedge_cross_source_article_dedup_preserves_push_decision()
-    test_feedback_enabled_event_uses_application_card_actions()
-    test_feedback_enabled_article_and_official_keep_card_base_in_result()
+    test_non_push_action_is_recorded_without_sending()
+    test_push_uses_direct_unified_identity_and_one_card_builder()
+    test_different_source_metadata_does_not_select_a_delivery_path()
+    test_duplicate_reservation_blocks_second_send_without_changing_action()
+    test_send_exception_releases_reservation_for_retry()
+    test_feedback_card_uses_market_item_id_and_retains_card_base()
     print("market delivery checks passed")
     return 0
 

@@ -490,7 +490,6 @@ def normalized_trade_policy_item(item: dict[str, Any], source: TradePolicySource
     return normalize_market_item(
         source.name,
         prepared,
-        store_kind="article",
         source_profile_id=source.name,
     )
 
@@ -530,7 +529,6 @@ def notify_item(item: dict[str, Any], *, source: TradePolicySource) -> None:
         outcome = process_market_item(
             normalized,
             enriched,
-            store_kind="article",
             db_path=DB_PATH,
             use_rule_dedup=True,
             production_admission=admission,

@@ -490,7 +490,6 @@ def notify_item(item: dict) -> None:
         normalized = normalize_market_item(
             PAGE_SOURCE_KEY,
             enriched,
-            store_kind="article",
             source_profile_id=profile_id,
         )
         admission_context = persist_production_admission_context(normalized, production_admission_context(normalized, db_path=DB_PATH), db_path=DB_PATH)
@@ -511,7 +510,6 @@ def notify_item(item: dict) -> None:
         outcome = process_market_item(
             normalized,
             enriched,
-            store_kind="article",
             db_path=DB_PATH,
             use_rule_dedup=False,
             production_admission=admission,

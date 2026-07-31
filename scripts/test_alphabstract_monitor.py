@@ -230,7 +230,6 @@ def test_notify_item_uses_process_market_item() -> None:
     assert normalized.content_type == "research_summary"
     assert raw_item["title"].startswith("Dylan Patel")
     assert "Memory pricing is up" in raw_item["full_text"]
-    assert kwargs["store_kind"] == "article"
     assert kwargs["use_rule_dedup"] is True
     assert kwargs["production_admission"].status == "admitted"
     assert row is not None

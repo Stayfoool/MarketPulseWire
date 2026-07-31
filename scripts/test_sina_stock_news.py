@@ -20,12 +20,11 @@ from sina_stock_news import (
     freshness_hint,
     is_ai_generated_content,
     is_relevant_to_holding,
-    legacy_source_event_id_for_item,
     parse_news_items,
-    retryable_event_review,
+    retryable_market_review,
     similar_news_title,
-    source_event_id_for_item,
-    stored_market_event,
+    source_item_id_for_item,
+    stored_market_item,
 )
 
 
@@ -90,14 +89,14 @@ def assert_first_run_baseline_creates_no_review() -> None:
             assert conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
 
 
-def assert_retryable_review_uses_stored_event() -> None:
+def assert_retryable_review_uses_stored_item() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
-        event = {
+        raw_item = {
             "source": "sina_stock_news",
-            "source_event_id": "article:retry-test",
-            "event_type": "stock_news",
+            "id": "item:retry-test",
+            "content_type": "stock_news",
             "title": "测试公司确认重大订单",
             "summary": "列表摘要",
             "full_text": "数据库中保存的完整正文，必须用于同一条 review 的重试。",
@@ -105,9 +104,9 @@ def assert_retryable_review_uses_stored_event() -> None:
             "published_at": "2026-07-26T01:00:00+00:00",
             "symbols": ["000001.SZ"],
             "themes": ["测试主题"],
-            "raw": {"source_event_id": "article:retry-test"},
+            "raw": {"id": "item:retry-test"},
         }
-        normalized = normalize_market_item("sina_stock_news", event, store_kind="event")
+        normalized = normalize_market_item("sina_stock_news", raw_item)
         admission = AdmissionResult(
             status="admitted",
             reason_code="holding_match",
@@ -126,28 +125,28 @@ def assert_retryable_review_uses_stored_event() -> None:
                 (review_id,),
             )
             conn.commit()
-        retry = retryable_event_review(market_item_id, db_path)
+        retry = retryable_market_review(market_item_id, db_path)
         assert retry is not None
         assert retry["market_item_id"] == market_item_id
         assert retry["market_review_id"] == review_id
         assert retry["admission"] == admission.to_dict()
-        stored = stored_market_event(market_item_id, db_path)
+        stored = stored_market_item(market_item_id, db_path)
         assert stored is not None
-        assert stored["source_event_id"] == event["source_event_id"]
-        assert stored["full_text"] == event["full_text"]
-        assert stored["themes"] == event["themes"]
+        assert stored["id"] == raw_item["id"]
+        assert stored["full_text"] == raw_item["full_text"]
+        assert stored["themes"] == raw_item["themes"]
         with connect_sqlite(db_path) as conn:
             conn.execute(
                 "UPDATE market_reviews SET review_status='succeeded' WHERE id=?",
                 (review_id,),
             )
             conn.commit()
-        assert retryable_event_review(market_item_id, db_path) is None
+        assert retryable_market_review(market_item_id, db_path) is None
 
 
 def main() -> int:
     assert_first_run_baseline_creates_no_review()
-    assert_retryable_review_uses_stored_event()
+    assert_retryable_review_uses_stored_item()
     fiber_item = {
         "title": "算力时代拉动光纤刚需，苏州光纤企业产能排至2027年，自主研发加车载新场景赋能光通信长效发展"
     }
@@ -183,13 +182,11 @@ def main() -> int:
     }
     wat = {"symbol": "688268.SH", "name": "华特气体"}
     peer = {"symbol": "300285.SZ", "name": "国瓷材料"}
-    article_id = source_event_id_for_item(duplicate_item, wat)
-    if article_id != source_event_id_for_item(duplicate_item, peer):
-        raise AssertionError("same Sina article should dedupe across different holdings")
-    if not article_id.startswith("article:"):
-        raise AssertionError(f"new Sina source_event_id should be article-level: {article_id}")
-    if legacy_source_event_id_for_item(duplicate_item, wat) == legacy_source_event_id_for_item(duplicate_item, peer):
-        raise AssertionError("legacy id should remain stock-specific for backward compatibility checks")
+    item_id = source_item_id_for_item(duplicate_item, wat)
+    if item_id != source_item_id_for_item(duplicate_item, peer):
+        raise AssertionError("same Sina information should dedupe across different holdings")
+    if not item_id.startswith("item:"):
+        raise AssertionError(f"new Sina source_item_id should be content-level: {item_id}")
     canonical = canonical_article_url(duplicate_item["url"])
     if "utm_source" in canonical or "from=stock" in canonical:
         raise AssertionError(f"tracking params should be stripped from canonical URL: {canonical}")

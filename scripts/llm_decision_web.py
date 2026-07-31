@@ -73,7 +73,9 @@ def _user_payload(call: dict[str, Any]) -> dict[str, Any]:
 
 def _segments_by_id(call: dict[str, Any]) -> dict[str, dict[str, str]]:
     payload = _user_payload(call)
-    segments = payload.get("article_segments")
+    segments = payload.get("source_segments")
+    if not isinstance(segments, list):
+        segments = payload.get("article_segments")
     if not isinstance(segments, list):
         return {}
     result: dict[str, dict[str, str]] = {}
@@ -296,11 +298,7 @@ def llm_decision_rows(
         SELECT m.id AS market_item_id, m.source, m.source_item_id, m.title, m.url,
                m.published_at, m.first_seen_at, m.content_type,
                r.id AS market_review_id, r.review_status, r.decision_action,
-               r.importance, r.decision_json, r.created_at, r.completed_at,
-               COALESCE((SELECT a.source FROM market_item_aliases a
-                         WHERE a.market_item_id=m.id ORDER BY a.created_at LIMIT 1), m.source) AS display_source,
-               COALESCE((SELECT a.legacy_item_id FROM market_item_aliases a
-                         WHERE a.market_item_id=m.id ORDER BY a.created_at LIMIT 1), m.source_item_id) AS display_item_id
+               r.importance, r.decision_json, r.created_at, r.completed_at
         FROM market_reviews r
         JOIN market_items m ON m.id=r.market_item_id
         WHERE r.is_current=1 AND r.admission_status='admitted'
@@ -328,7 +326,7 @@ def llm_decision_rows(
             model_status = "insufficient_evidence"
         elif attempts and model_status != "completed":
             model_status = str(attempts[-1].get("evaluation_status") or model_status)
-        display_source = str(row["display_source"] or row["source"] or "")
+        display_source = str(row["source"] or "")
         searchable = " ".join((display_source, str(row["title"] or ""), str(row["source_item_id"] or ""))).lower()
         if actions and final_action.lower() not in actions:
             continue
@@ -344,9 +342,8 @@ def llm_decision_rows(
             {
                 "market_item_id": int(row["market_item_id"]),
                 "market_review_id": review_id,
-                "item_kind": str(row["content_type"] or "unknown"),
                 "source": display_source,
-                "source_item_id": str(row["display_item_id"] or row["source_item_id"] or ""),
+                "source_item_id": str(row["source_item_id"] or ""),
                 "title": str(row["title"] or ""),
                 "url": str(row["url"] or ""),
                 "published_at": str(row["published_at"] or ""),

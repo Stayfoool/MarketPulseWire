@@ -1,0 +1,14 @@
+[Unit]
+Description=Surveil market information daily digest
+After=network-online.target surveil-db-init.service
+Wants=network-online.target
+
+[Service]
+UMask=0077
+Type=oneshot
+User=surveil
+WorkingDirectory=/opt/surveil
+EnvironmentFile=-/opt/surveil/.env
+ExecStart=/opt/surveil/.venv/bin/python /opt/surveil/scripts/market_daily.py
+StandardOutput=append:/opt/surveil/logs/market-daily.log
+StandardError=append:/opt/surveil/logs/market-daily.err.log

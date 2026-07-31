@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression checks for unified event decision and interpretation flow."""
+"""Regression checks for one decision and interpretation flow across sources."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from market_db import init_db
 from market_item import DecisionResult, InterpretationResult, NormalizedMarketItem
 
 
-def test_analyze_event_returns_interpretation_without_writing_legacy_tables() -> None:
+def test_item_returns_interpretation_without_writing_legacy_tables() -> None:
     original = market_flow.interpret_market_item
 
     def fake_interpret(*args, **kwargs):
@@ -36,20 +36,19 @@ def test_analyze_event_returns_interpretation_without_writing_legacy_tables() ->
             title="美国 CPI 大幅低于市场预期，2年期美债收益率大跌",
             summary="市场重新定价美联储降息路径。",
             published_at="2026-07-12T12:00:00+00:00",
-            raw={"source_event_id": "macro-1"},
+            raw={"id": "macro-1"},
         )
         try:
             market_flow.interpret_market_item = fake_interpret
-            flow_result = market_flow.evaluate_event_item(
+            flow_result = market_flow.evaluate_item(
                 item,
+                item.to_dict(),
                 DecisionResult(
                     action="push",
                     importance="high",
                     reason="大模型程度决策命中。",
                     rule_hits=[{"rule_id": "macro_policy_line"}],
                 ),
-                task="portfolio_event",
-                db_path=db_path,
                 storage_ref={},
             )
             analysis = market_result_view(flow_result)
@@ -69,7 +68,7 @@ def test_analyze_event_returns_interpretation_without_writing_legacy_tables() ->
     assert not legacy_tables.intersection({"events", "event_analyses"})
 
 
-def test_event_entry_without_decision_fails_closed() -> None:
+def test_item_without_decision_fails_closed() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
         init_db(db_path).close()
@@ -79,26 +78,25 @@ def test_event_entry_without_decision_fails_closed() -> None:
             title="测试事件",
             summary="测试摘要。",
             published_at="2026-07-12T12:00:00+00:00",
-            raw={"source_event_id": "missing-decision"},
+            raw={"id": "missing-decision"},
         )
         try:
-            market_flow.evaluate_event_item(
+            market_flow.evaluate_item(
                 item,
+                item.to_dict(),
                 None,
-                task="portfolio_event",
-                db_path=db_path,
                 storage_ref={},
             )
         except RuntimeError as exc:
             assert "决策结果缺失" in str(exc)
         else:
-            raise AssertionError("event processing must fail closed without DecisionResult")
+            raise AssertionError("market information processing must fail closed without DecisionResult")
 
 
 def main() -> int:
-    test_analyze_event_returns_interpretation_without_writing_legacy_tables()
-    test_event_entry_without_decision_fails_closed()
-    print("event pipeline convergence checks passed")
+    test_item_returns_interpretation_without_writing_legacy_tables()
+    test_item_without_decision_fails_closed()
+    print("market pipeline convergence checks passed")
     return 0
 
 

@@ -11,8 +11,8 @@ let managedRelations = [];
 let editingRelationId = null;
 let sourceProfileCache = {categories: [], profiles: []};
 let sourceFilterOptionsLoaded = false;
-let eventOperationId = 0;
-let eventAbortController = null;
+let marketOperationId = 0;
+let marketAbortController = null;
 let currentRulesCache = null;
 const multiSelectControls = new Map();
 
@@ -353,7 +353,7 @@ function showView(name) {
   document.getElementById(`view-${name}`).classList.add('active');
   document.getElementById(`tab-${name}`).classList.add('active');
   if (name === 'overview') loadOverview();
-  if (name === 'events') loadEventsView();
+  if (name === 'information') loadMarketItemsView();
   if (name === 'llm-decisions') loadLlmDecisionsView();
   if (name === 'rules') loadCurrentRules();
   if (name === 'feedback') loadFeedbackQuality();
@@ -619,7 +619,7 @@ async function loadFeedbackQuality() {
   }
 }
 
-function eventSourceFilterValue(profile) {
+function marketSourceFilterValue(profile) {
   if (profile.id === 'x_serenity') return 'x:serenity';
   return String(profile.id || '').trim();
 }
@@ -629,7 +629,7 @@ async function loadSourceFilterOptions() {
   const data = await api('/api/source-profiles');
   const options = [];
   (data.profiles || []).filter(profile => profile.enabled !== false).forEach(profile => {
-    const value = eventSourceFilterValue(profile);
+    const value = marketSourceFilterValue(profile);
     if (!value) return;
     options.push({
       value,
@@ -637,19 +637,19 @@ async function loadSourceFilterOptions() {
       group: profile.category_label || '其他来源'
     });
   });
-  setMultiSelectOptions('eventSource', options);
+  setMultiSelectOptions('marketSource', options);
   setMultiSelectOptions('llmDecisionSource', options);
   sourceFilterOptionsLoaded = true;
 }
 
-async function loadEventsView() {
+async function loadMarketItemsView() {
   try {
     await loadSourceFilterOptions();
   } catch (err) {
     showStatus(`来源下拉加载失败：${err.message}`, 'err');
     return;
   }
-  await loadEvents();
+  await loadMarketItems();
 }
 
 async function loadLlmDecisionsView() {
@@ -675,15 +675,15 @@ async function loadOverview() {
     const breakdown = [];
     breakdown.push('<div class="list-row"><strong>来源分布</strong></div>');
     (data.by_source || []).forEach(item => breakdown.push(`<div class="list-row">${escapeHtml(item.key)} <span class="summary">${item.count}</span></div>`));
-    breakdown.push('<div class="list-row"><strong>文章重要性</strong></div>');
-    (data.article_importance || []).forEach(item => breakdown.push(`<div class="list-row">${badge(item.key)} <span class="summary">${item.count}</span></div>`));
+    breakdown.push('<div class="list-row"><strong>程度分布</strong></div>');
+    (data.decision_importance || []).forEach(item => breakdown.push(`<div class="list-row">${badge(item.key)} <span class="summary">${item.count}</span></div>`));
     breakdown.push('<div class="list-row"><strong>飞书状态</strong></div>');
     (data.deliveries || []).forEach(item => breakdown.push(`<div class="list-row">${escapeHtml(item.key)} <span class="summary">${item.count}</span></div>`));
     document.getElementById('overviewBreakdown').innerHTML = breakdown.join('') || '<div class="list-row">暂无统计。</div>';
-    document.getElementById('overviewLatest').innerHTML = ['<div class="list-row"><strong>最近事件</strong></div>', ...(data.latest || []).map(item => `
+    document.getElementById('overviewLatest').innerHTML = ['<div class="list-row"><strong>最近信息</strong></div>', ...(data.latest || []).map(item => `
       <div class="list-row">
         <div>${badge(item.importance)} <strong>${escapeHtml(shortText(item.title, 120))}</strong></div>
-        <div class="hint">${escapeHtml(item.source)} / ${escapeHtml(item.kind)} / ${formatTime(item.seen_at)}</div>
+        <div class="hint">${escapeHtml(item.source)} / ${formatTime(item.seen_at)}</div>
       </div>
     `)].join('');
   } catch (err) {
@@ -691,20 +691,20 @@ async function loadOverview() {
   }
 }
 
-async function loadEvents() {
+async function loadMarketItems() {
   let operationId = 0;
   let controller = null;
-  const rows = document.getElementById('eventRows');
-  const queryButton = document.getElementById('eventQueryButton');
+  const rows = document.getElementById('marketRows');
+  const queryButton = document.getElementById('marketQueryButton');
   try {
     const params = new URLSearchParams();
-    const startDate = document.getElementById('eventFromDate').value;
-    const endDate = document.getElementById('eventToDate').value;
-    const timeBasis = document.getElementById('eventTimeBasis').value;
-    const selectedSources = selectedMultiSelectValues('eventSource');
-    const sources = selectedSources.length ? selectedSources : availableMultiSelectValues('eventSource');
-    const feedback = selectedMultiSelectValues('eventFeedback');
-    const q = document.getElementById('eventQuery').value.trim();
+    const startDate = document.getElementById('marketFromDate').value;
+    const endDate = document.getElementById('marketToDate').value;
+    const timeBasis = document.getElementById('marketTimeBasis').value;
+    const selectedSources = selectedMultiSelectValues('marketSource');
+    const sources = selectedSources.length ? selectedSources : availableMultiSelectValues('marketSource');
+    const feedback = selectedMultiSelectValues('marketFeedback');
+    const q = document.getElementById('marketQuery').value.trim();
     if (Boolean(startDate) !== Boolean(endDate)) {
       showStatus('开始日期和结束日期必须同时填写。', 'err');
       return;
@@ -721,30 +721,29 @@ async function loadEvents() {
     sources.forEach(source => params.append('source', source));
     feedback.forEach(value => params.append('feedback', value));
     if (q) params.set('q', q);
-    if (document.getElementById('eventIncludeBaseline').checked) params.set('include_baseline', '1');
-    eventAbortController?.abort();
+    if (document.getElementById('marketIncludeBaseline').checked) params.set('include_baseline', '1');
+    marketAbortController?.abort();
     controller = new AbortController();
-    eventAbortController = controller;
-    operationId = ++eventOperationId;
-    rows.innerHTML = '<tr><td colspan="7">正在查询...</td></tr>';
+    marketAbortController = controller;
+    operationId = ++marketOperationId;
+    rows.innerHTML = '<tr><td colspan="6">正在查询...</td></tr>';
     queryButton.disabled = true;
     queryButton.textContent = '查询中';
-    const data = await api('/api/events?' + params.toString(), {signal: controller.signal});
-    if (operationId !== eventOperationId) return;
-    document.getElementById('eventTimeHeader').textContent = timeBasis === 'published' ? '原文发布时间' : '采集/处理时间';
+    const data = await api('/api/market-items?' + params.toString(), {signal: controller.signal});
+    if (operationId !== marketOperationId) return;
+    document.getElementById('marketTimeHeader').textContent = timeBasis === 'published' ? '原文发布时间' : '采集/处理时间';
     const feedbackSummary = data.feedback_summary || {};
-    document.getElementById('eventFeedbackSummary').innerHTML = [
+    document.getElementById('marketFeedbackSummary').innerHTML = [
       `可反馈且已投递 ${feedbackSummary.delivered || 0}`,
       `已反馈 ${feedbackSummary.labelled || 0}`,
       `特别有用 ${feedbackSummary.high_value || 0}`,
       `重复 ${feedbackSummary.duplicate || 0}`,
       `无效 ${feedbackSummary.invalid || 0}`,
     ].map(text => `<span>${escapeHtml(text)}</span>`).join('');
-    rows.innerHTML = (data.events || []).map(item => `
+    rows.innerHTML = (data.items || []).map(item => `
       <tr>
         <td>${formatTime(timeBasis === 'published' ? (item.published_at || item.seen_at) : (item.seen_at || item.published_at))}${item.published_at && timeBasis !== 'published' ? `<div class="hint">原文：${formatTime(item.published_at)}</div>` : ''}${item.seen_at && timeBasis === 'published' ? `<div class="hint">采集：${formatTime(item.seen_at)}</div>` : ''}</td>
         <td>${escapeHtml(item.source || '')}</td>
-        <td>${escapeHtml(item.kind || '')}${item.baseline_only ? '<div class="hint">基线</div>' : ''}</td>
         <td class="summary-cell">
           <div><strong>${item.url ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title || '')}</a>` : escapeHtml(item.title || '')}</strong></div>
           <div>${escapeHtml(shortText(item.summary || '', 220))}</div>
@@ -753,14 +752,14 @@ async function loadEvents() {
         <td>${escapeHtml(item.delivery_status || '')}${item.push ? '<div class="hint">push</div>' : ''}</td>
         <td>${feedbackBadge(item)}</td>
       </tr>
-    `).join('') || '<tr><td colspan="7">没有匹配事件。</td></tr>';
+    `).join('') || '<tr><td colspan="6">没有匹配信息。</td></tr>';
   } catch (err) {
-    if (err.name === 'AbortError' || operationId !== eventOperationId) return;
-    rows.innerHTML = '<tr><td colspan="7">查询失败，请稍后重试。</td></tr>';
+    if (err.name === 'AbortError' || operationId !== marketOperationId) return;
+    rows.innerHTML = '<tr><td colspan="6">查询失败，请稍后重试。</td></tr>';
     showStatus(err.message, 'err');
   } finally {
-    if (operationId && operationId === eventOperationId) {
-      if (eventAbortController === controller) eventAbortController = null;
+    if (operationId && operationId === marketOperationId) {
+      if (marketAbortController === controller) marketAbortController = null;
       queryButton.disabled = false;
       queryButton.textContent = '查询';
     }
@@ -882,7 +881,7 @@ async function loadLlmDecisions() {
       return `
         <tr>
           <td>${escapeHtml(formatTime(item.review_created_at || ''))}</td>
-          <td>${escapeHtml(item.source || '')}<div class="hint">${escapeHtml(item.item_kind || '')}</div></td>
+          <td>${escapeHtml(item.source || '')}</td>
           <td class="summary-cell"><div><strong>${title}</strong></div><div class="hint">${escapeHtml(item.source_item_id || '')}</div>${llmDecisionDetailsHtml(item)}</td>
           <td>${action}<div class="hint">${escapeHtml(item.importance || '')}</div></td>
           <td>${badge(llmDecisionStatusLabel(item.model_status || ''))}<div class="hint">${escapeHtml(item.review_status || '')}</div></td>
@@ -1734,13 +1733,13 @@ async function confirmSave() {
   }
 }
 
-initializeMultiSelect('eventSource', [], loadEvents);
-initializeMultiSelect('eventFeedback', [
+initializeMultiSelect('marketSource', [], loadMarketItems);
+initializeMultiSelect('marketFeedback', [
   {value: 'high_value', label: '特别有用'},
   {value: 'duplicate', label: '重复'},
   {value: 'invalid', label: '无效'},
   {value: 'unlabelled', label: '未反馈'}
-], loadEvents);
+], loadMarketItems);
 initializeMultiSelect('llmDecisionAction', [
   {value: 'push', label: 'push'},
   {value: 'daily', label: 'daily'},
@@ -1762,8 +1761,8 @@ initializeMultiSelect('llmRuleAction', [
 ], renderLlmRules);
 initializeMultiSelect('sourceProfileCategory', [], renderSourceProfiles);
 
-document.getElementById('eventFromDate').value = todayString();
-document.getElementById('eventToDate').value = todayString();
+document.getElementById('marketFromDate').value = todayString();
+document.getElementById('marketToDate').value = todayString();
 showView('overview');
 loadHealthSummary();
 setInterval(() => {

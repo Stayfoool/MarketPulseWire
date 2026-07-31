@@ -14,17 +14,13 @@ from tempfile import TemporaryDirectory
 import value_directory_preview
 import value_directory_browser
 import value_directory_monitor
-from market_db import init_db
 from market_item import (
-    AdmissionEvidence,
     AdmissionResult,
     DecisionResult,
     InterpretationResult,
     MarketFlowResult,
-    NormalizedMarketItem,
 )
 from market_flow import MarketProcessOutcome
-from market_store import complete_market_review, record_production_admission
 from source_profiles import runtime_source_profile
 from value_directory_browser import (
     BrowserConfig,
@@ -397,71 +393,6 @@ def test_dedupe_entries_keeps_first_valid_url() -> None:
     assert rows[0]["title"] == "A"
 
 
-def test_shadow_payload_marks_seen_and_reviewed_without_delivery() -> None:
-    with TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "surveil.sqlite3"
-        init_db(db_path).close()
-        with sqlite3.connect(db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO seen_items (
-                    source, item_id, url, title, summary, published_at, first_seen_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                ("value_directory_ib_stocks", "862550", "", "", "", "", "2026-07-10T00:00:00+00:00"),
-            )
-            conn.commit()
-        normalized = NormalizedMarketItem(
-            source="value_directory_ib_stocks",
-            source_category="research_industry_media",
-            content_type="research_index",
-            title="高盛-宁德时代：首次覆盖买入",
-            summary="高盛-宁德时代：首次覆盖买入",
-            url="https://www.valuelist.cn/862550.html",
-            published_at="2026-07-09T16:00:00+00:00",
-            raw={"id": "862550"},
-        )
-        admitted = AdmissionResult(
-            status="admitted",
-            reason_code="holding_match",
-            matched_families=("holding",),
-            evidence=(AdmissionEvidence("holding", "entity", "宁德时代"),),
-            config_version="test-v1",
-        )
-        _, review_id = record_production_admission(normalized, admitted, db_path=db_path)
-        complete_market_review(
-            review_id,
-            MarketFlowResult(
-                item=normalized,
-                decision=DecisionResult(action="daily", importance="medium", reason="测试"),
-                interpretation=InterpretationResult(core_content="测试统一结果"),
-            ),
-            alias=("article", normalized.source, "862550", "market_items"),
-            db_path=db_path,
-        )
-        original_db = value_directory_monitor.DB_PATH
-        try:
-            value_directory_monitor.DB_PATH = db_path
-            payload = value_directory_monitor.shadow_payload(
-                [
-                    {
-                        "id": "862550",
-                        "url": "https://www.valuelist.cn/862550.html",
-                        "title": "高盛-宁德时代：首次覆盖买入",
-                        "summary": "高盛-宁德时代：首次覆盖买入",
-                        "published_at": "2026-07-09T16:00:00+00:00",
-                    }
-                ],
-                started_at="2026-07-10T00:00:00+00:00",
-            )
-        finally:
-            value_directory_monitor.DB_PATH = original_db
-    assert payload["sent_feishu"] is False
-    assert payload["ran_llm_review"] is False
-    assert payload["candidates"][0]["already_seen"] is True
-    assert payload["candidates"][0]["already_reviewed"] is True
-
-
 def test_source_profile_registers_value_directory() -> None:
     profile = runtime_source_profile("value_directory_ib_stocks")
     assert profile is not None
@@ -756,7 +687,7 @@ def test_recheck_uses_enriched_item_without_a_preliminary_decision_gate() -> Non
                     interpretation=InterpretationResult(),
                 ),
                 inserted=False,
-                storage_ref={"store_kind": "market_reviews", "item_id": raw_item["id"]},
+                storage_ref={"source_item_id": raw_item["id"]},
             )
 
         value_directory_monitor.process_market_item = fake_process
@@ -827,7 +758,7 @@ def test_new_item_uses_market_flow_after_preview_enrichment() -> None:
                     interpretation=InterpretationResult(core_content=raw_item["summary"]),
                 ),
                 inserted=True,
-                storage_ref={"store_kind": "market_reviews", "item_id": raw_item["id"]},
+                storage_ref={"source_item_id": raw_item["id"]},
                 delivery_status="sent",
             )
 
@@ -849,7 +780,6 @@ def test_new_item_uses_market_flow_after_preview_enrichment() -> None:
     assert normalized.source == source.source_id
     assert normalized.content_type == "research_index"
     assert normalized.raw["value_directory_policy"]["preview_enabled"] is True
-    assert call["store_kind"] == "article"
     assert call["deliver"] is True
     assert call["use_rule_dedup"] is True
     assert call["reprocess_existing"] is False
@@ -890,7 +820,7 @@ def test_run_finishes_browser_collection_before_source_processing() -> None:
             events.append(f"process:{source.source_id}")
             return {
                 "ok": True,
-                "mode": "shadow_dry_run",
+                "mode": "production",
                 "sent_feishu": False,
                 "source": source.source_id,
                 "counts": {"raw_items": 0},
@@ -900,7 +830,6 @@ def test_run_finishes_browser_collection_before_source_processing() -> None:
         value_directory_monitor.collect_sources_with_previews = fake_collect
         value_directory_monitor.process_collected_source = fake_process
         payload = value_directory_monitor.run(
-            production=False,
             limit=10,
             notify_baseline=False,
             source_ids=["value_directory_ib_stocks", "value_directory_ib_industry_macro"],
@@ -1124,7 +1053,6 @@ def main() -> int:
     test_multi_source_collection_uses_one_browser_and_continues_after_detail_failure()
     test_multi_source_collection_keeps_list_failure_attributable()
     test_dedupe_entries_keeps_first_valid_url()
-    test_shadow_payload_marks_seen_and_reviewed_without_delivery()
     test_source_profile_registers_value_directory()
     test_preview_failure_is_recorded_without_fake_summary()
     test_paddleocr_result_flatten_supports_common_shapes()
