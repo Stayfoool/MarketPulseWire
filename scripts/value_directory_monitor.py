@@ -16,7 +16,7 @@ from market_item import NormalizedMarketItem, raw_item_id
 from market_flow import normalize_market_item, process_market_item
 from market_store import processing_failure_status, source_item_review_snapshot
 from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
-from rss_monitor import DB_PATH, connect_db, save_new_items_with_retry
+from rss_monitor import DB_PATH, connect_db, save_new_items_with_retry, source_has_seen
 from source_health import record_source_failure, record_source_success
 from source_profiles import source_profile_enabled
 from value_directory_browser import (
@@ -228,6 +228,29 @@ def normalized_value_directory_item(
     )
 
 
+def persist_initial_baseline_items(
+    entries: list[dict[str, Any]],
+    *,
+    source: ValueDirectorySource,
+    db_path: Path = DB_PATH,
+) -> dict[str, int]:
+    market_item_ids: dict[str, int] = {}
+    for item in entries:
+        normalized = normalized_value_directory_item(item, source)
+        outcome = process_market_item(
+            normalized,
+            item,
+            db_path=db_path,
+            baseline_only=True,
+            analyze=False,
+            deliver=False,
+        )
+        if outcome.market_item_id is None:
+            raise RuntimeError(f"价值目录基线缺少 market_item_id：{raw_item_id(item)}")
+        market_item_ids[raw_item_id(item)] = outcome.market_item_id
+    return market_item_ids
+
+
 def set_seen_item_lifecycle_if_present(source: str, item_id: str, **values: Any) -> None:
     with connect_db() as conn:
         row = conn.execute(
@@ -360,12 +383,26 @@ def collect_production(
 ) -> dict[str, Any]:
     source = source or source_config()
     retryable_ids = retryable_item_ids(source.source_id)
+    with connect_db() as conn:
+        initial_baseline = not source_has_seen(conn, source.source_id)
+    baseline_market_item_ids = (
+        persist_initial_baseline_items(entries, source=source)
+        if initial_baseline and not notify_baseline
+        else {}
+    )
     new_items = save_new_items_with_retry(
         source.source_id,
         entries,
         notify_baseline=notify_baseline,
         source_label=source.module,
     )
+    for item_id, market_item_id in baseline_market_item_ids.items():
+        set_seen_item_lifecycle_if_present(
+            source.source_id,
+            item_id,
+            result_market_item_id=market_item_id,
+            lifecycle_updated_at=utc_now(),
+        )
     pushed = 0
     reviewed = 0
     new_item_ids = {raw_item_id(item) for item in new_items}
@@ -446,6 +483,7 @@ def collect_production(
         "finished_at": utc_now(),
         "counts": {
             "raw_items": len(entries),
+            "baseline_items": len(baseline_market_item_ids),
             "new_items": len(new_items),
             "reviewed_items": reviewed,
             "retryable_items": len(retryable_items),
@@ -470,6 +508,7 @@ def print_summary(payload: dict[str, Any]) -> None:
     print(
         f"value_directory {payload.get('mode')}: "
         f"raw={counts.get('raw_items', 0)} "
+        f"baseline={counts.get('baseline_items', '-')} "
         f"new={counts.get('new_items', '-')} "
         f"retryable={counts.get('retryable_items', '-')} "
         f"reviewed={counts.get('reviewed_items', '-')} "
@@ -484,6 +523,7 @@ def print_summary(payload: dict[str, Any]) -> None:
         child_counts = child.get("counts", {})
         print(
             f"  {child.get('source')}: raw={child_counts.get('raw_items', 0)} "
+            f"baseline={child_counts.get('baseline_items', '-')} "
             f"new={child_counts.get('new_items', '-')} retryable={child_counts.get('retryable_items', '-')} "
             f"reviewed={child_counts.get('reviewed_items', '-')} "
             f"pushed={child_counts.get('pushed_items', '-')}",
@@ -622,6 +662,7 @@ def run(
     errors = [error for payload in payloads for error in payload.get("errors", [])]
     counts = {
         "raw_items": sum(int(payload.get("counts", {}).get("raw_items") or 0) for payload in payloads),
+        "baseline_items": sum(int(payload.get("counts", {}).get("baseline_items") or 0) for payload in payloads),
         "new_items": sum(int(payload.get("counts", {}).get("new_items") or 0) for payload in payloads),
         "retryable_items": sum(int(payload.get("counts", {}).get("retryable_items") or 0) for payload in payloads),
         "reviewed_items": sum(int(payload.get("counts", {}).get("reviewed_items") or 0) for payload in payloads),

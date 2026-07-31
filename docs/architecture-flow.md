@@ -49,6 +49,14 @@ reviews, reserve rule dedup or deliver individual items. `seen_items` is a
 technical discovery and lifecycle ledger used by collectors that need a stable
 pre-enrichment reservation; it is not a second review store.
 
+Value-directory first discovery keeps the current list as a no-delivery
+baseline. Each entry is normalized and passed to
+`process_market_item(..., baseline_only=True)`, which stores it in
+`market_items` without range admission, a review, decision, delivery or rule
+dedup reservation. `seen_items` separately records the technical baseline and
+links its `result_market_item_id`; the information center never reads
+`seen_items` as a display source.
+
 The production collector services group sources only for shared transport and
 cadence:
 

@@ -143,15 +143,27 @@ ownership, mode and SHA-256; do not print file contents.
 After the approved revision has been deployed to Alibaba Cloud:
 
 1. Stop the collector timers and persistent services that can read or write
-   SQLite. Do not operate on Huawei Cloud.
+   SQLite. Do not operate on Huawei Cloud. Record which source profiles are
+   enabled and decide explicitly whether each source's current discovery window
+   will be retained as a no-delivery baseline or replayed. A fresh database has
+   no `seen_sources`, `seen_items`, review or delivery-dedup history; do not
+   describe the first post-rebuild run as ordinary incremental collection.
 2. Move `surveil.sqlite3` and any `-wal` / `-shm` companions into a private
    mode-`0700` retirement directory. This is the short rollback boundary; do
    not mix files from different timestamps.
 3. Run `scripts/market_db.py` as the production service account and verify the
    fresh schema, `PRAGMA quick_check`, foreign keys and expected table list.
 4. Install/restart the current systemd units, then verify Web APIs, enabled
-   source profiles, private-rule version/SHA-256, service health and natural new
-   collection.
+   source profiles, private-rule version/SHA-256 and service health. For every
+   enabled source with first-run baseline behavior, inspect its bounded run
+   report or source health instead of relying only on a successful systemd exit.
+   The value-directory report must show per-source `raw_items`, `baseline_items`,
+   `new_items`, `reviewed_items`, `pushed_items` and errors. Confirm each enabled
+   value-directory source either established a non-empty baseline or has an
+   explained fetch failure. With `显示基线条目` enabled, the same value-directory
+   baseline must be visible through the unified `market_items` reader while
+   remaining absent from `market_reviews`, deliveries and rule dedup. Only then
+   verify natural new collection.
 5. After the verification window, delete the retirement directory if historical
    information is intentionally not retained.
 
@@ -159,6 +171,9 @@ Before step 5, rollback requires stopping the same services, deploying the
 preceding revision and restoring the complete retired SQLite file set. After
 step 5, rollback can restore code and private configuration and create another
 fresh current database, but cannot restore historical collected information.
+If an enabled source has not established or explicitly failed its first-run
+baseline, keep the retirement database and treat rebuild verification as
+incomplete.
 
 Use it to verify whether your Mac, GitHub, and server are aligned:
 

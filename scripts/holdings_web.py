@@ -57,6 +57,7 @@ from stock_relations import (
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = ROOT / "web"
+REPORT_ROOT = ROOT / "reports"
 WEB_INDEX_PATH = WEB_ROOT / "index.html"
 WEB_STATIC_ASSETS = {
     "/static/styles.css": (WEB_ROOT / "styles.css", "text/css; charset=utf-8"),
@@ -753,6 +754,49 @@ def task_execution_status(service: dict[str, Any] | None) -> str:
     return str(service.get("status_text") or f"{active}/{sub}".strip("/") or "未知")
 
 
+def latest_value_directory_report(report_root: Path = REPORT_ROOT) -> dict[str, Any] | None:
+    reports = sorted(report_root.glob("value-directory-production-*.json"), reverse=True)
+    if not reports:
+        return None
+    path = reports[0]
+    try:
+        if path.stat().st_size > 256 * 1024:
+            raise ValueError("报告超过读取上限")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("报告根节点不是对象")
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return {"read_error": str(exc)[:300]}
+
+    raw_counts = payload.get("counts") if isinstance(payload.get("counts"), dict) else {}
+    count_keys = ("raw_items", "baseline_items", "new_items", "reviewed_items", "pushed_items")
+    counts: dict[str, int] = {}
+    for key in count_keys:
+        try:
+            counts[key] = max(0, int(raw_counts.get(key) or 0))
+        except (TypeError, ValueError):
+            counts[key] = 0
+    source_errors: list[dict[str, str]] = []
+    for source in payload.get("sources") if isinstance(payload.get("sources"), list) else []:
+        if not isinstance(source, dict):
+            continue
+        errors = source.get("errors") if isinstance(source.get("errors"), list) else []
+        for error in errors[:3]:
+            source_errors.append(
+                {
+                    "source": str(source.get("source") or "")[:100],
+                    "error": str(error)[:300],
+                }
+            )
+    return {
+        "ok": bool(payload.get("ok")),
+        "started_at": str(payload.get("started_at") or ""),
+        "finished_at": str(payload.get("finished_at") or ""),
+        "counts": counts,
+        "source_errors": source_errors[:6],
+    }
+
+
 def task_health_issue(task: dict[str, Any]) -> dict[str, Any] | None:
     if task.get("lifecycle") != "production" or not task.get("health_alert", True):
         return None
@@ -801,7 +845,11 @@ def task_health_issue(task: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def build_health_tasks(units: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_health_tasks(
+    units: list[dict[str, Any]],
+    *,
+    report_root: Path = REPORT_ROOT,
+) -> list[dict[str, Any]]:
     by_id = {str(unit.get("Id") or ""): unit for unit in units}
     paired_services = set(RUN_ONCE_TARGETS.values())
     tasks: list[dict[str, Any]] = []
@@ -869,6 +917,8 @@ def build_health_tasks(units: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     for task in tasks:
+        if task["Id"] == "surveil-value-directory":
+            task["run_report"] = latest_value_directory_report(report_root)
         task["health_issue"] = task_health_issue(task)
     return tasks
 

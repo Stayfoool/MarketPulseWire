@@ -21,6 +21,7 @@ from market_item import (
     MarketFlowResult,
 )
 from market_flow import MarketProcessOutcome
+from market_db import init_db
 from source_profiles import runtime_source_profile
 from value_directory_browser import (
     BrowserConfig,
@@ -944,12 +945,16 @@ def test_collect_production_automatically_retries_retryable_lifecycle() -> None:
     }
     calls: list[tuple[str, bool]] = []
     original_retryable = value_directory_monitor.retryable_item_ids
+    original_connect = value_directory_monitor.connect_db
+    original_source_has_seen = value_directory_monitor.source_has_seen
     original_save_new = value_directory_monitor.save_new_items_with_retry
     original_review = value_directory_monitor.review_and_maybe_push
     original_recheck = os.environ.get("VALUE_DIRECTORY_RECHECK_UNPUSHED")
     try:
         os.environ["VALUE_DIRECTORY_RECHECK_UNPUSHED"] = "0"
         value_directory_monitor.retryable_item_ids = lambda _source_id: {"retry-1"}
+        value_directory_monitor.connect_db = lambda: _DummyContext()
+        value_directory_monitor.source_has_seen = lambda _conn, _source_id: True
         value_directory_monitor.save_new_items_with_retry = lambda *_args, **_kwargs: []
 
         def fake_review(item, *, recheck_rules=False, **_kwargs):
@@ -965,6 +970,8 @@ def test_collect_production_automatically_retries_retryable_lifecycle() -> None:
         )
     finally:
         value_directory_monitor.retryable_item_ids = original_retryable
+        value_directory_monitor.connect_db = original_connect
+        value_directory_monitor.source_has_seen = original_source_has_seen
         value_directory_monitor.save_new_items_with_retry = original_save_new
         value_directory_monitor.review_and_maybe_push = original_review
         if original_recheck is None:
@@ -976,6 +983,83 @@ def test_collect_production_automatically_retries_retryable_lifecycle() -> None:
     assert payload["counts"]["new_items"] == 0
     assert payload["counts"]["retryable_items"] == 1
     assert payload["counts"]["reviewed_items"] == 1
+
+
+def test_initial_baseline_is_persisted_through_unified_market_items() -> None:
+    source = source_config("value_directory_ib_stocks")
+    entry = {
+        "id": "baseline-1",
+        "url": "https://www.valuelist.cn/baseline-1.html",
+        "title": "Synthetic baseline report",
+        "summary": "Synthetic baseline summary",
+        "published_at": "2026-07-30T00:00:00+00:00",
+    }
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
+        ids = value_directory_monitor.persist_initial_baseline_items(
+            [entry],
+            source=source,
+            db_path=db_path,
+        )
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT id,collection_class,processing_status FROM market_items WHERE source=? AND source_item_id=?",
+                (source.source_id, entry["id"]),
+            ).fetchone()
+            review_count = conn.execute("SELECT COUNT(*) FROM market_reviews").fetchone()[0]
+            delivery_count = conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0]
+
+    assert row == (ids[entry["id"]], "baseline", "not_applicable")
+    assert review_count == 0
+    assert delivery_count == 0
+
+
+def test_collect_production_records_initial_baseline_identity_without_review() -> None:
+    source = source_config("value_directory_ib_stocks")
+    entry = {
+        "id": "baseline-1",
+        "url": "https://www.valuelist.cn/baseline-1.html",
+        "title": "Synthetic baseline report",
+        "published_at": "2026-07-30T00:00:00+00:00",
+    }
+    linked: list[tuple[str, str, dict[str, object]]] = []
+    original_retryable = value_directory_monitor.retryable_item_ids
+    original_connect = value_directory_monitor.connect_db
+    original_source_has_seen = value_directory_monitor.source_has_seen
+    original_persist = value_directory_monitor.persist_initial_baseline_items
+    original_save = value_directory_monitor.save_new_items_with_retry
+    original_set = value_directory_monitor.set_seen_item_lifecycle_if_present
+    try:
+        value_directory_monitor.retryable_item_ids = lambda _source_id: set()
+        value_directory_monitor.connect_db = lambda: _DummyContext()
+        value_directory_monitor.source_has_seen = lambda _conn, _source_id: False
+        value_directory_monitor.persist_initial_baseline_items = (
+            lambda _entries, **_kwargs: {entry["id"]: 42}
+        )
+        value_directory_monitor.save_new_items_with_retry = lambda *_args, **_kwargs: []
+        value_directory_monitor.set_seen_item_lifecycle_if_present = (
+            lambda source_id, item_id, **values: linked.append((source_id, item_id, values))
+        )
+        payload = value_directory_monitor.collect_production(
+            [entry],
+            source=source,
+            notify_baseline=False,
+            started_at="2026-07-31T13:00:00+00:00",
+        )
+    finally:
+        value_directory_monitor.retryable_item_ids = original_retryable
+        value_directory_monitor.connect_db = original_connect
+        value_directory_monitor.source_has_seen = original_source_has_seen
+        value_directory_monitor.persist_initial_baseline_items = original_persist
+        value_directory_monitor.save_new_items_with_retry = original_save
+        value_directory_monitor.set_seen_item_lifecycle_if_present = original_set
+
+    assert payload["counts"]["baseline_items"] == 1
+    assert payload["counts"]["new_items"] == 0
+    assert payload["counts"]["reviewed_items"] == 0
+    assert linked[0][0:2] == (source.source_id, entry["id"])
+    assert linked[0][2]["result_market_item_id"] == 42
 
 
 def test_collect_production_rechecks_current_unpushed_reviews() -> None:
@@ -999,6 +1083,7 @@ def test_collect_production_rechecks_current_unpushed_reviews() -> None:
     calls: list[tuple[str, bool]] = []
     original_save_new = value_directory_monitor.save_new_items_with_retry
     original_connect = value_directory_monitor.connect_db
+    original_source_has_seen = value_directory_monitor.source_has_seen
     original_unpushed = value_directory_monitor.load_unpushed_review_ids
     original_review = value_directory_monitor.review_and_maybe_push
     original_enabled = os.environ.get("VALUE_DIRECTORY_RECHECK_UNPUSHED")
@@ -1008,6 +1093,7 @@ def test_collect_production_rechecks_current_unpushed_reviews() -> None:
         os.environ["VALUE_DIRECTORY_RECHECK_UNPUSHED_LIMIT"] = "30"
         value_directory_monitor.save_new_items_with_retry = lambda *_args, **_kwargs: []
         value_directory_monitor.connect_db = lambda: _DummyContext()
+        value_directory_monitor.source_has_seen = lambda _conn, _source_id: True
 
         def fake_review(item, *, source=None, recheck_rules=False, **_kwargs):
             calls.append((item["id"], recheck_rules))
@@ -1024,6 +1110,7 @@ def test_collect_production_rechecks_current_unpushed_reviews() -> None:
     finally:
         value_directory_monitor.save_new_items_with_retry = original_save_new
         value_directory_monitor.connect_db = original_connect
+        value_directory_monitor.source_has_seen = original_source_has_seen
         value_directory_monitor.load_unpushed_review_ids = original_unpushed
         value_directory_monitor.review_and_maybe_push = original_review
         if original_enabled is None:
@@ -1071,6 +1158,8 @@ def main() -> int:
     test_collected_preview_does_not_launch_another_browser()
     test_production_preview_selector_limits_work_to_processable_entries()
     test_collect_production_automatically_retries_retryable_lifecycle()
+    test_initial_baseline_is_persisted_through_unified_market_items()
+    test_collect_production_records_initial_baseline_identity_without_review()
     test_collect_production_rechecks_current_unpushed_reviews()
     print("value directory monitor checks passed")
     return 0
