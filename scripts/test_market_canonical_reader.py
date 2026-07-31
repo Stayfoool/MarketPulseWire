@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CI-safe checks for unified historical and operational read projections."""
+"""CI-safe checks for current unified read projections."""
 
 from __future__ import annotations
 
@@ -191,7 +191,6 @@ def test_canonical_readers_use_unified_tables_and_preserve_external_identity() -
         assert feedback is not None
         assert feedback["decision"]["action"] == "push"
         assert feedback["delivery_id"] == event_delivery_id
-        assert feedback["historical_payload"] == {}
         assert event_review_id > 0
         assert not tables.intersection({"article_reviews", "official_news_reviews", "events", "event_analyses"})
 

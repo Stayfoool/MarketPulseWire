@@ -30,15 +30,15 @@ SEEN_ITEM_LIFECYCLE_FIELDS = {
     "lifecycle_updated_at",
 }
 SEEN_ITEM_LIFECYCLE_VALUES = {
-    "collection_class": {"baseline", "live", "legacy_unclassified"},
+    "collection_class": {"baseline", "live"},
     "processability_status": {
         "not_required", "pending", "succeeded", "fallback",
-        "failed_retryable", "failed_terminal", "legacy_unclassified",
+        "failed_retryable", "failed_terminal",
     },
-    "admission_status": {"pending", "admitted", "excluded", "not_applicable", "legacy_unclassified"},
+    "admission_status": {"pending", "admitted", "excluded", "not_applicable"},
     "processing_status": {
         "not_applicable", "pending", "succeeded",
-        "failed_retryable", "failed_terminal", "insufficient_evidence", "legacy_unclassified",
+        "failed_retryable", "failed_terminal", "insufficient_evidence",
     },
 }
 

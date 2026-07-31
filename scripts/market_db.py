@@ -51,10 +51,10 @@ CREATE TABLE IF NOT EXISTS seen_items (
     summary TEXT,
     published_at TEXT,
     first_seen_at TEXT NOT NULL,
-    collection_class TEXT NOT NULL DEFAULT 'legacy_unclassified',
-    processability_status TEXT NOT NULL DEFAULT 'legacy_unclassified',
+    collection_class TEXT NOT NULL DEFAULT 'live',
+    processability_status TEXT NOT NULL DEFAULT 'pending',
     processability_reason TEXT,
-    admission_status TEXT NOT NULL DEFAULT 'legacy_unclassified',
+    admission_status TEXT NOT NULL DEFAULT 'pending',
     admission_reason TEXT,
     admission_matched_families_json TEXT NOT NULL DEFAULT '[]',
     admission_evidence_json TEXT NOT NULL DEFAULT '[]',
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS seen_items (
     admission_rule_contract_version TEXT,
     admission_evaluated_at TEXT,
     result_event_id INTEGER,
-    processing_status TEXT NOT NULL DEFAULT 'legacy_unclassified',
+    processing_status TEXT NOT NULL DEFAULT 'not_applicable',
     processing_error TEXT,
     processed_at TEXT,
     lifecycle_updated_at TEXT,
@@ -96,8 +96,6 @@ CREATE TABLE IF NOT EXISTS market_items (
     processability_reason TEXT,
     processing_status TEXT NOT NULL DEFAULT 'pending',
     processing_error TEXT,
-    legacy_store_kind TEXT,
-    legacy_store_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(source, source_item_id)
@@ -138,10 +136,7 @@ CREATE TABLE IF NOT EXISTS market_reviews (
     importance TEXT,
     decision_json TEXT,
     interpretation_json TEXT,
-    legacy_payload_json TEXT,
     application_revision TEXT,
-    legacy_store_kind TEXT,
-    legacy_store_id TEXT,
     created_at TEXT NOT NULL,
     completed_at TEXT,
     FOREIGN KEY(market_item_id) REFERENCES market_items(id)
@@ -149,9 +144,6 @@ CREATE TABLE IF NOT EXISTS market_reviews (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_market_reviews_current
     ON market_reviews(market_item_id, task) WHERE is_current = 1;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_market_reviews_legacy
-    ON market_reviews(legacy_store_kind, legacy_store_id)
-    WHERE legacy_store_kind IS NOT NULL AND legacy_store_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_market_reviews_created ON market_reviews(created_at);
 CREATE INDEX IF NOT EXISTS idx_market_reviews_admission ON market_reviews(admission_status, created_at);
 CREATE INDEX IF NOT EXISTS idx_market_reviews_action ON market_reviews(decision_action, created_at);
@@ -163,14 +155,14 @@ BEGIN
         source, source_item_id, dedupe_key, content_type, title, summary, full_text,
         url, published_at, first_seen_at, content_hash, collection_class,
         processability_status, processability_reason, processing_status,
-        processing_error, legacy_store_kind, legacy_store_id, created_at, updated_at
+        processing_error, created_at, updated_at
     ) VALUES (
         NEW.source, NEW.item_id, NEW.source || ':' || NEW.item_id, 'unknown',
         NEW.title, NEW.summary, '', NEW.url, NEW.published_at, NEW.first_seen_at,
         'seen:' || NEW.source || ':' || NEW.item_id, NEW.collection_class,
         NEW.processability_status, NEW.processability_reason, NEW.processing_status,
-        NEW.processing_error, 'seen_items', NEW.source || ':' || NEW.item_id,
-        NEW.first_seen_at, COALESCE(NEW.lifecycle_updated_at, NEW.first_seen_at)
+        NEW.processing_error, NEW.first_seen_at,
+        COALESCE(NEW.lifecycle_updated_at, NEW.first_seen_at)
     )
     ON CONFLICT(source, source_item_id) DO UPDATE SET
         title = excluded.title, summary = excluded.summary, url = excluded.url,

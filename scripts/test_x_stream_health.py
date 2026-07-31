@@ -85,10 +85,51 @@ def test_x_stream_enabled_uses_source_profile() -> None:
         x_stream.source_profile_enabled = original
 
 
+def test_rest_backfill_baselines_first_fetch_then_delivers_new_posts() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        original_db = x_stream.DB_PATH
+        original_fetch = x_stream.fetch_recent_posts
+        original_deliver = x_stream.deliver_post
+        delivered: list[str] = []
+        fetches = [
+            [
+                {"id": "1", "text": "old one", "created_at": "2026-07-31T00:00:00+00:00"},
+                {"id": "2", "text": "old two", "created_at": "2026-07-31T00:01:00+00:00"},
+            ],
+            [
+                {"id": "2", "text": "old two", "created_at": "2026-07-31T00:01:00+00:00"},
+                {"id": "3", "text": "new", "created_at": "2026-07-31T00:02:00+00:00"},
+            ],
+        ]
+        try:
+            x_stream.DB_PATH = Path(tmpdir) / "test.sqlite3"
+            init_db(x_stream.DB_PATH).close()
+            x_stream.fetch_recent_posts = lambda *_args, **_kwargs: fetches.pop(0)
+            x_stream.deliver_post = lambda _username, post: delivered.append(str(post["id"])) or True
+
+            assert x_stream.backfill_recent_posts("Serenity") == 0
+            assert delivered == []
+            with x_stream.connect_db() as conn:
+                assert conn.execute(
+                    "SELECT post_id,delivery_status FROM seen_posts ORDER BY post_id"
+                ).fetchall() == [("1", "baseline"), ("2", "baseline")]
+                assert conn.execute(
+                    "SELECT source FROM seen_sources"
+                ).fetchall() == [("x_stream:serenity",)]
+
+            assert x_stream.backfill_recent_posts("Serenity") == 1
+            assert delivered == ["3"]
+        finally:
+            x_stream.DB_PATH = original_db
+            x_stream.fetch_recent_posts = original_fetch
+            x_stream.deliver_post = original_deliver
+
+
 def main() -> int:
     test_stream_failure_records_unified_health()
     test_stream_recovery_clears_unified_health()
     test_x_stream_enabled_uses_source_profile()
+    test_rest_backfill_baselines_first_fetch_then_delivers_new_posts()
     print("x stream health checks passed")
     return 0
 

@@ -81,8 +81,6 @@ def upsert_market_item(
     processability_reason: str = "",
     processing_status: str = "pending",
     processing_error: str = "",
-    legacy_store_kind: str | None = None,
-    legacy_store_id: str | None = None,
 ) -> int:
     now = utc_now()
     item_id = source_item_id(item)
@@ -97,8 +95,8 @@ def upsert_market_item(
             first_seen_at, symbols_json, themes_json, raw_json, access_note,
             content_hash, collection_class, processability_status,
             processability_reason, processing_status, processing_error,
-            legacy_store_kind, legacy_store_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source, source_item_id) DO UPDATE SET
             dedupe_key = excluded.dedupe_key,
             source_category = CASE WHEN excluded.source_category <> '' THEN excluded.source_category ELSE market_items.source_category END,
@@ -117,15 +115,12 @@ def upsert_market_item(
             content_hash = excluded.content_hash,
             collection_class = CASE
                 WHEN market_items.collection_class = 'baseline' AND excluded.collection_class = 'live' THEN 'live'
-                WHEN market_items.collection_class = 'legacy_unclassified' THEN excluded.collection_class
                 ELSE market_items.collection_class
             END,
             processability_status = excluded.processability_status,
             processability_reason = excluded.processability_reason,
             processing_status = excluded.processing_status,
             processing_error = excluded.processing_error,
-            legacy_store_kind = COALESCE(market_items.legacy_store_kind, excluded.legacy_store_kind),
-            legacy_store_id = COALESCE(market_items.legacy_store_id, excluded.legacy_store_id),
             updated_at = excluded.updated_at
         """,
         (
@@ -152,8 +147,6 @@ def upsert_market_item(
             processability_reason,
             processing_status,
             processing_error,
-            legacy_store_kind,
-            legacy_store_id,
             now,
             now,
         ),
@@ -173,8 +166,6 @@ def begin_market_review(
     admission: AdmissionResult,
     *,
     task: str = "production",
-    legacy_store_kind: str | None = None,
-    legacy_store_id: str | None = None,
 ) -> int:
     now = utc_now()
     conn.execute(
@@ -189,8 +180,8 @@ def begin_market_review(
             admission_status, admission_reason, admission_matched_families_json,
             admission_evidence_json, admission_config_version,
             admission_rule_contract_version, admission_json, application_revision,
-            legacy_store_kind, legacy_store_id, created_at, completed_at
-        ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            created_at, completed_at
+        ) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             market_item_id,
@@ -205,8 +196,6 @@ def begin_market_review(
             admission.rule_contract_version,
             json_dumps(admission.to_dict()),
             application_revision(),
-            legacy_store_kind,
-            legacy_store_id,
             now,
             now if admission.status != "admitted" else None,
         ),
@@ -308,8 +297,7 @@ def market_review_snapshot(
         row = conn.execute(
             """
             SELECT r.market_item_id,r.review_status,r.admission_status,r.decision_action,
-                   r.importance,r.decision_json,r.interpretation_json,r.legacy_payload_json,
-                   r.legacy_store_kind,r.legacy_store_id,
+                   r.importance,r.decision_json,r.interpretation_json,
                    EXISTS(SELECT 1 FROM deliveries d
                           WHERE d.market_item_id=r.market_item_id AND d.status='sent')
             FROM market_reviews r WHERE r.id=?
@@ -318,9 +306,7 @@ def market_review_snapshot(
         ).fetchone()
     if not row:
         return None
-    # Existing historical reviews may still need their stored display projection.
-    # Current reviews reconstruct their result directly from the canonical columns.
-    payload = json_dict(row[7])
+    payload: dict[str, Any] = {}
     decision = json_dict(row[5])
     interpretation = json_dict(row[6])
     if decision:
@@ -335,9 +321,7 @@ def market_review_snapshot(
         "decision_action": str(row[3] or ""),
         "importance": str(row[4] or ""),
         "payload": payload,
-        "legacy_store_kind": str(row[8] or ""),
-        "legacy_store_id": str(row[9] or ""),
-        "delivered": bool(row[10]),
+        "delivered": bool(row[7]),
     }
 
 
@@ -368,8 +352,6 @@ def record_baseline_item(
     item: NormalizedMarketItem,
     *,
     db_path: Path = DEFAULT_DB_PATH,
-    legacy_store_kind: str | None = None,
-    legacy_store_id: str | None = None,
 ) -> int:
     with connect_sqlite(db_path) as conn:
         item_id = upsert_market_item(
@@ -377,8 +359,6 @@ def record_baseline_item(
             item,
             collection_class="baseline",
             processing_status="not_applicable",
-            legacy_store_kind=legacy_store_kind,
-            legacy_store_id=legacy_store_id,
         )
         conn.commit()
     return item_id
@@ -402,7 +382,7 @@ def _complete_market_review_in_conn(
         """
         UPDATE market_reviews
         SET review_status = 'succeeded', decision_action = ?, importance = ?,
-            decision_json = ?, interpretation_json = ?, legacy_payload_json = NULL, completed_at = ?
+            decision_json = ?, interpretation_json = ?, completed_at = ?
         WHERE id = ?
         """,
         (

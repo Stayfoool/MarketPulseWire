@@ -95,6 +95,24 @@ def test_excluded_has_no_decision() -> None:
         assert stored == ("公司确认新增HBM产线并扩大产能。", "not_applicable")
 
 
+def test_fresh_schema_omits_retired_result_fields_and_statuses() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "db.sqlite3"
+        init_db(path).close()
+        with sqlite3.connect(path) as conn:
+            item_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(market_items)")}
+            review_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(market_reviews)")}
+            schema_sql = "\n".join(
+                str(row[0] or "")
+                for row in conn.execute("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL")
+            )
+        assert {"legacy_store_kind", "legacy_store_id"}.isdisjoint(item_columns)
+        assert {"legacy_payload_json", "legacy_store_kind", "legacy_store_id"}.isdisjoint(
+            review_columns
+        )
+        assert "legacy_unclassified" not in schema_sql
+
+
 def test_result_alias_and_delivery_use_only_unified_storage() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "db.sqlite3"
@@ -124,8 +142,8 @@ def test_result_alias_and_delivery_use_only_unified_storage() -> None:
         assert snapshot["payload"]["decision_result"]["action"] == "push"
         with sqlite3.connect(path) as conn:
             review = conn.execute(
-                "SELECT admission_status,decision_action,importance,review_status,"
-                "legacy_store_kind,legacy_store_id,legacy_payload_json FROM market_reviews WHERE id=?",
+                "SELECT admission_status,decision_action,importance,review_status "
+                "FROM market_reviews WHERE id=?",
                 (review_id,),
             ).fetchone()
             alias = conn.execute(
@@ -138,7 +156,7 @@ def test_result_alias_and_delivery_use_only_unified_storage() -> None:
                 (delivery_id,),
             ).fetchone()
 
-        assert review == ("admitted", "push", "high", "succeeded", None, None, None)
+        assert review == ("admitted", "push", "high", "succeeded")
         assert alias == (market_item_id, "article", normalized.source, "a-1", "market_items")
         assert delivery == (delivery_id, market_item_id, review_id, "sent", "push")
 
@@ -178,15 +196,13 @@ def test_force_new_result_replaces_current_version() -> None:
         with sqlite3.connect(path) as conn:
             rows = conn.execute(
                 "SELECT id,is_current,review_status,decision_action,decision_json,"
-                "interpretation_json,legacy_store_kind,legacy_store_id "
+                "interpretation_json "
                 "FROM market_reviews ORDER BY id"
             ).fetchall()
         assert rows[0][0:4] == (first_review_id, 0, "succeeded", "archive")
         assert json.loads(rows[0][4])["action"] == "archive"
         assert json.loads(rows[0][5])["core_content"] == "HBM扩产"
-        assert rows[0][6:8] == (None, None)
         assert rows[1][0:4] == (second_review_id, 1, "succeeded", "daily")
-        assert rows[1][6:8] == (None, None)
 
 
 def test_retry_with_changed_admission_creates_a_new_current_result() -> None:
@@ -285,6 +301,7 @@ def test_unified_views_work_when_legacy_result_tables_are_absent() -> None:
 
 def main() -> int:
     test_excluded_has_no_decision()
+    test_fresh_schema_omits_retired_result_fields_and_statuses()
     test_result_alias_and_delivery_use_only_unified_storage()
     test_admission_reuses_current_unified_result()
     test_force_new_result_replaces_current_version()
