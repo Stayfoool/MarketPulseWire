@@ -23,7 +23,7 @@ from market_db import DEFAULT_DB_PATH
 from market_flow import normalize_market_item, process_market_item
 from market_store import processing_failure_status
 from holdings_store import load_enabled_holdings
-from market_item import event_content_hash as content_hash
+from market_item import content_hash
 from portfolio_import import import_holdings
 from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from rss_monitor import save_new_items
@@ -206,8 +206,8 @@ def event_from_row(row: dict[str, Any], holdings: list[dict[str, Any]]) -> dict[
     )
     return {
         "source": SOURCE,
-        "source_event_id": source_id,
-        "event_type": "flash_news",
+        "id": source_id,
+        "content_type": "flash_news",
         "title": title,
         "summary": text,
         "full_text": text,
@@ -354,12 +354,12 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
             if event:
                 event["raw"]["provider"] = provider
                 event["raw"]["tag"] = tag
-                events[event["source_event_id"]] = event
+                events[event["id"]] = event
 
     processed = 0
     new_count = 0
     excluded_count = 0
-    discovered = [{**event, "id": event["source_event_id"]} for event in events.values()]
+    discovered = list(events.values())
     if not dry_run:
         new_items = save_new_seen_items(
             discovered,
@@ -372,15 +372,15 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
             break
         processed += 1
         if dry_run:
-            print(f"[dry-run] {event['source_event_id']} {event['title']} symbols={event.get('symbols')}")
+            print(f"[dry-run] {event['id']} {event['title']} symbols={event.get('symbols')}")
             continue
-        normalized = normalize_market_item(SOURCE, event, store_kind="event")
+        normalized = normalize_market_item(SOURCE, event)
         admission_context = persist_production_admission_context(normalized, production_admission_context(normalized, db_path=DEFAULT_DB_PATH), db_path=DEFAULT_DB_PATH)
         admission = admission_context.result
         if admission.status != "admitted":
             excluded_count += 1
             set_seen_item_lifecycle(
-                str(event["source_event_id"]),
+                str(event["id"]),
                 processability_status="succeeded",
                 processability_reason="",
                 **admission_lifecycle_values(admission, processing_status="not_applicable"),
@@ -388,7 +388,7 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
             )
             continue
         set_seen_item_lifecycle(
-            str(event["source_event_id"]),
+            str(event["id"]),
             processability_status="succeeded",
             processability_reason="",
             **admission_lifecycle_values(admission, processing_status="pending"),
@@ -397,8 +397,6 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
             outcome = process_market_item(
                 normalized,
                 event,
-                store_kind="event",
-                task="sina_flash_portfolio",
                 db_path=DEFAULT_DB_PATH,
                 reprocess_existing=bool(event.get("_seen_item_retry")),
                 production_admission=admission,
@@ -409,7 +407,7 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
         except Exception as exc:
             status = processing_failure_status(exc)
             set_seen_item_lifecycle(
-                str(event["source_event_id"]),
+                str(event["id"]),
                 processing_status=status,
                 processing_error=f"{type(exc).__name__}: {str(exc)[:400]}",
                 processed_at=None,
@@ -420,34 +418,34 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
                 continue
             raise
         set_seen_item_lifecycle(
-            str(event["source_event_id"]),
+            str(event["id"]),
             processing_status="succeeded",
             processing_error="",
-            result_event_id=outcome.event_id,
+            result_market_item_id=outcome.market_item_id,
             processed_at=utc_now(),
             lifecycle_updated_at=utc_now(),
         )
-        event_id = outcome.event_id
+        market_item_id = outcome.market_item_id
         if not outcome.inserted:
             if verbose:
-                print(f"seen event #{event_id}: {event['title']}", flush=True)
+                print(f"seen market item #{market_item_id}: {event['title']}", flush=True)
             continue
         new_count += 1
         if baseline_only:
-            print(f"baseline event #{event_id}: {event['title']}", flush=True)
+            print(f"baseline market item #{market_item_id}: {event['title']}", flush=True)
             continue
-        print(f"new event #{event_id}: {event['title']}", flush=True)
+        print(f"new market item #{market_item_id}: {event['title']}", flush=True)
         print(
-            f"analysis #{event_id}: {outcome.flow_result.interpretation.core_content}",
+            f"analysis #{market_item_id}: {outcome.flow_result.interpretation.core_content}",
             flush=True,
         )
-        print(f"delivery #{event_id}: {outcome.delivery_status}", flush=True)
+        print(f"delivery #{market_item_id}: {outcome.delivery_status}", flush=True)
 
     if not dry_run:
         next_state = {
             "initialized": True,
             "last_run_at": utc_now(),
-            "last_event_ids": list(events.keys())[:100],
+            "last_item_ids": list(events.keys())[:100],
             "tags": tags_from_env(),
         }
         if events or state.get(SEEN_FLOW_STATE_KEY):
@@ -456,7 +454,7 @@ def run_once(*, dry_run: bool = False, limit: int | None = None) -> int:
     if dry_run or verbose or new_count or baseline_only:
         print(
             f"Sina flash finished: discovered={len(events)}, processed={processed}, "
-            f"current_excluded={excluded_count}, new_events={new_count}, "
+            f"current_excluded={excluded_count}, new_items={new_count}, "
             f"baseline={bool(baseline_only or expanded_scope_baseline)}",
             flush=True,
         )

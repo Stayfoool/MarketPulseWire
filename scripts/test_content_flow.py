@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression checks for unified article/news/official content flow."""
+"""Regression checks for the single normalized market-information flow."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def fake_interpretation(*args, **kwargs) -> InterpretationResult:
     )
 
 
-def test_article_interpretation_cannot_override_decision_action() -> None:
+def test_interpretation_cannot_override_decision_action() -> None:
     item = {
         "id": "macro-1",
         "title": "美国 CPI 大幅低于市场预期，2年期美债收益率下跌",
@@ -34,8 +34,8 @@ def test_article_interpretation_cannot_override_decision_action() -> None:
     original = market_flow.interpret_market_item
     try:
         market_flow.interpret_market_item = fake_interpretation
-        flow_result = market_flow.evaluate_content_item(
-            market_flow.normalize_market_item("cls_telegraph_api", item, store_kind="article"),
+        flow_result = market_flow.evaluate_item(
+            market_flow.normalize_market_item("cls_telegraph_api", item),
             item,
             DecisionResult(
                 action="push",
@@ -43,7 +43,6 @@ def test_article_interpretation_cannot_override_decision_action() -> None:
                 reason="大模型程度决策命中。",
                 need_llm_interpretation=True,
             ),
-            official=False,
             storage_ref={},
         )
         result_view = market_result_view(flow_result)
@@ -56,7 +55,7 @@ def test_article_interpretation_cannot_override_decision_action() -> None:
     assert "should_push" not in result_view["interpretation_result"]
 
 
-def test_official_flow_uses_same_decision_and_interpretation_contract() -> None:
+def test_different_source_uses_same_decision_and_interpretation_contract() -> None:
     item = {
         "id": "rubin-1",
         "title": "NVIDIA announces Rubin rack-scale AI platform with liquid cooling",
@@ -66,8 +65,8 @@ def test_official_flow_uses_same_decision_and_interpretation_contract() -> None:
     original = market_flow.interpret_market_item
     try:
         market_flow.interpret_market_item = fake_interpretation
-        flow_result = market_flow.evaluate_content_item(
-            market_flow.normalize_market_item("nvidia_blog", item, store_kind="official"),
+        flow_result = market_flow.evaluate_item(
+            market_flow.normalize_market_item("nvidia_blog", item),
             item,
             DecisionResult(
                 action="push",
@@ -75,7 +74,6 @@ def test_official_flow_uses_same_decision_and_interpretation_contract() -> None:
                 reason="大模型程度决策命中。",
                 need_llm_interpretation=True,
             ),
-            official=True,
             storage_ref={},
         )
         result_view = market_result_view(flow_result)
@@ -114,8 +112,8 @@ def test_value_directory_uses_unified_runtime_after_private_enrichment() -> None
 
 
 def main() -> int:
-    test_article_interpretation_cannot_override_decision_action()
-    test_official_flow_uses_same_decision_and_interpretation_contract()
+    test_interpretation_cannot_override_decision_action()
+    test_different_source_uses_same_decision_and_interpretation_contract()
     test_runtime_and_monitor_imports_use_one_unified_path()
     test_value_directory_uses_unified_runtime_after_private_enrichment()
     print("content flow checks passed")

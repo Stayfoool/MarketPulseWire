@@ -13,7 +13,7 @@ from llm_production_decision import ProductionLLMInsufficientEvidence
 from market_flow import evaluate_market_item
 from market_db import init_db
 from market_item import AdmissionEvidence, AdmissionResult, DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem
-from market_store import processing_failure_status, record_article_delivery, record_production_admission
+from market_store import processing_failure_status, record_delivery, record_production_admission
 
 
 def canonical_items() -> list[NormalizedMarketItem]:
@@ -47,9 +47,9 @@ def canonical_items() -> list[NormalizedMarketItem]:
             title="持仓相关新闻",
         ),
         NormalizedMarketItem(
-            source="ifind_notice",
+            source="company_disclosures",
             source_category="company_disclosures",
-            collector="ifind_batch",
+            collector="company_disclosures",
             content_type="notice",
             title="上市公司公告",
         ),
@@ -175,15 +175,13 @@ def test_value_directory_enrichment_is_preserved_in_normalized_item() -> None:
         market_flow.interpret_market_item = lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("preview facts should supply the interpretation")
         )
-        flow_result = market_flow.evaluate_content_item(
+        flow_result = market_flow.evaluate_item(
             market_flow.normalize_market_item(
                 "value_directory_ib_industry_macro",
                 raw_item,
-                store_kind="article",
             ),
             raw_item,
             DecisionResult(action="daily", importance="medium", reason="模型判断为日报。"),
-            official=False,
             storage_ref={},
         )
     finally:
@@ -206,8 +204,8 @@ def admitted() -> AdmissionResult:
     )
 
 
-def test_production_content_runtime_uses_unified_result_for_existing_and_delivery() -> None:
-    original_deliver = market_flow.deliver_article_review
+def test_production_runtime_uses_unified_result_for_existing_and_delivery() -> None:
+    original_deliver = market_flow.deliver_market_item
     original_interpreter = market_flow.interpret_market_item
     original_prepare = market_flow.prepare_item_for_decision
     original_decider = market_flow.decide_market_item_with_llm
@@ -228,7 +226,7 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
         def fake_deliver(*_args, **kwargs):
             calls["deliver"] += 1
             assert kwargs["already_sent"] is False
-            record_article_delivery(
+            record_delivery(
                 kwargs["market_item_id"],
                 kwargs["market_review_id"],
                 status="sent",
@@ -237,7 +235,7 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
             )
             return "sent"
 
-        market_flow.deliver_article_review = fake_deliver
+        market_flow.deliver_market_item = fake_deliver
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "runtime.sqlite3"
             init_db(db_path).close()
@@ -254,7 +252,6 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
             first = market_flow.process_market_item(
                 item,
                 raw_item,
-                store_kind="article",
                 db_path=db_path,
                 production_admission=admitted(),
                 production_portfolio=object(),
@@ -265,7 +262,6 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
             second = market_flow.process_market_item(
                 item,
                 raw_item,
-                store_kind="article",
                 db_path=db_path,
                 production_admission=admitted(),
                 production_portfolio=object(),
@@ -277,7 +273,9 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
                 assert conn.execute(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='article_reviews'"
                 ).fetchone()[0] == 0
-                assert conn.execute("SELECT COUNT(*) FROM market_item_aliases").fetchone()[0] == 1
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='market_item_aliases'"
+                ).fetchone()[0] == 0
                 delivery = conn.execute(
                     "SELECT market_item_id,market_review_id,status,decision_action FROM deliveries"
                 ).fetchone()
@@ -286,7 +284,7 @@ def test_production_content_runtime_uses_unified_result_for_existing_and_deliver
             assert second.inserted is False
             assert second.delivery_status == "existing"
     finally:
-        market_flow.deliver_article_review = original_deliver
+        market_flow.deliver_market_item = original_deliver
         market_flow.interpret_market_item = original_interpreter
         market_flow.prepare_item_for_decision = original_prepare
         market_flow.decide_market_item_with_llm = original_decider
@@ -315,20 +313,19 @@ def test_production_event_runtime_completes_only_unified_result() -> None:
             init_db(db_path).close()
             raw_event = {
                 "source": "sina_flash",
-                "source_event_id": "event-unified-1",
-                "event_type": "flash",
+                "id": "item-unified-1",
+                "content_type": "flash",
                 "title": "公告跟踪",
                 "summary": "公告内容",
-                "raw": {"source_event_id": "event-unified-1"},
+                "raw": {"id": "item-unified-1"},
             }
-            item = market_flow.normalize_market_item("sina_flash", raw_event, store_kind="event")
+            item = market_flow.normalize_market_item("sina_flash", raw_event)
             item_id, review_id = record_production_admission(
-                item, admitted(), db_path=db_path, task="portfolio_event"
+                item, admitted(), db_path=db_path
             )
             first = market_flow.process_market_item(
                 item,
                 raw_event,
-                store_kind="event",
                 db_path=db_path,
                 deliver=False,
                 production_admission=admitted(),
@@ -339,7 +336,6 @@ def test_production_event_runtime_completes_only_unified_result() -> None:
             second = market_flow.process_market_item(
                 item,
                 raw_event,
-                store_kind="event",
                 db_path=db_path,
                 deliver=False,
                 production_admission=admitted(),
@@ -357,11 +353,13 @@ def test_production_event_runtime_completes_only_unified_result() -> None:
                 assert conn.execute(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='events'"
                 ).fetchone()[0] == 0
-                assert conn.execute("SELECT COUNT(*) FROM market_item_aliases").fetchone()[0] == 1
+                assert conn.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='market_item_aliases'"
+                ).fetchone()[0] == 0
             assert unified == ("succeeded", "daily")
             assert first.inserted is True
             assert second.inserted is False
-            assert second.delivery_status == "existing"
+            assert second.delivery_status == "not_requested"
     finally:
         market_flow.interpret_market_item = original_interpreter
         market_flow.prepare_item_for_decision = original_prepare
@@ -397,7 +395,6 @@ def test_production_official_runtime_uses_only_unified_result() -> None:
             outcome = market_flow.process_market_item(
                 item,
                 raw_item,
-                store_kind="official",
                 db_path=db_path,
                 deliver=False,
                 production_admission=admitted(),
@@ -412,11 +409,11 @@ def test_production_official_runtime_uses_only_unified_result() -> None:
                 assert conn.execute(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='official_news_reviews'"
                 ).fetchone()[0] == 0
-                alias = conn.execute(
-                    "SELECT item_kind,source,legacy_item_id FROM market_item_aliases"
+                stored = conn.execute(
+                    "SELECT source,source_item_id FROM market_items"
                 ).fetchone()
             assert unified == ("succeeded", "archive")
-            assert alias == ("official", "nvidia_blog", "official-1")
+            assert stored == ("nvidia_blog", "official-1")
             assert outcome.inserted is True
     finally:
         market_flow.interpret_market_item = original_interpreter
@@ -463,7 +460,6 @@ def test_production_llm_failure_retries_same_review_without_delivery() -> None:
                 market_flow.process_market_item(
                     item,
                     raw_item,
-                    store_kind="article",
                     db_path=db_path,
                     deliver=False,
                     production_admission=admitted(),
@@ -488,7 +484,6 @@ def test_production_llm_failure_retries_same_review_without_delivery() -> None:
             outcome = market_flow.process_market_item(
                 item,
                 raw_item,
-                store_kind="article",
                 db_path=db_path,
                 deliver=False,
                 production_admission=admitted(),
@@ -505,6 +500,44 @@ def test_production_llm_failure_retries_same_review_without_delivery() -> None:
         market_flow.interpret_market_item = original_interpreter
         market_flow.decide_market_item_with_llm = original_decider
     assert calls == {"evaluate": 1}
+
+
+def test_succeeded_review_without_decision_fails_retryable() -> None:
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "missing-decision.sqlite3"
+        init_db(db_path).close()
+        item = NormalizedMarketItem(
+            source="test_source",
+            title="缺少决策结果",
+            raw={"id": "missing-decision-1"},
+        )
+        item_id, review_id = record_production_admission(item, admitted(), db_path=db_path)
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(
+                "UPDATE market_reviews SET review_status='succeeded', decision_json=NULL WHERE id=?",
+                (review_id,),
+            )
+            conn.commit()
+        try:
+            market_flow.process_market_item(
+                item,
+                {"id": "missing-decision-1", "title": item.title},
+                db_path=db_path,
+                deliver=True,
+                production_admission=admitted(),
+                production_portfolio=object(),
+                market_item_id=item_id,
+                market_review_id=review_id,
+            )
+        except RuntimeError as exc:
+            assert "缺少有效 DecisionResult" in str(exc)
+        else:
+            raise AssertionError("missing DecisionResult must fail closed")
+        with sqlite3.connect(db_path) as conn:
+            assert conn.execute(
+                "SELECT review_status FROM market_reviews WHERE id=?", (review_id,)
+            ).fetchone()[0] == "failed_retryable"
+            assert conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
 
 
 def test_production_uncertain_terminates_review_without_delivery() -> None:
@@ -529,7 +562,6 @@ def test_production_uncertain_terminates_review_without_delivery() -> None:
             market_flow.process_market_item(
                 item,
                 raw_item,
-                store_kind="article",
                 db_path=db_path,
                 deliver=True,
                 production_admission=admitted(),
@@ -579,7 +611,6 @@ def test_production_uncertain_terminates_review_without_delivery() -> None:
             market_flow.process_market_item(
                 item,
                 raw_item,
-                store_kind="article",
                 db_path=db_path,
                 deliver=False,
                 production_admission=admitted(),
@@ -607,19 +638,18 @@ def test_event_uncertain_preserves_terminal_status_through_processing_wrapper() 
             source_category="news_media",
             content_type="flash",
             title="证据不足的快讯",
-            raw={"source_event_id": "flash-insufficient-1"},
+            raw={"id": "flash-insufficient-1"},
         )
         raw_item = {
             "source": "sina_flash",
-            "source_event_id": "flash-insufficient-1",
-            "event_type": "flash",
+            "id": "flash-insufficient-1",
+            "content_type": "flash",
             "title": item.title,
         }
         item_id, review_id = record_production_admission(
             item,
             admitted(),
             db_path=db_path,
-            task="sina_flash_portfolio",
         )
         market_flow.decide_market_item_with_llm = lambda *_args, **_kwargs: (_ for _ in ()).throw(
             ProductionLLMInsufficientEvidence("valid uncertain result")
@@ -628,15 +658,13 @@ def test_event_uncertain_preserves_terminal_status_through_processing_wrapper() 
             market_flow.process_market_item(
                 item,
                 raw_item,
-                store_kind="event",
-                task="sina_flash_portfolio",
                 db_path=db_path,
                 production_admission=admitted(),
                 production_portfolio=object(),
                 market_item_id=item_id,
                 market_review_id=review_id,
             )
-        except market_flow.MarketItemProcessingError as exc:
+        except ProductionLLMInsufficientEvidence as exc:
             assert processing_failure_status(exc) == "insufficient_evidence"
         else:
             raise AssertionError("event uncertain must retain the terminal processing status")
@@ -654,10 +682,11 @@ def main() -> int:
     test_interpretation_failure_preserves_decision_action()
     test_supplied_source_interpretation_skips_second_llm_call()
     test_value_directory_enrichment_is_preserved_in_normalized_item()
-    test_production_content_runtime_uses_unified_result_for_existing_and_delivery()
+    test_production_runtime_uses_unified_result_for_existing_and_delivery()
     test_production_event_runtime_completes_only_unified_result()
     test_production_official_runtime_uses_only_unified_result()
     test_production_llm_failure_retries_same_review_without_delivery()
+    test_succeeded_review_without_decision_fails_retryable()
     test_production_uncertain_terminates_review_without_delivery()
     test_event_uncertain_preserves_terminal_status_through_processing_wrapper()
     print("market flow checks passed")

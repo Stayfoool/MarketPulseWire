@@ -15,8 +15,8 @@ from market_feedback import FeedbackIdentity, feedback_test_card
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def build_test_card(item_id: str) -> dict:
-    return feedback_test_card(FeedbackIdentity("test", "feishu_feedback", item_id))
+def build_test_card() -> dict:
+    return feedback_test_card(FeedbackIdentity(0))
 
 
 def main() -> int:
@@ -31,7 +31,7 @@ def main() -> int:
     if not configured():
         raise SystemExit("飞书反馈应用配置不完整")
     item_id = f"test-{int(time.time() * 1_000_000)}"
-    response = send_interactive_card(build_test_card(item_id))
+    response = send_interactive_card(build_test_card())
     if not response.ok:
         raise SystemExit(f"测试卡发送失败：{response.code or ''} {response.message}")
     print(f"测试卡已发送：item_id={item_id} message_id={response.message_id}")

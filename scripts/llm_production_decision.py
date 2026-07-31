@@ -80,7 +80,7 @@ def _write_private_audit(
         "market_item_id": market_item_id,
         "market_review_id": market_review_id,
         "source": item.source,
-        "source_item_id": str(item.raw.get("source_event_id") or item.raw.get("id") or item.dedupe_key),
+        "source_item_id": str(item.raw.get("id") or item.dedupe_key),
         "application_revision": application_revision,
         "llm_decision_rule_version": evaluation.get("llm_decision_rule_version") or "",
         "prompt_version": evaluation.get("prompt_version") or "",

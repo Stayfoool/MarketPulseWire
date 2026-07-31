@@ -40,10 +40,10 @@ def callback_response(payload: dict[str, Any]) -> dict[str, Any]:
         else:
             response["toast"] = {"type": "warning", "content": "反馈已记录，但卡片状态未更新"}
             card_status = "unavailable"
-        item_kind = getattr(identity, "item_kind", "unknown") if identity is not None else "unknown"
+        market_item_id = getattr(identity, "market_item_id", 0) if identity is not None else 0
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
         print(
-            f"飞书反馈回调完成：status=recorded card={card_status} kind={item_kind} elapsed_ms={elapsed_ms}",
+            f"飞书反馈回调完成：status=recorded card={card_status} market_item_id={market_item_id} elapsed_ms={elapsed_ms}",
             flush=True,
         )
         return response

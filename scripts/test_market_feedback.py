@@ -58,14 +58,6 @@ def insert_delivered_article(db_path: Path) -> None:
             """,
             ("2026-07-15T00:00:00+00:00",) * 3,
         ).lastrowid)
-        conn.execute(
-            """
-            INSERT INTO market_item_aliases (
-                market_item_id,item_kind,source,legacy_item_id,legacy_store_kind,created_at
-            ) VALUES (?, 'article', 'cls_telegraph_api', 'item-1', 'market_items', ?)
-            """,
-            (item_id, "2026-07-15T00:00:00+00:00"),
-        )
         feedback_card = {
             "_feedback_card_base": {
                 "header": {"title": {"tag": "plain_text", "content": "Feedback fixture"}},
@@ -136,7 +128,7 @@ def callback(
 
 
 def test_feedback_token_and_card_actions() -> None:
-    identity = FeedbackIdentity("article", "cls_telegraph_api", "item-1")
+    identity = FeedbackIdentity(1)
     token = build_feedback_token(identity, secret=TEST_SIGNING_KEY, issued_at=1)
     assert parse_feedback_token(token, secret=TEST_SIGNING_KEY) == identity
     try:
@@ -169,7 +161,7 @@ def test_last_click_wins_by_feishu_timestamp_and_keeps_history() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "feedback.sqlite3"
         insert_delivered_article(db_path)
-        identity = FeedbackIdentity("article", "cls_telegraph_api", "item-1")
+        identity = FeedbackIdentity(1)
         token = build_feedback_token(identity, secret=TEST_SIGNING_KEY, issued_at=1)
 
         first = handle_feedback_callback(
@@ -258,7 +250,7 @@ def test_labels_toggle_independently_and_keep_one_current_snapshot() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "feedback.sqlite3"
         insert_delivered_article(db_path)
-        identity = FeedbackIdentity("article", "cls_telegraph_api", "item-1")
+        identity = FeedbackIdentity(1)
         token = build_feedback_token(identity, secret=TEST_SIGNING_KEY, issued_at=1)
 
         useful = handle_feedback_callback(
@@ -288,7 +280,7 @@ def test_labels_toggle_independently_and_keep_one_current_snapshot() -> None:
         assert history[0][0:4] == ("high_value", '["high_value"]', "[]", None)
         assert history[1][0:4] == ("duplicate", '["high_value", "duplicate"]', "[]", 1)
         assert json.loads(history[1][4]) == {"event_type": "card.action.trigger", "toggle": "select"}
-        projected = projection[("article", "cls_telegraph_api", "item-1")]
+        projected = projection[1]
         assert projected["labels"] == ["high_value", "duplicate"]
 
         selected_card = feedback_card_for_callback(
@@ -345,7 +337,7 @@ def test_unauthorized_operator_is_rejected() -> None:
         db_path = Path(tmp) / "feedback.sqlite3"
         insert_delivered_article(db_path)
         token = build_feedback_token(
-            FeedbackIdentity("article", "cls_telegraph_api", "item-1"), secret=TEST_SIGNING_KEY
+            FeedbackIdentity(1), secret=TEST_SIGNING_KEY
         )
         try:
             handle_feedback_callback(
@@ -425,7 +417,7 @@ def test_test_card_feedback_is_audited_but_excluded_from_quality_metrics() -> No
         db_path = Path(tmp) / "feedback.sqlite3"
         init_db(db_path).close()
         token = build_feedback_token(
-            FeedbackIdentity("test", "feishu_feedback", "test-1"), secret=TEST_SIGNING_KEY
+            FeedbackIdentity(0), secret=TEST_SIGNING_KEY
         )
         result = handle_feedback_callback(
             callback(token, "duplicate", "evt-test", 100),
@@ -436,9 +428,9 @@ def test_test_card_feedback_is_audited_but_excluded_from_quality_metrics() -> No
         assert result["result"]["is_current"] is True
         with sqlite3.connect(db_path) as conn:
             stored = conn.execute(
-                "SELECT item_kind, decision_action, delivery_status FROM market_feedback"
+                "SELECT market_item_id, decision_action, delivery_status FROM market_feedback"
             ).fetchone()
-        assert stored == ("test", "test", "sent")
+        assert stored == (None, "test", "sent")
         quality = feedback_quality_payload(db_path=db_path, days=30)
         assert quality["summary"]["delivered"] == 0
         assert quality["summary"]["labelled"] == 0
@@ -449,7 +441,7 @@ def test_more_reason_is_stored_with_invalid_feedback() -> None:
         db_path = Path(tmp) / "feedback.sqlite3"
         insert_delivered_article(db_path)
         token = build_feedback_token(
-            FeedbackIdentity("article", "cls_telegraph_api", "item-1"), secret=TEST_SIGNING_KEY
+            FeedbackIdentity(1), secret=TEST_SIGNING_KEY
         )
         response = handle_feedback_callback(
             callback(token, "invalid", "evt-reason", 100, reason_tag="stale"),
@@ -477,7 +469,7 @@ def test_every_feedback_label_combination_is_rendered_and_counted() -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "feedback.sqlite3"
             insert_delivered_article(db_path)
-            identity = FeedbackIdentity("article", "cls_telegraph_api", "item-1")
+            identity = FeedbackIdentity(1)
             token = build_feedback_token(identity, secret=TEST_SIGNING_KEY, issued_at=1)
             expected = [label for index, label in enumerate(labels) if mask & (1 << index)]
             result = None
@@ -518,15 +510,15 @@ def test_existing_single_selection_becomes_multiselect_without_rewriting_history
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "feedback.sqlite3"
         insert_delivered_article(db_path)
-        identity = FeedbackIdentity("article", "cls_telegraph_api", "item-1")
+        identity = FeedbackIdentity(1)
         token = build_feedback_token(identity, secret=TEST_SIGNING_KEY, issued_at=1)
         with sqlite3.connect(db_path) as conn:
             conn.execute(
                 """
                 INSERT INTO market_feedback (
-                    feedback_event_id,item_kind,source,item_id,label,reason_tags_json,
+                    feedback_event_id,market_item_id,label,reason_tags_json,
                     operator_id,rule_ids_json,clicked_at_us,received_at,raw_json
-                ) VALUES ('legacy','article','cls_telegraph_api','item-1','high_value',
+                ) VALUES ('legacy',1,'high_value',
                           '[]',?,'[]',100,'2026-07-15T00:00:00+00:00','{}')
                 """,
                 (OPERATOR,),
@@ -556,15 +548,12 @@ def test_current_review_card_is_recovered_from_sent_delivery_payload() -> None:
         }
         with sqlite3.connect(db_path) as conn:
             conn.execute(
-                "UPDATE market_item_aliases SET item_kind='event',source='sina_flash'"
-            )
-            conn.execute(
                 "UPDATE deliveries SET payload_json=?",
                 (json.dumps({"_feedback_card_base": base}),),
             )
             conn.commit()
         card = feedback_card_for_callback(
-            FeedbackIdentity("event", "sina_flash", "item-1"),
+            FeedbackIdentity(1),
             ["high_value", "duplicate"],
             secret=TEST_SIGNING_KEY,
             db_path=db_path,
@@ -582,12 +571,12 @@ def test_unified_review_without_card_snapshot_keeps_toast_only() -> None:
         with sqlite3.connect(db_path) as conn:
             conn.execute("UPDATE deliveries SET payload_json='{}'")
             conn.commit()
-        identity = FeedbackIdentity("article", "cls_telegraph_api", "item-1")
+        identity = FeedbackIdentity(1)
         assert feedback_card_for_callback(identity, "duplicate", secret=TEST_SIGNING_KEY, db_path=db_path) is None
 
 
 def test_callback_response_replaces_card_when_snapshot_is_available() -> None:
-    identity = FeedbackIdentity("test", "feishu_feedback", "test-1")
+    identity = FeedbackIdentity(0)
     replacement = {"elements": [{"tag": "div"}]}
     result = {
         "toast": {"type": "success", "content": "已记录"},
@@ -604,11 +593,10 @@ def test_callback_response_replaces_card_when_snapshot_is_available() -> None:
     assert render.call_args.args[:2] == (identity, ["duplicate"])
     log_text = " ".join(str(arg) for call in logged.call_args_list for arg in call.args)
     assert "status=recorded" in log_text and "card=updated" in log_text
-    assert identity.source not in log_text and identity.item_id not in log_text
 
 
 def test_callback_response_keeps_successful_feedback_toast_when_card_projection_fails() -> None:
-    identity = FeedbackIdentity("test", "feishu_feedback", "test-1")
+    identity = FeedbackIdentity(0)
     result = {
         "toast": {"type": "success", "content": "已记录"},
         "card_state": {"identity": identity, "active_labels": ["duplicate"], "reason_tags": []},
@@ -625,7 +613,7 @@ def test_overflow_callback_value_is_parsed() -> None:
         db_path = Path(tmp) / "feedback.sqlite3"
         insert_delivered_article(db_path)
         token = build_feedback_token(
-            FeedbackIdentity("article", "cls_telegraph_api", "item-1"), secret=TEST_SIGNING_KEY
+            FeedbackIdentity(1), secret=TEST_SIGNING_KEY
         )
         payload = callback(token, "invalid", "evt-overflow", 100)
         payload["event"]["action"] = {

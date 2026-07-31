@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from db_utils import update_seen_item_lifecycle
-from market_item import NormalizedMarketItem, article_item_id
+from market_item import NormalizedMarketItem, raw_item_id
 from market_flow import normalize_market_item, process_market_item
 from market_store import processing_failure_status, source_item_review_snapshot
 from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
@@ -47,25 +47,6 @@ def utc_now() -> str:
 def table_exists(conn: sqlite3.Connection, name: str) -> bool:
     row = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone()
     return row is not None
-
-
-def load_seen_item_ids(source_id: str = SOURCE_ID, db_path: Path | None = None) -> set[str]:
-    db_path = db_path or DB_PATH
-    if not db_path.exists():
-        return set()
-    try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-            if not table_exists(conn, "seen_items"):
-                return set()
-            return {
-                str(row[0] or "")
-                for row in conn.execute(
-                    "SELECT item_id FROM seen_items WHERE source = ?",
-                    (source_id,),
-                )
-            }
-    except sqlite3.Error:
-        return set()
 
 
 def load_seen_item_states(
@@ -125,72 +106,6 @@ def load_unpushed_review_ids(
         return set()
 
 
-def load_reviewed_item_ids(source_id: str = SOURCE_ID, db_path: Path | None = None) -> set[str]:
-    db_path = db_path or DB_PATH
-    if not db_path.exists():
-        return set()
-    try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-            return {
-                str(row[0] or "")
-                for row in conn.execute(
-                    """
-                    SELECT m.source_item_id
-                    FROM market_items m
-                    JOIN market_reviews r
-                      ON r.market_item_id=m.id AND r.task='production'
-                     AND r.is_current=1 AND r.review_status='succeeded'
-                    WHERE m.source = ?
-                    """,
-                    (source_id,),
-                )
-            }
-    except sqlite3.Error:
-        return set()
-
-
-def shadow_payload(entries: list[dict[str, Any]], *, started_at: str, source: ValueDirectorySource | None = None) -> dict[str, Any]:
-    source = source or source_config()
-    seen = load_seen_item_ids(source.source_id)
-    reviewed = load_reviewed_item_ids(source.source_id)
-    candidates = []
-    for item in entries:
-        item_id = article_item_id(item)
-        candidates.append(
-            {
-                "source": source.source_id,
-                "id": item_id,
-                "url": item.get("url", ""),
-                "title": item.get("title", ""),
-                "published_at": item.get("published_at", ""),
-                "summary": item.get("summary", ""),
-                "already_seen": item_id in seen,
-                "already_reviewed": item_id in reviewed,
-                "pipeline": "value_directory shadow only; production uses unified market flow",
-            }
-        )
-    return {
-        "ok": True,
-        "mode": "shadow_dry_run",
-        "sent_feishu": False,
-        "ran_llm_review": False,
-        "wrote_production_seen_items": False,
-        "wrote_production_reviews": False,
-        "source": source.source_id,
-        "url": source.list_url,
-        "started_at": started_at,
-        "finished_at": utc_now(),
-        "counts": {
-            "raw_items": len(entries),
-            "candidates": len(candidates),
-            "already_seen_candidates": sum(1 for item in candidates if item["already_seen"]),
-            "already_reviewed_candidates": sum(1 for item in candidates if item["already_reviewed"]),
-        },
-        "candidates": candidates,
-        "errors": [],
-    }
-
-
 def preview_enabled() -> bool:
     return os.getenv("VALUE_DIRECTORY_PREVIEW_ENABLED", "1").strip() != "0"
 
@@ -237,7 +152,7 @@ def production_preview_selector(
     def selected(source: ValueDirectorySource, item: dict[str, Any]) -> bool:
         if not preview_enabled():
             return False
-        item_id = article_item_id(item)
+        item_id = raw_item_id(item)
         states = states_by_source.get(source.source_id, {})
         if target_id and item_id == target_id:
             return True
@@ -263,7 +178,7 @@ def enrich_item_with_preview(item: dict[str, Any], preview: dict[str, Any] | Non
 
 
 def preview_key(source: ValueDirectorySource, item: dict[str, Any]) -> tuple[str, str]:
-    return source.source_id, article_item_id(item)
+    return source.source_id, raw_item_id(item)
 
 
 def has_preview_record(item: dict[str, Any]) -> bool:
@@ -309,7 +224,6 @@ def normalized_value_directory_item(
     return normalize_market_item(
         source.source_id,
         prepared,
-        store_kind="article",
         source_profile_id=source.source_id,
     )
 
@@ -336,7 +250,7 @@ def review_and_maybe_push(
     browser_collection_complete: bool = False,
 ) -> bool:
     source = source or source_config()
-    item_id = article_item_id(item)
+    item_id = raw_item_id(item)
     existing = source_item_review_snapshot(source.source_id, item_id, db_path=DB_PATH)
     if existing and (existing.get("delivered") or not recheck_rules):
         return False
@@ -393,7 +307,6 @@ def review_and_maybe_push(
         outcome = process_market_item(
             normalized,
             item,
-            store_kind="article",
             db_path=DB_PATH,
             deliver=True,
             use_rule_dedup=True,
@@ -455,18 +368,18 @@ def collect_production(
     )
     pushed = 0
     reviewed = 0
-    new_item_ids = {article_item_id(item) for item in new_items}
+    new_item_ids = {raw_item_id(item) for item in new_items}
     retryable_items = [
         item
         for item in entries
-        if article_item_id(item) in retryable_ids and article_item_id(item) not in new_item_ids
+        if raw_item_id(item) in retryable_ids and raw_item_id(item) not in new_item_ids
     ]
     for item in [*new_items, *retryable_items]:
         reviewed += 1
         if review_and_maybe_push(
             item,
             source=source,
-            recheck_rules=article_item_id(item) in retryable_ids,
+            recheck_rules=raw_item_id(item) in retryable_ids,
             collected_previews=collected_previews,
             preview_errors=preview_errors,
             browser_collection_complete=browser_collection_complete,
@@ -474,14 +387,14 @@ def collect_production(
             pushed += 1
     rechecked = 0
     rechecked_item_ids: set[str] = set()
-    retryable_item_id_set = {article_item_id(item) for item in retryable_items}
+    retryable_item_id_set = {raw_item_id(item) for item in retryable_items}
     if recheck_unpushed_enabled():
         limit = recheck_unpushed_limit()
         unpushed_review_ids = load_unpushed_review_ids(source.source_id)
         for item in entries:
             if rechecked >= limit:
                 break
-            item_id = article_item_id(item)
+            item_id = raw_item_id(item)
             if item_id in new_item_ids or item_id in retryable_item_id_set:
                 continue
             if item_id not in unpushed_review_ids:
@@ -506,7 +419,7 @@ def collect_production(
         and target_id not in rechecked_item_ids
     ):
         for item in entries:
-            if article_item_id(item) != target_id:
+            if raw_item_id(item) != target_id:
                 continue
             rechecked += 1
             reviewed += 1
@@ -580,27 +493,9 @@ def print_summary(payload: dict[str, Any]) -> None:
         print(f"[ERR] {error}", flush=True)
 
 
-def run_source(
-    source_id: str,
-    *,
-    production: bool,
-    limit: int,
-    notify_baseline: bool,
-    recheck_item_id: str = "",
-) -> dict[str, Any]:
-    return run(
-        production=production,
-        limit=limit,
-        notify_baseline=notify_baseline,
-        recheck_item_id=recheck_item_id,
-        source_ids=[source_id],
-    )["sources"][0]
-
-
 def source_payload_error(
     source: ValueDirectorySource,
     *,
-    production: bool,
     started_at: str,
     error: Exception | str,
 ) -> dict[str, Any]:
@@ -609,7 +504,7 @@ def source_payload_error(
         record_source_failure(conn, MONITOR, source.source_id, error_text)
     return {
         "ok": False,
-        "mode": "production" if production else "shadow_dry_run",
+        "mode": "production",
         "source": source.source_id,
         "url": source.list_url,
         "started_at": started_at,
@@ -623,7 +518,6 @@ def process_collected_source(
     source: ValueDirectorySource,
     entries: list[dict[str, Any]],
     *,
-    production: bool,
     notify_baseline: bool,
     started_at: str,
     recheck_item_id: str,
@@ -631,29 +525,25 @@ def process_collected_source(
     preview_errors: dict[tuple[str, str], str],
 ) -> dict[str, Any]:
     try:
-        if production:
-            payload = collect_production(
-                entries,
-                source=source,
-                notify_baseline=notify_baseline,
-                started_at=started_at,
-                recheck_item_id=recheck_item_id,
-                collected_previews=collected_previews,
-                preview_errors=preview_errors,
-                browser_collection_complete=True,
-            )
-        else:
-            payload = shadow_payload(entries, started_at=started_at, source=source)
+        payload = collect_production(
+            entries,
+            source=source,
+            notify_baseline=notify_baseline,
+            started_at=started_at,
+            recheck_item_id=recheck_item_id,
+            collected_previews=collected_previews,
+            preview_errors=preview_errors,
+            browser_collection_complete=True,
+        )
         with connect_db() as conn:
             record_source_success(conn, MONITOR, source.source_id)
         return payload
     except Exception as exc:  # noqa: BLE001 - health state should capture every collector failure
-        return source_payload_error(source, production=production, started_at=started_at, error=exc)
+        return source_payload_error(source, started_at=started_at, error=exc)
 
 
 def run(
     *,
-    production: bool,
     limit: int,
     notify_baseline: bool,
     recheck_item_id: str = "",
@@ -670,14 +560,10 @@ def run(
             collection = collect_sources_with_previews(
                 enabled_sources,
                 limit=limit,
-                preview_selector=(
-                    production_preview_selector(
-                        enabled_sources,
-                        notify_baseline=notify_baseline,
-                        recheck_item_id=recheck_item_id,
-                    )
-                    if production
-                    else lambda _source, _item: False
+                preview_selector=production_preview_selector(
+                    enabled_sources,
+                    notify_baseline=notify_baseline,
+                    recheck_item_id=recheck_item_id,
                 ),
             )
         except Exception as exc:  # noqa: BLE001 - one browser session owns all enabled sources.
@@ -691,7 +577,7 @@ def run(
             payloads.append(
                 {
                     "ok": True,
-                    "mode": "production" if production else "shadow_dry_run",
+                    "mode": "production",
                     "skipped": True,
                     "reason": "source profile 已停用",
                     "source": source.source_id,
@@ -707,7 +593,6 @@ def run(
             payloads.append(
                 source_payload_error(
                     source,
-                    production=production,
                     started_at=source_started_at,
                     error=collection_error,
                 )
@@ -718,7 +603,6 @@ def run(
             payloads.append(
                 source_payload_error(
                     source,
-                    production=production,
                     started_at=source_started_at,
                     error=collection.source_errors[source_id],
                 )
@@ -728,7 +612,6 @@ def run(
             process_collected_source(
                 source,
                 collection.entries_by_source.get(source_id, []),
-                production=production,
                 notify_baseline=notify_baseline,
                 started_at=source_started_at,
                 recheck_item_id=recheck_item_id,
@@ -747,10 +630,10 @@ def run(
     }
     return {
         "ok": all(payload.get("ok") for payload in payloads),
-        "mode": "production" if production else "shadow_dry_run",
+        "mode": "production",
         "sent_feishu": any(payload.get("sent_feishu") for payload in payloads),
         "ran_llm_review": False,
-        "wrote_production_seen_items": production,
+        "wrote_production_seen_items": True,
         "wrote_production_reviews": counts["reviewed_items"] > 0,
         "source": "value_directory",
         "url": LIST_URL,
@@ -766,7 +649,6 @@ def run(
 def main() -> int:
     load_env(ENV_PATH)
     parser = argparse.ArgumentParser(description="Monitor ValueList international-bank stock research index.")
-    parser.add_argument("--production", action="store_true", help="写入 seen_items/market_reviews 并按统一决策发送飞书。")
     parser.add_argument("--notify-baseline", action="store_true", help="首次建立基线时也处理旧条目。默认只建立基线。")
     parser.add_argument("--limit", type=int, default=30, help="读取列表页前 N 条。")
     parser.add_argument(
@@ -786,7 +668,6 @@ def main() -> int:
     args = parser.parse_args()
 
     payload = run(
-        production=args.production,
         limit=max(1, min(args.limit, 100)),
         notify_baseline=args.notify_baseline or os.getenv("SURVEIL_NOTIFY_BASELINE", "") == "1",
         recheck_item_id=args.recheck_item_id,

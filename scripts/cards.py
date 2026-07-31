@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 from feishu_image import image_key_from_url
 from link_enrichment import analysis_text_with_links, display_url
 from market_card_view import decision_basis_reasons, interpretation_core
-from media_sources import is_overseas_media_source, overseas_media_access_note, overseas_media_module
+from media_sources import is_overseas_media_source, overseas_media_module
 from post_analysis import analyze_post, company_label, extract_tickers
 
 
@@ -182,7 +182,14 @@ def cls_metadata_lines(item: dict[str, Any], review: dict[str, Any] | None = Non
     return lines
 
 
-def build_thin_article_card(source: str, item: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
+def build_market_item_card(
+    source: str,
+    item: dict[str, Any],
+    review: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    review = review if isinstance(review, dict) else item.get("review")
+    if not isinstance(review, dict):
+        raise ValueError("market information card requires a unified review")
     title = str(item.get("title") or "")
     url = str(item.get("url") or "")
     text = str(item.get("full_text") or item.get("summary") or "")
@@ -430,103 +437,3 @@ def source_module(source: str, url: str) -> str:
     if source == "semianalysis":
         return "SemiAnalysis / RSS"
     return source
-
-
-def access_note(source: str, url: str, body_source: str) -> str:
-    if is_overseas_media_source(source):
-        return overseas_media_access_note(source, body_source)
-    if source in {
-        "openai_news",
-        "nvidia_blog",
-        "nvidia_developer_blog",
-        "samsung_semiconductor_news",
-        "samsung_global_semiconductor",
-        "skhynix_newsroom",
-        "micron_news_releases",
-    }:
-        return "免费公开内容：来自公司官方新闻/博客/RSS。"
-    if source == "trendforce_page":
-        if "/research/download/" in url:
-            return "可能为 Research Report / Selected Topics 会员或付费内容；当前只使用官方页面公开标题/摘要，不绕过付费墙。"
-        if "/news/" in url:
-            return "免费公开内容：来自 TrendForce News 官方页面。"
-        return f"免费/付费状态未知：正文来源为 {body_source}。"
-    if source.startswith("trendforce_"):
-        if "/presscenter/news/" in url:
-            return "免费公开内容：来自 TrendForce Press Centre 新闻页/RSS。"
-        if "/research/" in url:
-            return "可能为 Research Report 内容；完整报告是否付费取决于 TrendForce 页面权限。"
-        return "免费/付费状态未知：来自 RSS，需以原页面访问权限为准。"
-    if source == "semianalysis":
-        return "免费/付费状态未知：来自 RSS；若原页面进入付费墙，以页面权限为准。"
-    return f"免费/付费状态未知：正文来源为 {body_source}。"
-
-
-def build_article_card(source: str, item: dict[str, Any]) -> dict[str, Any]:
-    review = item.get("article_review") or item.get("review")
-    if isinstance(review, dict):
-        return build_thin_article_card(source, item, review)
-    title = item.get("title", "")
-    url = item.get("url", "")
-    text = item.get("full_text") or item.get("summary") or ""
-    body_source = item.get("body_source", "RSS")
-    analysis_lines = item.get("analysis_lines") or analyze_post(
-        f"{title}\n\n{text}",
-        thinking_override=item.get("analysis_thinking"),
-        max_tokens_override=item.get("analysis_max_tokens"),
-    )
-    prefix_lines = item.get("analysis_lines_prefix") or []
-    if prefix_lines and len(analysis_lines) > 1:
-        analysis_lines = [analysis_lines[0], *prefix_lines, *analysis_lines[1:]]
-    cls_lines = cls_metadata_lines(item, review if isinstance(review, dict) else None)
-    elements: list[dict[str, Any]] = [
-        div_markdown(f"**发送时间**：{md_escape(now_beijing())}"),
-        div_markdown(f"**来源模块**：{md_escape(item.get('source_module') or source_module(source, url))}"),
-        div_markdown(f"**免费/付费**：{md_escape(item.get('access_note') or access_note(source, url, body_source))}"),
-        div_markdown(f"**发布时间**：{md_escape(format_time(str(item.get('published_at', ''))))}"),
-        div_markdown(f"**正文来源**：{md_escape(body_source)}"),
-    ]
-    if cls_lines:
-        elements.append(div_markdown("**财联社元数据**\n" + md_escape("\n".join(cls_lines))))
-    elements.extend([{"tag": "hr"}, div_markdown(f"**标题**\n{md_escape(title)}")])
-    for index, chunk in enumerate(text_chunks(text), start=1):
-        chunk_title = "**原文全文**" if index == 1 else f"**原文全文（续 {index}）**"
-        elements.append(div_markdown(f"{chunk_title}\n{md_escape(chunk)}"))
-    elements.extend(
-        [
-            {"tag": "hr"},
-            div_markdown("**中文解读**\n" + md_escape("\n".join(analysis_lines[1:]))),
-        ]
-    )
-    if url:
-        elements.append(
-            {
-                "tag": "action",
-                "actions": [
-                    {
-                        "tag": "button",
-                        "text": {"tag": "plain_text", "content": "打开原文"},
-                        "type": "primary",
-                        "multi_url": {
-                            "url": url,
-                            "pc_url": url,
-                            "ios_url": url,
-                            "android_url": url,
-                        },
-                    }
-                ],
-            }
-        )
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "template": "green",
-            "title": {
-                "tag": "plain_text",
-                "content": item.get("source_display")
-                or item.get("source_module")
-                or f"{source} 新文章",
-            },
-        },
-        "elements": elements,
-    }

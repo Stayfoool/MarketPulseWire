@@ -198,7 +198,7 @@ def build_profiles() -> list[SourceProfile]:
                 pipeline="采集层复用 rss_monitor -> NormalizedMarketItem -> 统一决策/解读 -> market_reviews -> 统一投递/view",
                 service_units=("surveil-research-collector.timer", "surveil-research-collector.service"),
                 health_keys=(("rss_monitor", source_id),),
-                fetcher="scripts/research_collector.py -> scripts/overseas_media_monitor.py / rss_monitor.py",
+                fetcher="scripts/research_collector.py -> scripts/rss_monitor.py",
                 proxy_profile="通常走服务器本机 mihomo 代理",
                 text_length_policy="统一决策；短硬变量直接快判，长文按需截断/摘要",
                 url=url,

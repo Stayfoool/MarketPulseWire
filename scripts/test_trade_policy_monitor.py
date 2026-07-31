@@ -174,7 +174,6 @@ def test_notify_item_uses_unified_process_market_item() -> None:
     normalized, raw_item, kwargs = calls[0]
     assert normalized.source == source.name
     assert raw_item["id"] == item["id"]
-    assert kwargs["store_kind"] == "article"
     assert kwargs["use_rule_dedup"] is True
     assert kwargs["production_admission"].status == "admitted"
     assert kwargs["production_admission"].matched_families == ("trade_policy",)

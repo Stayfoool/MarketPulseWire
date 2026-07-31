@@ -36,7 +36,7 @@ from holdings_store import (
     validate_holdings,
 )
 from market_db import DEFAULT_DB_PATH
-from market_canonical_reader import canonical_event_rows
+from market_canonical_reader import canonical_market_rows
 from market_feedback import FEEDBACK_LABELS, feedback_projection_by_item, feedback_quality_payload
 from llm_decision_web import llm_decision_rows, llm_decision_summary
 from current_rules_web import current_rules_payload
@@ -88,7 +88,7 @@ SERVICE_UNITS = [
     "surveil-sina-flash.service",
     "surveil-sina-stock-news.service",
     "surveil-company-disclosures.service",
-    "surveil-article-daily.service",
+    "surveil-market-daily.service",
     "surveil-llm-decision-audit-cleanup.service",
     "surveil-research-collector.service",
     "surveil-official-collector.service",
@@ -100,7 +100,7 @@ SERVICE_UNITS = [
 
 TIMER_UNITS = [
     "surveil-sina-stock-news.timer",
-    "surveil-article-daily.timer",
+    "surveil-market-daily.timer",
     "surveil-llm-decision-audit-cleanup.timer",
     "surveil-company-disclosures.timer",
     "surveil-research-collector.timer",
@@ -111,7 +111,7 @@ TIMER_UNITS = [
 
 RUN_ONCE_TARGETS = {
     "surveil-sina-stock-news.timer": "surveil-sina-stock-news.service",
-    "surveil-article-daily.timer": "surveil-article-daily.service",
+    "surveil-market-daily.timer": "surveil-market-daily.service",
     "surveil-llm-decision-audit-cleanup.timer": "surveil-llm-decision-audit-cleanup.service",
     "surveil-company-disclosures.timer": "surveil-company-disclosures.service",
     "surveil-research-collector.timer": "surveil-research-collector.service",
@@ -131,7 +131,7 @@ UNIT_METADATA = {
     "surveil-official-collector.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 10 分钟"},
     "surveil-news-collector.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 2 分钟"},
     "surveil-value-directory.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每天 05:00 / 21:00；需先完成服务器浏览器登录"},
-    "surveil-article-daily.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 20:50"},
+    "surveil-market-daily.service": {"group": "processing_scheduled", "type": "定时处理", "schedule": "timer 20:50"},
     "surveil-llm-decision-audit-cleanup.service": {"group": "processing_scheduled", "type": "审计清理", "schedule": "每天 15:30 北京时间"},
     "surveil-holdings-web.service": {"group": "infrastructure", "type": "基础设施", "schedule": "Web 工作台"},
     "surveil-feishu-feedback.service": {"group": "infrastructure", "type": "基础设施", "schedule": "飞书长连接"},
@@ -142,7 +142,7 @@ UNIT_METADATA = {
     "surveil-official-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 10 分钟"},
     "surveil-news-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 2 分钟"},
     "surveil-value-directory.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每天 05:00 / 21:00；默认需人工启用"},
-    "surveil-article-daily.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "20:50"},
+    "surveil-market-daily.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "20:50"},
     "surveil-llm-decision-audit-cleanup.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "每天 15:30 北京时间"},
 }
 
@@ -164,7 +164,7 @@ UNIT_TASK_LABELS = {
     "surveil-official-collector": "公司官网采集",
     "surveil-news-collector": "新闻媒体采集",
     "surveil-value-directory": "价值目录",
-    "surveil-article-daily": "文章日报",
+    "surveil-market-daily": "市场信息日报",
     "surveil-llm-decision-audit-cleanup": "大模型决策审计清理",
     "surveil-holdings-web": "Surveil 工作台",
     "surveil-proxy": "网络代理",
@@ -268,7 +268,7 @@ def grouped_counts(conn: sqlite3.Connection, table: str, field: str, where: str,
     return [{"key": row["key"] or "unknown", "count": int(row["count"])} for row in rows]
 
 
-def event_center_where_clause(
+def market_information_where_clause(
     *,
     time_field: str,
     start_utc: str,
@@ -293,23 +293,23 @@ def event_center_where_clause(
     return " AND ".join(clauses), params
 
 
-def normalized_event_time_basis(value: str) -> str:
+def normalized_market_time_basis(value: str) -> str:
     return "published" if str(value or "").strip().lower() == "published" else "seen"
 
 
-def event_time_field(*, basis: str, seen_field: str, published_field: str) -> str:
+def market_time_field(*, basis: str, seen_field: str, published_field: str) -> str:
     if basis == "published":
         return f"COALESCE(NULLIF({published_field}, ''), {seen_field})"
     return seen_field
 
 
-def displayed_event_time(item: dict[str, Any], basis: str) -> str:
+def displayed_market_time(item: dict[str, Any], basis: str) -> str:
     if basis == "published":
         return str(item.get("published_at") or item.get("seen_at") or "")
     return str(item.get("seen_at") or item.get("published_at") or "")
 
 
-def normalized_event_feedback_filter(value: str) -> str:
+def normalized_market_feedback_filter(value: str) -> str:
     normalized = str(value or "").strip().lower()
     return normalized if normalized in {*FEEDBACK_LABELS, "unlabelled"} else ""
 
@@ -323,16 +323,14 @@ def normalized_filter_values(values: str | list[str]) -> list[str]:
     )
 
 
-def apply_event_feedback(
+def apply_market_feedback(
     item: dict[str, Any],
     *,
-    item_kind: str = "",
-    source: str = "",
-    item_id: str = "",
+    market_item_id: int | None = None,
     delivered: bool = False,
-    projection: dict[tuple[str, str, str], dict[str, Any]] | None = None,
+    projection: dict[int, dict[str, Any]] | None = None,
 ) -> None:
-    capable = item_kind in {"article", "official", "event"}
+    capable = bool(market_item_id)
     item["feedback_capable"] = capable
     item["feedback_delivered"] = bool(capable and delivered)
     item["feedback_labels"] = []
@@ -347,7 +345,7 @@ def apply_event_feedback(
         item["feedback_state"] = "not_delivered"
         item["feedback_display"] = "—"
         return
-    current = (projection or {}).get((item_kind, source, str(item_id)))
+    current = (projection or {}).get(int(market_item_id or 0))
     if not current:
         item["feedback_state"] = "unlabelled"
         item["feedback_display"] = "未反馈"
@@ -361,7 +359,7 @@ def apply_event_feedback(
     item["feedback_received_at"] = normalize_time(current.get("received_at"))
 
 
-def event_feedback_summary(rows: list[dict[str, Any]]) -> dict[str, int]:
+def market_feedback_summary(rows: list[dict[str, Any]]) -> dict[str, int]:
     delivered = [item for item in rows if item.get("feedback_delivered")]
     labelled = [item for item in delivered if item.get("feedback_labels")]
     return {
@@ -374,12 +372,11 @@ def event_feedback_summary(rows: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
-def fetch_events_rows(
+def fetch_market_rows(
     day: str = "",
     start_day: str = "",
     end_day: str = "",
     source: str = "",
-    kind: str = "",
     q: str = "",
     time_basis: str = "seen",
     include_baseline: bool = False,
@@ -394,18 +391,17 @@ def fetch_events_rows(
     start_utc, end_utc, _, _ = utc_window_for_range(start_day, end_day)
     q_lower = q.strip().lower()
     source_lowers = normalized_filter_values(source)
-    kind_lower = kind.strip().lower()
     feedback_filters = list(
         dict.fromkeys(
-            filter(None, map(normalized_event_feedback_filter, normalized_filter_values(feedback)))
+            filter(None, map(normalized_market_feedback_filter, normalized_filter_values(feedback)))
         )
     )
-    time_basis = normalized_event_time_basis(time_basis)
+    time_basis = normalized_market_time_basis(time_basis)
     rows: list[dict[str, Any]] = []
     with connect_sqlite(db_path) as conn:
         conn.row_factory = sqlite3.Row
         feedback_projection = feedback_projection_by_item(conn)
-        for item in canonical_event_rows(
+        for item in canonical_market_rows(
             conn,
             start_utc=start_utc,
             end_utc=end_utc,
@@ -417,11 +413,9 @@ def fetch_events_rows(
             item["published_at"] = normalize_time(item.get("published_at"))
             item["seen_at"] = normalize_time(item.get("seen_at"))
             if identity:
-                apply_event_feedback(
+                apply_market_feedback(
                     item,
-                    item_kind=str(identity["item_kind"]),
-                    source=str(identity["source"]),
-                    item_id=str(identity["item_id"]),
+                    market_item_id=int(identity["market_item_id"]),
                     delivered=bool(identity["delivered"]),
                     projection=feedback_projection,
                 )
@@ -429,8 +423,8 @@ def fetch_events_rows(
         if not feedback_filters and table_exists(conn, "seen_posts"):
             seen_columns = table_columns(conn, "seen_posts")
             delivery_expr = "delivery_status" if "delivery_status" in seen_columns else "'sent'"
-            where, params = event_center_where_clause(
-                time_field=event_time_field(
+            where, params = market_information_where_clause(
+                time_field=market_time_field(
                     basis=time_basis,
                     seen_field="first_seen_at",
                     published_field="published_at",
@@ -456,7 +450,6 @@ def fetch_events_rows(
                 text = row["text"] or ""
                 rows.append(
                     {
-                        "kind": "x_post",
                         "source": row["source"],
                         "source_id": row["source"],
                         "id": row["post_id"],
@@ -474,15 +467,13 @@ def fetch_events_rows(
                 )
     for item in rows:
         if "feedback_state" not in item:
-            apply_event_feedback(item)
+            apply_market_feedback(item)
 
     def matches(item: dict[str, Any]) -> bool:
         if source_lowers:
             item_sources = (str(item["source"]).lower(), str(item.get("source_id") or "").lower())
             if not any(source in item_source for source in source_lowers for item_source in item_sources):
                 return False
-        if kind_lower and kind_lower != str(item["kind"]).lower():
-            return False
         if q_lower:
             hay = json.dumps(item, ensure_ascii=False).lower()
             if q_lower not in hay:
@@ -495,7 +486,7 @@ def fetch_events_rows(
         return True
 
     rows = [item for item in rows if matches(item)]
-    rows.sort(key=lambda item: displayed_event_time(item, time_basis), reverse=True)
+    rows.sort(key=lambda item: displayed_market_time(item, time_basis), reverse=True)
     return rows[: max(1, min(limit, 300))]
 
 
@@ -545,7 +536,7 @@ def overview_payload(day: str = "") -> dict[str, Any]:
             "AND COALESCE(NULLIF(attempted_at, ''), sent_at) < ? AND status = 'failed'",
             (start_utc, end_utc),
         )
-        article_failures = int(
+        processing_failures = int(
                 conn.execute(
                     """
                     SELECT COUNT(*)
@@ -553,35 +544,26 @@ def overview_payload(day: str = "") -> dict[str, Any]:
                     WHERE r.created_at >= ? AND r.created_at < ?
                       AND r.is_current=1
                       AND r.review_status IN ('failed_retryable','failed_terminal')
-                      AND EXISTS (
-                          SELECT 1 FROM market_item_aliases a
-                          WHERE a.market_item_id=r.market_item_id AND a.item_kind='article'
-                      )
                     """,
                     (start_utc, end_utc),
                 ).fetchone()[0]
             )
-        event_count = int(
+        item_count = int(
                 conn.execute(
                     """
-                    SELECT COUNT(DISTINCT m.id)
+                    SELECT COUNT(*)
                     FROM market_items m
-                    JOIN market_item_aliases a ON a.market_item_id=m.id AND a.item_kind='event'
                     WHERE m.first_seen_at >= ? AND m.first_seen_at < ?
                     """,
                     (start_utc, end_utc),
                 ).fetchone()[0]
             )
-        article_count = int(
+        review_count = int(
                 conn.execute(
                     """
                     SELECT COUNT(*)
                     FROM market_reviews r
                     WHERE r.created_at >= ? AND r.created_at < ? AND r.is_current=1
-                      AND EXISTS (
-                          SELECT 1 FROM market_item_aliases a
-                          WHERE a.market_item_id=r.market_item_id AND a.item_kind='article'
-                      )
                     """,
                     (start_utc, end_utc),
                 ).fetchone()[0]
@@ -592,24 +574,19 @@ def overview_payload(day: str = "") -> dict[str, Any]:
                     """
                     SELECT m.source,COUNT(DISTINCT m.id)
                     FROM market_items m
-                    JOIN market_item_aliases a ON a.market_item_id=m.id AND a.item_kind='event'
                     WHERE m.first_seen_at >= ? AND m.first_seen_at < ?
                     GROUP BY m.source ORDER BY COUNT(DISTINCT m.id) DESC,m.source
                     """,
                     (start_utc, end_utc),
                 )
             ]
-        article_importance = [
+        decision_importance = [
                 {"key": str(row[0] or "unknown"), "count": int(row[1])}
                 for row in conn.execute(
                     """
                     SELECT COALESCE(r.importance,''),COUNT(*)
                     FROM market_reviews r
                     WHERE r.created_at >= ? AND r.created_at < ? AND r.is_current=1
-                      AND EXISTS (
-                          SELECT 1 FROM market_item_aliases a
-                          WHERE a.market_item_id=r.market_item_id AND a.item_kind='article'
-                      )
                     GROUP BY COALESCE(r.importance,'')
                     ORDER BY COUNT(*) DESC,COALESCE(r.importance,'')
                     """,
@@ -617,10 +594,10 @@ def overview_payload(day: str = "") -> dict[str, Any]:
                 )
             ]
         cards = [
-            {"label": "统一事件", "value": event_count},
-            {"label": "来源决策", "value": article_count},
+            {"label": "市场信息", "value": item_count},
+            {"label": "程度决策", "value": review_count},
             {"label": "X 新帖", "value": count_rows(conn, "seen_posts", "first_seen_at >= ? AND first_seen_at < ?", (start_utc, end_utc))},
-            {"label": "飞书失败", "value": deliveries_failed + article_failures},
+            {"label": "飞书失败", "value": deliveries_failed + processing_failures},
         ]
         deliveries = grouped_counts(conn, "deliveries", "status", "sent_at >= ? AND sent_at < ?", (start_utc, end_utc))
     return {
@@ -628,9 +605,9 @@ def overview_payload(day: str = "") -> dict[str, Any]:
         "date": display_day,
         "cards": cards,
         "by_source": by_source[:12],
-        "article_importance": article_importance,
+        "decision_importance": decision_importance,
         "deliveries": deliveries,
-        "latest": fetch_events_rows(day=day, limit=10),
+        "latest": fetch_market_rows(day=day, limit=10),
     }
 
 
@@ -1317,7 +1294,7 @@ class HoldingsHandler(BaseHTTPRequestHandler):
             except Exception as exc:  # noqa: BLE001
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
-        if parsed.path == "/api/events":
+        if parsed.path == "/api/market-items":
             if not self.require_auth():
                 return
             try:
@@ -1327,12 +1304,11 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                     limit = int(limit_raw)
                 except ValueError:
                     limit = 100
-                events = fetch_events_rows(
+                items = fetch_market_rows(
                     day=(qs.get("date") or [""])[0],
                     start_day=(qs.get("from") or [""])[0],
                     end_day=(qs.get("to") or [""])[0],
                     source=qs.get("source") or [],
-                    kind=(qs.get("kind") or [""])[0],
                     q=(qs.get("q") or [""])[0],
                     time_basis=(qs.get("time_basis") or ["seen"])[0],
                     include_baseline=(qs.get("include_baseline") or [""])[0].strip().lower()
@@ -1340,7 +1316,7 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                     feedback=qs.get("feedback") or [],
                     limit=limit,
                 )
-                self.send_json({"ok": True, "events": events, "feedback_summary": event_feedback_summary(events)})
+                self.send_json({"ok": True, "items": items, "feedback_summary": market_feedback_summary(items)})
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
             except Exception as exc:  # noqa: BLE001

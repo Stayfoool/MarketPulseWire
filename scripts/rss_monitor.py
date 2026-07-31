@@ -33,7 +33,7 @@ from db_utils import (
 )
 from http_utils import http_get
 from llm_analysis import llm_config
-from market_flow import is_official_news_source, normalize_market_item, process_market_item
+from market_flow import normalize_market_item, process_market_item
 from market_store import processing_failure_status
 from media_sources import is_overseas_media_source, overseas_media_access_note, overseas_media_module
 from media_keyword_config import is_media_focus_item
@@ -468,7 +468,7 @@ def notify_item(source: str, item: dict) -> None:
     try:
         enriched = enrich_item(source, item)
         _finish_seen_item(source, item_id, enriched)
-        normalized = normalize_market_item(source, enriched, store_kind="article", source_profile_id=source)
+        normalized = normalize_market_item(source, enriched, source_profile_id=source)
         admission_context = persist_production_admission_context(normalized, production_admission_context(normalized, db_path=DB_PATH), db_path=DB_PATH)
         admission = admission_context.result
         if admission.status != "admitted":
@@ -488,7 +488,6 @@ def notify_item(source: str, item: dict) -> None:
         outcome = process_market_item(
             normalized,
             enriched,
-            store_kind="article",
             db_path=DB_PATH,
             production_admission=admission,
             production_portfolio=admission_context.portfolio,
@@ -510,52 +509,6 @@ def notify_item(source: str, item: dict) -> None:
     )
     if outcome.delivery_status == "duplicate":
         print(f"{source} 国际投行主题策略去重：title={item.get('title', '')}", flush=True)
-
-
-def handle_official_news_item(source: str, item: dict) -> None:
-    item, item_id = _prepare_retry_item(item)
-    try:
-        enriched = enrich_item(source, item)
-        _finish_seen_item(source, item_id, enriched)
-        normalized = normalize_market_item(source, enriched, store_kind="official", source_profile_id=source)
-        admission_context = persist_production_admission_context(normalized, production_admission_context(normalized, db_path=DB_PATH), db_path=DB_PATH)
-        admission = admission_context.result
-        if admission.status != "admitted":
-            set_seen_item_lifecycle(
-                source,
-                item_id,
-                **admission_lifecycle_values(admission, processing_status="not_applicable"),
-                processed_at=datetime.now(timezone.utc).isoformat(),
-            )
-            print(f"{source} 五类范围准入排除：title={enriched.get('title', '')}", flush=True)
-            return
-        set_seen_item_lifecycle(
-            source,
-            item_id,
-            **admission_lifecycle_values(admission, processing_status="pending"),
-        )
-        outcome = process_market_item(
-            normalized,
-            enriched,
-            store_kind="official",
-            db_path=DB_PATH,
-            production_admission=admission,
-            production_portfolio=admission_context.portfolio,
-            market_item_id=admission_context.market_item_id,
-            market_review_id=admission_context.market_review_id,
-        )
-        _complete_seen_item(source, item_id, admission)
-    except Exception as exc:
-        if _fail_seen_item(source, item_id, exc) == "insufficient_evidence":
-            print(f"{source} 证据不足，当前条目终止处理：title={item.get('title', '')}", flush=True)
-            return
-        raise
-    decision = outcome.flow_result.decision
-    print(
-        f"{source} 官网新闻分流：importance={decision.importance} "
-        f"action={decision.action} title={enriched.get('title', '')}",
-        flush=True,
-    )
 
 
 def filter_items(source: str, items: list[dict]) -> list[dict]:
@@ -645,10 +598,7 @@ def run_once(feeds: dict[str, str], notify_baseline: bool = False) -> int:
             print(item.get("url", ""))
             print(item.get("published_at", ""))
             try:
-                if is_official_news_source(source):
-                    handle_official_news_item(source, item)
-                else:
-                    notify_item(source, item)
+                notify_item(source, item)
             except Exception as exc:  # noqa: BLE001 - keep other feeds alive
                 print(f"{source} 通知失败：{exc}")
     return total_new

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CI-safe checks for unified market item, review, alias, and delivery storage."""
+"""CI-safe checks for unified market item, review, and delivery storage."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 from market_db import init_db
 from market_canonical_reader import (
     canonical_digest_rows,
-    canonical_event_rows,
+    canonical_market_rows,
     canonical_feedback_snapshot,
 )
 from market_item import (
@@ -26,7 +26,7 @@ from market_store import (
     complete_market_review,
     fail_market_review,
     market_review_snapshot,
-    record_article_delivery,
+    record_delivery,
     record_production_admission,
 )
 
@@ -113,7 +113,7 @@ def test_fresh_schema_omits_retired_result_fields_and_statuses() -> None:
         assert "legacy_unclassified" not in schema_sql
 
 
-def test_result_alias_and_delivery_use_only_unified_storage() -> None:
+def test_result_and_delivery_use_only_unified_storage() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "db.sqlite3"
         init_db(path).close()
@@ -126,9 +126,8 @@ def test_result_alias_and_delivery_use_only_unified_storage() -> None:
             review_id,
             result,
             db_path=path,
-            alias=("article", normalized.source, "a-1", "market_items"),
         )
-        delivery_id = record_article_delivery(
+        delivery_id = record_delivery(
             market_item_id,
             review_id,
             status="sent",
@@ -146,10 +145,9 @@ def test_result_alias_and_delivery_use_only_unified_storage() -> None:
                 "FROM market_reviews WHERE id=?",
                 (review_id,),
             ).fetchone()
-            alias = conn.execute(
-                "SELECT market_item_id,item_kind,source,legacy_item_id,legacy_store_kind "
-                "FROM market_item_aliases"
-            ).fetchone()
+            alias_table = conn.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='market_item_aliases'"
+            ).fetchone()[0]
             delivery = conn.execute(
                 "SELECT id,market_item_id,market_review_id,status,decision_action "
                 "FROM deliveries WHERE id=?",
@@ -157,7 +155,7 @@ def test_result_alias_and_delivery_use_only_unified_storage() -> None:
             ).fetchone()
 
         assert review == ("admitted", "push", "high", "succeeded")
-        assert alias == (market_item_id, "article", normalized.source, "a-1", "market_items")
+        assert alias_table == 0
         assert delivery == (delivery_id, market_item_id, review_id, "sent", "push")
 
 
@@ -237,53 +235,52 @@ def test_retry_with_changed_admission_creates_a_new_current_result() -> None:
         ]
 
 
-def test_unified_views_work_when_legacy_result_tables_are_absent() -> None:
+def test_all_source_metadata_uses_the_same_views() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "db.sqlite3"
         init_db(path).close()
         items = {
-            "article": item("article-source"),
-            "official": item("official-source"),
-            "event": item("event-source"),
+            "research-source": item("research-source"),
+            "company-source": item("company-source"),
+            "flash-source": item("flash-source"),
         }
-        items["official"].content_type = "official_news"
-        items["event"].content_type = "flash_news"
+        items["company-source"].content_type = "company_update"
+        items["flash-source"].content_type = "flash_news"
         identities = {
             kind: record_production_admission(value, admission("admitted"), db_path=path)
             for kind, value in items.items()
         }
         for kind, normalized in items.items():
             market_item_id, review_id = identities[kind]
-            action = "push" if kind == "event" else "daily"
+            action = "push" if kind == "flash-source" else "daily"
             complete_market_review(
                 review_id,
                 flow(normalized, action),
-                alias=(kind, normalized.source, "a-1", "market_items"),
                 db_path=path,
             )
-            record_article_delivery(
+            record_delivery(
                 market_item_id,
                 review_id,
-                status="sent" if kind == "event" else "skipped",
+                status="sent" if kind == "flash-source" else "skipped",
                 decision_action=action,
                 db_path=path,
             )
 
         with sqlite3.connect(path) as conn:
             conn.row_factory = sqlite3.Row
-            articles = canonical_digest_rows(
+            digest = canonical_digest_rows(
                 conn,
                 start_utc="2000-01-01T00:00:00+00:00",
                 end_utc="2100-01-01T00:00:00+00:00",
             )
-            events = canonical_event_rows(
+            rows = canonical_market_rows(
                 conn,
                 start_utc="2000-01-01T00:00:00+00:00",
                 end_utc="2100-01-01T00:00:00+00:00",
                 time_basis="seen",
                 include_baseline=False,
             )
-            feedback = canonical_feedback_snapshot(conn, "event", "event-source", "a-1")
+            feedback = canonical_feedback_snapshot(conn, identities["flash-source"][0])
             legacy_tables = {
                 str(row[0])
                 for row in conn.execute(
@@ -291,8 +288,8 @@ def test_unified_views_work_when_legacy_result_tables_are_absent() -> None:
                 )
             }
 
-        assert [row["source"] for row in articles] == ["article-source"]
-        assert any(row["source"] == "event-source" for row in events)
+        assert {row["source"] for row in digest} == {"research-source", "company-source"}
+        assert {row["source"] for row in rows} == set(items)
         assert feedback is not None and feedback["decision"]["action"] == "push"
         assert not legacy_tables.intersection(
             {"article_reviews", "official_news_reviews", "events", "event_analyses"}
@@ -302,11 +299,11 @@ def test_unified_views_work_when_legacy_result_tables_are_absent() -> None:
 def main() -> int:
     test_excluded_has_no_decision()
     test_fresh_schema_omits_retired_result_fields_and_statuses()
-    test_result_alias_and_delivery_use_only_unified_storage()
+    test_result_and_delivery_use_only_unified_storage()
     test_admission_reuses_current_unified_result()
     test_force_new_result_replaces_current_version()
     test_retry_with_changed_admission_creates_a_new_current_result()
-    test_unified_views_work_when_legacy_result_tables_are_absent()
+    test_all_source_metadata_uses_the_same_views()
     print("market store checks passed")
     return 0
 

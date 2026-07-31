@@ -35,7 +35,7 @@ UNIFIED_FETCHERS = {
 }
 
 UNIFIED_STORAGE_RUNTIME_MODULES = {
-    "article_daily.py",
+    "market_daily.py",
     "holdings_web.py",
     "market_canonical_reader.py",
     "market_delivery.py",
@@ -310,7 +310,7 @@ def test_production_decision_boundary_is_llm_only() -> None:
     engine = (SCRIPTS / "decision_engine.py").read_text(encoding="utf-8")
     production = (SCRIPTS / "llm_production_decision.py").read_text(encoding="utf-8")
     assert "from decision_engine import decide_market_item_with_llm" in flow
-    assert flow.count("decide_market_item_with_llm(") == 2
+    assert flow.count("decide_market_item_with_llm(") == 1
     assert "def decide_market_item_with_llm(" in engine
     assert "def decide_market_item(" not in engine
     assert "from llm_production_decision import decide_production_market_item" in engine
@@ -347,6 +347,68 @@ def test_production_decision_boundary_is_llm_only() -> None:
     assert "decide_market_item(" not in flow
     assert not (SCRIPTS / "rule_core_v1.py").exists()
     assert not (SCRIPTS / "rule_core_runtime_shadow.py").exists()
+
+
+def test_market_information_contract_has_no_type_routing() -> None:
+    schema = (SCRIPTS / "market_db.py").read_text(encoding="utf-8")
+    flow = (SCRIPTS / "market_flow.py").read_text(encoding="utf-8")
+    delivery = (SCRIPTS / "market_delivery.py").read_text(encoding="utf-8")
+    store = (SCRIPTS / "market_store.py").read_text(encoding="utf-8")
+    reader = (SCRIPTS / "market_canonical_reader.py").read_text(encoding="utf-8")
+    feedback = (SCRIPTS / "market_feedback.py").read_text(encoding="utf-8")
+    backend = (SCRIPTS / "holdings_web.py").read_text(encoding="utf-8")
+    frontend = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+
+    for retired in (
+        "market_item_aliases",
+        "item_kind",
+        "legacy_item_id",
+        "legacy_store_kind",
+        "result_event_id",
+        "trg_seen_items_market_insert",
+        "trg_seen_items_market_update",
+    ):
+        assert retired not in schema
+    for retired in (
+        "store_kind",
+        "item_kind",
+        "source_event_id",
+        "evaluate_content_item",
+        "evaluate_event_item",
+        "deliver_article_review",
+        "deliver_official_review",
+        "deliver_event",
+        "repair_missing_feedback_snapshots",
+        "market_ids_for_review",
+    ):
+        assert retired not in flow
+        assert retired not in delivery
+        assert retired not in store
+        assert retired not in reader
+        assert retired not in feedback
+    assert "def normalize_market_item(" in flow
+    assert "def process_market_item(" in flow
+    assert flow.count("deliver_market_item(") == 1
+    assert "def deliver_market_item(" in delivery
+    assert "build_market_item_card" in delivery
+    assert "def canonical_market_rows(" in reader
+    assert 'if parsed.path == "/api/market-items"' in backend
+    assert "/api/events" not in backend
+    assert "/api/events" not in frontend
+    assert "item.kind" not in frontend
+
+
+def test_production_collectors_have_no_shadow_path() -> None:
+    assert not (SCRIPTS / "overseas_media_monitor.py").exists()
+    for filename in (
+        "research_collector.py",
+        "official_collector.py",
+        "news_collector.py",
+        "value_directory_monitor.py",
+    ):
+        source = (SCRIPTS / filename).read_text(encoding="utf-8")
+        for retired in ("collect_shadow", "shadow_dry_run", "save_shadow_state", "--production"):
+            assert retired not in source, f"{filename}: retired collector path returned: {retired}"
 
 
 def test_removed_compatibility_modules_do_not_return() -> None:
@@ -481,64 +543,18 @@ def test_deployment_preserves_private_state_and_retires_unused_units() -> None:
         assert installer.count(enable) == 1
         assert installer.count(restart) == 1
         assert installer.index(enable) < installer.index(restart)
-    retired_units = (
-        "surveil-research-collector-shadow.service",
-        "surveil-research-collector-shadow.timer",
-        "surveil-official-collector-shadow.service",
-        "surveil-official-collector-shadow.timer",
-        "surveil-news-collector-shadow.service",
-        "surveil-news-collector-shadow.timer",
-        "surveil-collector-shadow-digest.service",
-        "surveil-collector-shadow-digest.timer",
-        "surveil-rule-shadow-daily.service",
-        "surveil-rule-shadow-daily.timer",
-        "surveil-rss-monitor.service",
-        "surveil-trendforce-page-monitor.service",
-        "surveil-overseas-media.service",
-        "surveil-overseas-media.timer",
-        "surveil-china-media.service",
-        "surveil-china-media.timer",
-        "surveil-signals-extract.service",
-        "surveil-signals-extract.timer",
-        "surveil-signal-outcome.service",
-        "surveil-signal-outcome.timer",
-        "surveil-signal-review.service",
-        "surveil-signal-review.timer",
-        "surveil-signal-digest.service",
-        "surveil-signal-digest.timer",
-        "surveil-jygs-actions.service",
-        "surveil-jygs-actions.timer",
-        "surveil-ifind-smoke.service",
-    )
-    for unit in retired_units:
+    for unit in ("surveil-article-daily.service", "surveil-article-daily.timer"):
         assert unit in installer
         assert not (ROOT / "systemd" / unit).exists()
         assert unit not in (SCRIPTS / "holdings_web.py").read_text(encoding="utf-8")
-    retired_logs = (
-        "rss-monitor.log",
-        "rss-monitor.err.log",
-        "trendforce-page-monitor.log",
-        "trendforce-page-monitor.err.log",
-        "overseas-media.log",
-        "overseas-media.err.log",
-        "china-media.log",
-        "china-media.err.log",
-        "signals-extract.log",
-        "signals-extract.err.log",
-        "signal-outcome.log",
-        "signal-outcome.err.log",
-        "signal-review.log",
-        "signal-review.err.log",
-        "signal-digest.log",
-        "signal-digest.err.log",
-        "jygs-actions.log",
-        "jygs-actions.err.log",
-        "ifind-smoke.log",
-        "ifind-smoke.err.log",
-    )
-    for log_name in retired_logs:
-        assert installer.count(f"  {log_name}\n") == 1
-    assert 'rm -f \'$REMOTE_DIR/logs/\'"\\$log_name"' in installer
+    for retired_name in (
+        "collector-shadow",
+        "rule-shadow",
+        "surveil-ifind",
+        "surveil-jygs",
+        "surveil-signals",
+    ):
+        assert retired_name not in installer
     for timer in (
         "surveil-research-collector.timer",
         "surveil-official-collector.timer",
@@ -617,8 +633,11 @@ def main() -> int:
     test_unified_collectors_use_runtime_without_owning_delivery()
     test_live_unified_collector_calls_cannot_omit_production_admission()
     test_production_decision_boundary_is_llm_only()
+    test_market_information_contract_has_no_type_routing()
+    test_production_collectors_have_no_shadow_path()
     test_removed_compatibility_modules_do_not_return()
     test_retired_management_flows_do_not_return()
+    test_market_db_is_the_only_production_schema_initializer()
     test_independent_routes_are_explicit_and_tested()
     test_direct_urllib_request_usage_is_explicit_and_bounded()
     test_deployment_preserves_private_state_and_retires_unused_units()

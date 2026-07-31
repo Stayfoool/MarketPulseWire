@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Literal
+from typing import Any
 
 from llm_analysis import call_chat_completion_with_prompts
 from market_item import DecisionResult, InterpretationResult, NormalizedMarketItem
 
 
 INTERPRETER_VERSION = "market_interpreter_v2"
-
-ForbiddenFieldMode = Literal["article", "official", "event"]
 
 FORBIDDEN_FIELDS = {
     "importance",
@@ -47,15 +45,8 @@ def interpretation_schema() -> dict[str, Any]:
     return {"core_content": "一句到两句中文核心内容"}
 
 
-def forbidden_field_line(mode: ForbiddenFieldMode = "article") -> str:
-    fields = sorted(FORBIDDEN_FIELDS)
-    if mode == "official":
-        fields = [field for field in fields if field != "should_push_now"]
-        fields.insert(0, "should_push_now")
-    elif mode == "event":
-        fields = [field for field in fields if field not in {"should_push", "incremental_view"}]
-        fields[:0] = ["importance", "incremental_view", "should_push"]
-    return "不要输出：" + "/".join(dict.fromkeys(fields)) + "。"
+def forbidden_field_line() -> str:
+    return "不要输出：" + "/".join(sorted(FORBIDDEN_FIELDS)) + "。"
 
 
 def rule_boundary_lines() -> str:
@@ -83,13 +74,12 @@ def thin_system_prompt(*, task: str, subject_note: str = "") -> str:
 def thin_user_prompt_template(
     *,
     intro: str,
-    forbidden_mode: ForbiddenFieldMode = "article",
     extra_notes: list[str] | None = None,
     include_source_module: bool = False,
 ) -> str:
     source_module = "来源模块：{source_module}\n" if include_source_module else ""
     notes = [
-        forbidden_field_line(forbidden_mode),
+        forbidden_field_line(),
         "只根据原文和 DecisionResult 上下文提炼核心事实；不要总结规则、风险、估值或相关标的。",
     ]
     for note in extra_notes or []:
@@ -152,7 +142,7 @@ def item_context(item: NormalizedMarketItem | dict[str, Any]) -> dict[str, Any]:
         }
     return {
         "source": _clean_text(item.get("source")),
-        "content_type": _clean_text(item.get("content_type") or item.get("event_type")),
+        "content_type": _clean_text(item.get("content_type")),
         "title": _clean_text(item.get("title")),
         "summary": _clean_text(item.get("summary") or item.get("content")),
         "published_at": _clean_text(item.get("published_at")),
@@ -170,7 +160,6 @@ def interpret_market_item(
     content: str = "",
     task: str = "为一条已完成规则决策的市场信息生成极简实时摘要。",
     intro: str = "请解读以下市场信息",
-    forbidden_mode: ForbiddenFieldMode = "article",
     extra_notes: list[str] | None = None,
     user_agent: str = "surveil-market-interpreter/0.1",
 ) -> InterpretationResult:
@@ -178,7 +167,6 @@ def interpret_market_item(
     system_prompt = thin_system_prompt(task=task)
     user_template = thin_user_prompt_template(
         intro=intro,
-        forbidden_mode=forbidden_mode,
         extra_notes=extra_notes,
     )
     context = item_context(item)

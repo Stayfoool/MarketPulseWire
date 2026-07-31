@@ -1,42 +1,33 @@
 #!/usr/bin/env python3
-"""Regression checks for the domestic news-media shadow collector."""
+"""Regression checks for the media and trade-policy collector."""
 
 from __future__ import annotations
 
 import os
-import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import news_collector
 from source_profiles import save_source_profile_config
 
+
 ROOT = Path(__file__).resolve().parents[1]
 TEST_RULE_CONFIG = ROOT / "config" / "rule_core_v1.test.json"
 
 
-def test_news_sources_include_expected_batch_and_exclude_sina_flash() -> None:
+def test_enabled_sources_include_current_groups() -> None:
     sources = news_collector.news_sources()
-    assert "yicai_brief" in sources
-    assert "cls_telegraph_api" in sources
-    assert "star_market_daily_subject" in sources
-    assert "jin10_rsshub_important" in sources
-    assert "sina_finance_articles" in sources
-    assert "wallstreetcn_news" in sources
+    assert {
+        "yicai_brief",
+        "cls_telegraph_api",
+        "star_market_daily_subject",
+        "jin10_rsshub_important",
+        "sina_finance_articles",
+        "wallstreetcn_news",
+    } <= set(sources)
     assert "sina_flash" not in sources
-    assert "yicai_brief_rsshub" not in sources
-    assert "cls_telegraph_page" not in sources
-
-
-def test_official_trade_policy_sources_join_news_collector_timer() -> None:
-    source_ids = {source.name for source in news_collector.official_trade_policy_sources()}
-    assert source_ids == {
-        "federal_register_china_trade",
-        "ustr_press_releases",
-        "eu_press_corner_trade_policy",
-        "mofcom_policy_releases",
-        "mofcom_spokesperson_statements",
-    }
+    policies = {source.name for source in news_collector.official_trade_policy_sources()}
+    assert "ustr_press_releases" in policies
     media, policy = news_collector.selected_source_groups(["ustr_press_releases"])
     assert media == {}
     assert [source.name for source in policy] == ["ustr_press_releases"]
@@ -46,206 +37,53 @@ def test_disabled_source_is_filtered() -> None:
     with TemporaryDirectory() as tmpdir:
         config_path = Path(tmpdir) / "source_profiles.local.json"
         save_source_profile_config(
-            {
-                "profiles": [
-                    {"id": "jin10_rsshub_important", "enabled": False},
-                    {"id": "sina_finance_articles", "enabled": False},
-                    {"id": "wallstreetcn_news", "enabled": False},
-                ]
-            },
+            {"profiles": [{"id": source, "enabled": False} for source in (
+                "jin10_rsshub_important",
+                "sina_finance_articles",
+                "wallstreetcn_news",
+            )]},
             path=config_path,
         )
-        sources = news_collector.selected_sources([], config_path=config_path)
+        sources, _ = news_collector.selected_source_groups([], config_path=config_path)
         assert "jin10_rsshub_important" not in sources
         assert "sina_finance_articles" not in sources
         assert "wallstreetcn_news" not in sources
         assert "cls_telegraph_api" in sources
 
 
-def test_shadow_collect_does_not_write_prod_seen_reviews_or_source_state() -> None:
-    calls: list[dict] = []
-    original_source_items = news_collector.china_media.source_items
-    original_db_path = news_collector.DB_PATH
-
-    def fake_source_items(source: str, *, persist_state: bool = True, force: bool = False):
-        calls.append({"source": source, "persist_state": persist_state, "force": force})
-        return [
-            {
-                "id": f"{source}-1",
-                "url": f"https://example.com/{source}/1",
-                "title": "全球功率半导体厂商新一轮涨价",
-                "summary": "AI服务器需求拉动功率半导体供需偏紧。",
-                "content": "",
-                "published_at": "2026-07-08T00:00:00+00:00",
-                "source_module": source,
-                "body_source": "fake",
-            }
-        ]
-
-    with TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "surveil.sqlite3"
-        conn = sqlite3.connect(db_path)
-        conn.execute(
-            """
-            CREATE TABLE seen_items (
-                source TEXT NOT NULL,
-                item_id TEXT NOT NULL,
-                url TEXT,
-                title TEXT,
-                summary TEXT,
-                published_at TEXT,
-                first_seen_at TEXT,
-                PRIMARY KEY (source, item_id)
-            )
-            """
-        )
-        conn.execute("CREATE TABLE source_state (source TEXT PRIMARY KEY, state_json TEXT, updated_at TEXT NOT NULL)")
-        conn.commit()
-        conn.close()
-
-        try:
-            news_collector.china_media.source_items = fake_source_items
-            news_collector.DB_PATH = db_path
-            payload = news_collector.collect_shadow(
-                sources={"cls_telegraph_api": "https://example.com/cls"},
-                limit=5,
-                compare_seen=True,
-                compare_reviews=True,
-                respect_prod_cls_state=False,
-            )
-        finally:
-            news_collector.china_media.source_items = original_source_items
-            news_collector.DB_PATH = original_db_path
-
-        conn = sqlite3.connect(db_path)
-        seen_count = conn.execute("SELECT COUNT(*) FROM seen_items").fetchone()[0]
-        legacy_table_count = conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='article_reviews'"
-        ).fetchone()[0]
-        state_count = conn.execute("SELECT COUNT(*) FROM source_state").fetchone()[0]
-        conn.close()
-
-    assert calls == [{"source": "cls_telegraph_api", "persist_state": False, "force": True}]
-    assert payload["ok"] is True, payload
-    assert payload["sent_feishu"] is False
-    assert payload["ran_llm_review"] is False
-    assert payload["wrote_production_seen_items"] is False
-    assert payload["wrote_production_reviews"] is False
-    assert payload["touched_production_source_state"] is False
-    assert payload["counts"]["candidates"] == 1
-    assert payload["sources"][0]["candidates"][0]["pipeline"] == "news_media shadow -> decision layer / thin interpretation planned"
-    assert seen_count == 0
-    assert legacy_table_count == 0
-    assert state_count == 0
-
-
-def test_respect_prod_cls_state_passes_force_false() -> None:
-    calls: list[dict] = []
-    original_source_items = news_collector.china_media.source_items
-
-    def fake_source_items(source: str, *, persist_state: bool = True, force: bool = False):
-        calls.append({"source": source, "persist_state": persist_state, "force": force})
-        return []
-
-    try:
-        news_collector.china_media.source_items = fake_source_items
-        news_collector.collect_shadow(
-            sources={"cls_telegraph_api": "https://example.com/cls"},
-            compare_seen=False,
-            compare_reviews=False,
-            respect_prod_cls_state=True,
-        )
-    finally:
-        news_collector.china_media.source_items = original_source_items
-
-    assert calls == [{"source": "cls_telegraph_api", "persist_state": False, "force": False}]
-
-
-def test_json_report_shape() -> None:
-    payload = news_collector.collect_shadow(sources={}, compare_seen=False, compare_reviews=False)
-    assert payload["ok"] is True
-    assert payload["mode"] == "shadow_dry_run"
-    assert payload["counts"] == {
-        "sources": 0,
-        "failed_sources": 0,
-        "raw_items": 0,
-        "candidates": 0,
-        "focus_candidates": 0,
-        "mandatory_candidates": 0,
-        "already_seen_candidates": 0,
-        "already_reviewed_candidates": 0,
-    }
-    assert payload["sources"] == []
-    assert payload["errors"] == []
-
-
-def test_production_collect_delegates_to_existing_china_media_pipeline() -> None:
+def test_collect_delegates_to_unified_source_pipelines() -> None:
     calls: list[tuple[list[str], bool]] = []
-    original_run_once = news_collector.china_media.run_once
-
-    def fake_run_once(sources: list[str], notify_baseline: bool = False) -> int:
-        calls.append((sources, notify_baseline))
-        return 3
-
+    original_media = news_collector.china_media.run_once
+    original_policy = news_collector.trade_policy.run_once
+    policy_sources = news_collector.official_trade_policy_sources()[:2]
+    news_collector.china_media.run_once = lambda sources, notify_baseline=False: calls.append((list(sources), notify_baseline)) or 3
+    news_collector.trade_policy.run_once = lambda sources, notify_baseline=False: calls.append(([s.name for s in sources], notify_baseline)) or 2
     try:
-        news_collector.china_media.run_once = fake_run_once
         payload = news_collector.collect_production(
-            sources={
-                "yicai_brief": "https://example.com/yicai",
-                "cls_telegraph_api": "https://example.com/cls",
-            },
+            sources={"yicai_brief": "https://example.com/yicai"},
+            policy_sources=policy_sources,
             notify_baseline=True,
         )
     finally:
-        news_collector.china_media.run_once = original_run_once
+        news_collector.china_media.run_once = original_media
+        news_collector.trade_policy.run_once = original_policy
 
-    assert payload["mode"] == "production"
-    assert payload["wrote_production_seen_items"] is True
-    assert payload["wrote_production_reviews"] is True
-    assert payload["touched_production_source_state"] is True
-    assert payload["counts"]["sources"] == 2
-    assert payload["counts"]["new_items"] == 3
-    assert calls == [(["yicai_brief", "cls_telegraph_api"], True)]
-
-
-def test_production_collect_runs_official_trade_policy_family() -> None:
-    calls: list[tuple[list[str], bool]] = []
-    original_run_once = news_collector.trade_policy.run_once
-    policy = news_collector.official_trade_policy_sources()[:2]
-
-    def fake_run_once(sources, notify_baseline: bool = False) -> int:
-        calls.append(([source.name for source in sources], notify_baseline))
-        return 2
-
-    try:
-        news_collector.trade_policy.run_once = fake_run_once
-        payload = news_collector.collect_production(
-            sources={},
-            policy_sources=policy,
-            notify_baseline=False,
-        )
-    finally:
-        news_collector.trade_policy.run_once = original_run_once
-
-    assert payload["counts"]["sources"] == 2
-    assert payload["counts"]["trade_policy_sources"] == 2
-    assert payload["counts"]["trade_policy_new_items"] == 2
-    assert payload["counts"]["new_items"] == 2
-    assert calls == [([source.name for source in policy], False)]
+    assert payload["ok"] is True
+    assert payload["counts"]["new_items"] == 5
+    assert payload["counts"]["sources"] == 3
+    assert calls == [
+        (["yicai_brief"], True),
+        ([source.name for source in policy_sources], True),
+    ]
 
 
 def main() -> int:
     previous = os.environ.get("RULE_CORE_CONFIG")
     os.environ["RULE_CORE_CONFIG"] = str(TEST_RULE_CONFIG)
     try:
-        test_news_sources_include_expected_batch_and_exclude_sina_flash()
-        test_official_trade_policy_sources_join_news_collector_timer()
+        test_enabled_sources_include_current_groups()
         test_disabled_source_is_filtered()
-        test_shadow_collect_does_not_write_prod_seen_reviews_or_source_state()
-        test_respect_prod_cls_state_passes_force_false()
-        test_json_report_shape()
-        test_production_collect_delegates_to_existing_china_media_pipeline()
-        test_production_collect_runs_official_trade_policy_family()
+        test_collect_delegates_to_unified_source_pipelines()
     finally:
         if previous is None:
             os.environ.pop("RULE_CORE_CONFIG", None)

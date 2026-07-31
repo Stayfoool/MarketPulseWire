@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Surveil market information daily digest at 20:50
+
+[Timer]
+OnCalendar=*-*-* 20:50:00
+Persistent=true
+Unit=surveil-market-daily.service
+
+[Install]
+WantedBy=timers.target

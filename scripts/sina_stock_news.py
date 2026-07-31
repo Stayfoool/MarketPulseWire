@@ -21,7 +21,7 @@ from llm_analysis import call_chat_completion_with_prompts
 from market_db import DEFAULT_DB_PATH
 from market_flow import normalize_market_item, process_market_item
 from holdings_store import load_enabled_holdings
-from market_item import event_content_hash as content_hash
+from market_item import content_hash
 from market_store import processing_failure_status
 from portfolio_import import import_holdings
 from production_admission import persist_production_admission_context, production_admission_context
@@ -747,7 +747,7 @@ def canonical_article_url(url: str) -> str:
     )
 
 
-def article_event_key(item: dict[str, str]) -> str:
+def market_item_key(item: dict[str, str]) -> str:
     canonical_url = canonical_article_url(item.get("url", ""))
     if canonical_url:
         return content_hash(SOURCE, canonical_url)[:24]
@@ -826,25 +826,18 @@ def published_close(left: str, right: str, max_hours: int = 48) -> bool:
     return abs((left_dt - right_dt).total_seconds()) <= max_hours * 3600
 
 
-def source_event_id_for_item(item: dict[str, str], holding: dict[str, Any]) -> str:
-    return f"article:{article_event_key(item)}"
+def source_item_id_for_item(item: dict[str, str], holding: dict[str, Any]) -> str:
+    return f"item:{market_item_key(item)}"
 
 
-def legacy_source_event_id_for_item(item: dict[str, str], holding: dict[str, Any]) -> str:
-    symbol = str(holding.get("symbol") or "").upper()
-    source_id = content_hash(SOURCE, symbol, item["published_at"], item["title"], item["url"])[:24]
-    return f"{symbol}:{source_id}"
-
-
-def find_existing_article_event(item: dict[str, str], holding: dict[str, Any]) -> int | None:
-    source_event_id = source_event_id_for_item(item, holding)
-    legacy_event_id = legacy_source_event_id_for_item(item, holding)
+def find_existing_market_item(item: dict[str, str], holding: dict[str, Any]) -> int | None:
+    source_item_id = source_item_id_for_item(item, holding)
     canonical_url = canonical_article_url(item.get("url", ""))
     title = item.get("title", "").strip()
     with connect_sqlite(DEFAULT_DB_PATH) as conn:
         row = conn.execute(
-            "SELECT id FROM market_items WHERE source = ? AND source_item_id IN (?, ?) LIMIT 1",
-            (SOURCE, source_event_id, legacy_event_id),
+            "SELECT id FROM market_items WHERE source = ? AND source_item_id = ? LIMIT 1",
+            (SOURCE, source_item_id),
         ).fetchone()
         if row:
             return int(row[0])
@@ -880,7 +873,7 @@ def find_existing_article_event(item: dict[str, str], holding: dict[str, Any]) -
     return None
 
 
-def retryable_event_review(
+def retryable_market_review(
     market_item_id: int,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> dict[str, Any] | None:
@@ -975,7 +968,7 @@ def merge_holding_into_market_item(
         conn.commit()
 
 
-def stored_market_event(
+def stored_market_item(
     market_item_id: int,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> dict[str, Any] | None:
@@ -1004,8 +997,8 @@ def stored_market_event(
         raw = {}
     return {
         "source": str(row[0] or ""),
-        "source_event_id": str(row[1] or ""),
-        "event_type": str(row[2] or "event"),
+        "id": str(row[1] or ""),
+        "content_type": str(row[2] or "unknown"),
         "title": str(row[3] or ""),
         "summary": str(row[4] or ""),
         "full_text": str(row[5] or ""),
@@ -1023,7 +1016,7 @@ def relevance_cache_key(item: dict[str, str], holding: dict[str, Any]) -> str:
     return content_hash("sina_stock_news_relevance", symbol, item["title"], item["url"])[:24]
 
 
-def event_from_item(
+def market_information_from_item(
     item: dict[str, str],
     holding: dict[str, Any],
     *,
@@ -1037,13 +1030,13 @@ def event_from_item(
     title = item["title"]
     url = item["url"]
     published_at = item["published_at"]
-    source_event_id = source_event_id_for_item(item, holding)
+    source_item_id = source_item_id_for_item(item, holding)
     summary = f"{name}（{symbol}）相关新闻：{title}"
     full_text = article_text.strip() or summary
     return {
         "source": SOURCE,
-        "source_event_id": source_event_id,
-        "event_type": "stock_news",
+        "id": source_item_id,
+        "content_type": "stock_news",
         "title": title,
         "summary": summary,
         "full_text": full_text,
@@ -1173,12 +1166,12 @@ def run_once(
                     )
                 continue
             matched_count += 1
-            source_event_id = source_event_id_for_item(item, holding)
-            existing_item_id = None if dry_run else find_existing_article_event(item, holding)
-            known_event = existing_item_id is not None
+            source_item_id = source_item_id_for_item(item, holding)
+            existing_item_id = None if dry_run else find_existing_market_item(item, holding)
+            known_item = existing_item_id is not None
             article_text = item.get("content", "")
             freshness = {"status": "unknown"}
-            if fetch_articles and not article_text and not known_event and (not dry_run or fetch_articles_in_dry_run):
+            if fetch_articles and not article_text and not known_item and (not dry_run or fetch_articles_in_dry_run):
                 try:
                     article_text = fetch_article_text(item["url"], timeout=article_timeout)
                     if article_text:
@@ -1195,7 +1188,7 @@ def run_once(
                             )
                         continue
                     freshness = {"status": "fetch_failed", "error": str(exc)}
-            event = event_from_item(
+            market_information = market_information_from_item(
                 item,
                 holding,
                 relevance_reason=relevance_reason,
@@ -1203,16 +1196,16 @@ def run_once(
                 article_text=article_text,
                 freshness=freshness,
             )
-            seen_ids.append(event["source_event_id"])
+            seen_ids.append(market_information["id"])
             if baseline_only:
-                event["baseline_only"] = True
+                market_information["baseline_only"] = True
             if limit is not None and processed >= limit:
                 continue
             processed += 1
             if dry_run:
                 print(
-                    f"[dry-run] {event['source_event_id']} {event['published_at']} "
-                    f"{event['title']} url={event['url']}",
+                    f"[dry-run] {market_information['id']} {market_information['published_at']} "
+                    f"{market_information['title']} url={market_information['url']}",
                     flush=True,
                 )
                 continue
@@ -1223,25 +1216,25 @@ def run_once(
                     item=item,
                     reason=relevance_reason,
                 )
-                retry = retryable_event_review(existing_item_id)
+                retry = retryable_market_review(existing_item_id)
                 if retry is None:
-                    print(f"seen market item #{existing_item_id}: {event['title']}", flush=True)
+                    print(f"seen market item #{existing_item_id}: {market_information['title']}", flush=True)
                     continue
-                stored_event = stored_market_event(existing_item_id)
-                if not stored_event:
+                stored_item = stored_market_item(existing_item_id)
+                if not stored_item:
                     print(
-                        f"retryable market item #{existing_item_id} missing stored content: {event['title']}",
+                        f"retryable market item #{existing_item_id} missing stored content: {market_information['title']}",
                         flush=True,
                     )
                     continue
-                normalized = normalize_market_item(SOURCE, stored_event, store_kind="event")
+                normalized = normalize_market_item(SOURCE, stored_item)
                 admission_context = production_admission_context(
                     normalized, db_path=DEFAULT_DB_PATH
                 )
                 if admission_context.result.to_dict() != retry["admission"]:
                     print(
                         f"retryable market item #{existing_item_id} admission changed; keep existing review pending: "
-                        f"{event['title']}",
+                        f"{market_information['title']}",
                         flush=True,
                     )
                     continue
@@ -1258,9 +1251,7 @@ def run_once(
                 try:
                     outcome = process_market_item(
                         normalized,
-                        stored_event,
-                        store_kind="event",
-                        task="sina_stock_news_portfolio",
+                        stored_item,
                         db_path=DEFAULT_DB_PATH,
                         reprocess_existing=True,
                         production_admission=admission_context.result,
@@ -1278,11 +1269,11 @@ def run_once(
                     continue
                 print(
                     f"retried market item #{existing_item_id} review #{retry['market_review_id']}: "
-                    f"delivery={outcome.delivery_status} {event['title']}",
+                    f"delivery={outcome.delivery_status} {market_information['title']}",
                     flush=True,
                 )
                 continue
-            normalized = normalize_market_item(SOURCE, event, store_kind="event")
+            normalized = normalize_market_item(SOURCE, market_information)
             admission_context = production_admission_context(normalized, db_path=DEFAULT_DB_PATH)
             if not baseline_only:
                 admission_context = persist_production_admission_context(
@@ -1291,16 +1282,14 @@ def run_once(
             admission = admission_context.result
             if not baseline_only and admission.status != "admitted":
                 print(
-                    f"新浪个股新闻持仓范围准入排除：{event['title']} reason={admission.reason_code}",
+                    f"新浪个股新闻持仓范围准入排除：{market_information['title']} reason={admission.reason_code}",
                     flush=True,
                 )
                 continue
             try:
                 outcome = process_market_item(
                     normalized,
-                    event,
-                    store_kind="event",
-                    task="sina_stock_news_portfolio",
+                    market_information,
                     db_path=DEFAULT_DB_PATH,
                     baseline_only=baseline_only,
                     production_admission=(
@@ -1319,27 +1308,27 @@ def run_once(
             except Exception as exc:  # noqa: BLE001 - one failed review must not abort the batch
                 status = processing_failure_status(exc)
                 print(
-                    f"event processing {status}: {type(exc).__name__}: {exc} "
-                    f"title={event['title']}",
+                    f"market information processing {status}: {type(exc).__name__}: {exc} "
+                    f"title={market_information['title']}",
                     flush=True,
                 )
                 continue
-            event_id = outcome.event_id
+            market_item_id = outcome.market_item_id
             if not outcome.inserted:
-                if event_id is not None:
-                    merge_holding_into_market_item(event_id, holding, item=item, reason=relevance_reason)
-                print(f"seen event #{event_id}: {event['title']}", flush=True)
+                if market_item_id is not None:
+                    merge_holding_into_market_item(market_item_id, holding, item=item, reason=relevance_reason)
+                print(f"seen market item #{market_item_id}: {market_information['title']}", flush=True)
                 continue
             new_count += 1
             if baseline_only:
-                print(f"baseline event #{event_id}: {event['title']}", flush=True)
+                print(f"baseline market item #{market_item_id}: {market_information['title']}", flush=True)
                 continue
-            print(f"new event #{event_id}: {event['title']}", flush=True)
+            print(f"new market item #{market_item_id}: {market_information['title']}", flush=True)
             print(
-                f"analysis #{event_id}: {outcome.flow_result.interpretation.core_content}",
+                f"analysis #{market_item_id}: {outcome.flow_result.interpretation.core_content}",
                 flush=True,
             )
-            print(f"delivery #{event_id}: {outcome.delivery_status}", flush=True)
+            print(f"delivery #{market_item_id}: {outcome.delivery_status}", flush=True)
         if sleep_seconds:
             time.sleep(sleep_seconds)
 
@@ -1348,7 +1337,7 @@ def run_once(
             {
                 "initialized": True,
                 "last_run_at": utc_now(),
-                "last_event_ids": seen_ids[:300],
+                "last_item_ids": seen_ids[:300],
                 "since_date": since_date,
                 "relevance_cache": dict(list(relevance_cache.items())[-1000:]),
             }

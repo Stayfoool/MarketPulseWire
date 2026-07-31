@@ -19,7 +19,6 @@ def test_thin_prompt_schema_keeps_push_fields_out_of_output() -> None:
     assert set(schema) == {"core_content"}
     prompt = thin_user_prompt_template(
         intro="请分析以下资讯/报告",
-        forbidden_mode="article",
         include_source_module=True,
     )
     assert '"core_content"' in prompt
@@ -31,12 +30,12 @@ def test_thin_prompt_schema_keeps_push_fields_out_of_output() -> None:
     assert '"importance"' not in prompt
 
 
-def test_event_prompt_uses_the_same_core_only_schema() -> None:
-    prompt = thin_user_prompt_template(intro="请分析以下持仓事件", forbidden_mode="event")
+def test_market_information_prompt_uses_the_core_only_schema() -> None:
+    prompt = thin_user_prompt_template(intro="请分析以下市场信息")
     assert '"core_content"' in prompt
     assert '"related_holdings"' not in prompt
     assert '"brief_reason"' not in prompt
-    assert "incremental_view" in forbidden_field_line("event")
+    assert "incremental_view" in forbidden_field_line()
 
 
 def test_normalize_interpretation_payload_ignores_non_core_fields() -> None:
@@ -92,7 +91,6 @@ def test_interpret_market_item_passes_decision_context_and_ignores_push_fields()
                 brief_reason="宏观政策线规则命中。",
                 rule_hits=[{"rule_id": "macro_policy_line"}],
             ),
-            forbidden_mode="event",
         )
     finally:
         market_interpreter.call_chat_completion_with_prompts = original
@@ -133,7 +131,7 @@ def test_interpret_market_item_does_not_request_limited_judgement_when_flagged()
 
 def main() -> int:
     test_thin_prompt_schema_keeps_push_fields_out_of_output()
-    test_event_prompt_uses_the_same_core_only_schema()
+    test_market_information_prompt_uses_the_core_only_schema()
     test_normalize_interpretation_payload_ignores_non_core_fields()
     test_system_prompt_states_llm_is_not_final_push_judge()
     test_interpret_market_item_passes_decision_context_and_ignores_push_fields()

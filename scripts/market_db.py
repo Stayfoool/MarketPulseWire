@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS seen_items (
     admission_config_version TEXT,
     admission_rule_contract_version TEXT,
     admission_evaluated_at TEXT,
-    result_event_id INTEGER,
+    result_market_item_id INTEGER,
     processing_status TEXT NOT NULL DEFAULT 'not_applicable',
     processing_error TEXT,
     processed_at TEXT,
@@ -105,19 +105,6 @@ CREATE INDEX IF NOT EXISTS idx_market_items_seen ON market_items(first_seen_at);
 CREATE INDEX IF NOT EXISTS idx_market_items_source ON market_items(source, source_item_id);
 CREATE INDEX IF NOT EXISTS idx_market_items_processing ON market_items(processing_status, updated_at);
 
-CREATE TABLE IF NOT EXISTS market_item_aliases (
-    market_item_id INTEGER NOT NULL,
-    item_kind TEXT NOT NULL,
-    source TEXT NOT NULL,
-    legacy_item_id TEXT NOT NULL,
-    legacy_store_kind TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    UNIQUE(item_kind, source, legacy_item_id),
-    FOREIGN KEY(market_item_id) REFERENCES market_items(id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_market_item_aliases_item ON market_item_aliases(market_item_id);
-
 CREATE TABLE IF NOT EXISTS market_reviews (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     market_item_id INTEGER NOT NULL,
@@ -147,50 +134,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_market_reviews_current
 CREATE INDEX IF NOT EXISTS idx_market_reviews_created ON market_reviews(created_at);
 CREATE INDEX IF NOT EXISTS idx_market_reviews_admission ON market_reviews(admission_status, created_at);
 CREATE INDEX IF NOT EXISTS idx_market_reviews_action ON market_reviews(decision_action, created_at);
-
-CREATE TRIGGER IF NOT EXISTS trg_seen_items_market_insert
-AFTER INSERT ON seen_items
-BEGIN
-    INSERT INTO market_items (
-        source, source_item_id, dedupe_key, content_type, title, summary, full_text,
-        url, published_at, first_seen_at, content_hash, collection_class,
-        processability_status, processability_reason, processing_status,
-        processing_error, created_at, updated_at
-    ) VALUES (
-        NEW.source, NEW.item_id, NEW.source || ':' || NEW.item_id, 'unknown',
-        NEW.title, NEW.summary, '', NEW.url, NEW.published_at, NEW.first_seen_at,
-        'seen:' || NEW.source || ':' || NEW.item_id, NEW.collection_class,
-        NEW.processability_status, NEW.processability_reason, NEW.processing_status,
-        NEW.processing_error, NEW.first_seen_at,
-        COALESCE(NEW.lifecycle_updated_at, NEW.first_seen_at)
-    )
-    ON CONFLICT(source, source_item_id) DO UPDATE SET
-        title = excluded.title, summary = excluded.summary, url = excluded.url,
-        published_at = excluded.published_at,
-        collection_class = excluded.collection_class,
-        processability_status = excluded.processability_status,
-        processability_reason = excluded.processability_reason,
-        processing_status = excluded.processing_status,
-        processing_error = excluded.processing_error,
-        updated_at = excluded.updated_at;
-END;
-
-CREATE TRIGGER IF NOT EXISTS trg_seen_items_market_update
-AFTER UPDATE ON seen_items
-BEGIN
-    UPDATE market_items SET
-        title = NEW.title,
-        summary = NEW.summary,
-        url = NEW.url,
-        published_at = NEW.published_at,
-        collection_class = NEW.collection_class,
-        processability_status = NEW.processability_status,
-        processability_reason = NEW.processability_reason,
-        processing_status = NEW.processing_status,
-        processing_error = NEW.processing_error,
-        updated_at = COALESCE(NEW.lifecycle_updated_at, NEW.first_seen_at)
-    WHERE source = NEW.source AND source_item_id = NEW.item_id;
-END;
 
 CREATE TABLE IF NOT EXISTS seen_sources (
     source TEXT PRIMARY KEY,
@@ -241,11 +184,11 @@ CREATE TABLE IF NOT EXISTS portfolio_holdings (
 
 CREATE TABLE IF NOT EXISTS deliveries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    market_item_id INTEGER,
-    market_review_id INTEGER,
+    market_item_id INTEGER NOT NULL,
+    market_review_id INTEGER NOT NULL,
     channel TEXT NOT NULL,
     status TEXT NOT NULL,
-    decision_action TEXT,
+    decision_action TEXT NOT NULL,
     attempted_at TEXT,
     sent_at TEXT,
     error TEXT,
@@ -263,9 +206,7 @@ ON deliveries(market_review_id, attempted_at);
 CREATE TABLE IF NOT EXISTS market_feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     feedback_event_id TEXT NOT NULL UNIQUE,
-    item_kind TEXT NOT NULL,
-    source TEXT NOT NULL,
-    item_id TEXT NOT NULL,
+    market_item_id INTEGER,
     delivery_id INTEGER,
     label TEXT NOT NULL,
     active_labels_json TEXT,
@@ -282,12 +223,13 @@ CREATE TABLE IF NOT EXISTS market_feedback (
     received_at TEXT NOT NULL,
     supersedes_id INTEGER,
     raw_json TEXT NOT NULL DEFAULT '{}',
+    FOREIGN KEY(market_item_id) REFERENCES market_items(id),
     FOREIGN KEY(delivery_id) REFERENCES deliveries(id),
     FOREIGN KEY(supersedes_id) REFERENCES market_feedback(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_market_feedback_item
-ON market_feedback(item_kind, source, item_id, operator_id, clicked_at_us, id);
+ON market_feedback(market_item_id, operator_id, clicked_at_us, id);
 
 CREATE INDEX IF NOT EXISTS idx_market_feedback_received
 ON market_feedback(received_at);

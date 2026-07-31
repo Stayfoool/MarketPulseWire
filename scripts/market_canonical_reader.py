@@ -1,4 +1,4 @@
-"""Read current unified market storage while preserving external identities."""
+"""Read current unified market information from its direct identities."""
 
 from __future__ import annotations
 
@@ -7,9 +7,6 @@ import sqlite3
 from typing import Any
 
 from market_card_view import card_targets
-
-
-ITEM_KINDS = ("article", "official", "event")
 
 
 def _json_dict(value: Any) -> dict[str, Any]:
@@ -43,53 +40,20 @@ def _result_projection(row: sqlite3.Row) -> dict[str, Any]:
     return result
 
 
-def _aliases(conn: sqlite3.Connection, item_ids: list[int]) -> dict[int, list[dict[str, str]]]:
-    if not item_ids:
-        return {}
-    result: dict[int, list[dict[str, str]]] = {}
-    for offset in range(0, len(item_ids), 500):
-        batch = item_ids[offset : offset + 500]
-        placeholders = ",".join("?" for _ in batch)
-        for row in conn.execute(
-            f"""
-            SELECT market_item_id,item_kind,source,legacy_item_id,legacy_store_kind
-            FROM market_item_aliases
-            WHERE market_item_id IN ({placeholders})
-            ORDER BY CASE item_kind WHEN 'event' THEN 0 WHEN 'official' THEN 1 ELSE 2 END,
-                     created_at, legacy_item_id
-            """,
-            batch,
-        ):
-            result.setdefault(int(row[0]), []).append(
-                {
-                    "item_kind": str(row[1]),
-                    "source": str(row[2]),
-                    "legacy_item_id": str(row[3]),
-                    "legacy_store_kind": str(row[4]),
-                }
-            )
-    return result
-
-
-def _preferred_alias(aliases: list[dict[str, str]], content_type: str) -> dict[str, str]:
-    if content_type == "official_news":
-        expected_kind = "official"
-    elif content_type in {"article", "research_index", "unknown"}:
-        expected_kind = "article"
-    else:
-        expected_kind = "event"
-    for alias in aliases:
-        if alias["item_kind"] == expected_kind:
-            return alias
-    if aliases:
-        return aliases[0]
-    if content_type == "official_news":
-        kind = "official"
-    elif content_type in {"article", "research_index", "unknown"}:
-        kind = "article"
-    else:
-        kind = "event"
-    return {"item_kind": kind, "source": "", "legacy_item_id": "", "legacy_store_kind": ""}
+def _review_select() -> str:
+    return """
+        m.*, r.id AS review_id, r.review_status, r.admission_status,
+        r.decision_action, r.importance, r.decision_json,
+        r.interpretation_json, r.created_at AS review_created_at,
+        r.completed_at AS review_completed_at,
+        (SELECT d.status FROM deliveries d
+         WHERE d.market_item_id=m.id ORDER BY d.id DESC LIMIT 1) delivery_status,
+        (SELECT d.id FROM deliveries d
+         WHERE d.market_item_id=m.id AND d.status='sent'
+         ORDER BY d.id DESC LIMIT 1) delivery_id,
+        (SELECT MAX(d.sent_at) FROM deliveries d
+         WHERE d.market_item_id=m.id AND d.status='sent') delivery_sent_at
+    """
 
 
 def _selected_item_rows(
@@ -101,13 +65,7 @@ def _selected_item_rows(
     include_baseline: bool,
     source: str = "",
 ) -> list[sqlite3.Row]:
-    """Return one display result per item while retaining all result versions in storage."""
-    seen_time = (
-        "CASE WHEN EXISTS (SELECT 1 FROM market_item_aliases display_alias "
-        "WHERE display_alias.market_item_id=m.id "
-        "AND display_alias.item_kind IN ('article','official')) "
-        "THEN COALESCE(NULLIF(r.created_at,''),m.first_seen_at) ELSE m.first_seen_at END"
-    )
+    seen_time = "COALESCE(NULLIF(r.created_at,''),m.first_seen_at)"
     display_time = (
         f"COALESCE(NULLIF(m.published_at,''),{seen_time})"
         if time_basis == "published"
@@ -121,41 +79,18 @@ def _selected_item_rows(
     return list(
         conn.execute(
             f"""
-            SELECT m.*, r.id AS review_id, r.review_status, r.admission_status,
-                   r.decision_action, r.importance, r.decision_json,
-                   r.interpretation_json,
-                   r.created_at AS review_created_at,
-                   r.completed_at AS review_completed_at,
-                   (SELECT d.status FROM deliveries d
-                    WHERE d.market_item_id=m.id ORDER BY d.id DESC LIMIT 1) delivery_status,
-                   (SELECT d.id FROM deliveries d
-                    WHERE d.market_item_id=m.id AND d.status='sent'
-                    ORDER BY d.id DESC LIMIT 1) delivery_id,
-                   (SELECT MAX(d.sent_at) FROM deliveries d
-                    WHERE d.market_item_id=m.id AND d.status='sent') delivery_sent_at
+            SELECT {_review_select()}
             FROM market_items m
             LEFT JOIN market_reviews r ON r.id = (
-                SELECT current.id
-                FROM market_reviews current
+                SELECT current.id FROM market_reviews current
                 WHERE current.market_item_id=m.id AND current.is_current=1
-                ORDER BY current.id DESC
-                LIMIT 1
+                ORDER BY current.id DESC LIMIT 1
             )
             WHERE datetime({display_time}) >= datetime(?)
               AND datetime({display_time}) < datetime(?)
               {source_clause}
-              AND (
-                  r.id IS NOT NULL
-                  OR EXISTS (
-                      SELECT 1 FROM market_item_aliases event_alias
-                      WHERE event_alias.market_item_id=m.id AND event_alias.item_kind='event'
-                  )
-                  OR (?=1 AND m.collection_class='baseline')
-              )
-              AND (
-                  r.id IS NULL
-                  OR r.admission_status = 'admitted'
-              )
+              AND (r.id IS NOT NULL OR (?=1 AND m.collection_class='baseline'))
+              AND (r.id IS NULL OR r.admission_status='admitted')
             ORDER BY datetime({display_time}) DESC, m.id DESC
             LIMIT 5000
             """,
@@ -164,21 +99,7 @@ def _selected_item_rows(
     )
 
 
-def _sent_at(row: sqlite3.Row) -> str:
-    return str(row["delivery_sent_at"] or "")
-
-
-def _display_seen_at(row: sqlite3.Row, item_kind: str) -> str:
-    if item_kind in {"article", "official"} and row["review_created_at"]:
-        return str(row["review_created_at"])
-    return str(row["first_seen_at"] or row["review_created_at"] or "")
-
-
-def _event_kind(row: sqlite3.Row) -> str:
-    return str(row["content_type"] or "event")
-
-
-def canonical_event_rows(
+def canonical_market_rows(
     conn: sqlite3.Connection,
     *,
     start_utc: str,
@@ -187,41 +108,25 @@ def canonical_event_rows(
     include_baseline: bool,
     source: str = "",
 ) -> list[dict[str, Any]]:
-    rows = _selected_item_rows(
+    result: list[dict[str, Any]] = []
+    for row in _selected_item_rows(
         conn,
         start_utc=start_utc,
         end_utc=end_utc,
         time_basis=time_basis,
         include_baseline=include_baseline,
         source=source,
-    )
-    alias_map = _aliases(conn, [int(row["id"]) for row in rows])
-    result: list[dict[str, Any]] = []
-    for row in rows:
-        aliases = alias_map.get(int(row["id"]), [])
-        item_alias = _preferred_alias(aliases, str(row["content_type"] or ""))
-        item_kind = item_alias["item_kind"]
-        review_status = str(row["review_status"] or "")
-        admission_status = str(row["admission_status"] or "")
+    ):
         baseline = str(row["collection_class"] or "") == "baseline"
-        is_event_without_review = not review_status and any(
-            alias["item_kind"] == "event" for alias in aliases
-        )
-
-        if review_status and admission_status != "admitted":
-            continue
-        if not review_status and not is_event_without_review:
-            if not (include_baseline and baseline):
-                continue
+        review_status = str(row["review_status"] or "")
         if baseline and not include_baseline:
             continue
-
         published_at = str(row["published_at"] or "")
-        seen_at = _display_seen_at(row, item_kind)
-        if baseline and not review_status and item_kind != "event":
+        seen_at = str(row["review_created_at"] or row["first_seen_at"] or "")
+        if baseline and not review_status:
             result.append(
                 {
-                    "kind": "baseline",
+                    "market_item_id": int(row["id"]),
                     "source": str(row["source"]),
                     "source_id": str(row["source"]),
                     "id": str(row["source_item_id"]),
@@ -239,30 +144,20 @@ def canonical_event_rows(
                 }
             )
             continue
-
         decision = _decision(row)
         interpretation = _interpretation(row)
-        sent_at = _sent_at(row)
-        source_label = str(row["source"] or "")
-        legacy_item_id = item_alias["legacy_item_id"] or str(row["source_item_id"])
-        if item_kind == "event":
-            kind = _event_kind(row)
-        elif item_kind == "official":
-            kind = "official_news"
-        else:
-            kind = "article"
+        sent_at = str(row["delivery_sent_at"] or "")
         related_payload = _result_projection(row)
         result.append(
             {
-                "kind": kind,
-                "source": source_label,
-                "source_id": str(row["source"]),
-                "id": legacy_item_id,
+                "market_item_id": int(row["id"]),
+                "source": str(row["source"] or ""),
+                "source_id": str(row["source"] or ""),
+                "id": str(row["source_item_id"]),
                 "title": str(row["title"] or ""),
                 "summary": str(
                     interpretation.get("core_content")
                     or row["summary"]
-                    or interpretation.get("brief_reason")
                     or decision.get("reason")
                     or ""
                 ),
@@ -280,9 +175,7 @@ def canonical_event_rows(
                 "brief_reason": str(interpretation.get("brief_reason") or ""),
                 "related_targets": card_targets(related_payload),
                 "feedback_identity": {
-                    "item_kind": item_kind,
-                    "source": str(item_alias["source"] or row["source"]),
-                    "item_id": legacy_item_id,
+                    "market_item_id": int(row["id"]),
                     "delivered": bool(sent_at),
                 },
             }
@@ -291,54 +184,35 @@ def canonical_event_rows(
     return result[:5000]
 
 
-def _review_rows_for_kind(
+def _review_rows(
     conn: sqlite3.Connection,
-    item_kind: str,
     *,
     start_utc: str = "",
     end_utc: str = "",
     since: str = "",
 ) -> list[sqlite3.Row]:
-    params: list[Any] = [item_kind]
+    params: list[Any] = []
     time_clause = ""
     if start_utc and end_utc:
         time_clause = "AND datetime(r.created_at) >= datetime(?) AND datetime(r.created_at) < datetime(?)"
         params.extend((start_utc, end_utc))
     elif since:
         time_clause = """
-            AND (
-                datetime(COALESCE(NULLIF(m.published_at,''),r.created_at)) >= datetime(?)
-                OR datetime(m.first_seen_at) >= datetime(?)
-            )
+            AND (datetime(COALESCE(NULLIF(m.published_at,''),r.created_at)) >= datetime(?)
+                 OR datetime(m.first_seen_at) >= datetime(?))
         """
         params.extend((since, since))
     return list(
         conn.execute(
             f"""
-            SELECT m.*, a.source AS alias_source, a.legacy_item_id,
-                   r.id AS review_id, r.review_status, r.admission_status,
-                   r.decision_action, r.importance, r.decision_json,
-                   r.interpretation_json,
-                   r.created_at AS review_created_at,
-                   r.completed_at AS review_completed_at,
-                   (SELECT d.status FROM deliveries d WHERE d.market_item_id=m.id
-                    ORDER BY d.id DESC LIMIT 1) delivery_status,
-                   (SELECT d.id FROM deliveries d WHERE d.market_item_id=m.id AND d.status='sent'
-                    ORDER BY d.id DESC LIMIT 1) delivery_id,
-                   (SELECT MAX(d.sent_at) FROM deliveries d
-                    WHERE d.market_item_id=m.id AND d.status='sent') delivery_sent_at
-            FROM market_item_aliases a
-            JOIN market_items m ON m.id=a.market_item_id
+            SELECT {_review_select()}
+            FROM market_items m
             JOIN market_reviews r ON r.id = (
-                SELECT current.id
-                FROM market_reviews current
-                WHERE current.market_item_id=m.id
-                  AND current.is_current=1
-                ORDER BY current.id DESC
-                LIMIT 1
+                SELECT current.id FROM market_reviews current
+                WHERE current.market_item_id=m.id AND current.is_current=1
+                ORDER BY current.id DESC LIMIT 1
             )
-            WHERE a.item_kind=?
-              {time_clause}
+            WHERE 1=1 {time_clause}
             ORDER BY r.id DESC
             """,
             params,
@@ -346,15 +220,14 @@ def _review_rows_for_kind(
     )
 
 
-def _article_digest_row(row: sqlite3.Row) -> dict[str, Any]:
-    gate = _result_projection(row)
+def _digest_row(row: sqlite3.Row) -> dict[str, Any]:
+    result = _result_projection(row)
     interpretation = _interpretation(row)
-    sent_at = _sent_at(row)
-    affected = _json_text(card_targets(gate))
+    affected = _json_text(card_targets(result))
     return {
         "market_review_id": int(row["review_id"]),
-        "source": str(row["alias_source"] or row["source"]),
-        "item_id": str(row["legacy_item_id"]),
+        "source": str(row["source"]),
+        "item_id": str(row["source_item_id"]),
         "url": str(row["url"] or ""),
         "title": str(row["title"] or ""),
         "source_module": str(row["source"] or ""),
@@ -365,12 +238,10 @@ def _article_digest_row(row: sqlite3.Row) -> dict[str, Any]:
         "incremental_classification": "",
         "affected_targets_json": str(affected or "[]"),
         "reason": str(_decision(row).get("brief_reason") or _decision(row).get("reason") or ""),
-        "daily_summary": str(
-            interpretation.get("core_content") or ""
-        ),
+        "daily_summary": str(interpretation.get("core_content") or ""),
         "confidence": "",
-        "gate_json": _json_text(gate),
-        "pushed_at": sent_at,
+        "gate_json": _json_text(result),
+        "pushed_at": str(row["delivery_sent_at"] or ""),
         "created_at": str(row["review_created_at"] or ""),
     }
 
@@ -381,27 +252,27 @@ def canonical_digest_rows(
     start_utc: str,
     end_utc: str,
 ) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
-    for row in _review_rows_for_kind(conn, "article", start_utc=start_utc, end_utc=end_utc):
-        projected = _article_digest_row(row)
-        if projected["pushed_at"]:
-            continue
-        result.append(projected)
+    result = [
+        projected
+        for row in _review_rows(conn, start_utc=start_utc, end_utc=end_utc)
+        if not (projected := _digest_row(row))["pushed_at"]
+    ]
     importance_order = {"medium": 0, "low": 1}
-    # Preserve the existing digest ordering within each importance group.
     grouped: list[dict[str, Any]] = []
     for rank in (0, 1, 2):
         group = [item for item in result if importance_order.get(str(item.get("importance") or ""), 2) == rank]
-        group.sort(key=lambda item: (str(item.get("published_at") or ""), str(item.get("created_at") or "")), reverse=True)
+        group.sort(
+            key=lambda item: (str(item.get("published_at") or ""), str(item.get("created_at") or "")),
+            reverse=True,
+        )
         grouped.extend(group)
     return grouped
 
 
 def canonical_feedback_snapshot(
-    conn: sqlite3.Connection, item_kind: str, source: str, item_id: str
+    conn: sqlite3.Connection,
+    market_item_id: int,
 ) -> dict[str, Any] | None:
-    if item_kind not in ITEM_KINDS:
-        return None
     row = conn.execute(
         """
         SELECT r.decision_json,r.application_revision,
@@ -414,15 +285,12 @@ def canonical_feedback_snapshot(
                (SELECT d.payload_json FROM deliveries d
                 WHERE d.market_item_id=m.id AND d.status='sent'
                 ORDER BY d.id DESC LIMIT 1) delivery_payload_json
-        FROM market_item_aliases a
-        JOIN market_items m ON m.id=a.market_item_id
-        JOIN market_reviews r ON r.market_item_id=m.id
-                             AND r.is_current=1
-        WHERE a.item_kind=? AND a.source=? AND a.legacy_item_id=?
-        ORDER BY r.id DESC
-        LIMIT 1
+        FROM market_items m
+        JOIN market_reviews r ON r.market_item_id=m.id AND r.is_current=1
+        WHERE m.id=?
+        ORDER BY r.id DESC LIMIT 1
         """,
-        (item_kind, source, item_id),
+        (market_item_id,),
     ).fetchone()
     if not row:
         return None
@@ -438,30 +306,28 @@ def canonical_feedback_snapshot(
 def canonical_delivered_items(conn: sqlite3.Connection, cutoff: str) -> list[dict[str, Any]]:
     conn.row_factory = sqlite3.Row
     items: list[dict[str, Any]] = []
-    for item_kind in ITEM_KINDS:
-        for row in _review_rows_for_kind(conn, item_kind):
-            sent_at = _sent_at(row)
-            if not sent_at or sent_at < cutoff:
-                continue
-            decision = _decision(row)
-            rule_hits = decision.get("rule_hits") if isinstance(decision.get("rule_hits"), list) else []
-            rule_ids = [
-                str(hit.get("rule_id") or "")
-                for hit in rule_hits
-                if isinstance(hit, dict) and hit.get("rule_id")
-            ]
-            audit = decision.get("audit_json") if isinstance(decision.get("audit_json"), dict) else {}
-            version = str(audit.get("decision_version") or audit.get("schema_version") or "")
-            items.append(
-                {
-                    "item_kind": item_kind,
-                    "source": str(row["alias_source"] or row["source"]),
-                    "item_id": str(row["legacy_item_id"]),
-                    "title": str(row["title"] or ""),
-                    "sent_at": sent_at,
-                    "action": str(row["decision_action"] or ""),
-                    "rule_ids": list(dict.fromkeys(rule_ids)),
-                    "version": version,
-                }
-            )
+    for row in _review_rows(conn):
+        sent_at = str(row["delivery_sent_at"] or "")
+        if not sent_at or sent_at < cutoff:
+            continue
+        decision = _decision(row)
+        rule_hits = decision.get("rule_hits") if isinstance(decision.get("rule_hits"), list) else []
+        rule_ids = [
+            str(hit.get("rule_id") or "")
+            for hit in rule_hits
+            if isinstance(hit, dict) and hit.get("rule_id")
+        ]
+        audit = decision.get("audit_json") if isinstance(decision.get("audit_json"), dict) else {}
+        items.append(
+            {
+                "market_item_id": int(row["id"]),
+                "source": str(row["source"]),
+                "item_id": str(row["source_item_id"]),
+                "title": str(row["title"] or ""),
+                "sent_at": sent_at,
+                "action": str(row["decision_action"] or ""),
+                "rule_ids": list(dict.fromkeys(rule_ids)),
+                "version": str(audit.get("decision_version") or audit.get("schema_version") or ""),
+            }
+        )
     return items

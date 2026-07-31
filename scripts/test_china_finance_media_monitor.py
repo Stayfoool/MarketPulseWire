@@ -606,7 +606,7 @@ def test_current_admission_is_equivalent_after_normalization() -> None:
             "published_at": "2026-07-20T00:00:00+00:00",
             "source_module": "Test Media",
         }
-        normalized = cfm.normalize_market_item("test-source", mapping, store_kind="article")
+        normalized = cfm.normalize_market_item("test-source", mapping)
         before = cfm.current_admission_result(dict(mapping), "test-source")
         after = cfm.current_admission_result(
             normalized,

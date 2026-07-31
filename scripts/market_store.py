@@ -57,7 +57,7 @@ def application_revision() -> str:
 
 
 def source_item_id(item: NormalizedMarketItem) -> str:
-    value = str(item.raw.get("source_event_id") or item.raw.get("id") or "").strip()
+    value = str(item.raw.get("id") or "").strip()
     if value:
         return value
     if item.url:
@@ -201,29 +201,6 @@ def begin_market_review(
         ),
     )
     return int(cur.lastrowid)
-
-
-def ensure_market_item_alias(
-    conn: sqlite3.Connection,
-    market_item_id: int,
-    *,
-    item_kind: str,
-    source: str,
-    legacy_item_id: str,
-    legacy_store_kind: str,
-) -> None:
-    conn.execute(
-        """
-        INSERT INTO market_item_aliases (
-            market_item_id, item_kind, source, legacy_item_id,
-            legacy_store_kind, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(item_kind, source, legacy_item_id) DO UPDATE SET
-            market_item_id = excluded.market_item_id,
-            legacy_store_kind = excluded.legacy_store_kind
-        """,
-        (market_item_id, item_kind, source, legacy_item_id, legacy_store_kind, utc_now()),
-    )
 
 
 def record_production_admission(
@@ -406,25 +383,15 @@ def complete_market_review(
     flow_result: MarketFlowResult,
     *,
     db_path: Path = DEFAULT_DB_PATH,
-    alias: tuple[str, str, str, str] | None = None,
 ) -> None:
     with connect_sqlite(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            market_item_id = _complete_market_review_in_conn(
+            _complete_market_review_in_conn(
                 conn,
                 market_review_id,
                 flow_result,
             )
-            if alias:
-                ensure_market_item_alias(
-                    conn,
-                    market_item_id,
-                    item_kind=alias[0],
-                    source=alias[1],
-                    legacy_item_id=alias[2],
-                    legacy_store_kind=alias[3],
-                )
         except BaseException:
             conn.rollback()
             raise
@@ -465,7 +432,7 @@ def processing_failure_status(error: BaseException) -> str:
     return "failed_retryable"
 
 
-def record_article_delivery(
+def record_delivery(
     market_item_id: int,
     market_review_id: int,
     *,
@@ -498,51 +465,3 @@ def record_article_delivery(
         conn.commit()
         delivery_id = int(cur.lastrowid)
     return delivery_id
-
-
-def record_event_delivery(
-    channel: str,
-    status: str,
-    payload: dict[str, Any],
-    *,
-    error: str = "",
-    market_item_id: int | None = None,
-    market_review_id: int | None = None,
-    decision_action: str = "",
-    db_path: Path = DEFAULT_DB_PATH,
-) -> int:
-    """Persist an event-shaped item's delivery using only unified identities."""
-    now = utc_now()
-    with connect_sqlite(db_path) as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO deliveries (
-                market_item_id, market_review_id, channel, status, decision_action,
-                attempted_at, sent_at, error, payload_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                market_item_id,
-                market_review_id,
-                channel,
-                status,
-                decision_action or None,
-                now,
-                now if status == "sent" else "",
-                error,
-                json_dumps(payload),
-            ),
-        )
-        conn.commit()
-        return int(cur.lastrowid)
-
-
-def market_ids_for_review(market_review_id: int, *, db_path: Path = DEFAULT_DB_PATH) -> tuple[int, int]:
-    with connect_sqlite(db_path) as conn:
-        row = conn.execute(
-            "SELECT market_item_id, id FROM market_reviews WHERE id = ?",
-            (market_review_id,),
-        ).fetchone()
-    if not row:
-        raise RuntimeError(f"market review does not exist: {market_review_id}")
-    return int(row[0]), int(row[1])

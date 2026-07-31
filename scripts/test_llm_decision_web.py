@@ -20,9 +20,9 @@ from llm_decision_web import (
 )
 
 
-def audit_payload(status: str = "uncertain", review_id: int = 12) -> dict:
+def audit_payload(status: str = "uncertain", review_id: int = 12, *, legacy_segments: bool = False) -> dict:
     user_payload = {
-        "article_segments": [
+        "article_segments" if legacy_segments else "source_segments": [
             {"id": "T1", "field": "title", "text": "标题证据"},
             {"id": "B1", "field": "full_text", "text": "正文反证"},
         ]
@@ -86,8 +86,22 @@ def test_uncertain_projection_is_bounded() -> None:
     assert assessment["judgement"] == "uncertain"
     assert assessment["reason"] == "缺少决定性事实"
     assert assessment["counterevidence"][0]["quote"] == "正文反证"
-    forbidden = {"request", "response", "content", "article_segments", "system_prompt", "user_payload"}
+    forbidden = {
+        "request",
+        "response",
+        "content",
+        "source_segments",
+        "article_segments",
+        "system_prompt",
+        "user_payload",
+    }
     assert not any(key in forbidden for key, _ in walk_values(projection))
+
+
+def test_existing_private_audits_remain_readable() -> None:
+    projection = build_web_projection(audit_payload(legacy_segments=True))
+    assessment = projection["calls"][0]["rule_assessments"][0]
+    assert assessment["counterevidence"][0]["quote"] == "正文反证"
 
 
 def test_projection_write_is_idempotent_and_mode_bounded() -> None:
@@ -125,9 +139,6 @@ def test_rows_show_terminal_insufficient_evidence_without_action() -> None:
                 id INTEGER PRIMARY KEY, market_item_id INTEGER, is_current INTEGER,
                 admission_status TEXT, review_status TEXT, decision_action TEXT,
                 importance TEXT, decision_json TEXT, created_at TEXT, completed_at TEXT
-            );
-            CREATE TABLE market_item_aliases (
-                market_item_id INTEGER, source TEXT, legacy_item_id TEXT, created_at TEXT
             );
             INSERT INTO market_items VALUES (1, 'source-a', 'item-a', '测试标题', 'https://example.com/a', '', '2026-07-26T01:00:00+00:00', 'article');
             INSERT INTO market_reviews VALUES (12, 1, 1, 'admitted', 'insufficient_evidence', NULL, NULL, NULL, '2026-07-26T01:01:00+00:00', NULL);
@@ -186,6 +197,7 @@ def test_retention_removes_raw_calls_but_keeps_web_projection() -> None:
 
 def main() -> None:
     test_uncertain_projection_is_bounded()
+    test_existing_private_audits_remain_readable()
     test_projection_write_is_idempotent_and_mode_bounded()
     test_rows_show_terminal_insufficient_evidence_without_action()
     test_retention_removes_raw_calls_but_keeps_web_projection()

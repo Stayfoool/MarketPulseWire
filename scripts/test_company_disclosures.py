@@ -322,7 +322,7 @@ def test_event_preserves_provider_audit_but_uses_logical_source() -> None:
     item = record("1225409631")
     event = event_from_disclosure(item, "公告正文", {"status": "ok", "file_sha256": "abc"})
     assert event["source"] == "company_disclosures"
-    assert event["source_event_id"] == "announcement:1225409631"
+    assert event["id"] == "announcement:1225409631"
     assert event["raw"]["transport_provider"] == "cninfo_public"
     assert event["raw"]["official_document_url"].endswith("1225409631.PDF")
     assert event["full_text"] == "公告正文"
@@ -335,7 +335,7 @@ def test_transport_provider_does_not_change_identity() -> None:
     for disclosure in records:
         disclosure = replace(disclosure, title=text)
         event = event_from_disclosure(disclosure, text, {"status": "ok"})
-        item = normalize_market_item("company_disclosures", event, store_kind="event")
+        item = normalize_market_item("company_disclosures", event)
         items.append(item)
     assert {item.dedupe_key for item in items} == {"company_disclosures:announcement:1225409631"}
 

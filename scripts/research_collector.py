@@ -1,25 +1,16 @@
 #!/usr/bin/env python3
-"""Collector for research institutions and industry media.
-
-By default this collector runs in shadow mode: it does not send Feishu cards,
-run LLM interpretation, or write production dedupe/review tables. The explicit
-``--production`` mode runs the RSS/page collectors; every item then enters the
-shared ``market_flow.process_market_item`` entry point.
-"""
+"""Run enabled research sources through the unified market flow."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import sqlite3
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from alphabstract_monitor import ALPHAABSTRACT_SOURCES, AlphaAbstractSource
-from alphabstract_monitor import extract_items as extract_alphabstract_items
 from alphabstract_monitor import run_once as run_alphabstract_once
 from collector_runtime import (
     filter_enabled_mapping_for_run,
@@ -29,9 +20,8 @@ from collector_runtime import (
 )
 from db_utils import connect_sqlite
 from media_sources import OVERSEAS_MEDIA_FEEDS
-from rss_monitor import CORE_COMPANY_FEEDS, DB_PATH, fetch_feed, filter_items, run_once as run_rss_once, strip_tags
+from rss_monitor import CORE_COMPANY_FEEDS, DB_PATH, run_once as run_rss_once
 from source_profiles import SOURCE_PROFILE_CONFIG_PATH, runtime_profile_map
-from trendforce_page_monitor import extract_items as extract_page_items
 from trendforce_page_monitor import run_once as run_page_once
 from trendforce_sources import DEFAULT_RSS_FEEDS, PageSource, TREND_FORCE_PAGE_SOURCES
 from x_check import load_env
@@ -41,7 +31,6 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 REPORT_DIR = ROOT / "reports"
 RESEARCH_CATEGORY = "research_industry_media"
-SHADOW_STATE_PREFIX = "research_shadow_feed"
 PRODUCTION_PAGE_STATE_PREFIX = "research_collector_page"
 DEFAULT_PAGE_MIN_INTERVAL_SECONDS = 900
 
@@ -63,14 +52,12 @@ def parse_utc_datetime(value: Any) -> datetime | None:
 
 
 def research_rss_feeds(config_path: Path = SOURCE_PROFILE_CONFIG_PATH) -> dict[str, str]:
-    """Return enabled research/industry RSS/RDF feed URLs from source profiles."""
     source_urls = {
         source: url
         for source, url in DEFAULT_RSS_FEEDS.items()
         if source not in CORE_COMPANY_FEEDS
     }
     source_urls.update(OVERSEAS_MEDIA_FEEDS)
-
     profiles = runtime_profile_map(config_path=config_path)
     feeds = {
         source: url
@@ -81,7 +68,6 @@ def research_rss_feeds(config_path: Path = SOURCE_PROFILE_CONFIG_PATH) -> dict[s
 
 
 def research_page_sources(config_path: Path = SOURCE_PROFILE_CONFIG_PATH) -> list[PageSource]:
-    """Return enabled research/industry list-page sources."""
     profiles = runtime_profile_map(config_path=config_path)
     sources = [
         source
@@ -92,7 +78,6 @@ def research_page_sources(config_path: Path = SOURCE_PROFILE_CONFIG_PATH) -> lis
 
 
 def research_alphabstract_sources(config_path: Path = SOURCE_PROFILE_CONFIG_PATH) -> list[AlphaAbstractSource]:
-    """Return enabled AlphaAbstract public-summary sources."""
     profiles = runtime_profile_map(config_path=config_path)
     sources = [
         source
@@ -115,7 +100,6 @@ def selected_sources(
     alphabstract = research_alphabstract_sources(config_path=config_path) if include_pages else []
     if not requested:
         return feeds, pages, alphabstract
-
     known = set(feeds) | {source.name for source in pages} | {source.name for source in alphabstract}
     missing = sorted(requested - known)
     if missing:
@@ -127,113 +111,26 @@ def selected_sources(
     )
 
 
-def table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    row = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone()
-    return row is not None
-
-
-def load_seen_item_ids(sources: Iterable[str], db_path: Path = DB_PATH) -> set[tuple[str, str]]:
-    source_list = sorted({source for source in sources if source})
-    if not source_list or not db_path.exists():
-        return set()
-    placeholders = ",".join("?" for _ in source_list)
-    try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
-            if not table_exists(conn, "seen_items"):
-                return set()
-            return {
-                (str(row[0] or ""), str(row[1] or ""))
-                for row in conn.execute(
-                    f"SELECT source, item_id FROM seen_items WHERE source IN ({placeholders})",
-                    source_list,
-                )
-            }
-    except sqlite3.Error:
-        return set()
-
-
-def summarize_text(value: Any, limit: int = 320) -> str:
-    text = strip_tags(str(value or ""))
-    text = " ".join(text.split())
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3].rstrip() + "..."
-
-
-def candidate_from_item(
-    source: str,
-    item: dict[str, Any],
-    seen_ids: set[tuple[str, str]],
-    *,
-    collector: str = "research_collector",
-    content_type: str = "article",
-) -> dict[str, Any]:
-    item_id = str(item.get("id") or item.get("url") or item.get("title") or "")
-    candidate = {
-        "source": source,
-        "id": item_id,
-        "already_seen": (source, item_id) in seen_ids,
-        "url": str(item.get("url") or ""),
-        "title": str(item.get("title") or ""),
-        "published_at": str(item.get("published_at") or ""),
-        "summary": summarize_text(item.get("summary") or item.get("content") or ""),
-        "categories": list(item.get("categories") or []),
-        "pipeline": "research_media shadow -> decision layer / thin interpretation planned",
-    }
-    return candidate
-
-
-def limited(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
-    if limit <= 0:
-        return items
-    return items[:limit]
-
-
-def load_shadow_feed_states(feeds: dict[str, str], save_shadow_state: bool) -> dict[str, dict[str, Any]]:
-    if not save_shadow_state or not feeds:
-        return {source: {} for source in feeds}
-    with connect_sqlite(DB_PATH) as conn:
-        return load_source_states(conn, feeds, prefix=SHADOW_STATE_PREFIX)
-
-
-def save_shadow_feed_state(source: str, state: dict[str, Any], save_shadow_state: bool) -> None:
-    if not save_shadow_state:
-        return
-    with connect_sqlite(DB_PATH) as conn:
-        save_source_state(conn, source, state, prefix=SHADOW_STATE_PREFIX)
-        conn.commit()
-
-
 def due_page_sources(
     sources: list[Any],
     *,
     min_interval_seconds: int = DEFAULT_PAGE_MIN_INTERVAL_SECONDS,
     force: bool = False,
 ) -> tuple[list[Any], list[dict[str, str]]]:
-    """Return page sources due for production processing.
-
-    The unified research collector can run every few minutes for RSS latency,
-    while list-page sources should stay lower frequency. We keep that cadence in
-    source_state instead of splitting the migration back into multiple services.
-    """
     if force or min_interval_seconds <= 0 or not sources:
         return list(sources), []
-
     now = datetime.now(timezone.utc)
     with connect_sqlite(DB_PATH) as conn:
         states = load_source_states(conn, [source.name for source in sources], prefix=PRODUCTION_PAGE_STATE_PREFIX)
-
-    due: list[PageSource] = []
+    due: list[Any] = []
     skipped: list[dict[str, str]] = []
     min_delta = timedelta(seconds=min_interval_seconds)
     for source in sources:
-        state = states.get(source.name, {})
-        last_checked = parse_utc_datetime(state.get("last_checked_at"))
+        last_checked = parse_utc_datetime(states.get(source.name, {}).get("last_checked_at"))
         if last_checked is None or now - last_checked >= min_delta:
             due.append(source)
-            continue
-        next_due = last_checked + min_delta
-        skipped.append({"source": source.name, "next_due_at": next_due.isoformat()})
+        else:
+            skipped.append({"source": source.name, "next_due_at": (last_checked + min_delta).isoformat()})
     return due, skipped
 
 
@@ -245,241 +142,6 @@ def mark_page_sources_checked(sources: list[Any]) -> None:
         for source in sources:
             save_source_state(conn, source.name, {"last_checked_at": now}, prefix=PRODUCTION_PAGE_STATE_PREFIX)
         conn.commit()
-
-
-def collect_rss_shadow(
-    feeds: dict[str, str],
-    *,
-    limit: int,
-    seen_ids: set[tuple[str, str]],
-    save_shadow_state: bool = False,
-) -> list[dict[str, Any]]:
-    states = load_shadow_feed_states(feeds, save_shadow_state)
-    max_workers = max(1, int(os.getenv("RESEARCH_COLLECTOR_MAX_WORKERS", os.getenv("RSS_FETCH_MAX_WORKERS", "8")) or "8"))
-    rows: dict[str, dict[str, Any]] = {}
-    with ThreadPoolExecutor(max_workers=min(max_workers, max(1, len(feeds)))) as executor:
-        futures = {
-            executor.submit(fetch_feed, source, url, states.get(source, {})): (source, url)
-            for source, url in feeds.items()
-        }
-        for future in as_completed(futures):
-            source, url = futures[future]
-            try:
-                raw_items, next_state, not_modified = future.result()
-                save_shadow_feed_state(source, next_state, save_shadow_state)
-                filtered_items = filter_items(source, raw_items)
-                rows[source] = {
-                    "source": source,
-                    "url": url,
-                    "ok": True,
-                    "not_modified": not_modified,
-                    "raw_count": len(raw_items),
-                    "candidate_count": len(filtered_items),
-                    "candidates": limited(
-                        [
-                            candidate_from_item(
-                                source,
-                                item,
-                                seen_ids,
-                                collector="research_collector.rss",
-                            )
-                            for item in filtered_items
-                        ],
-                        limit,
-                    ),
-                    "error": "",
-                }
-            except Exception as exc:  # noqa: BLE001 - one failing source must not hide the rest
-                rows[source] = {
-                    "source": source,
-                    "url": url,
-                    "ok": False,
-                    "not_modified": False,
-                    "raw_count": 0,
-                    "candidate_count": 0,
-                    "candidates": [],
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-    return [rows[source] for source in feeds if source in rows]
-
-
-def collect_page_shadow(
-    sources: list[PageSource],
-    *,
-    limit: int,
-    seen_ids: set[tuple[str, str]],
-) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for source in sources:
-        try:
-            items = extract_page_items(source)
-            rows.append(
-                {
-                    "source": source.name,
-                    "url": source.url,
-                    "ok": True,
-                    "module": source.module,
-                    "kind": source.kind,
-                    "access_note": source.access_note,
-                    "raw_count": len(items),
-                    "candidate_count": len(items),
-                    "candidates": limited(
-                        [
-                            candidate_from_item(
-                                source.name,
-                                item,
-                                seen_ids,
-                                collector="research_collector.page",
-                            )
-                            for item in items
-                        ],
-                        limit,
-                    ),
-                    "error": "",
-                }
-            )
-        except Exception as exc:  # noqa: BLE001 - keep shadow report complete
-            rows.append(
-                {
-                    "source": source.name,
-                    "url": source.url,
-                    "ok": False,
-                    "module": source.module,
-                    "kind": source.kind,
-                    "access_note": source.access_note,
-                    "raw_count": 0,
-                    "candidate_count": 0,
-                    "candidates": [],
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            )
-    return rows
-
-
-def collect_alphabstract_shadow(
-    sources: list[AlphaAbstractSource],
-    *,
-    limit: int,
-    seen_ids: set[tuple[str, str]],
-) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for source in sources:
-        try:
-            items = extract_alphabstract_items(source)
-            rows.append(
-                {
-                    "source": source.name,
-                    "url": source.sitemap_url,
-                    "ok": True,
-                    "module": source.module,
-                    "kind": "alphabstract_sitemap",
-                    "access_note": source.access_note,
-                    "raw_count": len(items),
-                    "candidate_count": len(items),
-                    "candidates": limited(
-                        [
-                            candidate_from_item(
-                                source.name,
-                                item,
-                                seen_ids,
-                                collector="research_collector.alphabstract",
-                                content_type="research_summary",
-                            )
-                            for item in items
-                        ],
-                        limit,
-                    ),
-                    "error": "",
-                }
-            )
-        except Exception as exc:  # noqa: BLE001 - keep shadow report complete
-            rows.append(
-                {
-                    "source": source.name,
-                    "url": source.sitemap_url,
-                    "ok": False,
-                    "module": source.module,
-                    "kind": "alphabstract_sitemap",
-                    "access_note": source.access_note,
-                    "raw_count": 0,
-                    "candidate_count": 0,
-                    "candidates": [],
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            )
-    return rows
-
-
-def collect_shadow(
-    *,
-    feeds: dict[str, str],
-    page_sources: list[PageSource],
-    alphabstract_sources: list[AlphaAbstractSource] | None = None,
-    limit: int = 5,
-    compare_seen: bool = True,
-    save_shadow_state: bool = False,
-) -> dict[str, Any]:
-    started_at = utc_now()
-    alphabstract_sources = alphabstract_sources or []
-    seen_ids = (
-        load_seen_item_ids(
-            [
-                *feeds.keys(),
-                *(source.name for source in page_sources),
-                *(source.name for source in alphabstract_sources),
-            ]
-        )
-        if compare_seen
-        else set()
-    )
-    rss_rows = collect_rss_shadow(
-        feeds,
-        limit=limit,
-        seen_ids=seen_ids,
-        save_shadow_state=save_shadow_state,
-    )
-    page_rows = collect_page_shadow(
-        page_sources,
-        limit=limit,
-        seen_ids=seen_ids,
-    )
-    alphabstract_rows = collect_alphabstract_shadow(
-        alphabstract_sources,
-        limit=limit,
-        seen_ids=seen_ids,
-    )
-    all_rows = [*rss_rows, *page_rows, *alphabstract_rows]
-    errors = [row for row in all_rows if not row.get("ok")]
-    counts = {
-        "rss_sources": len(rss_rows),
-        "page_sources": len(page_rows),
-        "alphabstract_sources": len(alphabstract_rows),
-        "sources": len(all_rows),
-        "failed_sources": len(errors),
-        "raw_items": sum(int(row.get("raw_count") or 0) for row in all_rows),
-        "candidates": sum(int(row.get("candidate_count") or 0) for row in all_rows),
-        "already_seen_candidates": sum(
-            1
-            for row in all_rows
-            for item in row.get("candidates", [])
-            if item.get("already_seen")
-        ),
-    }
-    return {
-        "ok": not errors,
-        "mode": "shadow_dry_run",
-        "sent_feishu": False,
-        "ran_llm_review": False,
-        "wrote_production_seen_items": False,
-        "save_shadow_state": save_shadow_state,
-        "started_at": started_at,
-        "finished_at": utc_now(),
-        "counts": counts,
-        "rss": rss_rows,
-        "pages": page_rows,
-        "alphabstract": alphabstract_rows,
-        "errors": errors,
-    }
 
 
 def collect_production(
@@ -505,9 +167,8 @@ def collect_production(
     if feeds:
         try:
             rss_new = run_rss_once(feeds, notify_baseline=notify_baseline)
-        except Exception as exc:  # noqa: BLE001 - report the batch failure clearly
+        except Exception as exc:  # noqa: BLE001 - retain a source-family result for service health
             errors.append({"stage": "rss", "error": f"{type(exc).__name__}: {exc}"})
-
     if page_sources:
         try:
             due_pages, skipped_pages = due_page_sources(
@@ -518,33 +179,25 @@ def collect_production(
             if due_pages:
                 page_new = run_page_once(due_pages, notify_baseline=notify_baseline)
                 mark_page_sources_checked(due_pages)
-            else:
-                print("research_collector production: 页面源尚未到达抓取间隔，本轮跳过。", flush=True)
-        except Exception as exc:  # noqa: BLE001 - keep the production summary explicit
+        except Exception as exc:  # noqa: BLE001 - retain a source-family result for service health
             errors.append({"stage": "pages", "error": f"{type(exc).__name__}: {exc}"})
-
     if alphabstract_sources:
         try:
-            due_alpha_raw, skipped_alphabstract = due_page_sources(
+            due_alpha, skipped_alphabstract = due_page_sources(
                 alphabstract_sources,
                 min_interval_seconds=page_min_interval_seconds,
                 force=force_pages,
             )
-            due_alphabstract = list(due_alpha_raw)
+            due_alphabstract = list(due_alpha)
             if due_alphabstract:
                 alphabstract_new = run_alphabstract_once(due_alphabstract, notify_baseline=notify_baseline)
                 mark_page_sources_checked(due_alphabstract)
-            else:
-                print("research_collector production: AlphaAbstract 尚未到达抓取间隔，本轮跳过。", flush=True)
-        except Exception as exc:  # noqa: BLE001 - keep the production summary explicit
+        except Exception as exc:  # noqa: BLE001 - retain a source-family result for service health
             errors.append({"stage": "alphabstract", "error": f"{type(exc).__name__}: {exc}"})
 
     return {
         "ok": not errors,
         "mode": "production",
-        "sent_feishu": True,
-        "ran_llm_review": True,
-        "wrote_production_seen_items": True,
         "started_at": started_at,
         "finished_at": utc_now(),
         "counts": {
@@ -569,108 +222,62 @@ def collect_production(
 def write_report(payload: dict[str, Any], report_dir: Path = REPORT_DIR) -> Path:
     report_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    mode = "production" if payload.get("mode") == "production" else "shadow"
-    path = report_dir / f"research-collector-{mode}-{stamp}.json"
+    path = report_dir / f"research-collector-{stamp}.json"
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path
 
 
 def print_text_summary(payload: dict[str, Any]) -> None:
     counts = payload.get("counts", {})
-    if payload.get("mode") == "production":
-        print(
-            "research_collector production: "
-            f"rss_sources={counts.get('rss_sources', 0)} "
-            f"page_sources={counts.get('page_sources', 0)} "
-            f"alphabstract_sources={counts.get('alphabstract_sources', 0)} "
-            f"pages_due={counts.get('page_sources_due', 0)} "
-            f"alphabstract_due={counts.get('alphabstract_sources_due', 0)} "
-            f"new_items={counts.get('new_items', 0)} "
-            f"errors={len(payload.get('errors', []))}",
-            flush=True,
-        )
-        for skipped in payload.get("skipped_pages", [])[:10]:
-            print(f"[SKIP] {skipped.get('source')}: next_due_at={skipped.get('next_due_at')}", flush=True)
-        for skipped in payload.get("skipped_alphabstract", [])[:10]:
-            print(f"[SKIP] {skipped.get('source')}: next_due_at={skipped.get('next_due_at')}", flush=True)
-        for error in payload.get("errors", []):
-            print(f"[ERR] {error.get('stage')}: {error.get('error')}", flush=True)
-        return
     print(
-        "research_collector shadow: "
-        f"sources={counts.get('sources', 0)} "
-        f"failed={counts.get('failed_sources', 0)} "
-        f"raw_items={counts.get('raw_items', 0)} "
-        f"candidates={counts.get('candidates', 0)}"
+        "research_collector: "
+        f"rss_sources={counts.get('rss_sources', 0)} "
+        f"page_sources={counts.get('page_sources', 0)} "
+        f"alphabstract_sources={counts.get('alphabstract_sources', 0)} "
+        f"new_items={counts.get('new_items', 0)} "
+        f"errors={len(payload.get('errors', []))}",
+        flush=True,
     )
-    for group in ("rss", "pages", "alphabstract"):
-        for row in payload.get(group, []):
-            status = "OK" if row.get("ok") else "ERR"
-            print(
-                f"[{status}] {row.get('source')}: "
-                f"raw={row.get('raw_count', 0)} candidates={row.get('candidate_count', 0)}"
-            )
-            if row.get("error"):
-                print(f"  error: {row.get('error')}")
-            for item in row.get("candidates", [])[:3]:
-                seen = "seen" if item.get("already_seen") else "new?"
-                print(f"  - ({seen}) {item.get('title')}")
+    for skipped in payload.get("skipped_pages", []) + payload.get("skipped_alphabstract", []):
+        print(f"[SKIP] {skipped.get('source')}: next_due_at={skipped.get('next_due_at')}", flush=True)
+    for error in payload.get("errors", []):
+        print(f"[ERR] {error.get('stage')}: {error.get('error')}", flush=True)
 
 
 def main() -> int:
     load_env(ENV_PATH)
-    parser = argparse.ArgumentParser(description="Run research/industry-media collector.")
+    parser = argparse.ArgumentParser(description="Run research sources.")
     parser.add_argument("--source", action="append", default=[], help="只跑指定 source id，可重复。")
     parser.add_argument("--rss-only", action="store_true", help="只跑 RSS/RDF 源。")
     parser.add_argument("--pages-only", action="store_true", help="只跑页面源。")
-    parser.add_argument("--production", action="store_true", help="运行生产链路：入库、统一决策/解读和飞书推送。")
-    parser.add_argument("--notify-baseline", action="store_true", help="生产模式下首次建立基线时也发送通知。默认不发送旧条目。")
+    parser.add_argument("--notify-baseline", action="store_true", help="首次建立基线时也发送通知。默认不发送旧条目。")
     parser.add_argument(
         "--page-min-interval",
         type=int,
         default=int(os.getenv("RESEARCH_COLLECTOR_PAGE_MIN_INTERVAL_SECONDS", str(DEFAULT_PAGE_MIN_INTERVAL_SECONDS))),
-        help="生产模式页面源最小抓取间隔秒数；默认 900。0 表示每轮都抓。",
+        help="页面源最小抓取间隔秒数；默认 900。0 表示每轮都抓。",
     )
-    parser.add_argument("--force-pages", action="store_true", help="生产模式下忽略页面源最小间隔。")
-    parser.add_argument("--limit", type=int, default=5, help="每个 source 输出候选条数；0 表示不限制。")
+    parser.add_argument("--force-pages", action="store_true", help="忽略页面源最小间隔。")
     parser.add_argument("--json", action="store_true", help="输出完整 JSON。")
     parser.add_argument("--write-report", action="store_true", help="把 JSON 报告写入 reports/。")
-    parser.add_argument("--no-compare-seen", action="store_true", help="不读取生产库判断 already_seen。")
-    parser.add_argument("--strict-exit", action="store_true", help="任一 source 失败时返回非 0；默认只在报告中记录错误。")
-    parser.add_argument(
-        "--save-shadow-state",
-        action="store_true",
-        help="仅保存 research_shadow_feed:* 条件请求状态；不写生产 seen/review 表。",
-    )
+    parser.add_argument("--strict-exit", action="store_true", help="任一 source 失败时返回非 0。")
     args = parser.parse_args()
     if args.rss_only and args.pages_only:
         raise SystemExit("--rss-only 和 --pages-only 不能同时使用")
-    if args.production and args.save_shadow_state:
-        raise SystemExit("--production 不能与 --save-shadow-state 同时使用")
 
     feeds, pages, alphabstract = selected_sources(
         args.source,
         include_rss=not args.pages_only,
         include_pages=not args.rss_only,
     )
-    if args.production:
-        payload = collect_production(
-            feeds=feeds,
-            page_sources=pages,
-            alphabstract_sources=alphabstract,
-            notify_baseline=args.notify_baseline or os.getenv("SURVEIL_NOTIFY_BASELINE", "") == "1",
-            page_min_interval_seconds=max(0, args.page_min_interval),
-            force_pages=args.force_pages,
-        )
-    else:
-        payload = collect_shadow(
-            feeds=feeds,
-            page_sources=pages,
-            alphabstract_sources=alphabstract,
-            limit=max(0, args.limit),
-            compare_seen=not args.no_compare_seen,
-            save_shadow_state=args.save_shadow_state,
-        )
+    payload = collect_production(
+        feeds=feeds,
+        page_sources=pages,
+        alphabstract_sources=alphabstract,
+        notify_baseline=args.notify_baseline or os.getenv("SURVEIL_NOTIFY_BASELINE", "") == "1",
+        page_min_interval_seconds=max(0, args.page_min_interval),
+        force_pages=args.force_pages,
+    )
     if args.write_report:
         payload["report_path"] = str(write_report(payload))
     if args.json:

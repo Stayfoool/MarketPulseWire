@@ -18,7 +18,7 @@ from env_utils import load_env
 from market_db import DEFAULT_DB_PATH
 from market_flow import normalize_market_item, process_market_item
 from holdings_store import load_enabled_holdings
-from market_item import event_content_hash
+from market_item import content_hash
 from market_store import processing_failure_status
 from portfolio_import import import_holdings
 from production_admission import persist_production_admission_context, production_admission_context
@@ -80,7 +80,7 @@ def parse_record_document(record: DisclosureRecord) -> tuple[str, dict[str, Any]
 
 def event_from_disclosure(record: DisclosureRecord, full_text: str, document_meta: dict[str, Any]) -> dict[str, Any]:
     identity = disclosure_identity(record)
-    event_type = "investor_relations_record" if record.content_kind == "relation" else "announcement"
+    content_type = "investor_relations_record" if record.content_kind == "relation" else "announcement"
     summary_parts = [
         f"股票：{record.company_name} {record.symbol}".strip(),
         f"标题：{record.title}",
@@ -102,12 +102,11 @@ def event_from_disclosure(record: DisclosureRecord, full_text: str, document_met
         raw["_text_quality"] = "公告 PDF 正文未抽取成功，系统仅基于标题和元数据保守判断。"
     return {
         "source": SOURCE_ID,
-        "source_event_id": identity,
+        "id": identity,
         "source_category": "company_disclosures",
         "publisher_role": "company_official",
         "collector": "company_disclosures",
-        "event_type": event_type,
-        "content_type": event_type,
+        "content_type": content_type,
         "title": record.title,
         "summary": "；".join(summary_parts),
         "full_text": full_text,
@@ -116,7 +115,7 @@ def event_from_disclosure(record: DisclosureRecord, full_text: str, document_met
         "symbols": [record.symbol],
         "themes": ["投资者关系活动记录"] if record.content_kind == "relation" else ["公司公告"],
         "raw": raw,
-        "content_hash": event_content_hash(identity, record.title, record.published_at, full_text[:2000]),
+        "content_hash": content_hash(identity, record.title, record.published_at, full_text[:2000]),
     }
 
 
@@ -294,11 +293,10 @@ def collect_disclosures(
             if not identity_known:
                 stats["baseline"] += 1
         elif baseline_only:
-            normalized = normalize_market_item(SOURCE_ID, event, store_kind="event")
+            normalized = normalize_market_item(SOURCE_ID, event)
             outcome = process_market_item(
                 normalized,
                 event,
-                store_kind="event",
                 db_path=db_path,
                 baseline_only=True,
                 analyze=False,
@@ -315,7 +313,7 @@ def collect_disclosures(
                 stats["baseline"] += 1
                 print(f"[baseline] {identity} {record.symbol} {record.title} pdf={document_meta.get('status')}", flush=True)
         else:
-            normalized = normalize_market_item(SOURCE_ID, event, store_kind="event")
+            normalized = normalize_market_item(SOURCE_ID, event)
             admission_context = persist_production_admission_context(normalized, production_admission_context(normalized, db_path=db_path), db_path=db_path)
             admission = admission_context.result
             if admission.status != "admitted":
@@ -329,7 +327,6 @@ def collect_disclosures(
                     outcome = process_market_item(
                         normalized,
                         event,
-                        store_kind="event",
                         db_path=db_path,
                         analyze=analyze,
                         deliver=deliver,

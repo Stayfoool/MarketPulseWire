@@ -23,7 +23,7 @@ SEEN_ITEM_LIFECYCLE_FIELDS = {
     "admission_config_version",
     "admission_rule_contract_version",
     "admission_evaluated_at",
-    "result_event_id",
+    "result_market_item_id",
     "processing_status",
     "processing_error",
     "processed_at",

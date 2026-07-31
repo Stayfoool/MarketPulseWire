@@ -6,8 +6,7 @@ from __future__ import annotations
 from market_item import (
     DecisionResult,
     InterpretationResult,
-    item_from_article_mapping,
-    item_from_event_mapping,
+    item_from_mapping,
     normalize_action,
     normalize_importance,
     normalize_llm_judgement,
@@ -15,7 +14,7 @@ from market_item import (
 )
 
 
-def test_article_mapping_preserves_source_context_and_dedupe_key() -> None:
+def test_mapping_preserves_source_context_and_dedupe_key() -> None:
     item = {
         "id": "862591",
         "title": "野村-中际旭创：上调目标价",
@@ -26,7 +25,7 @@ def test_article_mapping_preserves_source_context_and_dedupe_key() -> None:
         "source_module": "价值目录 / 国际投行-个股",
         "access_note": "用户账号可见列表页。",
     }
-    normalized = item_from_article_mapping(
+    normalized = item_from_mapping(
         "value_directory_ib_stocks",
         item,
         source_category="research_industry_media",
@@ -45,11 +44,11 @@ def test_article_mapping_preserves_source_context_and_dedupe_key() -> None:
     assert payload["access_note"] == "用户账号可见列表页。"
 
 
-def test_event_mapping_uses_source_event_id_and_symbols() -> None:
-    event = {
+def test_mapping_uses_generic_source_item_id_and_symbols() -> None:
+    item = {
         "source": "sina_flash",
-        "source_event_id": "flash-1",
-        "event_type": "flash_news",
+        "id": "flash-1",
+        "content_type": "flash_news",
         "title": "美国 CPI 大幅超预期",
         "summary": "美债收益率快速上行。",
         "published_at": "2026-07-11T12:30:00+00:00",
@@ -57,8 +56,9 @@ def test_event_mapping_uses_source_event_id_and_symbols() -> None:
         "themes": ["宏观流动性/美联储政策"],
         "raw": {"provider": "legacy"},
     }
-    normalized = item_from_event_mapping(
-        event,
+    normalized = item_from_mapping(
+        "sina_flash",
+        item,
         source_category="news_media",
         publisher_role="news_media",
         collector="sina_flash",
@@ -68,7 +68,7 @@ def test_event_mapping_uses_source_event_id_and_symbols() -> None:
     assert normalized.publisher_role == "news_media"
     assert normalized.dedupe_key == "sina_flash:flash-1"
     assert normalized.symbols == ["688017.SH"]
-    assert normalized.raw["source_event_id"] == "flash-1"
+    assert normalized.raw["id"] == "flash-1"
 
 
 def test_decision_result_normalizes_current_fields() -> None:
@@ -111,8 +111,8 @@ def test_invalid_enums_fall_back_to_safe_defaults() -> None:
     assert DecisionResult(importance="unknown").to_dict()["importance"] == "unknown"
 
 
-def test_stable_dedupe_key_prefers_source_event_id_then_url() -> None:
-    assert stable_dedupe_key(source="demo", source_event_id="abc") == "demo:abc"
+def test_stable_dedupe_key_prefers_source_item_id_then_url() -> None:
+    assert stable_dedupe_key(source="demo", source_item_id="abc") == "demo:abc"
     assert stable_dedupe_key(source="demo", url="https://example.com/x") == "demo:https://example.com/x"
     generated = stable_dedupe_key(source="demo", content_type="article", title="same", published_at="2026")
     assert generated.startswith("demo:")
@@ -120,12 +120,12 @@ def test_stable_dedupe_key_prefers_source_event_id_then_url() -> None:
 
 
 def main() -> int:
-    test_article_mapping_preserves_source_context_and_dedupe_key()
-    test_event_mapping_uses_source_event_id_and_symbols()
+    test_mapping_preserves_source_context_and_dedupe_key()
+    test_mapping_uses_generic_source_item_id_and_symbols()
     test_decision_result_normalizes_current_fields()
     test_interpretation_result_restricts_llm_judgement_values()
     test_invalid_enums_fall_back_to_safe_defaults()
-    test_stable_dedupe_key_prefers_source_event_id_then_url()
+    test_stable_dedupe_key_prefers_source_item_id_then_url()
     print("market item checks passed")
     return 0
 
