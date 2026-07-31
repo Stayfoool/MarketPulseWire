@@ -592,59 +592,6 @@ def run_once(sources: list[TradePolicySource] | None = None, notify_baseline: bo
     return total_new
 
 
-def shadow_collect(
-    sources: list[TradePolicySource] | None = None,
-    *,
-    limit: int = 10,
-) -> dict[str, Any]:
-    sources = sources or list(TRADE_POLICY_SOURCES)
-    rows: list[dict[str, Any]] = []
-    for source in sources:
-        if not source_profile_enabled(source.name):
-            continue
-        try:
-            discovered = discover_items(source)
-            selected = discovered if limit <= 0 else discovered[:limit]
-            items = enrich_unseen_items(source, selected, enrich_all=True)
-            candidates = [
-                {
-                    "source": source.name,
-                    "id": item.get("id", ""),
-                    "title": item.get("title", ""),
-                    "url": item.get("url", ""),
-                    "published_at": item.get("published_at", ""),
-                }
-                for item in items
-            ]
-            rows.append(
-                {
-                    "source": source.name,
-                    "label": source.module,
-                    "ok": True,
-                    "raw_count": len(discovered),
-                    "candidates": candidates,
-                    "error": "",
-                }
-            )
-        except Exception as exc:  # noqa: BLE001 - shadow report should include every source
-            rows.append(
-                {
-                    "source": source.name,
-                    "label": source.module,
-                    "ok": False,
-                    "raw_count": 0,
-                    "candidates": [],
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            )
-    return {
-        "mode": "shadow",
-        "wrote_production_state": False,
-        "rows": rows,
-        "errors": [row for row in rows if not row.get("ok")],
-    }
-
-
 def selected_sources(names: Iterable[str]) -> list[TradePolicySource]:
     requested = [compact_text(name) for name in names if compact_text(name)]
     if not requested:
@@ -660,14 +607,9 @@ def main() -> int:
     load_env(ENV_PATH)
     parser = argparse.ArgumentParser(description="Monitor official China-US / China-EU trade-policy sources.")
     parser.add_argument("--source", action="append", default=[], help="只跑指定 source id，可重复。")
-    parser.add_argument("--shadow", action="store_true", help="只抓取和解析，不写生产库或投递。")
-    parser.add_argument("--limit", type=int, default=10, help="shadow 每个来源最多输出条数；0 表示不限制。")
     parser.add_argument("--notify-baseline", action="store_true", help="首次建立基线时也处理旧条目；默认关闭。")
     args = parser.parse_args()
     sources = selected_sources(args.source)
-    if args.shadow:
-        print(json.dumps(shadow_collect(sources, limit=max(0, args.limit)), ensure_ascii=False, indent=2))
-        return 0
     run_once(sources, notify_baseline=args.notify_baseline or os.getenv("SURVEIL_NOTIFY_BASELINE", "") == "1")
     return 0
 

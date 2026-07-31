@@ -65,6 +65,11 @@ cadence:
 The three grouped collectors have one production entry each. Their retired
 shadow modes and the standalone overseas-media wrapper do not exist.
 
+Source profile `frequency` and `proxy_profile` values are read-only runtime
+facts defined by code. Actual cadence is owned by systemd or the long-running
+process, and actual proxy behavior is owned by the private server environment
+and transport layer; neither value is a Web-managed override.
+
 ## Admission And Decision
 
 Production range admission is the logical OR of `holding`,

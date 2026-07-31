@@ -100,6 +100,13 @@ def test_sina_flash_uses_news_media_flash_shape() -> None:
     assert item.content_type == "flash_news"
 
 
+def test_sina_flash_normalizes_source_stock_symbols() -> None:
+    assert sina_flash.normalize_sina_stock_symbol("sz000001") == "000001.SZ"
+    assert sina_flash.normalize_sina_stock_symbol("SH600000") == "600000.SH"
+    assert sina_flash.normalize_sina_stock_symbol("bj920438") == "920438.BJ"
+    assert sina_flash.normalize_sina_stock_symbol("US.AAPL") == "US.AAPL"
+
+
 def test_sina_flash_current_admission_reports_macro_and_fed_families() -> None:
     macro_item = SimpleNamespace(
         symbols=(),
@@ -256,6 +263,7 @@ def main() -> int:
         test_collectors_import_unified_entrypoints()
         test_unified_upsert_preserves_store_contract()
         test_sina_flash_uses_news_media_flash_shape()
+        test_sina_flash_normalizes_source_stock_symbols()
         test_sina_flash_current_admission_reports_macro_and_fed_families()
         test_sina_flash_reserves_all_discoveries_before_current_admission()
         test_sina_flash_empty_response_does_not_finish_expanded_scope_baseline()

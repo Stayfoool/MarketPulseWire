@@ -1134,9 +1134,7 @@ function sourceProfilesForSave() {
   return (sourceProfileCache.profiles || []).map(item => ({
     id: item.id,
     enabled: item.enabled !== false,
-    frequency: item.frequency || '',
     publisher_role: item.publisher_role || '',
-    proxy_profile: item.proxy_profile || '',
     provider: item.provider || '',
     notes: item.notes || ''
   }));
@@ -1185,7 +1183,7 @@ function renderSourceProfiles() {
         </td>
         <td>${badge(health)}<div class="hint">连续失败 ${escapeHtml(item.consecutive_failures || 0)}</div>${healthTime}${healthDetail}</td>
         <td>
-          <input class="source-control" data-source-id="${escapeHtml(item.id || '')}" data-field="frequency" value="${escapeHtml(item.frequency || '')}" oninput="updateSourceProfileDraft(this)">
+          <div>${escapeHtml(item.frequency || '')}</div>
           <div class="hint">${escapeHtml(item.runtime_shape || '')}</div>
         </td>
         <td>
@@ -1205,7 +1203,8 @@ function renderSourceProfiles() {
           <div class="hint">${services}</div>
           ${providerControls}
           <div style="margin-top:6px">
-            <input class="source-control" data-source-id="${escapeHtml(item.id || '')}" data-field="proxy_profile" value="${escapeHtml(item.proxy_profile || '')}" oninput="updateSourceProfileDraft(this)">
+            <div class="hint">代理</div>
+            <div>${escapeHtml(item.proxy_profile || '')}</div>
           </div>
           <textarea class="source-notes" data-source-id="${escapeHtml(item.id || '')}" data-field="notes" oninput="updateSourceProfileDraft(this)">${escapeHtml(item.notes || '')}</textarea>
         </td>
@@ -1264,7 +1263,7 @@ async function saveSourceProfiles() {
       hint.textContent = `${data.runtime_note || '已读取信息源实际运行配置。'} 配置文件：${sourceProfileCache.config_path || '-'}；已存在本地覆盖配置。`;
     }
     const saved = data.save_result || {};
-    showStatus(`信息源配置已保存：停用 ${saved.disabled_count || 0} 个，覆盖 ${saved.override_count || 0} 个。页面已按实际运行配置刷新；频率/代理暂仅记录。`);
+    showStatus(`信息源配置已保存：停用 ${saved.disabled_count || 0} 个，覆盖 ${saved.override_count || 0} 个。页面已按实际运行配置刷新。`);
   } catch (err) {
     showStatus(err.message, 'err');
   }
