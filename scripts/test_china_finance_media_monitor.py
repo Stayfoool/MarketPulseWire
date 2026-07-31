@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -355,7 +355,80 @@ def test_wallstreetcn_processability_retry_waits_for_source_rediscovery() -> Non
         cfm.enrich_item = original_enrich
 
 
-def test_wallstreetcn_stale_retry_keeps_processing_but_skips_delivery() -> None:
+def test_wallstreetcn_stale_detail_failure_stops_retrying() -> None:
+    original_db = cfm.DB_PATH
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            use_test_database(Path(tmpdir) / "test.sqlite3")
+            now = datetime.now(timezone.utc)
+            rows = (
+                ("article:fresh", now - timedelta(hours=23)),
+                ("article:expired", now - timedelta(hours=25)),
+            )
+            with cfm.connect_db() as conn:
+                conn.execute(
+                    "INSERT INTO seen_sources (source, first_seen_at) VALUES (?, ?)",
+                    (cfm.WALLSTREETCN_SOURCE, now.isoformat()),
+                )
+                for item_id, first_seen_at in rows:
+                    conn.execute(
+                        """
+                        INSERT INTO seen_items (
+                            source, item_id, url, title, summary, published_at, first_seen_at,
+                            collection_class, processability_status, processability_reason,
+                            admission_status, admission_reason, processing_status,
+                            processing_error, processed_at, lifecycle_updated_at
+                        ) VALUES (?, ?, ?, ?, '', '', ?, 'live', 'failed_retryable', ?,
+                                  'pending', '', 'not_applicable', '', NULL, ?)
+                        """,
+                        (
+                            cfm.WALLSTREETCN_SOURCE,
+                            item_id,
+                            f"https://wallstreetcn.com/articles/{item_id.split(':', 1)[1]}",
+                            item_id,
+                            first_seen_at.isoformat(),
+                            "HTTPStatusError: upstream 500",
+                            first_seen_at.isoformat(),
+                        ),
+                    )
+                conn.commit()
+
+            discovered = [
+                {
+                    "id": item_id,
+                    "url": f"https://wallstreetcn.com/articles/{item_id.split(':', 1)[1]}",
+                    "title": item_id,
+                }
+                for item_id, _first_seen_at in rows
+            ]
+            selected = cfm.save_new_items_with_retry(cfm.WALLSTREETCN_SOURCE, discovered)
+            assert [item["id"] for item in selected] == ["article:fresh"]
+            assert selected[0][cfm.SEEN_ITEM_RETRY_KEY] is True
+
+            with cfm.connect_db() as conn:
+                states = {
+                    row[0]: row[1:]
+                    for row in conn.execute(
+                        """
+                        SELECT item_id, processability_status, processability_reason,
+                               admission_status, processing_status
+                        FROM seen_items
+                        WHERE source = ? AND item_id IN ('article:fresh', 'article:expired')
+                        """,
+                        (cfm.WALLSTREETCN_SOURCE,),
+                    )
+                }
+            assert states["article:fresh"] == ("pending", "", "pending", "not_applicable")
+            assert states["article:expired"][0] == "failed_terminal"
+            assert states["article:expired"][1].startswith(
+                "wallstreetcn_detail_retry_expired_after_24h: HTTPStatusError: upstream 500"
+            )
+            assert states["article:expired"][2:] == ("not_applicable", "not_applicable")
+    finally:
+        cfm.DB_PATH = original_db
+
+
+def test_wallstreetcn_stale_processing_retry_keeps_processing_but_skips_delivery() -> None:
     original_db = cfm.DB_PATH
     original_enrich = cfm.enrich_item
     original_process = cfm.process_market_item
@@ -381,7 +454,9 @@ def test_wallstreetcn_stale_retry_keeps_processing_but_skips_delivery() -> None:
                     """
                     UPDATE seen_items
                     SET first_seen_at = '2026-07-20T00:00:00+00:00',
-                        processability_status = 'failed_retryable',
+                        processability_status = 'succeeded',
+                        admission_status = 'admitted',
+                        processing_status = 'failed_retryable',
                         title = '', summary = '', published_at = ''
                     WHERE source = ? AND item_id = ?
                     """,
@@ -951,7 +1026,8 @@ def main() -> int:
     test_excluded_item_stops_before_decision_runtime()
     test_admitted_item_reuses_normalized_item_and_processing_failure_retries()
     test_wallstreetcn_processability_retry_waits_for_source_rediscovery()
-    test_wallstreetcn_stale_retry_keeps_processing_but_skips_delivery()
+    test_wallstreetcn_stale_detail_failure_stops_retrying()
+    test_wallstreetcn_stale_processing_retry_keeps_processing_but_skips_delivery()
     test_wallstreetcn_fresh_retry_and_new_old_item_can_deliver()
     test_short_english_keyword_requires_token_boundary()
     test_china_media_focus_filters_generic_power_and_accepts_ai_context()

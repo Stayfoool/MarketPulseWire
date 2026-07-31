@@ -959,19 +959,29 @@ def should_deliver_wallstreetcn_retry(
 ) -> bool:
     if source != WALLSTREETCN_SOURCE or not is_retry:
         return True
-    reference_raw = first_seen_at or published_at
-    normalized = parse_datetime_to_utc_iso(reference_raw)
+    age = wallstreetcn_retry_age(
+        first_seen_at=first_seen_at,
+        published_at=published_at,
+        now=now,
+    )
+    return age is not None and age <= WALLSTREETCN_RETRY_DELIVERY_MAX_AGE
+
+
+def wallstreetcn_retry_age(
+    *,
+    first_seen_at: str,
+    published_at: str = "",
+    now: datetime | None = None,
+) -> timedelta | None:
+    normalized = parse_datetime_to_utc_iso(first_seen_at or published_at)
     try:
         reference = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
     except (AttributeError, ValueError):
-        return False
+        return None
     if reference.tzinfo is None:
         reference = reference.replace(tzinfo=timezone.utc)
     current = now or datetime.now(timezone.utc)
-    return (
-        current.astimezone(timezone.utc) - reference.astimezone(timezone.utc)
-        <= WALLSTREETCN_RETRY_DELIVERY_MAX_AGE
-    )
+    return current.astimezone(timezone.utc) - reference.astimezone(timezone.utc)
 
 
 def set_seen_item_lifecycle(source: str, item_id: str, **values: str | None) -> None:
@@ -1126,7 +1136,8 @@ def save_new_items(
             continue
         existing = conn.execute(
             """
-            SELECT collection_class, processability_status, admission_status, processing_status, first_seen_at
+            SELECT collection_class, processability_status, processability_reason,
+                   admission_status, processing_status, first_seen_at
             FROM seen_items WHERE source = ? AND item_id = ?
             """,
             (source, item_id),
@@ -1136,11 +1147,36 @@ def save_new_items(
                 str(existing[0]) == "live"
                 and (
                     str(existing[1]) in {"pending", "failed_retryable"}
-                    or str(existing[2]) == "pending"
-                    or str(existing[3]) in {"pending", "failed_retryable"}
+                    or str(existing[3]) == "pending"
+                    or str(existing[4]) in {"pending", "failed_retryable"}
                 )
             )
             if retryable and item_id not in selected_ids:
+                retry_age = wallstreetcn_retry_age(first_seen_at=str(existing[5] or ""))
+                if (
+                    source == WALLSTREETCN_SOURCE
+                    and str(existing[1]) in {"pending", "failed_retryable"}
+                    and retry_age is not None
+                    and retry_age > WALLSTREETCN_RETRY_DELIVERY_MAX_AGE
+                ):
+                    prior_reason = str(existing[2] or "").strip()
+                    reason = "wallstreetcn_detail_retry_expired_after_24h"
+                    if prior_reason:
+                        reason = f"{reason}: {prior_reason[:400]}"
+                    update_seen_item_lifecycle(
+                        conn,
+                        source,
+                        item_id,
+                        processability_status="failed_terminal",
+                        processability_reason=reason,
+                        admission_status="not_applicable",
+                        admission_reason="",
+                        processing_status="not_applicable",
+                        processing_error="",
+                        processed_at=now,
+                        lifecycle_updated_at=now,
+                    )
+                    continue
                 update_seen_item_lifecycle(
                     conn,
                     source,
@@ -1155,7 +1191,7 @@ def save_new_items(
                     lifecycle_updated_at=now,
                 )
                 item[SEEN_ITEM_RETRY_KEY] = True
-                item[SEEN_ITEM_RETRY_FIRST_SEEN_KEY] = str(existing[4] or "")
+                item[SEEN_ITEM_RETRY_FIRST_SEEN_KEY] = str(existing[5] or "")
                 selected_ids.add(item_id)
                 new_items.append(item)
             continue

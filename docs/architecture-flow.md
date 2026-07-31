@@ -152,6 +152,14 @@ their `seen_items` admission audit. Rediscovered items whose processability,
 admission evaluation or processing remains `pending`/`failed_retryable` are
 eligible for retry without deleting their discovery reservation.
 
+WallstreetCN detail failures remain retryable only for 24 hours after first
+discovery, matching the existing freshness boundary for retry delivery. If the
+same list or sitemap identity is rediscovered after that boundary while detail
+processability is still `pending` or `failed_retryable`, its `seen_items` row is
+retained as `failed_terminal` and no further detail request, decision, review or
+delivery is attempted. Admission or decision retries that already passed detail
+processability are not changed by this detail-specific freshness boundary.
+
 The same lifecycle now covers the widened overseas/industry RSS, TrendForce
 page and official-company RSS paths. Their source-specific discovery controls
 (feed/page selection, URL/schema validation and access policy) remain before
