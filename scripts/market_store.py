@@ -274,7 +274,7 @@ def market_review_snapshot(
         row = conn.execute(
             """
             SELECT r.market_item_id,r.review_status,r.admission_status,r.decision_action,
-                   r.importance,r.decision_json,r.interpretation_json,
+                   r.decision_json,r.interpretation_json,
                    EXISTS(SELECT 1 FROM deliveries d
                           WHERE d.market_item_id=r.market_item_id AND d.status='sent')
             FROM market_reviews r WHERE r.id=?
@@ -284,8 +284,8 @@ def market_review_snapshot(
     if not row:
         return None
     payload: dict[str, Any] = {}
-    decision = json_dict(row[5])
-    interpretation = json_dict(row[6])
+    decision = json_dict(row[4])
+    interpretation = json_dict(row[5])
     if decision:
         payload["decision_result"] = decision
     if interpretation:
@@ -296,9 +296,8 @@ def market_review_snapshot(
         "review_status": str(row[1] or ""),
         "admission_status": str(row[2] or ""),
         "decision_action": str(row[3] or ""),
-        "importance": str(row[4] or ""),
         "payload": payload,
-        "delivered": bool(row[7]),
+        "delivered": bool(row[6]),
     }
 
 
@@ -358,13 +357,12 @@ def _complete_market_review_in_conn(
     conn.execute(
         """
         UPDATE market_reviews
-        SET review_status = 'succeeded', decision_action = ?, importance = ?,
+        SET review_status = 'succeeded', decision_action = ?,
             decision_json = ?, interpretation_json = ?, completed_at = ?
         WHERE id = ?
         """,
         (
             flow_result.decision.action,
-            flow_result.decision.importance,
             json_dumps(flow_result.decision.to_dict()),
             json_dumps(flow_result.interpretation.to_dict()),
             now,

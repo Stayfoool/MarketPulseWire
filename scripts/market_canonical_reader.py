@@ -43,7 +43,7 @@ def _result_projection(row: sqlite3.Row) -> dict[str, Any]:
 def _review_select() -> str:
     return """
         m.*, r.id AS review_id, r.review_status, r.admission_status,
-        r.decision_action, r.importance, r.decision_json,
+        r.decision_action, r.decision_json,
         r.interpretation_json, r.created_at AS review_created_at,
         r.completed_at AS review_completed_at,
         (SELECT d.status FROM deliveries d
@@ -135,9 +135,7 @@ def canonical_market_rows(
                     "url": str(row["url"] or ""),
                     "published_at": published_at,
                     "seen_at": seen_at,
-                    "importance": "",
-                    "classification": "仅建立去重基线",
-                    "push": False,
+                    "decision_action": "baseline",
                     "delivery_status": "baseline",
                     "baseline_only": True,
                     "feedback_identity": None,
@@ -164,9 +162,6 @@ def canonical_market_rows(
                 "url": str(row["url"] or ""),
                 "published_at": published_at,
                 "seen_at": seen_at,
-                "importance": str(row["importance"] or ""),
-                "classification": str(row["decision_action"] or ""),
-                "push": str(row["decision_action"] or "") == "push",
                 "delivery_status": str(row["delivery_status"] or ("sent" if sent_at else "")),
                 "baseline_only": baseline,
                 "decision_action": str(row["decision_action"] or ""),
@@ -232,14 +227,10 @@ def _digest_row(row: sqlite3.Row) -> dict[str, Any]:
         "title": str(row["title"] or ""),
         "source_module": str(row["source"] or ""),
         "published_at": str(row["published_at"] or ""),
-        "importance": str(row["importance"] or ""),
-        "push_now": int(str(row["decision_action"] or "") == "push"),
-        "market_impact": "",
-        "incremental_classification": "",
+        "decision_action": str(row["decision_action"] or ""),
         "affected_targets_json": str(affected or "[]"),
         "reason": str(_decision(row).get("brief_reason") or _decision(row).get("reason") or ""),
         "daily_summary": str(interpretation.get("core_content") or ""),
-        "confidence": "",
         "gate_json": _json_text(result),
         "pushed_at": str(row["delivery_sent_at"] or ""),
         "created_at": str(row["review_created_at"] or ""),
@@ -257,10 +248,10 @@ def canonical_digest_rows(
         for row in _review_rows(conn, start_utc=start_utc, end_utc=end_utc)
         if not (projected := _digest_row(row))["pushed_at"]
     ]
-    importance_order = {"medium": 0, "low": 1}
+    action_order = {"daily": 0, "archive": 1}
     grouped: list[dict[str, Any]] = []
     for rank in (0, 1, 2):
-        group = [item for item in result if importance_order.get(str(item.get("importance") or ""), 2) == rank]
+        group = [item for item in result if action_order.get(str(item.get("decision_action") or ""), 2) == rank]
         group.sort(
             key=lambda item: (str(item.get("published_at") or ""), str(item.get("created_at") or "")),
             reverse=True,

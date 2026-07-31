@@ -74,14 +74,7 @@ def evaluate_market_item(
     """Interpret one normalized item after its authoritative decision exists."""
     decision_item = item
     resolved_decision = decision
-    should_interpret = bool(
-        source_interpretation is None
-        and (
-            force_interpretation
-            or resolved_decision.need_llm_interpretation
-            or resolved_decision.need_limited_llm_judgement
-        )
-    )
+    should_interpret = source_interpretation is None and force_interpretation
     interpretation_error = ""
     if source_interpretation is not None:
         interpretation = source_interpretation
@@ -106,11 +99,6 @@ def evaluate_market_item(
         decision=resolved_decision,
         interpretation=interpretation,
         storage_ref=dict(storage_ref or {}),
-        delivery_intent={
-            "action": resolved_decision.action,
-            "should_deliver": resolved_decision.should_push,
-            "dedup": dict(resolved_decision.dedup),
-        },
         audit_json={
             "flow_version": FLOW_VERSION,
             "decision_supplied": decision is not None,
@@ -210,7 +198,6 @@ def _flow_result(
         reason = "条目尚未进入决策阶段。"
         decision = DecisionResult(
             action=technical_action,
-            importance=payload.get("importance") or "unknown",
             reason=reason,
             brief_reason=reason,
             audit_json={"technical_action": technical_action},

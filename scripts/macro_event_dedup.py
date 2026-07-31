@@ -386,7 +386,7 @@ def _fed_policy_reaction_impulse(text: str) -> str:
 
 def macro_event_dedup_hit(item: dict[str, Any], decision: DecisionResult) -> dict[str, Any] | None:
     """Return a source-neutral delivery identity after a push decision already exists."""
-    if not decision.should_push or not _macro_rule_matched(decision):
+    if decision.action != "push" or not _macro_rule_matched(decision):
         return None
     text = _text(item)
     if _contains_any(text, CORRECTION_MARKERS):

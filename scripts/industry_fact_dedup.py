@@ -274,7 +274,7 @@ FACT_EXTRACTORS: tuple[Callable[[str], dict[str, Any] | None], ...] = (
 
 def industry_fact_dedup_hit(item: dict[str, Any], decision: DecisionResult) -> dict[str, Any] | None:
     """Return a conservative delivery identity after an industry push decision."""
-    if not decision.should_push or not _has_industry_rule(decision):
+    if decision.action != "push" or not _has_industry_rule(decision):
         return None
     text = _text(item)
     if not text:

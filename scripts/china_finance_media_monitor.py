@@ -1452,7 +1452,7 @@ def notify_item(source: str, item: dict[str, Any]) -> None:
             flush=True,
         )
     print(
-        f"{source} 决策层：importance={decision.importance} action={decision.action} title={enriched.get('title', '')}",
+        f"{source} 决策层：action={decision.action} title={enriched.get('title', '')}",
         flush=True,
     )
     if outcome.delivery_status == "duplicate":

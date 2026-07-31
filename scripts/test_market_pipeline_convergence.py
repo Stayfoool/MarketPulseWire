@@ -45,7 +45,6 @@ def test_item_returns_interpretation_without_writing_legacy_tables() -> None:
                 item.to_dict(),
                 DecisionResult(
                     action="push",
-                    importance="high",
                     reason="大模型程度决策命中。",
                     rule_hits=[{"rule_id": "macro_policy_line"}],
                 ),

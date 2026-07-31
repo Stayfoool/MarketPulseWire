@@ -39,7 +39,6 @@ def decision(
 ) -> DecisionResult:
     return DecisionResult(
         action=action,
-        importance={"push": "high", "daily": "medium", "archive": "low"}[action],
         reason="固定测试决策。",
         rule_hits=rule_hits or [],
     )

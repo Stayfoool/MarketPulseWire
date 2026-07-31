@@ -120,7 +120,6 @@ CREATE TABLE IF NOT EXISTS market_reviews (
     admission_rule_contract_version TEXT,
     admission_json TEXT NOT NULL DEFAULT '{}',
     decision_action TEXT,
-    importance TEXT,
     decision_json TEXT,
     interpretation_json TEXT,
     application_revision TEXT,

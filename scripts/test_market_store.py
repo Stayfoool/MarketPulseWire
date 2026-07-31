@@ -66,10 +66,9 @@ def admission(status: str) -> AdmissionResult:
 
 
 def flow(item_value: NormalizedMarketItem, action: str = "push") -> MarketFlowResult:
-    importance = {"push": "high", "daily": "medium", "archive": "low"}[action]
     return MarketFlowResult(
         item=item_value,
-        decision=DecisionResult(action=action, importance=importance, reason="扩产"),
+        decision=DecisionResult(action=action, reason="扩产"),
         interpretation=InterpretationResult(core_content="HBM扩产"),
     )
 
@@ -107,7 +106,7 @@ def test_fresh_schema_omits_retired_result_fields_and_statuses() -> None:
                 for row in conn.execute("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL")
             )
         assert {"legacy_store_kind", "legacy_store_id"}.isdisjoint(item_columns)
-        assert {"legacy_payload_json", "legacy_store_kind", "legacy_store_id"}.isdisjoint(
+        assert {"importance", "legacy_payload_json", "legacy_store_kind", "legacy_store_id"}.isdisjoint(
             review_columns
         )
         assert "legacy_unclassified" not in schema_sql
@@ -141,7 +140,7 @@ def test_result_and_delivery_use_only_unified_storage() -> None:
         assert snapshot["payload"]["decision_result"]["action"] == "push"
         with sqlite3.connect(path) as conn:
             review = conn.execute(
-                "SELECT admission_status,decision_action,importance,review_status "
+                "SELECT admission_status,decision_action,review_status "
                 "FROM market_reviews WHERE id=?",
                 (review_id,),
             ).fetchone()
@@ -154,7 +153,8 @@ def test_result_and_delivery_use_only_unified_storage() -> None:
                 (delivery_id,),
             ).fetchone()
 
-        assert review == ("admitted", "push", "high", "succeeded")
+        assert review == ("admitted", "push", "succeeded")
+        assert "importance" not in snapshot["payload"]["decision_result"]
         assert alias_table == 0
         assert delivery == (delivery_id, market_item_id, review_id, "sent", "push")
 

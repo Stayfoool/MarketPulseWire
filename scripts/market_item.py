@@ -13,7 +13,6 @@ from typing import Any, Literal
 
 
 DecisionAction = Literal["push", "daily", "archive", "ignore", "baseline"]
-Importance = Literal["high", "medium", "low", "unknown"]
 AdmissionStatus = Literal["admitted", "excluded", "not_applicable"]
 RuleFamily = Literal["holding", "semiconductor_ai", "macro_data", "fed_policy", "trade_policy"]
 EvidenceScope = Literal["holding", "semiconductor_ai", "macro_data", "fed_policy", "trade_policy", "global"]
@@ -28,7 +27,6 @@ LLMJudgement = Literal[
 ]
 
 VALID_ACTIONS: set[str] = {"push", "daily", "archive", "ignore", "baseline"}
-VALID_IMPORTANCE: set[str] = {"high", "medium", "low", "unknown"}
 VALID_LLM_JUDGEMENTS: set[str] = {
     "not_needed",
     "confirm",
@@ -83,22 +81,6 @@ def _dict_value(value: Any) -> dict[str, Any]:
 def normalize_action(value: Any, default: DecisionAction = "archive") -> DecisionAction:
     text = str(value or "").strip().lower()
     if text in VALID_ACTIONS:
-        return text  # type: ignore[return-value]
-    return default
-
-
-def normalize_importance(value: Any, default: Importance = "unknown") -> Importance:
-    text = str(value or "").strip().lower()
-    mapping = {
-        "高": "high",
-        "重要": "high",
-        "中": "medium",
-        "中等": "medium",
-        "低": "low",
-        "不重要": "low",
-    }
-    text = mapping.get(text, text)
-    if text in VALID_IMPORTANCE:
         return text  # type: ignore[return-value]
     return default
 
@@ -275,19 +257,15 @@ class AdmissionResult:
 @dataclass
 class DecisionResult:
     action: DecisionAction = "archive"
-    importance: Importance = "unknown"
     reason: str = ""
     brief_reason: str = ""
     rule_hits: list[dict[str, Any]] = field(default_factory=list)
     candidate_rules: list[dict[str, Any]] = field(default_factory=list)
     dedup: dict[str, Any] = field(default_factory=dict)
-    need_llm_interpretation: bool = False
-    need_limited_llm_judgement: bool = False
     audit_json: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.action = normalize_action(self.action)
-        self.importance = normalize_importance(self.importance)
         self.reason = str(self.reason or "").strip()
         self.brief_reason = str(self.brief_reason or "").strip()
         self.rule_hits = [item for item in self.rule_hits if isinstance(item, dict)]
@@ -295,21 +273,14 @@ class DecisionResult:
         self.dedup = _dict_value(self.dedup)
         self.audit_json = _dict_value(self.audit_json)
 
-    @property
-    def should_push(self) -> bool:
-        return self.action == "push"
-
     def to_dict(self) -> dict[str, Any]:
         return {
             "action": self.action,
-            "importance": self.importance,
             "reason": self.reason,
             "brief_reason": self.brief_reason,
             "rule_hits": list(self.rule_hits),
             "candidate_rules": list(self.candidate_rules),
             "dedup": dict(self.dedup),
-            "need_llm_interpretation": self.need_llm_interpretation,
-            "need_limited_llm_judgement": self.need_limited_llm_judgement,
             "audit_json": dict(self.audit_json),
         }
 
@@ -337,14 +308,11 @@ def decision_result_from_dict(payload: Any) -> DecisionResult | None:
         return None
     return DecisionResult(
         action=payload.get("action", "archive"),
-        importance=payload.get("importance", "unknown"),
         reason=payload.get("reason", ""),
         brief_reason=payload.get("brief_reason", ""),
         rule_hits=payload.get("rule_hits") or [],
         candidate_rules=payload.get("candidate_rules") or [],
         dedup=payload.get("dedup") or {},
-        need_llm_interpretation=bool(payload.get("need_llm_interpretation")),
-        need_limited_llm_judgement=bool(payload.get("need_limited_llm_judgement")),
         audit_json=payload.get("audit_json") or {},
     )
 
@@ -386,19 +354,11 @@ class MarketFlowResult:
     decision: DecisionResult
     interpretation: InterpretationResult
     storage_ref: dict[str, Any] = field(default_factory=dict)
-    delivery_intent: dict[str, Any] = field(default_factory=dict)
     audit_json: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.storage_ref = dict(_dict_value(self.storage_ref))
-        self.delivery_intent = dict(_dict_value(self.delivery_intent))
         self.audit_json = dict(_dict_value(self.audit_json))
-        if not self.delivery_intent:
-            self.delivery_intent = {
-                "action": self.decision.action,
-                "should_deliver": self.decision.should_push,
-                "dedup": dict(self.decision.dedup),
-            }
 
     def audit_payload(self) -> dict[str, Any]:
         return {
@@ -413,7 +373,6 @@ class MarketFlowResult:
             },
             "decision": {
                 "action": self.decision.action,
-                "importance": self.decision.importance,
                 "rule_ids": [
                     str(rule.get("rule_id") or "")
                     for rule in self.decision.rule_hits
@@ -424,8 +383,6 @@ class MarketFlowResult:
                     for rule in self.decision.candidate_rules
                     if rule.get("rule_id")
                 ],
-                "need_llm_interpretation": self.decision.need_llm_interpretation,
-                "need_limited_llm_judgement": self.decision.need_limited_llm_judgement,
             },
             "interpretation": {
                 "llm_judgement": self.interpretation.llm_judgement,
@@ -433,7 +390,6 @@ class MarketFlowResult:
                 "prompt_version": self.interpretation.prompt_version,
             },
             "storage_ref": dict(self.storage_ref),
-            "delivery_intent": dict(self.delivery_intent),
             "audit": dict(self.audit_json),
         }
 

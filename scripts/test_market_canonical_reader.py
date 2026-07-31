@@ -63,7 +63,6 @@ def add_result(
     market_item_id, review_id = record_production_admission(item, admitted(), db_path=path)
     decision = DecisionResult(
         action=action,
-        importance={"push": "high", "daily": "medium", "archive": "low"}[action],
         reason=f"{action} reason",
         rule_hits=[{"rule_id": "test_rule", "decision_action": action}],
     )

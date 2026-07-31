@@ -567,8 +567,8 @@ def notify_item(item: dict[str, Any], *, source: AlphaAbstractSource = DEFAULT_S
         raise
     decision = outcome.flow_result.decision
     print(
-        f"{source.name} 统一决策：importance={decision.importance} "
-        f"action={decision.action} delivery={outcome.delivery_status} title={enriched.get('title', '')}",
+        f"{source.name} 统一决策：action={decision.action} "
+        f"delivery={outcome.delivery_status} title={enriched.get('title', '')}",
         flush=True,
     )
 

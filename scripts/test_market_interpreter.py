@@ -87,7 +87,6 @@ def test_interpret_market_item_passes_decision_context_and_ignores_push_fields()
             NormalizedMarketItem(source="sina_flash", title="美国 CPI 低于预期"),
             DecisionResult(
                 action="push",
-                importance="high",
                 brief_reason="宏观政策线规则命中。",
                 rule_hits=[{"rule_id": "macro_policy_line"}],
             ),
@@ -117,9 +116,7 @@ def test_interpret_market_item_does_not_request_limited_judgement_when_flagged()
             NormalizedMarketItem(source="cls_telegraph_api", title="美国 ADP 低于预期"),
             DecisionResult(
                 action="daily",
-                importance="medium",
                 candidate_rules=[{"rule_id": "macro_policy_line"}],
-                need_limited_llm_judgement=True,
             ),
         )
     finally:

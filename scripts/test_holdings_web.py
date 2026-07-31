@@ -50,7 +50,6 @@ def insert_unified_result(
     seen_at: str,
     summary: str = "",
     action: str = "archive",
-    importance: str = "low",
     delivered: bool = False,
     collection_class: str = "live",
     content_type: str = "article",
@@ -86,7 +85,7 @@ def insert_unified_result(
     market_item_id = int(cur.lastrowid)
     if collection_class == "baseline":
         return market_item_id
-    decision = {"action": action, "importance": importance, "reason": "测试决策"}
+    decision = {"action": action, "reason": "测试决策"}
     interpretation = {"core_content": summary, "model": "fixed-test"}
     review_id = int(
         conn.execute(
@@ -94,17 +93,16 @@ def insert_unified_result(
             INSERT INTO market_reviews (
                 market_item_id,task,run_key,is_current,review_status,
                 admission_status,admission_reason,admission_matched_families_json,
-                admission_evidence_json,admission_json,decision_action,importance,
+                admission_evidence_json,admission_json,decision_action,
                 decision_json,interpretation_json,
                 application_revision,created_at,completed_at
             ) VALUES (?, 'production', ?, 1, 'succeeded', 'admitted', 'test',
-                      '[]', '[]', '{}', ?, ?, ?, ?, 'test', ?, ?)
+                      '[]', '[]', '{}', ?, ?, ?, 'test', ?, ?)
             """,
             (
                 market_item_id,
                 f"test:{source}:{item_id}",
                 action,
-                importance,
                 json.dumps(decision, ensure_ascii=False),
                 json.dumps(interpretation, ensure_ascii=False),
                 seen_at,
@@ -378,7 +376,6 @@ def test_information_center_search_filters_before_result_limit() -> None:
                 summary="高盛发布中国AI价值链策略",
                 published_at="2026-07-09T03:57:30+00:00",
                 seen_at="2026-07-09T03:57:58.693585+00:00",
-                importance="medium",
             )
             for index in range(301):
                 insert_unified_result(
@@ -471,7 +468,6 @@ def test_information_center_can_show_baselines_and_filter_by_published_time() ->
                 summary="后续采集",
                 published_at="2026-07-10T15:00:00+00:00",
                 seen_at="2026-07-11T00:00:10+00:00",
-                importance="medium",
             )
 
         default_rows = fetch_market_rows(
@@ -659,7 +655,6 @@ def test_information_center_projects_current_feedback_across_active_stores() -> 
                 published_at="2026-07-15T09:00:00+00:00",
                 seen_at="2026-07-15T09:00:01+00:00",
                 action="push",
-                importance="high",
                 delivered=True,
             )
             insert_unified_result(
@@ -679,7 +674,6 @@ def test_information_center_projects_current_feedback_across_active_stores() -> 
                 published_at="2026-07-15T09:02:00+00:00",
                 seen_at="2026-07-15T09:02:01+00:00",
                 action="push",
-                importance="high",
                 delivered=True,
                 content_type="official_news",
             )
@@ -692,7 +686,6 @@ def test_information_center_projects_current_feedback_across_active_stores() -> 
                 published_at="2026-07-15T09:03:00+00:00",
                 seen_at="2026-07-15T09:03:01+00:00",
                 action="push",
-                importance="high",
                 delivered=True,
                 content_type="flash_news",
             )
@@ -765,7 +758,6 @@ def test_information_center_feedback_filter_applies_before_result_limit() -> Non
                     published_at="2026-07-15T09:00:00+00:00",
                     seen_at=f"2026-07-15T09:{index // 60:02d}:{index % 60:02d}+00:00",
                     action="push",
-                    importance="high",
                     delivered=True,
                 )
                 if index == 0:

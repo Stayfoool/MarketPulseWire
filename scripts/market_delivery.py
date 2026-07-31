@@ -129,7 +129,7 @@ def deliver_market_item(
 
     if already_sent:
         return "existing"
-    if not decision.should_push:
+    if decision.action != "push":
         persist("skipped", {"reason": "DecisionResult.action 不是 push"})
         return "skipped"
     reservation: dict[str, Any] = {}

@@ -138,10 +138,10 @@ def test_rows_show_terminal_insufficient_evidence_without_action() -> None:
             CREATE TABLE market_reviews (
                 id INTEGER PRIMARY KEY, market_item_id INTEGER, is_current INTEGER,
                 admission_status TEXT, review_status TEXT, decision_action TEXT,
-                importance TEXT, decision_json TEXT, created_at TEXT, completed_at TEXT
+                decision_json TEXT, created_at TEXT, completed_at TEXT
             );
             INSERT INTO market_items VALUES (1, 'source-a', 'item-a', '测试标题', 'https://example.com/a', '', '2026-07-26T01:00:00+00:00', 'article');
-            INSERT INTO market_reviews VALUES (12, 1, 1, 'admitted', 'insufficient_evidence', NULL, NULL, NULL, '2026-07-26T01:01:00+00:00', NULL);
+            INSERT INTO market_reviews VALUES (12, 1, 1, 'admitted', 'insufficient_evidence', NULL, NULL, '2026-07-26T01:01:00+00:00', NULL);
             """
         )
         rows = llm_decision_rows(
@@ -161,7 +161,7 @@ def test_rows_show_terminal_insufficient_evidence_without_action() -> None:
         conn.executescript(
             """
             INSERT INTO market_items VALUES (2, 'source-b', 'item-b', '第二条', 'https://example.com/b', '', '2026-07-26T02:00:00+00:00', 'article');
-            INSERT INTO market_reviews VALUES (13, 2, 1, 'admitted', 'succeeded', 'push', 'high', '{}', '2026-07-26T02:01:00+00:00', '2026-07-26T02:01:01+00:00');
+            INSERT INTO market_reviews VALUES (13, 2, 1, 'admitted', 'succeeded', 'push', '{}', '2026-07-26T02:01:00+00:00', '2026-07-26T02:01:01+00:00');
             """
         )
         filtered = llm_decision_rows(

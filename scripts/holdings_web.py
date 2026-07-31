@@ -458,9 +458,7 @@ def fetch_market_rows(
                         "url": row["url"] or "",
                         "published_at": normalize_time(row["published_at"]),
                         "seen_at": normalize_time(row["first_seen_at"]),
-                        "importance": "",
-                        "classification": "",
-                        "push": row["delivery_status"] == "sent",
+                        "decision_action": "",
                         "delivery_status": row["delivery_status"] or "",
                         "baseline_only": False,
                     }
@@ -580,15 +578,15 @@ def overview_payload(day: str = "") -> dict[str, Any]:
                     (start_utc, end_utc),
                 )
             ]
-        decision_importance = [
+        decision_actions = [
                 {"key": str(row[0] or "unknown"), "count": int(row[1])}
                 for row in conn.execute(
                     """
-                    SELECT COALESCE(r.importance,''),COUNT(*)
+                    SELECT COALESCE(r.decision_action,''),COUNT(*)
                     FROM market_reviews r
                     WHERE r.created_at >= ? AND r.created_at < ? AND r.is_current=1
-                    GROUP BY COALESCE(r.importance,'')
-                    ORDER BY COUNT(*) DESC,COALESCE(r.importance,'')
+                    GROUP BY COALESCE(r.decision_action,'')
+                    ORDER BY COUNT(*) DESC,COALESCE(r.decision_action,'')
                     """,
                     (start_utc, end_utc),
                 )
@@ -605,7 +603,7 @@ def overview_payload(day: str = "") -> dict[str, Any]:
         "date": display_day,
         "cards": cards,
         "by_source": by_source[:12],
-        "decision_importance": decision_importance,
+        "decision_actions": decision_actions,
         "deliveries": deliveries,
         "latest": fetch_market_rows(day=day, limit=10),
     }

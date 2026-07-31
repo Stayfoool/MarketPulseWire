@@ -683,7 +683,7 @@ def test_recheck_uses_enriched_item_without_a_preliminary_decision_gate() -> Non
 
         def fake_process(normalized, raw_item, **kwargs):
             calls.append({"normalized": normalized, "raw_item": raw_item, **kwargs})
-            decision = DecisionResult(action="archive", importance="low", reason="当前规则复核。")
+            decision = DecisionResult(action="archive", reason="当前规则复核。")
             return MarketProcessOutcome(
                 flow_result=MarketFlowResult(
                     item=normalized,
@@ -754,7 +754,7 @@ def test_new_item_uses_market_flow_after_preview_enrichment() -> None:
 
         def fake_process(normalized, raw_item, **kwargs):
             calls.append({"normalized": normalized, "raw_item": raw_item, **kwargs})
-            decision = DecisionResult(action="push", importance="high", reason="价值目录规则命中。")
+            decision = DecisionResult(action="push", reason="价值目录规则命中。")
             return MarketProcessOutcome(
                 flow_result=MarketFlowResult(
                     item=normalized,

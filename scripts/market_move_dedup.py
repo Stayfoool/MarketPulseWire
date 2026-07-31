@@ -87,7 +87,7 @@ def intraday_market_move_dedup_hit(item: dict[str, Any], decision: DecisionResul
     a China-market date, a directional move, a literal ``<concept>概念`` phrase,
     and one matched target. Different concepts or targets remain distinct.
     """
-    if not decision.should_push:
+    if decision.action != "push":
         return None
     text = _text(item)
     session = _market_date(item.get("published_at"))
