@@ -30,6 +30,7 @@ from holdings_web import (
 )
 from market_db import init_db
 from source_profiles import (
+    default_profile_map,
     filter_enabled_named_sources,
     filter_enabled_source_mapping,
     load_source_profile_config,
@@ -897,23 +898,54 @@ def test_source_profile_local_config_roundtrip() -> None:
         raw = load_source_profile_config(config_path)
         assert raw["disabled_sources"] == ["semianalysis"]
         assert set(raw["overrides"]["semianalysis"]) == {
-            "frequency",
             "publisher_role",
-            "proxy_profile",
             "notes",
         }
         payload = source_profiles_payload(tmp_path / "surveil.sqlite3", config_path=config_path)
+    defaults = default_profile_map()["semianalysis"]
     profile = next(item for item in payload["profiles"] if item["id"] == "semianalysis")
     assert profile["enabled"] is False
-    assert profile["frequency"] == "每 60 秒"
+    assert profile["frequency"] == defaults["frequency"]
     assert profile["publisher_role"] == "news_media"
     assert "skeptic_enabled" not in profile
     assert "web_evidence_enabled" not in profile
-    assert profile["proxy_profile"] == "测试代理"
+    assert profile["proxy_profile"] == defaults["proxy_profile"]
     assert profile["notes"] == "测试覆盖"
     assert profile["config_modified"] is True
     assert profile["runtime_effective"] is True
     assert payload["config_exists"] is True
+
+
+def test_source_profile_ignores_retired_runtime_fact_overrides() -> None:
+    with TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        config_path = tmp_path / "source_profiles.local.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "disabled_sources": [],
+                    "overrides": {
+                        "semianalysis": {
+                            "frequency": "旧频率覆盖",
+                            "proxy_profile": "旧代理覆盖",
+                            "notes": "有效备注",
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        loaded = load_source_profile_config(config_path)
+        payload = source_profiles_payload(tmp_path / "surveil.sqlite3", config_path=config_path)
+
+    defaults = default_profile_map()["semianalysis"]
+    assert loaded["overrides"]["semianalysis"] == {"notes": "有效备注"}
+    profile = next(item for item in payload["profiles"] if item["id"] == "semianalysis")
+    assert profile["frequency"] == defaults["frequency"]
+    assert profile["proxy_profile"] == defaults["proxy_profile"]
+    assert profile["notes"] == "有效备注"
+    assert "频率和代理为只读运行事实" in profile["runtime_note"]
 
 
 def test_source_profile_local_config_stays_private_across_replacement() -> None:
@@ -1236,6 +1268,7 @@ def main() -> int:
     test_source_profiles_group_six_categories()
     test_source_profiles_aggregate_wildcard_health()
     test_source_profile_local_config_roundtrip()
+    test_source_profile_ignores_retired_runtime_fact_overrides()
     test_source_profile_local_config_stays_private_across_replacement()
     test_source_profile_runtime_filters()
     test_company_disclosure_provider_is_the_only_provider_runtime_override()

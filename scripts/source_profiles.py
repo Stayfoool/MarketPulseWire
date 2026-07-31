@@ -46,9 +46,7 @@ CATEGORY_LABELS = {
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PROFILE_CONFIG_PATH = ROOT / "config/source_profiles.local.json"
 EDITABLE_OVERRIDE_FIELDS = {
-    "frequency",
     "publisher_role",
-    "proxy_profile",
     "provider",
     "notes",
 }
@@ -529,7 +527,7 @@ def save_source_profile_config(
             disabled_sources.append(source_id)
 
         item: dict[str, Any] = {}
-        for field in ("frequency", "proxy_profile", "provider", "notes"):
+        for field in ("provider", "notes"):
             value = str(row.get(field) or "").strip()
             if value and value != str(default.get(field) or ""):
                 item[field] = value
@@ -569,10 +567,10 @@ def apply_local_config(profile: SourceProfile, config: dict[str, Any]) -> dict[s
     if payload.get("provider"):
         payload["runtime_note"] = (
             f"来源开关、provider={payload.get('provider')} 由运行时读取；"
-            "频率和代理暂仅记录。"
+            "频率和代理为只读运行事实。"
         )
     else:
-        payload["runtime_note"] = "来源开关由运行时读取；频率和代理暂仅记录。"
+        payload["runtime_note"] = "来源开关由运行时读取；频率和代理为只读运行事实。"
     return payload
 
 

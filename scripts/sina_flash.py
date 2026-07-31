@@ -60,7 +60,7 @@ def news_provider() -> str:
     return os.getenv("SINA_NEWS_PROVIDER", "legacy").strip().lower() or "legacy"
 
 
-def sina_symbol_to_ifind(value: str) -> str:
+def normalize_sina_stock_symbol(value: str) -> str:
     raw = value.strip().lower()
     if len(raw) != 8:
         return raw.upper()
@@ -99,7 +99,7 @@ def stock_symbols_from_ext(ext: dict[str, Any]) -> set[str]:
         if not isinstance(item, dict):
             continue
         symbol = str(item.get("symbol") or "").strip()
-        normalized = sina_symbol_to_ifind(symbol)
+        normalized = normalize_sina_stock_symbol(symbol)
         if normalized:
             symbols.add(normalized)
     return symbols

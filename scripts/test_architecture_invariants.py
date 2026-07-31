@@ -404,11 +404,31 @@ def test_production_collectors_have_no_shadow_path() -> None:
         "research_collector.py",
         "official_collector.py",
         "news_collector.py",
+        "trade_policy_monitor.py",
         "value_directory_monitor.py",
     ):
         source = (SCRIPTS / filename).read_text(encoding="utf-8")
-        for retired in ("collect_shadow", "shadow_dry_run", "save_shadow_state", "--production"):
+        for retired in (
+            "collect_shadow",
+            "shadow_collect",
+            "shadow_dry_run",
+            "save_shadow_state",
+            "--shadow",
+            "--production",
+        ):
             assert retired not in source, f"{filename}: retired collector path returned: {retired}"
+
+    sina_flash = (SCRIPTS / "sina_flash.py").read_text(encoding="utf-8")
+    assert "sina_symbol_to_ifind" not in sina_flash
+    assert "ifind" not in sina_flash.casefold()
+
+    source_profiles = (SCRIPTS / "source_profiles.py").read_text(encoding="utf-8")
+    frontend = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+    editable_fields = source_profiles.split("EDITABLE_OVERRIDE_FIELDS = {", 1)[1].split("}", 1)[0]
+    assert '"frequency"' not in editable_fields
+    assert '"proxy_profile"' not in editable_fields
+    assert 'data-field="frequency"' not in frontend
+    assert 'data-field="proxy_profile"' not in frontend
 
 
 def test_removed_compatibility_modules_do_not_return() -> None:
