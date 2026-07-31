@@ -945,12 +945,16 @@ def test_collect_production_automatically_retries_retryable_lifecycle() -> None:
     }
     calls: list[tuple[str, bool]] = []
     original_retryable = value_directory_monitor.retryable_item_ids
+    original_connect = value_directory_monitor.connect_db
+    original_source_has_seen = value_directory_monitor.source_has_seen
     original_save_new = value_directory_monitor.save_new_items_with_retry
     original_review = value_directory_monitor.review_and_maybe_push
     original_recheck = os.environ.get("VALUE_DIRECTORY_RECHECK_UNPUSHED")
     try:
         os.environ["VALUE_DIRECTORY_RECHECK_UNPUSHED"] = "0"
         value_directory_monitor.retryable_item_ids = lambda _source_id: {"retry-1"}
+        value_directory_monitor.connect_db = lambda: _DummyContext()
+        value_directory_monitor.source_has_seen = lambda _conn, _source_id: True
         value_directory_monitor.save_new_items_with_retry = lambda *_args, **_kwargs: []
 
         def fake_review(item, *, recheck_rules=False, **_kwargs):
@@ -966,6 +970,8 @@ def test_collect_production_automatically_retries_retryable_lifecycle() -> None:
         )
     finally:
         value_directory_monitor.retryable_item_ids = original_retryable
+        value_directory_monitor.connect_db = original_connect
+        value_directory_monitor.source_has_seen = original_source_has_seen
         value_directory_monitor.save_new_items_with_retry = original_save_new
         value_directory_monitor.review_and_maybe_push = original_review
         if original_recheck is None:
