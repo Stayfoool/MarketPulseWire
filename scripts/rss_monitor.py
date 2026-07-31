@@ -502,10 +502,10 @@ def notify_item(source: str, item: dict) -> None:
             return
         raise
     item = enriched
-    review = outcome.payload
+    decision = outcome.flow_result.decision
     print(
-        f"{source} 决策层：importance={review.get('importance')} "
-        f"push={review.get('push_now')} title={item.get('title', '')}",
+        f"{source} 决策层：importance={decision.importance} "
+        f"action={decision.action} title={item.get('title', '')}",
         flush=True,
     )
     if outcome.delivery_status == "duplicate":
@@ -550,10 +550,10 @@ def handle_official_news_item(source: str, item: dict) -> None:
             print(f"{source} 证据不足，当前条目终止处理：title={item.get('title', '')}", flush=True)
             return
         raise
-    review = outcome.payload
+    decision = outcome.flow_result.decision
     print(
-        f"{source} 官网新闻分流：importance={review.get('importance')} "
-        f"push={review.get('should_push_now')} title={enriched.get('title', '')}",
+        f"{source} 官网新闻分流：importance={decision.importance} "
+        f"action={decision.action} title={enriched.get('title', '')}",
         flush=True,
     )
 

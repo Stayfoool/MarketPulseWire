@@ -71,7 +71,7 @@ def test_event_mapping_uses_source_event_id_and_symbols() -> None:
     assert normalized.raw["source_event_id"] == "flash-1"
 
 
-def test_decision_result_normalizes_and_exposes_legacy_fields() -> None:
+def test_decision_result_normalizes_current_fields() -> None:
     decision = DecisionResult(
         action="push",
         importance="高",
@@ -82,11 +82,10 @@ def test_decision_result_normalizes_and_exposes_legacy_fields() -> None:
     )
     assert decision.should_push is True
     assert decision.importance == "high"
-    legacy = decision.legacy_push_fields("should_push_now")
-    assert legacy["should_push_now"] is True
-    assert legacy["importance"] == "high"
-    assert legacy["raw"]["decision_result"]["action"] == "push"
-    assert legacy["raw"]["rule_hits"][0]["rule_id"] == "holding_keyword_immediate_alert"
+    payload = decision.to_dict()
+    assert payload["action"] == "push"
+    assert payload["importance"] == "high"
+    assert payload["rule_hits"][0]["rule_id"] == "holding_keyword_immediate_alert"
 
 
 def test_interpretation_result_restricts_llm_judgement_values() -> None:
@@ -109,7 +108,7 @@ def test_invalid_enums_fall_back_to_safe_defaults() -> None:
     assert normalize_action("send-now") == "archive"
     assert normalize_importance("very-high") == "unknown"
     assert normalize_llm_judgement("freeform bullish") == "not_needed"
-    assert DecisionResult(importance="unknown").legacy_push_fields()["importance"] == "unknown"
+    assert DecisionResult(importance="unknown").to_dict()["importance"] == "unknown"
 
 
 def test_stable_dedupe_key_prefers_source_event_id_then_url() -> None:
@@ -123,7 +122,7 @@ def test_stable_dedupe_key_prefers_source_event_id_then_url() -> None:
 def main() -> int:
     test_article_mapping_preserves_source_context_and_dedupe_key()
     test_event_mapping_uses_source_event_id_and_symbols()
-    test_decision_result_normalizes_and_exposes_legacy_fields()
+    test_decision_result_normalizes_current_fields()
     test_interpretation_result_restricts_llm_judgement_values()
     test_invalid_enums_fall_back_to_safe_defaults()
     test_stable_dedupe_key_prefers_source_event_id_then_url()

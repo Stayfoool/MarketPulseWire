@@ -8,11 +8,10 @@ import inspect
 import alphabstract_monitor
 import china_finance_media_monitor
 import market_flow
-import market_content_adapter
-import market_flow as market_flow
 import rss_monitor
 import trendforce_page_monitor
 import value_directory_monitor
+from market_card_view import market_result_view
 from market_item import DecisionResult, InterpretationResult
 from settings_store import FIELDS_BY_KEY
 
@@ -47,15 +46,14 @@ def test_article_interpretation_cannot_override_decision_action() -> None:
             official=False,
             storage_ref={},
         )
-        review = market_content_adapter.project_article_review(item, flow_result)
+        result_view = market_result_view(flow_result)
     finally:
         market_flow.interpret_market_item = original
-    assert review["push_now"] is True
-    assert review["raw"]["decision_result"]["action"] == "push"
-    assert review["raw"]["_interpretation_result"]["model"] == "fake-model"
-    assert review["raw"]["_interpretation_result"]["brief_reason"] == ""
-    assert review["raw"]["_interpretation_result"]["related_targets"] == []
-    assert "should_push" not in review["raw"]["_interpretation_result"]
+    assert result_view["decision_result"]["action"] == "push"
+    assert result_view["interpretation_result"]["model"] == "fake-model"
+    assert result_view["interpretation_result"]["brief_reason"] == ""
+    assert result_view["interpretation_result"]["related_targets"] == []
+    assert "should_push" not in result_view["interpretation_result"]
 
 
 def test_official_flow_uses_same_decision_and_interpretation_contract() -> None:
@@ -80,18 +78,15 @@ def test_official_flow_uses_same_decision_and_interpretation_contract() -> None:
             official=True,
             storage_ref={},
         )
-        review = market_content_adapter.project_official_review(item, flow_result)
+        result_view = market_result_view(flow_result)
     finally:
         market_flow.interpret_market_item = original
-    assert review["should_push_now"] is True
-    assert review["analysis"]["_decision_result"]["action"] == "push"
-    assert review["analysis"]["_interpretation_result"]["core_content"] == "统一薄解读核心内容。"
+    assert result_view["decision_result"]["action"] == "push"
+    assert result_view["interpretation_result"]["core_content"] == "统一薄解读核心内容。"
 
 
 def test_runtime_and_monitor_imports_use_one_unified_path() -> None:
-    assert market_flow.project_article_review.__module__ == "market_content_adapter"
-    assert market_flow.project_official_review.__module__ == "market_content_adapter"
-    assert market_flow.project_event_analysis.__module__ == "market_event_adapter"
+    assert market_flow.process_market_item.__module__ == "market_flow"
     for module in (rss_monitor, china_finance_media_monitor, trendforce_page_monitor, alphabstract_monitor, value_directory_monitor):
         assert module.process_market_item.__module__ == "market_flow"
         source = inspect.getsource(module)

@@ -318,13 +318,15 @@ def market_review_snapshot(
         ).fetchone()
     if not row:
         return None
+    # Existing historical reviews may still need their stored display projection.
+    # Current reviews reconstruct their result directly from the canonical columns.
     payload = json_dict(row[7])
     decision = json_dict(row[5])
     interpretation = json_dict(row[6])
     if decision:
         payload["decision_result"] = decision
     if interpretation:
-        payload["_interpretation_result"] = interpretation
+        payload["interpretation_result"] = interpretation
     return {
         "market_item_id": int(row[0]),
         "market_review_id": market_review_id,
@@ -386,8 +388,6 @@ def _complete_market_review_in_conn(
     conn: sqlite3.Connection,
     market_review_id: int,
     flow_result: MarketFlowResult,
-    *,
-    legacy_payload: dict[str, Any] | None = None,
 ) -> int:
     now = utc_now()
     row = conn.execute(
@@ -402,7 +402,7 @@ def _complete_market_review_in_conn(
         """
         UPDATE market_reviews
         SET review_status = 'succeeded', decision_action = ?, importance = ?,
-            decision_json = ?, interpretation_json = ?, legacy_payload_json = ?, completed_at = ?
+            decision_json = ?, interpretation_json = ?, legacy_payload_json = NULL, completed_at = ?
         WHERE id = ?
         """,
         (
@@ -410,7 +410,6 @@ def _complete_market_review_in_conn(
             flow_result.decision.importance,
             json_dumps(flow_result.decision.to_dict()),
             json_dumps(flow_result.interpretation.to_dict()),
-            json_dumps(legacy_payload) if legacy_payload is not None else None,
             now,
             market_review_id,
         ),
@@ -427,7 +426,6 @@ def complete_market_review(
     flow_result: MarketFlowResult,
     *,
     db_path: Path = DEFAULT_DB_PATH,
-    legacy_payload: dict[str, Any] | None = None,
     alias: tuple[str, str, str, str] | None = None,
 ) -> None:
     with connect_sqlite(db_path) as conn:
@@ -437,7 +435,6 @@ def complete_market_review(
                 conn,
                 market_review_id,
                 flow_result,
-                legacy_payload=legacy_payload,
             )
             if alias:
                 ensure_market_item_alias(
@@ -496,7 +493,6 @@ def record_article_delivery(
     decision_action: str,
     payload: dict[str, Any] | None = None,
     error: str = "",
-    legacy_payload: dict[str, Any] | None = None,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> int:
     now = utc_now()
@@ -519,11 +515,6 @@ def record_article_delivery(
                 json_dumps(payload or {}),
             ),
         )
-        if legacy_payload is not None:
-            conn.execute(
-                "UPDATE market_reviews SET legacy_payload_json=? WHERE id=?",
-                (json_dumps(legacy_payload), market_review_id),
-            )
         conn.commit()
         delivery_id = int(cur.lastrowid)
     return delivery_id

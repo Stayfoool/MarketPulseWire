@@ -1,10 +1,8 @@
 """Shared market item data structures.
 
-This module is intentionally passive: it defines normalized objects and legacy
-adapter helpers, but it does not call LLMs, send Feishu cards, write SQLite, or
-change production routing. The first migration step is to let old article,
-official-news, and event paths describe their inputs and decisions with the
-same shapes before any behavior is changed.
+This module is intentionally passive: it defines normalized objects, decisions,
+interpretations and flow results, but it does not call LLMs, send Feishu cards,
+write SQLite or change production routing.
 """
 
 from __future__ import annotations
@@ -319,19 +317,6 @@ class DecisionResult:
             "audit_json": dict(self.audit_json),
         }
 
-    def legacy_push_fields(self, push_key: str = "push_now") -> dict[str, Any]:
-        return {
-            "importance": self.importance,
-            push_key: self.should_push,
-            "reason": self.reason,
-            "brief_reason": self.brief_reason,
-            "raw": {
-                "decision_result": self.to_dict(),
-                "rule_hits": list(self.rule_hits),
-            },
-        }
-
-
 @dataclass(frozen=True)
 class RuleEvaluation:
     admission: AdmissionResult
@@ -350,42 +335,22 @@ class RuleEvaluation:
         }
 
 
-def decision_result_from_payload(payload: Any) -> DecisionResult | None:
-    """Read a DecisionResult from unified metadata, or return None for legacy data."""
-    if not isinstance(payload, dict):
+def decision_result_from_dict(payload: Any) -> DecisionResult | None:
+    """Build a DecisionResult from its current serialized dictionary."""
+    if not isinstance(payload, dict) or "action" not in payload:
         return None
-    candidates: list[Any] = []
-    containers = [payload]
-    seen: set[int] = set()
-    index = 0
-    while index < len(containers) and index < 8:
-        container = containers[index]
-        index += 1
-        identity = id(container)
-        if identity in seen:
-            continue
-        seen.add(identity)
-        candidates.extend([container.get("decision_result"), container.get("_decision_result")])
-        for key in ("raw", "analysis"):
-            nested = container.get(key)
-            if isinstance(nested, dict):
-                containers.append(nested)
-    for candidate in candidates:
-        if not isinstance(candidate, dict) or "action" not in candidate:
-            continue
-        return DecisionResult(
-            action=candidate.get("action", "archive"),
-            importance=candidate.get("importance", "unknown"),
-            reason=candidate.get("reason", ""),
-            brief_reason=candidate.get("brief_reason", ""),
-            rule_hits=candidate.get("rule_hits") or [],
-            candidate_rules=candidate.get("candidate_rules") or [],
-            dedup=candidate.get("dedup") or {},
-            need_llm_interpretation=bool(candidate.get("need_llm_interpretation")),
-            need_limited_llm_judgement=bool(candidate.get("need_limited_llm_judgement")),
-            audit_json=candidate.get("audit_json") or {},
-        )
-    return None
+    return DecisionResult(
+        action=payload.get("action", "archive"),
+        importance=payload.get("importance", "unknown"),
+        reason=payload.get("reason", ""),
+        brief_reason=payload.get("brief_reason", ""),
+        rule_hits=payload.get("rule_hits") or [],
+        candidate_rules=payload.get("candidate_rules") or [],
+        dedup=payload.get("dedup") or {},
+        need_llm_interpretation=bool(payload.get("need_llm_interpretation")),
+        need_limited_llm_judgement=bool(payload.get("need_limited_llm_judgement")),
+        audit_json=payload.get("audit_json") or {},
+    )
 
 
 @dataclass

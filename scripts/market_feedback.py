@@ -22,7 +22,7 @@ from market_canonical_reader import (
     canonical_delivered_items,
     canonical_feedback_snapshot,
 )
-from market_item import decision_result_from_payload
+from market_item import decision_result_from_dict
 
 
 FEEDBACK_LABELS = {
@@ -253,10 +253,7 @@ def _load_json(value: Any) -> dict[str, Any]:
 
 
 def _decision_snapshot(payload: dict[str, Any]) -> tuple[str, list[str], str]:
-    # Unified storage keeps decision_json as a bare DecisionResult, while
-    # compatibility payloads retain the historical decision_result wrapper.
-    candidate = {"decision_result": payload} if "action" in payload else payload
-    decision = decision_result_from_payload(candidate)
+    decision = decision_result_from_dict(payload)
     if not decision:
         return "", [], ""
     rule_ids = [str(hit.get("rule_id") or "") for hit in decision.rule_hits if hit.get("rule_id")]
@@ -696,7 +693,7 @@ def _feedback_card_base(conn: sqlite3.Connection, identity: FeedbackIdentity) ->
     )
     if canonical is None:
         return None
-    payload = canonical["legacy_payload"]
+    payload = canonical["historical_payload"]
     raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else payload
     card = raw.get("_feedback_card_base")
     if not isinstance(card, dict):

@@ -400,7 +400,12 @@ def test_wallstreetcn_stale_retry_keeps_processing_but_skips_delivery() -> None:
                 calls.append(kwargs["deliver"])
                 assert cfm.SEEN_ITEM_RETRY_KEY not in raw_item
                 assert cfm.SEEN_ITEM_RETRY_FIRST_SEEN_KEY not in raw_item
-                return SimpleNamespace(payload={}, delivery_status="not_requested")
+                return SimpleNamespace(
+                    flow_result=SimpleNamespace(
+                        decision=SimpleNamespace(importance="medium", action="daily")
+                    ),
+                    delivery_status="not_requested",
+                )
 
             cfm.process_market_item = capture_process
             cfm.notify_item(cfm.WALLSTREETCN_SOURCE, item)

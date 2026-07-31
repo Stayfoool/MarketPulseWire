@@ -104,12 +104,10 @@ def test_result_alias_and_delivery_use_only_unified_storage() -> None:
             normalized, admission("admitted"), db_path=path
         )
         result = flow(normalized)
-        legacy_payload = result.decision.legacy_push_fields(push_key="push_now")
         complete_market_review(
             review_id,
             result,
             db_path=path,
-            legacy_payload=legacy_payload,
             alias=("article", normalized.source, "a-1", "market_items"),
         )
         delivery_id = record_article_delivery(
@@ -117,7 +115,6 @@ def test_result_alias_and_delivery_use_only_unified_storage() -> None:
             review_id,
             status="sent",
             decision_action="push",
-            legacy_payload=legacy_payload,
             db_path=path,
         )
 
@@ -128,7 +125,7 @@ def test_result_alias_and_delivery_use_only_unified_storage() -> None:
         with sqlite3.connect(path) as conn:
             review = conn.execute(
                 "SELECT admission_status,decision_action,importance,review_status,"
-                "legacy_store_kind,legacy_store_id FROM market_reviews WHERE id=?",
+                "legacy_store_kind,legacy_store_id,legacy_payload_json FROM market_reviews WHERE id=?",
                 (review_id,),
             ).fetchone()
             alias = conn.execute(
@@ -141,7 +138,7 @@ def test_result_alias_and_delivery_use_only_unified_storage() -> None:
                 (delivery_id,),
             ).fetchone()
 
-        assert review == ("admitted", "push", "high", "succeeded", None, None)
+        assert review == ("admitted", "push", "high", "succeeded", None, None, None)
         assert alias == (market_item_id, "article", normalized.source, "a-1", "market_items")
         assert delivery == (delivery_id, market_item_id, review_id, "sent", "push")
 
@@ -260,13 +257,6 @@ def test_unified_views_work_when_legacy_result_tables_are_absent() -> None:
             conn.row_factory = sqlite3.Row
             articles = canonical_digest_rows(
                 conn,
-                item_kind="article",
-                start_utc="2000-01-01T00:00:00+00:00",
-                end_utc="2100-01-01T00:00:00+00:00",
-            )
-            officials = canonical_digest_rows(
-                conn,
-                item_kind="official",
                 start_utc="2000-01-01T00:00:00+00:00",
                 end_utc="2100-01-01T00:00:00+00:00",
             )
@@ -286,7 +276,6 @@ def test_unified_views_work_when_legacy_result_tables_are_absent() -> None:
             }
 
         assert [row["source"] for row in articles] == ["article-source"]
-        assert [row["source"] for row in officials] == ["official-source"]
         assert any(row["source"] == "event-source" for row in events)
         assert feedback is not None and feedback["decision"]["action"] == "push"
         assert not legacy_tables.intersection(

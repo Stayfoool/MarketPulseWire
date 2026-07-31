@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-import market_content_adapter
+from market_interpreter import thin_system_prompt, thin_user_prompt_template
 
 
 def assert_contains(text: str, expected: str) -> None:
@@ -12,8 +12,12 @@ def assert_contains(text: str, expected: str) -> None:
 
 
 def main() -> int:
-    article_prompt = market_content_adapter.GATE_SYSTEM_PROMPT + "\n" + market_content_adapter.GATE_USER_PROMPT
-    official_prompt = market_content_adapter.OFFICIAL_SYSTEM_PROMPT + "\n" + market_content_adapter.OFFICIAL_USER_PROMPT
+    article_prompt = thin_system_prompt(task="资讯摘要") + "\n" + thin_user_prompt_template(
+        intro="请解读以下资讯/报告", forbidden_mode="article", include_source_module=True
+    )
+    official_prompt = thin_system_prompt(task="公司官网新闻摘要") + "\n" + thin_user_prompt_template(
+        intro="请解读以下核心产业链公司官网新闻", forbidden_mode="official"
+    )
 
     for prompt in (article_prompt, official_prompt):
         assert_contains(prompt, '"core_content"')

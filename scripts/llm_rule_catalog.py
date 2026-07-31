@@ -17,24 +17,13 @@ from typing import Any, Mapping, cast
 from market_item import RuleFamily
 
 
-LEGACY_RULE_CONFIG_SCHEMA_VERSION = "llm-decision-rule-config-v1"
 RULE_CONFIG_SCHEMA_VERSION = "llm-decision-rule-config-v2"
-SUPPORTED_RULE_CONFIG_SCHEMA_VERSIONS = {
-    LEGACY_RULE_CONFIG_SCHEMA_VERSION,
-    RULE_CONFIG_SCHEMA_VERSION,
-}
 RULE_CONFIG_ENV = "LLM_DECISION_RULE_CONFIG"
 DEFAULT_RULE_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "llm_decision_rules.json"
 MAX_RULE_CONFIG_BYTES = 256_000
 MAX_RULES = 64
 MODEL_ACTIONS = ("push", "daily", "archive")
 RULE_FAMILIES = {"holding", "semiconductor_ai", "macro_data", "fed_policy", "trade_policy"}
-
-# Historical comparison writers/readers still import these protocol versions.
-# They do not contain or select production decision-rule content.
-RULE_MATRIX_VERSION = "llm-reviewed-rule-matrix-v12-20260724"
-CATALOG_VERSION = "llm-rule-catalog-v13"
-
 
 class LLMRuleCatalogError(RuntimeError):
     """The private LLM decision-rule file is missing or invalid."""
@@ -106,7 +95,7 @@ def _string_tuple(value: Any, path: str, *, required: bool) -> tuple[str, ...]:
     return result
 
 
-def _parse_rule(payload: Any, index: int, version: str, schema_version: str) -> LLMRuleDefinition:
+def _parse_rule(payload: Any, index: int, version: str) -> LLMRuleDefinition:
     path = f"rules[{index}]"
     if not isinstance(payload, dict):
         raise LLMRuleCatalogError(f"{path} must be an object")
@@ -118,7 +107,7 @@ def _parse_rule(payload: Any, index: int, version: str, schema_version: str) -> 
         "required_facts",
         "exclusions",
     }
-    optional_fields = {"applicable_families"} if schema_version == RULE_CONFIG_SCHEMA_VERSION else set()
+    optional_fields = {"applicable_families"}
     if not required_fields <= set(payload) or set(payload) - required_fields - optional_fields:
         allowed = sorted(required_fields | optional_fields)
         raise LLMRuleCatalogError(f"{path} fields must match {allowed}")
@@ -168,14 +157,14 @@ def load_rule_catalog(path: Path | None = None) -> tuple[str, tuple[LLMRuleDefin
     if not isinstance(payload, dict) or set(payload) != {"schema_version", "version", "rules"}:
         raise LLMRuleCatalogError("private LLM decision-rule file has invalid top-level fields")
     schema_version = payload["schema_version"]
-    if schema_version not in SUPPORTED_RULE_CONFIG_SCHEMA_VERSIONS:
+    if schema_version != RULE_CONFIG_SCHEMA_VERSION:
         raise LLMRuleCatalogError("private LLM decision-rule schema_version is unsupported")
     version = _required_string(payload["version"], "version")
     raw_rules = payload["rules"]
     if not isinstance(raw_rules, list) or not raw_rules or len(raw_rules) > MAX_RULES:
         raise LLMRuleCatalogError(f"rules must contain between 1 and {MAX_RULES} entries")
     rules = tuple(
-        _parse_rule(rule, index, version, schema_version)
+        _parse_rule(rule, index, version)
         for index, rule in enumerate(raw_rules)
     )
     ids = [rule.rule_id for rule in rules]

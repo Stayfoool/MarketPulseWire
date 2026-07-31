@@ -78,15 +78,10 @@ def add_result(
         decision=decision,
         interpretation=InterpretationResult(core_content=f"{title}核心内容"),
     )
-    legacy_payload = {
-        "daily_summary": f"{title}兼容摘要",
-        "_legacy_row": {"source_module": source, "event_type": content_type},
-    }
     complete_market_review(
         review_id,
         flow,
         db_path=path,
-        legacy_payload=legacy_payload,
         alias=(item_kind, source, external_item_id or source_item_id, "market_items"),
     )
     with sqlite3.connect(path) as conn:
@@ -171,13 +166,6 @@ def test_canonical_readers_use_unified_tables_and_preserve_external_identity() -
             conn.row_factory = sqlite3.Row
             articles = canonical_digest_rows(
                 conn,
-                item_kind="article",
-                start_utc="2026-07-23T00:00:00+00:00",
-                end_utc="2026-07-24T00:00:00+00:00",
-            )
-            officials = canonical_digest_rows(
-                conn,
-                item_kind="official",
                 start_utc="2026-07-23T00:00:00+00:00",
                 end_utc="2026-07-24T00:00:00+00:00",
             )
@@ -192,7 +180,6 @@ def test_canonical_readers_use_unified_tables_and_preserve_external_identity() -
             tables = {str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
         assert [row["item_id"] for row in articles] == ["article-daily"]
-        assert [row["item_id"] for row in officials] == ["official-daily"]
         event = next(row for row in events if row["title"] == "事件推送")
         assert event["id"] == "77"
         assert event["feedback_identity"] == {
@@ -204,6 +191,7 @@ def test_canonical_readers_use_unified_tables_and_preserve_external_identity() -
         assert feedback is not None
         assert feedback["decision"]["action"] == "push"
         assert feedback["delivery_id"] == event_delivery_id
+        assert feedback["historical_payload"] == {}
         assert event_review_id > 0
         assert not tables.intersection({"article_reviews", "official_news_reviews", "events", "event_analyses"})
 

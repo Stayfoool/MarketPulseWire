@@ -22,17 +22,17 @@ from investment_bank_report_dedup import (
     INVESTMENT_BANK_REPORT_RULE_ID,
     investment_bank_report_dedup_hit,
 )
-from market_card_view import decision_basis_reasons, interpretation_core
+from market_card_view import decision_basis_reasons, interpretation_core, market_result_view
 from market_db import DEFAULT_DB_PATH
 from macro_event_dedup import MACRO_DEDUP_RULE_IDS, macro_event_dedup_hit
 from market_item import (
     DecisionResult,
-    NormalizedMarketItem,
+    MarketFlowResult,
     article_item_id,
     official_news_item_id,
 )
 from market_feedback import FeedbackIdentity, append_feedback_actions
-from market_store import record_event_delivery, source_item_id
+from market_store import record_article_delivery, record_event_delivery, source_item_id
 from market_move_dedup import MARKET_MOVE_RULE_ID, intraday_market_move_dedup_hit
 from rule_alert_dedup import confirm_rule_alert, release_rule_alert, reserve_rule_alert, reserve_rule_alert_set
 
@@ -91,67 +91,15 @@ def record_delivery(
     )
 
 
-def _duplicate_article_review(
-    review: dict[str, Any],
-    reservation: dict[str, Any],
-) -> None:
-    first = reservation.get("first") or {}
-    rule_id = str(reservation.get("rule_id") or "")
-    if rule_id == MARKET_MOVE_RULE_ID:
-        note = (
-            "同一盘中行情事件跨来源去重：已由 "
-            f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
-        )
-    elif rule_id in MACRO_DEDUP_RULE_IDS:
-        note = (
-            "同一美国宏观/政策催化事件跨来源去重：已由 "
-            f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
-        )
-    elif rule_id == "ai_compute_supply_demand":
-        note = (
-            "同一AI算力供需催化事件跨来源去重：已由 "
-            f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
-        )
-    elif rule_id == INDUSTRY_FACT_RULE_ID:
-        note = (
-            "同一产业事实跨来源去重：已由 "
-            f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
-        )
-    elif rule_id == INVESTMENT_BANK_REPORT_RULE_ID:
-        note = (
-            "同一投行个股评级/目标价报告跨来源去重：已由 "
-            f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
-        )
-    elif rule_id == COMPANY_EVENT_RULE_ID:
-        note = (
-            "同一公司事件事实跨来源去重：已由 "
-            f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
-        )
-    else:
-        note = (
-            "同一规则观点跨来源去重：已由 "
-            f"{first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
-        )
-    updated = dict(review)
-    updated["push_now"] = False
-    updated["reason"] = f"{updated.get('reason') or ''}\n{note}".strip()
-    raw = dict(updated.get("raw") or {})
-    raw["rule_alert_dedup"] = reservation
-    updated["raw"] = raw
-    review.clear()
-    review.update(updated)
-
-
-def _duplicate_official_review(
-    review: dict[str, Any],
-    reservation: dict[str, Any],
-) -> None:
+def _duplicate_delivery_payload(reservation: dict[str, Any]) -> dict[str, Any]:
     first = reservation.get("first") or {}
     rule_id = str(reservation.get("rule_id") or "")
     if rule_id == MARKET_MOVE_RULE_ID:
         label = "同一盘中行情事件跨来源去重"
     elif rule_id in MACRO_DEDUP_RULE_IDS:
         label = "同一美国宏观/政策催化事件跨来源去重"
+    elif rule_id == "ai_compute_supply_demand":
+        label = "同一AI算力供需催化事件跨来源去重"
     elif rule_id == INDUSTRY_FACT_RULE_ID:
         label = "同一产业事实跨来源去重"
     elif rule_id == INVESTMENT_BANK_REPORT_RULE_ID:
@@ -160,19 +108,20 @@ def _duplicate_official_review(
         label = "同一公司事件事实跨来源去重"
     else:
         label = "同一规则观点跨来源去重"
-    note = f"{label}：已由 {first.get('source') or '其他来源'} 在 {first.get('published_at') or '较早时间'} 提醒。"
-    updated = dict(review)
-    updated["should_push_now"] = False
-    updated["reason"] = f"{updated.get('reason') or ''}\n{note}".strip()
-    analysis = dict(updated.get("analysis") or {})
-    analysis["rule_alert_dedup"] = reservation
-    updated["analysis"] = analysis
-    review.clear()
-    review.update(updated)
+    return {
+        "reason": label,
+        "rule_id": reservation.get("rule_id"),
+        "first_source": first.get("source"),
+        "first_item_id": first.get("item_id"),
+        "first_published_at": first.get("published_at"),
+        "dedup_key": reservation.get("dedup_key"),
+        "dedup_keys": reservation.get("dedup_keys") or [reservation.get("dedup_key")],
+        "matched_dedup_key": reservation.get("matched_dedup_key"),
+        "covered": reservation.get("covered") or [],
+    }
 
 
 def _reserve_delivery_alert(
-    payload: dict[str, Any],
     item: dict[str, Any],
     decision: DecisionResult,
     *,
@@ -187,7 +136,7 @@ def _reserve_delivery_alert(
         or investment_bank_report_dedup_hit(item, decision)
     )
     reservation = reserve_rule_alert(
-        payload,
+        decision,
         source=source,
         item_id=item_id,
         title=str(item.get("title") or ""),
@@ -207,25 +156,45 @@ def _reserve_delivery_alert(
     )
 
 
-def deliver_article_review(
+def _deliver_content_item(
+    item_kind: str,
     source: str,
     item: dict[str, Any],
-    review: dict[str, Any],
+    flow_result: MarketFlowResult,
     *,
-    decision: DecisionResult,
+    market_item_id: int,
+    market_review_id: int,
     db_path: Path = DEFAULT_DB_PATH,
-    analysis_lines_prefix: list[str] | None = None,
     use_rule_dedup: bool = True,
     already_sent: bool = False,
 ) -> str:
-    """Deliver a pre-decided article review."""
-    if not decision.should_push or already_sent or review.get("pushed_at"):
+    decision = flow_result.decision
+    item_id = official_news_item_id(item) if item_kind == "official" else article_item_id(item)
+
+    def persist(
+        status: str,
+        details: dict[str, Any] | None = None,
+        *,
+        error: str = "",
+    ) -> None:
+        record_article_delivery(
+            market_item_id,
+            market_review_id,
+            status=status,
+            decision_action=decision.action,
+            payload={"item_kind": item_kind, "source": source, "item_id": item_id, **(details or {})},
+            error=error,
+            db_path=db_path,
+        )
+
+    if already_sent:
+        return "existing"
+    if not decision.should_push:
+        persist("skipped", {"reason": "DecisionResult.action 不是 push"})
         return "skipped"
-    item_id = article_item_id(item)
     reservation: dict[str, Any] = {}
     if use_rule_dedup:
         reservation = _reserve_delivery_alert(
-            review,
             item,
             decision,
             source=source,
@@ -233,88 +202,80 @@ def deliver_article_review(
             db_path=db_path,
         )
         if reservation.get("duplicate"):
-            _duplicate_article_review(
-                review,
-                reservation,
-            )
+            persist("duplicate", _duplicate_delivery_payload(reservation))
             return "duplicate"
     prepared = dict(item)
-    prepared["article_review"] = review
-    prepared["analysis_thinking"] = "enabled"
-    prepared["analysis_max_tokens"] = int(os.getenv("LLM_HIGH_IMPORTANCE_MAX_OUTPUT_TOKENS", "1800"))
-    if analysis_lines_prefix:
-        prepared["analysis_lines_prefix"] = list(analysis_lines_prefix)
+    prepared["raw"] = dict(flow_result.item.raw)
+    prepared["article_review"] = market_result_view(flow_result)
     card = build_article_card(source, prepared)
-    if feedback_enabled():
-        if not feishu_app_configured():
-            release_rule_alert(reservation, db_path=db_path)
-            return "skipped"
-        feedback_card = append_feedback_actions(card, FeedbackIdentity("article", source, item_id))
-        response = send_interactive_card(feedback_card)
-        sent = response.ok
-    else:
-        sent = send_card(card)
+    try:
+        if feedback_enabled():
+            if not feishu_app_configured():
+                release_rule_alert(reservation, db_path=db_path)
+                persist("skipped", {"reason": "飞书反馈已启用但应用机器人配置不完整"})
+                return "skipped"
+            feedback_card = append_feedback_actions(card, FeedbackIdentity(item_kind, source, item_id))
+            response = send_interactive_card(feedback_card)
+            sent = response.ok
+        else:
+            sent = send_card(card)
+    except Exception as exc:  # noqa: BLE001 - delivery failures must not stop collectors
+        release_rule_alert(reservation, db_path=db_path)
+        persist("failed", {"reason": "飞书发送异常"}, error=str(exc))
+        return "failed"
     if sent:
         confirm_rule_alert(reservation, db_path=db_path)
-        if feedback_enabled():
-            raw = dict(review.get("raw") or {})
-            raw["_feedback_card_base"] = card
-            review["raw"] = raw
+        persist("sent", {"_feedback_card_base": card if feedback_enabled() else {}})
         return "sent"
     release_rule_alert(reservation, db_path=db_path)
+    persist("skipped", {"reason": "飞书发送失败"})
     return "skipped"
+
+
+def deliver_article_review(
+    source: str,
+    item: dict[str, Any],
+    flow_result: MarketFlowResult,
+    *,
+    market_item_id: int,
+    market_review_id: int,
+    db_path: Path = DEFAULT_DB_PATH,
+    use_rule_dedup: bool = True,
+    already_sent: bool = False,
+) -> str:
+    return _deliver_content_item(
+        "article",
+        source=source,
+        item=item,
+        flow_result=flow_result,
+        market_item_id=market_item_id,
+        market_review_id=market_review_id,
+        db_path=db_path,
+        use_rule_dedup=use_rule_dedup,
+        already_sent=already_sent,
+    )
 
 
 def deliver_official_review(
     source: str,
     item: dict[str, Any],
-    review: dict[str, Any],
+    flow_result: MarketFlowResult,
     *,
-    decision: DecisionResult,
-    analysis_lines: list[str],
+    market_item_id: int,
+    market_review_id: int,
     db_path: Path = DEFAULT_DB_PATH,
     already_sent: bool = False,
 ) -> str:
-    """Deliver a pre-decided official-news review."""
-    if not decision.should_push or already_sent or review.get("pushed_at"):
-        return "skipped"
-    prepared = dict(item)
-    prepared["article_review"] = review
-    prepared["analysis_lines"] = list(analysis_lines)
-    item_id = official_news_item_id(item)
-    reservation = _reserve_delivery_alert(
-        review,
-        item,
-        decision,
+    return _deliver_content_item(
+        "official",
         source=source,
-        item_id=item_id,
+        item=item,
+        flow_result=flow_result,
+        market_item_id=market_item_id,
+        market_review_id=market_review_id,
         db_path=db_path,
+        already_sent=already_sent,
     )
-    if reservation.get("duplicate"):
-        _duplicate_official_review(
-            review,
-            reservation,
-        )
-        return "duplicate"
-    card = build_article_card(source, prepared)
-    if feedback_enabled():
-        if not feishu_app_configured():
-            release_rule_alert(reservation, db_path=db_path)
-            return "skipped"
-        feedback_card = append_feedback_actions(card, FeedbackIdentity("official", source, item_id))
-        response = send_interactive_card(feedback_card)
-        sent = response.ok
-    else:
-        sent = send_card(card)
-    if not sent:
-        release_rule_alert(reservation, db_path=db_path)
-        return "skipped"
-    confirm_rule_alert(reservation, db_path=db_path)
-    if feedback_enabled():
-        analysis = dict(review.get("analysis") or {})
-        analysis["_feedback_card_base"] = card
-        review["analysis"] = analysis
-    return "sent"
 
 
 def simple_event_card(
@@ -358,15 +319,15 @@ def simple_event_card(
 
 
 def deliver_event(
-    item: NormalizedMarketItem,
-    analysis: dict[str, Any],
+    flow_result: MarketFlowResult,
     *,
-    decision: DecisionResult,
     market_item_id: int | None = None,
     market_review_id: int | None = None,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> str:
     """Execute a precomputed event decision and persist its delivery outcome."""
+    item = flow_result.item
+    decision = flow_result.decision
     item_id = source_item_id(item)
     event_row = item.to_dict()
     def persist_delivery(status: str, payload: dict[str, Any], *, error: str = "") -> None:
@@ -395,7 +356,6 @@ def deliver_event(
     url = item.url
     published_at = item.published_at
     reservation = _reserve_delivery_alert(
-        analysis,
         event_row,
         decision,
         source=source,
@@ -460,7 +420,7 @@ def deliver_event(
         persist_delivery("skipped", {"reason": "FEISHU_WEBHOOK 未配置"})
         return "skipped"
 
-    lines = compact_event_analysis_lines(analysis)
+    lines = compact_event_analysis_lines(market_result_view(flow_result))
     display_text = compact_text(summary or full_text, 1000)
     card = simple_event_card(source, title, display_text, url, published_at, lines)
     try:

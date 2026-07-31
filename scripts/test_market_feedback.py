@@ -544,7 +544,7 @@ def test_legacy_single_selection_becomes_multiselect_without_rewriting_history()
         assert rows == [("legacy", None), ("evt-new", '["high_value", "duplicate"]')]
 
 
-def test_event_card_is_recovered_from_sent_delivery_payload() -> None:
+def test_current_review_card_is_recovered_from_sent_delivery_payload() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db_path = Path(tmp) / "feedback.sqlite3"
         insert_delivered_article(db_path)
@@ -553,9 +553,7 @@ def test_event_card_is_recovered_from_sent_delivery_payload() -> None:
             "elements": [{"tag": "div", "text": {"tag": "plain_text", "content": "event"}}],
         }
         with sqlite3.connect(db_path) as conn:
-            payload = json.loads(conn.execute("SELECT legacy_payload_json FROM market_reviews").fetchone()[0])
-            payload["raw"].pop("_feedback_card_base")
-            conn.execute("UPDATE market_reviews SET legacy_payload_json=?", (json.dumps(payload),))
+            conn.execute("UPDATE market_reviews SET legacy_payload_json=NULL")
             conn.execute(
                 "UPDATE market_item_aliases SET item_kind='event',source='sina_flash'"
             )
@@ -581,10 +579,7 @@ def test_unified_review_without_card_snapshot_keeps_toast_only() -> None:
         db_path = Path(tmp) / "feedback.sqlite3"
         insert_delivered_article(db_path)
         with sqlite3.connect(db_path) as conn:
-            row = conn.execute("SELECT legacy_payload_json FROM market_reviews").fetchone()
-            payload = json.loads(row[0])
-            payload["raw"].pop("_feedback_card_base")
-            conn.execute("UPDATE market_reviews SET legacy_payload_json = ?", (json.dumps(payload),))
+            conn.execute("UPDATE market_reviews SET legacy_payload_json=NULL")
             conn.commit()
         identity = FeedbackIdentity("article", "cls_telegraph_api", "item-1")
         assert feedback_card_for_callback(identity, "duplicate", secret=TEST_SIGNING_KEY, db_path=db_path) is None
@@ -672,7 +667,7 @@ def main() -> None:
     test_more_reason_is_stored_with_invalid_feedback()
     test_every_feedback_label_combination_is_rendered_and_counted()
     test_legacy_single_selection_becomes_multiselect_without_rewriting_history()
-    test_event_card_is_recovered_from_sent_delivery_payload()
+    test_current_review_card_is_recovered_from_sent_delivery_payload()
     test_unified_review_without_card_snapshot_keeps_toast_only()
     test_callback_response_replaces_card_when_snapshot_is_available()
     test_callback_response_keeps_successful_feedback_toast_when_card_projection_fails()

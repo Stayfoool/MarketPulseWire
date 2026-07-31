@@ -23,10 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 TEST_RULE_CONFIG = ROOT / "config" / "rule_core_v1.test.json"
 
 
-def test_runtime_selects_only_unified_adapters() -> None:
-    assert market_flow.project_article_review.__module__ == "market_content_adapter"
-    assert market_flow.project_official_review.__module__ == "market_content_adapter"
-    assert market_flow.project_event_analysis.__module__ == "market_event_adapter"
+def test_runtime_uses_only_unified_flow() -> None:
+    assert market_flow.process_market_item.__module__ == "market_flow"
     assert "SURVEIL_MARKET_FLOW_DIRECT_PATH" not in FIELDS_BY_KEY
     assert "SURVEIL_CONTENT_DIRECT_PATH" not in FIELDS_BY_KEY
     assert "SURVEIL_EVENT_DIRECT_PATH" not in FIELDS_BY_KEY
@@ -181,7 +179,9 @@ def test_sina_flash_reserves_all_discoveries_before_current_admission() -> None:
                 return SimpleNamespace(
                     event_id=1,
                     inserted=True,
-                    payload={"core_content": "test"},
+                    flow_result=SimpleNamespace(
+                        interpretation=SimpleNamespace(core_content="test")
+                    ),
                     delivery_status="not_requested",
                 )
 
@@ -255,7 +255,7 @@ def main() -> int:
     previous = os.environ.get("RULE_CORE_CONFIG")
     os.environ["RULE_CORE_CONFIG"] = str(TEST_RULE_CONFIG)
     try:
-        test_runtime_selects_only_unified_adapters()
+        test_runtime_uses_only_unified_flow()
         test_all_event_collectors_import_runtime_entrypoints()
         test_unified_upsert_preserves_store_contract()
         test_sina_flash_uses_news_media_flash_shape()

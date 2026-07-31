@@ -142,13 +142,15 @@ def test_private_catalog_loader_validates_structure_and_duplicates() -> None:
         assert version == LLM_DECISION_RULE_VERSION
         assert tuple(rule.rule_id for rule in loaded) == tuple(rule.rule_id for rule in RULES)
 
-        legacy = _catalog_payload()
-        legacy["schema_version"] = "llm-decision-rule-config-v1"
-        for rule in legacy["rules"]:
-            rule.pop("applicable_families", None)
-        path.write_text(json.dumps(legacy), encoding="utf-8")
-        _, loaded_legacy = load_rule_catalog(path)
-        assert all(rule.applicable_families == (rule.family,) for rule in loaded_legacy)
+        retired_schema = _catalog_payload()
+        retired_schema["schema_version"] = "llm-decision-rule-config-v1"
+        path.write_text(json.dumps(retired_schema), encoding="utf-8")
+        try:
+            load_rule_catalog(path)
+        except LLMRuleCatalogError as exc:
+            assert "schema_version is unsupported" in str(exc)
+        else:
+            raise AssertionError("retired private rule schemas must fail closed")
 
         invalid_applicability = _catalog_payload()
         invalid_applicability["rules"][0]["applicable_families"] = ["semiconductor_ai"]

@@ -9,11 +9,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from market_db import init_db
-from market_event_adapter import event_with_normalized_market_item_audit, normalized_event_item
+from market_flow import normalize_market_item
 from market_store import upsert_market_item
 
 
-def test_sina_flash_event_audit_preserves_raw_and_context() -> None:
+def test_sina_flash_normalization_preserves_raw_and_context() -> None:
     event = {
         "source": "sina_flash",
         "source_event_id": "flash-1",
@@ -27,34 +27,22 @@ def test_sina_flash_event_audit_preserves_raw_and_context() -> None:
         "themes": ["新浪财经快讯", "宏观流动性/美联储政策"],
         "raw": {"macro_policy_line": {"matched": True, "tier": "primary"}},
     }
-    item = normalized_event_item(event)
-    updated = event_with_normalized_market_item_audit(event)
-    audit = updated["raw"]["_normalized_market_item"]
+    item = normalize_market_item("sina_flash", event, store_kind="event")
 
     assert "_normalized_market_item" not in event["raw"]
-    assert updated["raw"]["macro_policy_line"] == event["raw"]["macro_policy_line"]
+    assert item.raw["macro_policy_line"] == event["raw"]["macro_policy_line"]
     assert item.source_category == "news_media"
     assert item.publisher_role == "news_media"
     assert item.collector == "sina_flash"
-    assert item.content_type == "flash_news"
+    assert item.content_type == "flash"
     assert item.symbols == ["688017.SH"]
     assert item.themes == ["新浪财经快讯", "宏观流动性/美联储政策"]
     assert item.dedupe_key == "sina_flash:flash-1"
-    assert audit["source_category"] == "news_media"
-    assert audit["publisher_role"] == "news_media"
-    assert audit["collector"] == "sina_flash"
-    assert audit["content_type"] == "flash_news"
-    assert audit["symbols"] == ["688017.SH"]
-    assert audit["themes"] == ["新浪财经快讯", "宏观流动性/美联储政策"]
-    assert audit["dedupe_key"] == "sina_flash:flash-1"
-    assert audit["source_event_id"] == "flash-1"
-    assert audit["raw_keys"] == ["macro_policy_line", "source_event_id"]
-    assert "raw" not in audit
-    assert "full_text" not in audit
-    assert audit["full_text_chars"] == len(event["full_text"])
+    assert item.raw["source_event_id"] == "flash-1"
+    assert "_normalized_market_item" not in item.raw
 
 
-def test_sina_stock_news_event_audit_uses_portfolio_category() -> None:
+def test_sina_stock_news_normalization_uses_portfolio_category() -> None:
     event = {
         "source": "sina_stock_news",
         "source_event_id": "article:abc",
@@ -68,13 +56,13 @@ def test_sina_stock_news_event_audit_uses_portfolio_category() -> None:
         "themes": ["新浪财经个股资讯"],
         "raw": {"canonical_url": "https://finance.sina.com.cn/stock/s/example.shtml"},
     }
-    audit = event_with_normalized_market_item_audit(event)["raw"]["_normalized_market_item"]
-    assert audit["source_category"] == "portfolio_stock_news"
-    assert audit["publisher_role"] == "news_media"
-    assert audit["collector"] == "sina_stock_news"
-    assert audit["content_type"] == "stock_news"
-    assert audit["dedupe_key"] == "sina_stock_news:article:abc"
-    assert audit["symbols"] == ["300308.SZ"]
+    item = normalize_market_item("sina_stock_news", event, store_kind="event")
+    assert item.source_category == "portfolio_stock_news"
+    assert item.publisher_role == "news_media"
+    assert item.collector == "sina_stock_news"
+    assert item.content_type == "portfolio_news"
+    assert item.dedupe_key == "sina_stock_news:article:abc"
+    assert item.symbols == ["300308.SZ"]
 
 
 def test_unified_item_stores_ifind_context_without_duplicating_full_text() -> None:
@@ -94,7 +82,7 @@ def test_unified_item_stores_ifind_context_without_duplicating_full_text() -> No
             "raw": {"pdfURL": "<ifind_notice_url_redacted>", "_pdf_parse": {"status": "ok"}},
         }
         init_db(db_path).close()
-        item = normalized_event_item(event)
+        item = normalize_market_item("ifind_notice", event, store_kind="event")
         with sqlite3.connect(db_path) as conn:
             item_id = upsert_market_item(conn, item, collection_class="baseline")
             conn.commit()
@@ -114,7 +102,7 @@ def test_unified_item_stores_ifind_context_without_duplicating_full_text() -> No
     assert row[:6] == (
         "company_disclosures",
         "ifind_batch",
-        "announcement",
+        "notice",
         '["688017.SH"]',
         "ifind_notice:688017.SH:notice-1",
         len(event["full_text"]),
@@ -123,8 +111,8 @@ def test_unified_item_stores_ifind_context_without_duplicating_full_text() -> No
 
 
 def main() -> int:
-    test_sina_flash_event_audit_preserves_raw_and_context()
-    test_sina_stock_news_event_audit_uses_portfolio_category()
+    test_sina_flash_normalization_preserves_raw_and_context()
+    test_sina_stock_news_normalization_uses_portfolio_category()
     test_unified_item_stores_ifind_context_without_duplicating_full_text()
     print("event normalization checks passed")
     return 0
