@@ -394,16 +394,20 @@ def test_dedupe_entries_keeps_first_valid_url() -> None:
 
 
 def test_source_profile_registers_value_directory() -> None:
-    profile = runtime_source_profile("value_directory_ib_stocks")
-    assert profile is not None
-    assert profile["category"] == "research_industry_media"
-    assert "surveil-value-directory.timer" in profile["service_units"]
-    assert "05:00 / 21:00" in profile["frequency"]
-    macro = runtime_source_profile("value_directory_ib_industry_macro")
-    assert macro is not None
-    assert macro["name"] == "价值目录 / 国际投行-行业宏观"
-    assert "05:00 / 21:00" in macro["frequency"]
-    assert "第一页预览" in macro["fetch_range"]
+    with TemporaryDirectory() as tmpdir:
+        config_path = Path(tmpdir) / "source_profiles.local.json"
+        profile = runtime_source_profile("value_directory_ib_stocks", config_path=config_path)
+        assert profile is not None
+        assert profile["category"] == "research_industry_media"
+        assert "surveil-value-directory.timer" in profile["service_units"]
+        assert "05:00 / 21:00" in profile["frequency"]
+        macro = runtime_source_profile(
+            "value_directory_ib_industry_macro", config_path=config_path
+        )
+        assert macro is not None
+        assert macro["name"] == "价值目录 / 国际投行-行业宏观"
+        assert "05:00 / 21:00" in macro["frequency"]
+        assert "第一页预览" in macro["fetch_range"]
 
 
 def test_preview_failure_is_recorded_without_fake_summary() -> None:

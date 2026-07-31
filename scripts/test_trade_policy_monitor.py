@@ -103,7 +103,7 @@ def test_official_source_parsers() -> None:
     assert "欧盟" in spokesperson[0]["title"]
 
 
-def test_normalized_item_and_source_profile_use_unified_article_runtime() -> None:
+def test_normalized_item_and_source_profile_use_unified_market_runtime() -> None:
     source = TRADE_POLICY_SOURCE_MAP["ustr_press_releases"]
     item = monitor.parse_ustr_html(USTR_SAMPLE, source)[0]
     normalized = monitor.normalized_trade_policy_item(item, source)
@@ -113,11 +113,15 @@ def test_normalized_item_and_source_profile_use_unified_article_runtime() -> Non
     assert normalized.collector == "trade_policy_monitor"
     assert normalized.content_type == "official_policy"
 
-    profile = runtime_source_profile(source.name)
-    assert profile is not None
-    assert profile["category"] == "official_policy"
-    assert "trade_policy_monitor.py" in profile["fetcher"]
-    assert profile["health_keys"] == [{"monitor": "trade_policy", "source": source.name}]
+    with TemporaryDirectory() as tmpdir:
+        profile = runtime_source_profile(
+            source.name,
+            config_path=Path(tmpdir) / "source_profiles.local.json",
+        )
+        assert profile is not None
+        assert profile["category"] == "official_policy"
+        assert "trade_policy_monitor.py" in profile["fetcher"]
+        assert profile["health_keys"] == [{"monitor": "trade_policy", "source": source.name}]
 
 def test_source_can_be_disabled_from_private_profile_config() -> None:
     with TemporaryDirectory() as tmpdir:
@@ -270,7 +274,7 @@ def test_parse_failure_updates_source_health() -> None:
 
 def main() -> int:
     test_official_source_parsers()
-    test_normalized_item_and_source_profile_use_unified_article_runtime()
+    test_normalized_item_and_source_profile_use_unified_market_runtime()
     test_source_can_be_disabled_from_private_profile_config()
     test_empty_or_invalid_payload_is_visible_as_parse_failure()
     test_notify_item_uses_unified_process_market_item()

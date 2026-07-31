@@ -16,21 +16,28 @@ TEST_RULE_CONFIG = ROOT / "config" / "rule_core_v1.test.json"
 
 
 def test_enabled_sources_include_current_groups() -> None:
-    sources = news_collector.news_sources()
-    assert {
-        "yicai_brief",
-        "cls_telegraph_api",
-        "star_market_daily_subject",
-        "jin10_rsshub_important",
-        "sina_finance_articles",
-        "wallstreetcn_news",
-    } <= set(sources)
-    assert "sina_flash" not in sources
-    policies = {source.name for source in news_collector.official_trade_policy_sources()}
-    assert "ustr_press_releases" in policies
-    media, policy = news_collector.selected_source_groups(["ustr_press_releases"])
-    assert media == {}
-    assert [source.name for source in policy] == ["ustr_press_releases"]
+    with TemporaryDirectory() as tmpdir:
+        config_path = Path(tmpdir) / "source_profiles.local.json"
+        sources = news_collector.news_sources(config_path=config_path)
+        assert {
+            "yicai_brief",
+            "cls_telegraph_api",
+            "star_market_daily_subject",
+            "jin10_rsshub_important",
+            "sina_finance_articles",
+            "wallstreetcn_news",
+        } <= set(sources)
+        assert "sina_flash" not in sources
+        policies = {
+            source.name
+            for source in news_collector.official_trade_policy_sources(config_path=config_path)
+        }
+        assert "ustr_press_releases" in policies
+        media, policy = news_collector.selected_source_groups(
+            ["ustr_press_releases"], config_path=config_path
+        )
+        assert media == {}
+        assert [source.name for source in policy] == ["ustr_press_releases"]
 
 
 def test_disabled_source_is_filtered() -> None:
@@ -55,7 +62,9 @@ def test_collect_delegates_to_unified_source_pipelines() -> None:
     calls: list[tuple[list[str], bool]] = []
     original_media = news_collector.china_media.run_once
     original_policy = news_collector.trade_policy.run_once
-    policy_sources = news_collector.official_trade_policy_sources()[:2]
+    with TemporaryDirectory() as tmpdir:
+        config_path = Path(tmpdir) / "source_profiles.local.json"
+        policy_sources = news_collector.official_trade_policy_sources(config_path=config_path)[:2]
     news_collector.china_media.run_once = lambda sources, notify_baseline=False: calls.append((list(sources), notify_baseline)) or 3
     news_collector.trade_policy.run_once = lambda sources, notify_baseline=False: calls.append(([s.name for s in sources], notify_baseline)) or 2
     try:

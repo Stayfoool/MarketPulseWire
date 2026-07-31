@@ -11,13 +11,20 @@ from source_profiles import save_source_profile_config
 
 
 def test_research_sources_include_expected_groups() -> None:
-    feeds = research_collector.research_rss_feeds()
-    pages = {source.name for source in research_collector.research_page_sources()}
-    alphabstract = {source.name for source in research_collector.research_alphabstract_sources()}
-    assert {"semianalysis", "trendforce_semiconductors", "digitimes_en_daily"} <= set(feeds)
-    assert "openai_news" not in feeds
-    assert "trendforce_research_latest" in pages
-    assert "alphabstract_summaries" in alphabstract
+    with TemporaryDirectory() as tmpdir:
+        config_path = Path(tmpdir) / "source_profiles.local.json"
+        feeds = research_collector.research_rss_feeds(config_path=config_path)
+        pages = {
+            source.name for source in research_collector.research_page_sources(config_path=config_path)
+        }
+        alphabstract = {
+            source.name
+            for source in research_collector.research_alphabstract_sources(config_path=config_path)
+        }
+        assert {"semianalysis", "trendforce_semiconductors", "digitimes_en_daily"} <= set(feeds)
+        assert "openai_news" not in feeds
+        assert "trendforce_research_latest" in pages
+        assert "alphabstract_summaries" in alphabstract
 
 
 def test_disabled_source_is_filtered() -> None:
