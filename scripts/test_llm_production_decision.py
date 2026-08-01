@@ -8,6 +8,7 @@ import json
 import os
 import stat
 import time
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -144,6 +145,7 @@ def test_valid_decisions_write_private_audits_and_keep_actions_authoritative() -
                 assert payload["application_revision"] == "fixed-production-revision"
                 assert payload["market_item_id"] == 10 + index
                 assert payload["market_review_id"] == 20 + index
+                assert payload["source_item_id"] == "production-1"
                 assert payload["decision"]["action"] == action
                 assert "PRIVATE_PRODUCTION_BODY" in json.dumps(payload["model_audit"], ensure_ascii=False)
 
@@ -164,6 +166,22 @@ def test_valid_decisions_write_private_audits_and_keep_actions_authoritative() -
             os.environ.pop("SURVEIL_REVISION", None)
         else:
             os.environ["SURVEIL_REVISION"] = original_revision
+
+
+def test_audit_source_item_id_matches_market_storage_fallback() -> None:
+    with TemporaryDirectory() as tmp:
+        selected_item = replace(item(), raw={})
+        decide_production_market_item(
+            selected_item,
+            admission=admission(),
+            portfolio=parse_portfolio_config([]),
+            market_item_id=10,
+            market_review_id=20,
+            audit_dir=Path(tmp),
+            model_caller=lambda _prompt: response(),
+        )
+        audit = json.loads(next(Path(tmp).glob("llm-decision-audit-*.json")).read_text(encoding="utf-8"))
+        assert audit["source_item_id"] == selected_item.url
 
 
 def test_invalid_output_fails_closed_after_auditing() -> None:
@@ -283,6 +301,7 @@ def test_hard_deadline_cancels_inflight_http_request() -> None:
 
 def main() -> int:
     test_valid_decisions_write_private_audits_and_keep_actions_authoritative()
+    test_audit_source_item_id_matches_market_storage_fallback()
     test_invalid_output_fails_closed_after_auditing()
     test_valid_uncertain_is_terminal_insufficient_evidence_without_repair()
     test_hard_deadline_cancels_inflight_http_request()

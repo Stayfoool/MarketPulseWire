@@ -20,7 +20,16 @@ from llm_decision_web import (
 )
 
 
-def audit_payload(status: str = "uncertain", review_id: int = 12, *, legacy_segments: bool = False) -> dict:
+def audit_payload(
+    status: str = "uncertain",
+    review_id: int = 12,
+    *,
+    market_item_id: int = 1,
+    source: str = "source-a",
+    source_item_id: str = "item-a",
+    generated_at: str = "2026-07-26T01:02:03+00:00",
+    legacy_segments: bool = False,
+) -> dict:
     user_payload = {
         "article_segments" if legacy_segments else "source_segments": [
             {"id": "T1", "field": "title", "text": "标题证据"},
@@ -39,8 +48,11 @@ def audit_payload(status: str = "uncertain", review_id: int = 12, *, legacy_segm
         ]
     }
     return {
-        "generated_at": "2026-07-26T01:02:03+00:00",
+        "generated_at": generated_at,
+        "market_item_id": market_item_id,
         "market_review_id": review_id,
+        "source": source,
+        "source_item_id": source_item_id,
         "evaluation_status": status,
         "failure_reason": "没有具体规则命中且存在 uncertain",
         "llm_decision_rule_version": "test-v1",
@@ -115,8 +127,8 @@ def test_projection_write_is_idempotent_and_mode_bounded() -> None:
         assert write_web_projection(path, apply=True) is True
         assert write_web_projection(path, apply=True) is False
         loaded = load_web_projections(directory)
-        assert 12 in loaded
-        assert loaded[12][0]["evaluation_status"] == "uncertain"
+        assert (12, 1, "source-a", "item-a") in loaded
+        assert loaded[(12, 1, "source-a", "item-a")][0]["evaluation_status"] == "uncertain"
 
 
 def test_rows_show_terminal_insufficient_evidence_without_action() -> None:
@@ -177,6 +189,58 @@ def test_rows_show_terminal_insufficient_evidence_without_action() -> None:
         conn.close()
 
 
+def test_rows_ignore_retired_database_audits_with_reused_ids() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        directory = Path(tmp)
+        directory.chmod(0o700)
+        payloads = (
+            audit_payload(
+                generated_at="2026-07-26T00:59:00+00:00",
+                source="retired-source",
+                source_item_id="retired-item",
+            ),
+            audit_payload(generated_at="2026-07-26T01:00:00+00:00"),
+            audit_payload(generated_at="2026-07-26T01:02:00+00:00"),
+            audit_payload(status="completed", generated_at="2026-07-26T01:03:00+00:00"),
+        )
+        for index, payload in enumerate(payloads, start=1):
+            path = directory / f"llm-decision-audit-{index}.json"
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            path.chmod(0o600)
+            write_web_projection(path, apply=True)
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE market_items (
+                id INTEGER PRIMARY KEY, source TEXT, source_item_id TEXT, title TEXT,
+                url TEXT, published_at TEXT, first_seen_at TEXT, content_type TEXT
+            );
+            CREATE TABLE market_reviews (
+                id INTEGER PRIMARY KEY, market_item_id INTEGER, is_current INTEGER,
+                admission_status TEXT, review_status TEXT, decision_action TEXT,
+                decision_json TEXT, created_at TEXT, completed_at TEXT
+            );
+            INSERT INTO market_items VALUES (1, 'source-a', 'item-a', '当前标题', '', '', '2026-07-26T01:00:00+00:00', 'article');
+            INSERT INTO market_reviews VALUES (12, 1, 1, 'admitted', 'succeeded', 'push', '{}', '2026-07-26T01:01:00+00:00', '2026-07-26T01:04:00+00:00');
+            """
+        )
+        rows = llm_decision_rows(
+            conn,
+            start_utc="2026-07-26T00:00:00+00:00",
+            end_utc="2026-07-27T00:00:00+00:00",
+            audit_dir=directory,
+        )
+        assert len(rows) == 1
+        assert [attempt["generated_at"] for attempt in rows[0]["attempts"]] == [
+            "2026-07-26T01:02:00+00:00",
+            "2026-07-26T01:03:00+00:00",
+        ]
+        assert rows[0]["uncertain_attempts"] == 1
+        conn.close()
+
+
 def test_retention_removes_raw_calls_but_keeps_web_projection() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         directory = Path(tmp)
@@ -200,6 +264,7 @@ def main() -> None:
     test_existing_private_audits_remain_readable()
     test_projection_write_is_idempotent_and_mode_bounded()
     test_rows_show_terminal_insufficient_evidence_without_action()
+    test_rows_ignore_retired_database_audits_with_reused_ids()
     test_retention_removes_raw_calls_but_keeps_web_projection()
     print("llm decision web checks passed")
 

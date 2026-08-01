@@ -16,7 +16,7 @@ from llm_decision_web import build_web_projection
 from llm_rule_decision import LLMRulePrompt, resolve_input_text_scope
 from llm_rule_execution import LLMRuleExecution, execute_llm_rule_decision
 from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem
-from market_store import InsufficientEvidenceError, application_revision
+from market_store import InsufficientEvidenceError, application_revision, source_item_id
 from admission_rules import PortfolioRuleConfig
 
 
@@ -80,7 +80,7 @@ def _write_private_audit(
         "market_item_id": market_item_id,
         "market_review_id": market_review_id,
         "source": item.source,
-        "source_item_id": str(item.raw.get("id") or item.dedupe_key),
+        "source_item_id": source_item_id(item),
         "application_revision": application_revision,
         "llm_decision_rule_version": evaluation.get("llm_decision_rule_version") or "",
         "prompt_version": evaluation.get("prompt_version") or "",
