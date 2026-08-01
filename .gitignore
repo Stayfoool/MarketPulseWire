@@ -14,7 +14,6 @@ config/investment_bank_theme_rules.json
 config/llm_decision_rules.json
 config/push_rules.local.json
 config/source_profiles.local.json
-config/stock_relations.json
 config/market_skill/
 data/
 logs/

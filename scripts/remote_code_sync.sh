@@ -32,7 +32,6 @@ remote_code_sync() {
     --exclude 'config/media_keywords.json' \
     --exclude 'config/llm_decision_rules.json' \
     --exclude 'config/source_profiles.local.json' \
-    --exclude 'config/stock_relations.json' \
     --exclude 'config/market_skill/' \
     --exclude '.venv' \
     --exclude '.cache/' \

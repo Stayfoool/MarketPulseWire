@@ -232,19 +232,6 @@ just remote-revision
 
 `just status-strict` exits non-zero when the local tree is dirty, local `HEAD` differs from `origin/main`, or the server deployed commit differs from GitHub.
 
-## Relationship Mappings
-
-Relationship mappings can be managed from the Web workbench's `关系映射` tab. SQLite is the live source; `config/stock_relations.json` is a private seed and backup snapshot. Web saves update SQLite and export the private JSON snapshot.
-
-To seed private relationship mappings from JSON, copy the example file and import it:
-
-```bash
-cp config/stock_relations.example.json config/stock_relations.json
-python scripts/stock_relations.py --config config/stock_relations.json
-```
-
-`config/stock_relations.json` is gitignored. Use it for personal holdings, supply-chain links, competitors, customers, upstream/downstream names, and theme mappings that should not be published. The Web workbench provides JSON import/export, diff checks, and a pending suggestion queue for reviewed relationship candidates.
-
 ### Source Health Noise
 
 Some public feeds throttle or temporarily fail. SemiAnalysis may return `429`, and public RSSHub routes such as Jin10 may return `503`. MarketPulseWire records these in `source_health`, backs off the noisy source, and only alerts after consecutive failures.

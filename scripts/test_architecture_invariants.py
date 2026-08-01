@@ -119,6 +119,7 @@ REMOVED_COMPATIBILITY_MODULES = (
     "migrate_admission_simplification.py",
     "migrate_media_keywords.py",
     "repair_market_feedback_snapshots.py",
+    "stock_relations.py",
 )
 
 REMOVED_OPERATOR_PATHS = (
@@ -127,7 +128,9 @@ REMOVED_OPERATOR_PATHS = (
     SCRIPTS / "write_remote_ifind_token.sh",
     SCRIPTS / "write_remote_jygs_cookie.sh",
     ROOT / "config" / "investment_bank_theme_rules.example.json",
+    ROOT / "config" / "stock_relations.example.json",
     ROOT / "docs" / "roadmap.md",
+    ROOT / "systemd" / "surveil-stock-relations-import.service",
 )
 
 INDEPENDENT_ROUTE_EXCEPTIONS = {
@@ -479,10 +482,19 @@ def test_retired_management_flows_do_not_return() -> None:
     backend = (SCRIPTS / "holdings_web.py").read_text(encoding="utf-8")
     frontend = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
     settings = (SCRIPTS / "settings_store.py").read_text(encoding="utf-8")
-    for retired_table in ("relation_suggestions", "rule_config_audit", "web_evidence_runs", "web_evidence_docs"):
+    for retired_table in (
+        "relation_suggestions",
+        "stock_relations",
+        "rule_config_audit",
+        "web_evidence_runs",
+        "web_evidence_docs",
+    ):
         assert retired_table not in schema
     assert "/api/relation-suggestions" not in backend
     assert "/api/relation-suggestions" not in frontend
+    assert "/api/relations" not in backend
+    assert "/api/relations" not in frontend
+    assert "view-relations" not in (ROOT / "web" / "index.html").read_text(encoding="utf-8")
     assert "WEB_EVIDENCE_" not in settings
     assert "SKEPTIC_" not in settings
 
