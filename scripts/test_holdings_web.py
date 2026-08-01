@@ -49,7 +49,10 @@ def insert_unified_result(
     published_at: str,
     seen_at: str,
     summary: str = "",
-    action: str = "archive",
+    action: str | None = "archive",
+    review_status: str = "succeeded",
+    admission_status: str = "admitted",
+    admission_reason: str = "test",
     delivered: bool = False,
     collection_class: str = "live",
     content_type: str = "article",
@@ -77,7 +80,7 @@ def insert_unified_result(
             seen_at,
             f"hash:{source}:{item_id}",
             collection_class,
-            "succeeded" if collection_class == "live" else "not_applicable",
+            review_status if collection_class == "live" else "not_applicable",
             seen_at,
             seen_at,
         ),
@@ -85,8 +88,8 @@ def insert_unified_result(
     market_item_id = int(cur.lastrowid)
     if collection_class == "baseline":
         return market_item_id
-    decision = {"action": action, "reason": "测试决策"}
-    interpretation = {"core_content": summary, "model": "fixed-test"}
+    decision = {"action": action, "reason": "测试决策"} if action else None
+    interpretation = {"core_content": summary, "model": "fixed-test"} if action else None
     review_id = int(
         conn.execute(
             """
@@ -96,21 +99,26 @@ def insert_unified_result(
                 admission_evidence_json,admission_json,decision_action,
                 decision_json,interpretation_json,
                 application_revision,created_at,completed_at
-            ) VALUES (?, 'production', ?, 1, 'succeeded', 'admitted', 'test',
+            ) VALUES (?, 'production', ?, 1, ?, ?, ?,
                       '[]', '[]', '{}', ?, ?, ?, 'test', ?, ?)
             """,
             (
                 market_item_id,
                 f"test:{source}:{item_id}",
+                review_status,
+                admission_status,
+                admission_reason,
                 action,
-                json.dumps(decision, ensure_ascii=False),
-                json.dumps(interpretation, ensure_ascii=False),
+                json.dumps(decision, ensure_ascii=False) if decision else None,
+                json.dumps(interpretation, ensure_ascii=False) if interpretation else None,
                 seen_at,
-                seen_at,
+                None if review_status == "admitted_pending" else seen_at,
             ),
         ).lastrowid
     )
     if delivered:
+        if action is None:
+            raise ValueError("delivered test result requires an action")
         conn.execute(
             """
             INSERT INTO deliveries (
@@ -121,6 +129,66 @@ def insert_unified_result(
             (market_item_id, review_id, action, seen_at, seen_at),
         )
     return market_item_id
+
+
+def test_overview_separates_actions_from_review_statuses() -> None:
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "overview.sqlite3"
+        init_db(db_path).close()
+        seen_at = "2026-08-01T01:00:00+00:00"
+        with sqlite3.connect(db_path) as conn:
+            for index, action in enumerate(("archive", "push", "daily"), start=1):
+                insert_unified_result(
+                    conn,
+                    source="test_source",
+                    item_id=f"action-{index}",
+                    title=f"action {index}",
+                    published_at=seen_at,
+                    seen_at=seen_at,
+                    action=action,
+                )
+            for index, status in enumerate(
+                ("excluded", "insufficient_evidence", "failed_retryable", "admitted_pending"),
+                start=1,
+            ):
+                insert_unified_result(
+                    conn,
+                    source="test_source",
+                    item_id=f"status-{index}",
+                    title=f"status {index}",
+                    published_at=seen_at,
+                    seen_at=seen_at,
+                    action=None,
+                    review_status=status,
+                    admission_status="excluded" if status == "excluded" else "admitted",
+                    admission_reason="out_of_scope" if status == "excluded" else "content_scope_match",
+                )
+            conn.commit()
+
+        original_db_path = holdings_web.DEFAULT_DB_PATH
+        holdings_web.DEFAULT_DB_PATH = db_path
+        try:
+            payload = holdings_web.overview_payload("2026-08-01")
+        finally:
+            holdings_web.DEFAULT_DB_PATH = original_db_path
+
+        assert payload["cards"][0] == {"label": "市场信息", "value": 7}
+        assert payload["cards"][1] == {"label": "程度决策", "value": 3}
+        assert {row["key"]: row["count"] for row in payload["decision_actions"]} == {
+            "archive": 1,
+            "daily": 1,
+            "push": 1,
+        }
+        assert {row["key"]: row["count"] for row in payload["review_statuses"]} == {
+            "admitted_pending": 1,
+            "excluded": 1,
+            "failed_retryable": 1,
+            "insufficient_evidence": 1,
+        }
+        source = frontend_source()
+        assert "范围准入和处理状态" in source
+        assert "范围准入排除" in source
+        assert "证据不足" in source
 
 
 def frontend_source() -> str:
@@ -1304,6 +1372,7 @@ def test_unit_display_metadata_includes_news_production_collector() -> None:
 
 def main() -> int:
     test_page_uses_extracted_assets_and_bounded_placeholders()
+    test_overview_separates_actions_from_review_statuses()
     test_media_keywords_use_one_master_list_and_a_title_only_subset()
     test_static_asset_routes_are_allowlisted()
     test_health_page_exposes_service_action_controls()

@@ -557,12 +557,13 @@ def overview_payload(day: str = "") -> dict[str, Any]:
                     (start_utc, end_utc),
                 ).fetchone()[0]
             )
-        review_count = int(
+        decision_count = int(
                 conn.execute(
                     """
                     SELECT COUNT(*)
                     FROM market_reviews r
                     WHERE r.created_at >= ? AND r.created_at < ? AND r.is_current=1
+                      AND r.decision_action IN ('push','daily','archive')
                     """,
                     (start_utc, end_utc),
                 ).fetchone()[0]
@@ -586,15 +587,33 @@ def overview_payload(day: str = "") -> dict[str, Any]:
                     SELECT COALESCE(r.decision_action,''),COUNT(*)
                     FROM market_reviews r
                     WHERE r.created_at >= ? AND r.created_at < ? AND r.is_current=1
+                      AND r.decision_action IN ('push','daily','archive')
                     GROUP BY COALESCE(r.decision_action,'')
                     ORDER BY COUNT(*) DESC,COALESCE(r.decision_action,'')
                     """,
                     (start_utc, end_utc),
                 )
             ]
+        review_statuses = [
+                {"key": str(row[0]), "count": int(row[1])}
+                for row in conn.execute(
+                    """
+                    SELECT r.review_status,COUNT(*)
+                    FROM market_reviews r
+                    WHERE r.created_at >= ? AND r.created_at < ? AND r.is_current=1
+                      AND (
+                          r.decision_action IS NULL
+                          OR r.decision_action NOT IN ('push','daily','archive')
+                      )
+                    GROUP BY r.review_status
+                    ORDER BY COUNT(*) DESC,r.review_status
+                    """,
+                    (start_utc, end_utc),
+                )
+            ]
         cards = [
             {"label": "市场信息", "value": item_count},
-            {"label": "程度决策", "value": review_count},
+            {"label": "程度决策", "value": decision_count},
             {"label": "X 新帖", "value": count_rows(conn, "seen_posts", "first_seen_at >= ? AND first_seen_at < ?", (start_utc, end_utc))},
             {"label": "飞书失败", "value": deliveries_failed + processing_failures},
         ]
@@ -605,8 +624,9 @@ def overview_payload(day: str = "") -> dict[str, Any]:
         "cards": cards,
         "by_source": by_source[:12],
         "decision_actions": decision_actions,
+        "review_statuses": review_statuses,
         "deliveries": deliveries,
-        "latest": fetch_market_rows(day=day, limit=10),
+        "latest": fetch_market_rows(day=day, limit=10, db_path=DEFAULT_DB_PATH),
     }
 
 
