@@ -215,9 +215,11 @@ timer from invoking a renamed executable after the old path has been deleted
 but before the replacement unit is installed. GitHub Deploy runs these three
 commands in this order. Both sync stages preserve the server-generated
 `REVISION` marker as well as the private configuration, data, logs and reports.
-After pruning, `prune_remote_code.sh` restores the deployment root to the
-configured service account and mode `0700`, because rsync otherwise applies the
-checkout root metadata to that directory.
+After pruning, `prune_remote_code.sh` recursively restores the complete
+deployment tree to the configured service account and restores the deployment
+root to mode `0700`, because rsync otherwise applies checkout ownership to
+tracked directories such as `config/`. Private files remain excluded from both
+sync stages and keep their existing content and restrictive modes.
 
 The research, company-feed and media collectors expose only their production
 entry. Retired shadow collector code and units are not part of the current

@@ -31,6 +31,6 @@ remote_code_sync prune
 
 echo "==> restore deployment root ownership and mode"
 "${SSH[@]}" "set -euo pipefail
-chown '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' '$REMOTE_DIR'
+chown -R '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' '$REMOTE_DIR'
 chmod 700 '$REMOTE_DIR'
 "
