@@ -11,6 +11,7 @@ import json
 import os
 import sqlite3
 from collections import Counter, defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ MAX_ERROR_CHARS = 500
 MAX_REFERENCES_PER_RULE = 3
 MAX_ASSESSMENTS_PER_CALL = 32
 MAX_AUDIT_FILES = 5000
+AuditIdentity = tuple[int, int, str, str]
 
 
 def _text(value: Any, limit: int) -> str:
@@ -234,8 +236,19 @@ def write_web_projection(path: Path, *, apply: bool = False) -> bool:
     return True
 
 
-def load_web_projections(audit_dir: Path = DEFAULT_AUDIT_DIR) -> dict[int, list[dict[str, Any]]]:
-    result: dict[int, list[dict[str, Any]]] = defaultdict(list)
+def _audit_generated_for_review(generated_at: str, review_created_at: str) -> bool:
+    try:
+        generated = datetime.fromisoformat(generated_at)
+        review_created = datetime.fromisoformat(review_created_at)
+    except (TypeError, ValueError):
+        return False
+    if generated.tzinfo is None or review_created.tzinfo is None:
+        return False
+    return generated >= review_created
+
+
+def load_web_projections(audit_dir: Path = DEFAULT_AUDIT_DIR) -> dict[AuditIdentity, list[dict[str, Any]]]:
+    result: dict[AuditIdentity, list[dict[str, Any]]] = defaultdict(list)
     if not audit_dir.is_dir() or (os.stat(audit_dir).st_mode & 0o777) != 0o700:
         return result
     for path in sorted(audit_dir.glob("llm-decision-audit-*.json"))[:MAX_AUDIT_FILES]:
@@ -249,9 +262,12 @@ def load_web_projections(audit_dir: Path = DEFAULT_AUDIT_DIR) -> dict[int, list[
             continue
         try:
             review_id = int(audit.get("market_review_id") or 0)
+            market_item_id = int(audit.get("market_item_id") or 0)
         except (TypeError, ValueError):
             continue
-        if review_id <= 0:
+        source = str(audit.get("source") or "")
+        source_item_id = str(audit.get("source_item_id") or "")
+        if review_id <= 0 or market_item_id <= 0 or not source.strip() or not source_item_id.strip():
             continue
         projection = dict(audit["web_projection"])
         projection["generated_at"] = _text(audit.get("generated_at"), 64)
@@ -260,7 +276,7 @@ def load_web_projections(audit_dir: Path = DEFAULT_AUDIT_DIR) -> dict[int, list[
         projection["provider"] = _text(audit.get("provider"), 200)
         projection["rule_version"] = _text(audit.get("llm_decision_rule_version"), 120)
         projection["prompt_version"] = _text(audit.get("prompt_version"), 120)
-        result[review_id].append(projection)
+        result[(review_id, market_item_id, source, source_item_id)].append(projection)
     for attempts in result.values():
         attempts.sort(key=lambda item: str(item.get("generated_at") or ""))
     return result
@@ -318,7 +334,18 @@ def llm_decision_rows(
     for row in rows:
         decision = _json_dict_value(row["decision_json"])
         review_id = int(row["market_review_id"])
-        attempts = audit_map.get(review_id, [])
+        audit_identity = (
+            review_id,
+            int(row["market_item_id"]),
+            str(row["source"] or ""),
+            str(row["source_item_id"] or ""),
+        )
+        review_created_at = str(row["created_at"] or "")
+        attempts = [
+            attempt
+            for attempt in audit_map.get(audit_identity, [])
+            if _audit_generated_for_review(str(attempt.get("generated_at") or ""), review_created_at)
+        ]
         final_action = str(row["decision_action"] or "")
         review_status = str(row["review_status"] or "")
         model_status = "completed" if review_status == "succeeded" and final_action else "pending"
