@@ -58,6 +58,16 @@ DEFAULT_PORT = 8787
 BJ = ZoneInfo("Asia/Shanghai")
 HOLDINGS_PREVIEW_TTL_SECONDS = 15 * 60
 _HOLDINGS_PREVIEW_SIGNING_KEY = secrets.token_bytes(32)
+MARKET_ACTION_FILTERS = {"push", "daily", "archive", "baseline", "no_action"}
+MARKET_STATUS_FILTERS = {
+    "sent",
+    "failed",
+    "skipped",
+    "duplicate",
+    "pending",
+    "baseline",
+    "no_status",
+}
 
 
 SYSTEMCTL_SHOW_FIELDS = {
@@ -304,6 +314,16 @@ def normalized_market_feedback_filter(value: str) -> str:
     return normalized if normalized in {*FEEDBACK_LABELS, "unlabelled"} else ""
 
 
+def normalized_market_action_filter(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in MARKET_ACTION_FILTERS else ""
+
+
+def normalized_market_status_filter(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in MARKET_STATUS_FILTERS else ""
+
+
 def normalized_filter_values(values: str | list[str]) -> list[str]:
     raw_values = [values] if isinstance(values, str) else values
     return list(
@@ -371,6 +391,8 @@ def fetch_market_rows(
     time_basis: str = "seen",
     include_baseline: bool = False,
     feedback: str | list[str] = "",
+    action: str | list[str] = "",
+    status: str | list[str] = "",
     limit: int = 100,
     db_path: Path = DEFAULT_DB_PATH,
 ) -> list[dict[str, Any]]:
@@ -384,6 +406,16 @@ def fetch_market_rows(
     feedback_filters = list(
         dict.fromkeys(
             filter(None, map(normalized_market_feedback_filter, normalized_filter_values(feedback)))
+        )
+    )
+    action_filters = list(
+        dict.fromkeys(
+            filter(None, map(normalized_market_action_filter, normalized_filter_values(action)))
+        )
+    )
+    status_filters = list(
+        dict.fromkeys(
+            filter(None, map(normalized_market_status_filter, normalized_filter_values(status)))
         )
     )
     time_basis = normalized_market_time_basis(time_basis)
@@ -410,7 +442,11 @@ def fetch_market_rows(
                     projection=feedback_projection,
                 )
             rows.append(item)
-        if not feedback_filters and table_exists(conn, "seen_posts"):
+        if (
+            not feedback_filters
+            and (not action_filters or "no_action" in action_filters)
+            and table_exists(conn, "seen_posts")
+        ):
             seen_columns = table_columns(conn, "seen_posts")
             delivery_expr = "delivery_status" if "delivery_status" in seen_columns else "'sent'"
             where, params = market_information_where_clause(
@@ -426,6 +462,11 @@ def fetch_market_rows(
                 q_lower=q_lower,
                 q_fields=("text", "url"),
             )
+            if status_filters:
+                placeholders = ",".join("?" for _ in status_filters)
+                status_expr = f"CASE WHEN COALESCE({delivery_expr}, '') = '' THEN 'no_status' ELSE LOWER({delivery_expr}) END"
+                where += f" AND {status_expr} IN ({placeholders})"
+                params.extend(status_filters)
             for row in conn.execute(
                 f"""
                 SELECT source, post_id, url, text, published_at, first_seen_at,
@@ -470,6 +511,14 @@ def fetch_market_rows(
             current = set(item.get("feedback_labels") or [])
             matches_unlabelled = "unlabelled" in feedback_filters and item.get("feedback_state") == "unlabelled"
             if not matches_unlabelled and not current.intersection(feedback_filters):
+                return False
+        if action_filters:
+            item_action = str(item.get("decision_action") or "").strip().lower() or "no_action"
+            if item_action not in action_filters:
+                return False
+        if status_filters:
+            item_status = str(item.get("delivery_status") or "").strip().lower() or "no_status"
+            if item_status not in status_filters:
                 return False
         return True
 
@@ -1362,6 +1411,8 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                     include_baseline=(qs.get("include_baseline") or [""])[0].strip().lower()
                     in {"1", "true", "yes", "on"},
                     feedback=qs.get("feedback") or [],
+                    action=qs.get("action") or [],
+                    status=qs.get("status") or [],
                     limit=limit,
                 )
                 self.send_json({"ok": True, "items": items, "feedback_summary": market_feedback_summary(items)})

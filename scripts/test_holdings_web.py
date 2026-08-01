@@ -54,6 +54,7 @@ def insert_unified_result(
     admission_status: str = "admitted",
     admission_reason: str = "test",
     delivered: bool = False,
+    delivery_status: str = "",
     collection_class: str = "live",
     content_type: str = "article",
 ) -> int:
@@ -116,17 +117,18 @@ def insert_unified_result(
             ),
         ).lastrowid
     )
-    if delivered:
+    if delivered or delivery_status:
         if action is None:
             raise ValueError("delivered test result requires an action")
+        status = delivery_status or "sent"
         conn.execute(
             """
             INSERT INTO deliveries (
                 market_item_id,market_review_id,channel,status,
                 decision_action,attempted_at,sent_at,payload_json
-            ) VALUES (?, ?, 'feishu', 'sent', ?, ?, ?, '{}')
+            ) VALUES (?, ?, 'feishu', ?, ?, ?, ?, '{}')
             """,
-            (market_item_id, review_id, action, seen_at, seen_at),
+            (market_item_id, review_id, status, action, seen_at, seen_at if status == "sent" else ""),
         )
     return market_item_id
 
@@ -468,6 +470,59 @@ def test_information_center_search_filters_before_result_limit() -> None:
     assert rows[0]["source"] == "cls_telegraph_api"
 
 
+def test_information_center_action_and_status_filters_before_result_limit() -> None:
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
+        with sqlite3.connect(db_path) as conn:
+            insert_unified_result(
+                conn,
+                source="cls_telegraph_api",
+                item_id="old-push",
+                title="较早但已发送的 push",
+                published_at="2026-07-09T03:00:00+00:00",
+                seen_at="2026-07-09T03:00:00+00:00",
+                action="push",
+                delivered=True,
+            )
+            insert_unified_result(
+                conn,
+                source="cls_telegraph_api",
+                item_id="no-action",
+                title="未生成 action",
+                published_at="2026-07-09T03:01:00+00:00",
+                seen_at="2026-07-09T03:01:00+00:00",
+                action=None,
+                review_status="failed_retryable",
+            )
+            for index in range(301):
+                insert_unified_result(
+                    conn,
+                    source="cls_telegraph_api",
+                    item_id=f"new-archive-{index}",
+                    title=f"较新的 archive {index}",
+                    published_at="2026-07-09T15:00:00+00:00",
+                    seen_at=f"2026-07-09T15:00:00.{index:03d}+00:00",
+                    action="archive",
+                )
+
+        sent_push_rows = fetch_market_rows(
+            day="2026-07-09",
+            action="push",
+            status="sent",
+            db_path=db_path,
+        )
+        no_action_rows = fetch_market_rows(
+            day="2026-07-09",
+            action="no_action",
+            status="no_status",
+            db_path=db_path,
+        )
+
+    assert [row["id"] for row in sent_push_rows] == ["old-push"]
+    assert [row["id"] for row in no_action_rows] == ["no-action"]
+
+
 def test_information_center_date_range_is_inclusive_in_beijing_time() -> None:
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "surveil.sqlite3"
@@ -646,6 +701,8 @@ def test_information_center_does_not_duplicate_market_items() -> None:
 def test_list_filters_use_reusable_multi_selects() -> None:
     html = frontend_source()
     assert 'id="marketSource" class="multi-select"' in html
+    assert 'id="marketImportance" class="multi-select"' in html
+    assert 'id="marketStatus" class="multi-select"' in html
     assert 'id="marketFeedback" class="multi-select"' in html
     assert 'id="llmDecisionSource" class="multi-select"' in html
     assert 'id="llmDecisionAction" class="multi-select"' in html
@@ -663,6 +720,8 @@ def test_list_filters_use_reusable_multi_selects() -> None:
     assert 'initializeMultiSelect' in html
     assert 'selectedMultiSelectValues' in html
     assert "params.append('source', source)" in html
+    assert "params.append('action', action)" in html
+    assert "params.append('status', value)" in html
     assert "params.append('feedback', value)" in html
     assert 'marketTimeBasis' in html
     assert 'marketFromDate' in html

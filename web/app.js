@@ -733,6 +733,8 @@ async function loadMarketItems() {
     const timeBasis = document.getElementById('marketTimeBasis').value;
     const selectedSources = selectedMultiSelectValues('marketSource');
     const sources = selectedSources.length ? selectedSources : availableMultiSelectValues('marketSource');
+    const actions = selectedMultiSelectValues('marketImportance');
+    const statuses = selectedMultiSelectValues('marketStatus');
     const feedback = selectedMultiSelectValues('marketFeedback');
     const q = document.getElementById('marketQuery').value.trim();
     if (Boolean(startDate) !== Boolean(endDate)) {
@@ -749,6 +751,8 @@ async function loadMarketItems() {
     }
     if (timeBasis !== 'seen') params.set('time_basis', timeBasis);
     sources.forEach(source => params.append('source', source));
+    actions.forEach(action => params.append('action', action));
+    statuses.forEach(value => params.append('status', value));
     feedback.forEach(value => params.append('feedback', value));
     if (q) params.set('q', q);
     if (document.getElementById('marketIncludeBaseline').checked) params.set('include_baseline', '1');
@@ -1585,6 +1589,22 @@ async function confirmSave() {
 }
 
 initializeMultiSelect('marketSource', [], loadMarketItems);
+initializeMultiSelect('marketImportance', [
+  {value: 'push', label: 'push'},
+  {value: 'daily', label: 'daily'},
+  {value: 'archive', label: 'archive'},
+  {value: 'baseline', label: '基线'},
+  {value: 'no_action', label: '未生成 action'}
+], loadMarketItems);
+initializeMultiSelect('marketStatus', [
+  {value: 'sent', label: '已发送'},
+  {value: 'failed', label: '发送失败'},
+  {value: 'skipped', label: '已跳过'},
+  {value: 'duplicate', label: '重复未发送'},
+  {value: 'pending', label: '等待发送'},
+  {value: 'baseline', label: '基线'},
+  {value: 'no_status', label: '未记录状态'}
+], loadMarketItems);
 initializeMultiSelect('marketFeedback', [
   {value: 'high_value', label: '特别有用'},
   {value: 'duplicate', label: '重复'},
