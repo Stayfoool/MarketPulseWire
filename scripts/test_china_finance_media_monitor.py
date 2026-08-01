@@ -210,6 +210,46 @@ def test_fresh_schema_seen_item_lifecycle_baseline_and_retry() -> None:
         cfm.DB_PATH = original_db
 
 
+def test_baseline_records_each_source_item_id_despite_matching_titles() -> None:
+    original_db = cfm.DB_PATH
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            use_test_database(Path(tmpdir) / "test.sqlite3")
+            items = [
+                {
+                    "id": "livenews:100",
+                    "title": "早间要闻汇总",
+                    "url": "https://wallstreetcn.com/livenews/100",
+                    "published_at": "2026-07-01T20:30:00+00:00",
+                },
+                {
+                    "id": "livenews:200",
+                    "title": "早间要闻汇总",
+                    "url": "https://wallstreetcn.com/livenews/200",
+                    "published_at": "2026-07-02T20:30:00+00:00",
+                },
+            ]
+
+            assert cfm.save_new_items_with_retry(cfm.WALLSTREETCN_SOURCE, items) == []
+            assert cfm.save_new_items_with_retry(cfm.WALLSTREETCN_SOURCE, items) == []
+
+            with cfm.connect_db() as conn:
+                rows = conn.execute(
+                    "SELECT item_id, collection_class FROM seen_items "
+                    "WHERE source = ? ORDER BY item_id",
+                    (cfm.WALLSTREETCN_SOURCE,),
+                ).fetchall()
+                assert rows == [
+                    ("livenews:100", "baseline"),
+                    ("livenews:200", "baseline"),
+                ]
+                assert conn.execute("SELECT COUNT(*) FROM market_items").fetchone()[0] == 0
+                assert conn.execute("SELECT COUNT(*) FROM market_reviews").fetchone()[0] == 0
+                assert conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
+    finally:
+        cfm.DB_PATH = original_db
+
+
 def test_excluded_item_stops_before_decision_runtime() -> None:
     original_db = cfm.DB_PATH
     original_process = cfm.process_market_item
@@ -1023,6 +1063,7 @@ def main() -> int:
     test_cls_poll_interval_skips_recent_fetch()
     test_run_once_fetches_sources_independently()
     test_fresh_schema_seen_item_lifecycle_baseline_and_retry()
+    test_baseline_records_each_source_item_id_despite_matching_titles()
     test_excluded_item_stops_before_decision_runtime()
     test_admitted_item_reuses_normalized_item_and_processing_failure_retries()
     test_wallstreetcn_processability_retry_waits_for_source_rediscovery()
