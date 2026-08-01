@@ -219,7 +219,9 @@ After pruning, `prune_remote_code.sh` recursively restores the complete
 deployment tree to the configured service account and restores the deployment
 root to mode `0700`, because rsync otherwise applies checkout ownership to
 tracked directories such as `config/`. Private files remain excluded from both
-sync stages and keep their existing content and restrictive modes.
+sync stages and keep their existing content and restrictive modes. The portfolio
+lock and private portfolio backups are excluded with `portfolio.json`, so prune
+cannot remove active lock state or private backup history.
 
 The research, company-feed and media collectors expose only their production
 entry. Retired shadow collector code and units are not part of the current

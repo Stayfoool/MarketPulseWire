@@ -41,6 +41,8 @@ def test_shared_sync_modes_and_private_exclusions() -> None:
         "REVISION",
         "proxy.env",
         "config/portfolio.json",
+        "config/portfolio.lock",
+        "config/backups/",
         "config/llm_decision_rules.json",
         "config/source_profiles.local.json",
         "data/",
