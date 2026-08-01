@@ -1195,7 +1195,7 @@ def save_new_items(
                 selected_ids.add(item_id)
                 new_items.append(item)
             continue
-        if any(title_similarity(title, prior) for prior in seen_titles):
+        if not is_baseline and any(title_similarity(title, prior) for prior in seen_titles):
             continue
         if source in star_market_sources and is_star_market_daily_text(
             title,
