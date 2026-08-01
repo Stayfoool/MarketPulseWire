@@ -77,7 +77,7 @@ def test_prune_requires_matching_systemd_revision() -> None:
 def test_prune_restores_deployment_root_metadata() -> None:
     prune = (ROOT / "scripts" / "prune_remote_code.sh").read_text(encoding="utf-8")
     sync = "remote_code_sync prune"
-    owner = "chown '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' '$REMOTE_DIR'"
+    owner = "chown -R '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' '$REMOTE_DIR'"
     mode = "chmod 700 '$REMOTE_DIR'"
     assert prune.count(owner) == 1
     assert prune.count(mode) == 1
