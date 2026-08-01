@@ -470,7 +470,12 @@ ValueList runs at 05:00 and 21:00 Beijing time. The installer restarts the timer
 to load those times only when the timer was already enabled; it does not enable
 a deliberately disabled ValueList timer. Browser launches retain bounded Playwright error and profile-lock
 diagnostics without page content, cookies or browser storage. One timer run uses
-one persistent context to collect every enabled ValueList list page, then
+one persistent context to collect every enabled ValueList list page. A source with
+no existing baseline reads only its first page. Later runs follow the page's normal
+next-page links until a complete page contains an existing source item ID; the
+existing `seen_items` identities are the only pagination boundary, and reaching the
+fixed safety limit without that boundary fails the source rather than advancing a
+second cursor. The same context then
 collects visible first-page previews only for new, `pending`/`failed_retryable`
 or explicitly rechecked entries. Completed-but-unpushed entries are not
 automatically reprocessed unless `VALUE_DIRECTORY_RECHECK_UNPUSHED=1` is

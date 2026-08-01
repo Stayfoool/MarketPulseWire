@@ -31,6 +31,8 @@ CN_TZ = timezone(timedelta(hours=8))
 LIST_EMPTY_WAIT_MS = 15_000
 BROWSER_CLOSE_WAIT_SECONDS = 5.0
 BROWSER_DIAGNOSTIC_LIMIT = 800
+LIST_PAGE_ENTRY_LIMIT = 100
+LIST_MAX_PAGES = 10
 
 WAF_PATTERNS = (
     "人机验证",
@@ -475,26 +477,56 @@ def collect_entries_from_page(
     limit: int,
     timeout_ms: int,
     timeout_error: type[Exception],
+    known_item_ids: set[str] | None = None,
+    max_pages: int = LIST_MAX_PAGES,
 ) -> list[dict[str, Any]]:
-    page.goto(source.list_url, wait_until="domcontentloaded", timeout=timeout_ms)
-    page.wait_for_timeout(int(os.getenv("VALUE_DIRECTORY_WAF_SETTLE_MS", "6000") or "6000"))
-    payload = evaluate_list_payload_with_empty_wait(
-        page,
-        max(1, min(int(limit), 100)),
-        timeout_ms,
-        timeout_error=timeout_error,
-    )
-    state = classify_page_state(
-        f"{payload.get('title', '')}\n{payload.get('bodySample', '')}",
-        article_count=int(payload.get("articleCount") or 0),
-        url=str(payload.get("url") or ""),
-    )
-    if state != "ok":
-        raise AccessBlocked(f"价值目录列表页不可用：state={state}")
-    entries = dedupe_entries(list(payload.get("entries") or []), source)
-    if not entries:
-        raise AccessBlocked("价值目录列表页未解析到研报条目。")
-    return entries
+    known_item_ids = set(known_item_ids or ())
+    page_url = source.list_url
+    visited_urls: set[str] = set()
+    collected: dict[str, dict[str, Any]] = {}
+    safe_max_pages = max(1, int(max_pages))
+    for page_number in range(1, safe_max_pages + 1):
+        if page_url in visited_urls:
+            raise AccessBlocked(f"价值目录分页重复：{page_url}")
+        visited_urls.add(page_url)
+        page.goto(page_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        page.wait_for_timeout(int(os.getenv("VALUE_DIRECTORY_WAF_SETTLE_MS", "6000") or "6000"))
+        payload = evaluate_list_payload_with_empty_wait(
+            page,
+            LIST_PAGE_ENTRY_LIMIT,
+            timeout_ms,
+            timeout_error=timeout_error,
+        )
+        state = classify_page_state(
+            f"{payload.get('title', '')}\n{payload.get('bodySample', '')}",
+            article_count=int(payload.get("articleCount") or 0),
+            url=str(payload.get("url") or ""),
+        )
+        if state != "ok":
+            raise AccessBlocked(f"价值目录列表页不可用：state={state}")
+        raw_entries = list(payload.get("entries") or [])
+        if int(payload.get("articleCount") or 0) > len(raw_entries):
+            raise AccessBlocked(
+                f"价值目录单页条目超过解析上限 {LIST_PAGE_ENTRY_LIMIT}，不能按完整页面判断停止"
+            )
+        entries = dedupe_entries(raw_entries, source)
+        if not entries:
+            raise AccessBlocked("价值目录列表页未解析到研报条目。")
+        for item in entries:
+            collected.setdefault(str(item["id"]), item)
+        if not known_item_ids or any(str(item["id"]) in known_item_ids for item in entries):
+            return list(collected.values())
+
+        next_page_url = str(payload.get("nextPageUrl") or "").strip()
+        if not next_page_url:
+            return list(collected.values())
+        expected_prefix = source.list_url.rstrip("/") + "/page/"
+        if not next_page_url.startswith(expected_prefix) or not next_page_url[len(expected_prefix) :].isdigit():
+            raise AccessBlocked(f"价值目录下一页链接异常：{next_page_url[:240]}")
+        if page_number == safe_max_pages:
+            raise AccessBlocked(f"价值目录连续 {safe_max_pages} 页未遇到已见来源条目 ID")
+        page_url = next_page_url
+    raise AssertionError("unreachable")
 
 
 def collect_entries(limit: int = 30, url: str | None = None, source_id: str = SOURCE_ID) -> list[dict[str, Any]]:
@@ -577,6 +609,7 @@ def collect_sources_with_previews(
     *,
     limit: int,
     preview_selector: Callable[[ValueDirectorySource, dict[str, Any]], bool],
+    known_item_ids_by_source: dict[str, set[str]] | None = None,
     playwright_factory: Callable[[], Any] | None = None,
     timeout_error: type[Exception] | None = None,
 ) -> ValueDirectoryBrowserCollection:
@@ -595,6 +628,7 @@ def collect_sources_with_previews(
     previews: dict[tuple[str, str], dict[str, Any]] = {}
     preview_errors: dict[tuple[str, str], str] = {}
     config = browser_config()
+    known_item_ids_by_source = known_item_ids_by_source or {}
     with playwright_factory() as playwright:
         context = launch_browser_context(playwright, config)
         try:
@@ -608,6 +642,7 @@ def collect_sources_with_previews(
                         limit=limit,
                         timeout_ms=config.timeout_ms,
                         timeout_error=timeout_error,
+                        known_item_ids=known_item_ids_by_source.get(source_id, set()),
                     )
                 except Exception as exc:  # noqa: BLE001 - retain per-source failure and continue.
                     source_errors[source_id] = f"{type(exc).__name__}: {compact_browser_error(exc)}"
@@ -711,7 +746,11 @@ def evaluate_detail_payload(page: Any) -> dict[str, Any]:
 def evaluate_list_payload(page: Any, safe_limit: int, timeout_ms: int) -> dict[str, Any]:
     script = """(limit) => {
         const text = document.body?.innerText || "";
-        const articles = Array.from(document.querySelectorAll("article")).slice(0, limit);
+        const allArticles = Array.from(document.querySelectorAll("article"));
+        const articles = allArticles.slice(0, limit);
+        const nextPage = Array.from(document.querySelectorAll("a[href]")).find(link =>
+            /下一页/.test((link.textContent || "").trim()) || link.classList.contains("next")
+        );
         const entries = articles.map(article => {
             const link = article.querySelector("h2 a") || article.querySelector("a[href]");
             const time = article.querySelector("time");
@@ -725,7 +764,8 @@ def evaluate_list_payload(page: Any, safe_limit: int, timeout_ms: int) -> dict[s
             url: location.href,
             title: document.title || "",
             bodySample: text.slice(0, 1200),
-            articleCount: articles.length,
+            articleCount: allArticles.length,
+            nextPageUrl: nextPage?.href || "",
             entries
         };
     }"""

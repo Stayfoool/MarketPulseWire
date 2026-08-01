@@ -24,11 +24,13 @@ from market_flow import MarketProcessOutcome
 from market_db import init_db
 from source_profiles import runtime_source_profile
 from value_directory_browser import (
+    AccessBlocked,
     BrowserConfig,
     BrowserLaunchFailed,
     BrowserShutdownTimeout,
     classify_page_state,
     close_browser_context,
+    collect_entries_from_page,
     collect_sources_with_previews,
     dedupe_entries,
     evaluate_list_payload_with_empty_wait,
@@ -128,6 +130,174 @@ def test_persistent_empty_list_remains_empty_after_bounded_wait() -> None:
     payload = evaluate_list_payload_with_empty_wait(page, 30, 5_000, timeout_error=_ListWaitTimeout)
     assert payload["articleCount"] == 0
     assert page.waits == [("article", 5_000)]
+
+
+class _PaginatedPage:
+    def __init__(self, payloads: dict[str, dict[str, object]]) -> None:
+        self.payloads = payloads
+        self.current_url = ""
+        self.gotos: list[str] = []
+        self.evaluate_limits: list[int] = []
+
+    def goto(self, url: str, **_kwargs) -> None:
+        self.current_url = url
+        self.gotos.append(url)
+
+    def wait_for_timeout(self, _milliseconds: int) -> None:
+        return None
+
+    def evaluate(self, _script, limit):
+        self.evaluate_limits.append(limit)
+        return self.payloads[self.current_url]
+
+
+def _value_directory_page(source, ids: list[str], *, next_page_url: str = "") -> dict[str, object]:
+    return {
+        "url": source.list_url,
+        "title": "价值目录",
+        "bodySample": "正常页面",
+        "articleCount": len(ids),
+        "nextPageUrl": next_page_url,
+        "entries": [
+            {
+                "title": f"Synthetic report {item_id}",
+                "url": f"https://www.valuelist.cn/{item_id}.html",
+                "published": "2026-08-01",
+            }
+            for item_id in ids
+        ],
+    }
+
+
+def test_value_directory_baseline_reads_only_first_page() -> None:
+    source = source_config()
+    second_url = source.list_url + "/page/2"
+    page = _PaginatedPage(
+        {
+            source.list_url: _value_directory_page(source, ["101", "102"], next_page_url=second_url),
+            second_url: _value_directory_page(source, ["91", "92"]),
+        }
+    )
+    entries = collect_entries_from_page(
+        page,
+        source,
+        limit=30,
+        timeout_ms=45_000,
+        timeout_error=TimeoutError,
+        known_item_ids=set(),
+    )
+    assert [item["id"] for item in entries] == ["101", "102"]
+    assert page.gotos == [source.list_url]
+
+
+def test_value_directory_pagination_reads_complete_page_despite_cli_limit() -> None:
+    source = source_config()
+    page = _PaginatedPage(
+        {
+            source.list_url: _value_directory_page(source, ["501", "500"]),
+        }
+    )
+    entries = collect_entries_from_page(
+        page,
+        source,
+        limit=1,
+        timeout_ms=45_000,
+        timeout_error=TimeoutError,
+        known_item_ids={"500"},
+    )
+    assert [item["id"] for item in entries] == ["501", "500"]
+    assert page.evaluate_limits == [100]
+
+
+def test_value_directory_paginates_until_complete_page_contains_known_id() -> None:
+    source = source_config()
+    second_url = source.list_url + "/page/2"
+    third_url = source.list_url + "/page/3"
+    page = _PaginatedPage(
+        {
+            source.list_url: _value_directory_page(source, ["201", "202"], next_page_url=second_url),
+            second_url: _value_directory_page(source, ["199", "198"], next_page_url=third_url),
+            third_url: _value_directory_page(source, ["old"]),
+        }
+    )
+    entries = collect_entries_from_page(
+        page,
+        source,
+        limit=30,
+        timeout_ms=45_000,
+        timeout_error=TimeoutError,
+        known_item_ids={"198"},
+    )
+    assert [item["id"] for item in entries] == ["201", "202", "199", "198"]
+    assert page.gotos == [source.list_url, second_url]
+
+
+def test_value_directory_known_first_page_does_not_import_older_pages() -> None:
+    source = source_config()
+    second_url = source.list_url + "/page/2"
+    page = _PaginatedPage(
+        {
+            source.list_url: _value_directory_page(source, ["401", "400"], next_page_url=second_url),
+            second_url: _value_directory_page(source, ["399"]),
+        }
+    )
+    entries = collect_entries_from_page(
+        page,
+        source,
+        limit=30,
+        timeout_ms=45_000,
+        timeout_error=TimeoutError,
+        known_item_ids={"400"},
+    )
+    assert [item["id"] for item in entries] == ["401", "400"]
+    assert page.gotos == [source.list_url]
+
+
+def test_value_directory_page_limit_fails_without_known_id_boundary() -> None:
+    source = source_config()
+    second_url = source.list_url + "/page/2"
+    third_url = source.list_url + "/page/3"
+    page = _PaginatedPage(
+        {
+            source.list_url: _value_directory_page(source, ["301"], next_page_url=second_url),
+            second_url: _value_directory_page(source, ["299"], next_page_url=third_url),
+        }
+    )
+    try:
+        collect_entries_from_page(
+            page,
+            source,
+            limit=30,
+            timeout_ms=45_000,
+            timeout_error=TimeoutError,
+            known_item_ids={"known"},
+            max_pages=2,
+        )
+    except AccessBlocked as exc:
+        assert "2 页未遇到已见来源条目 ID" in str(exc)
+    else:
+        raise AssertionError("pagination must fail when the known-ID boundary is not reached")
+    assert page.gotos == [source.list_url, second_url]
+
+
+def test_value_directory_truncated_page_fails_before_boundary_check() -> None:
+    source = source_config()
+    payload = _value_directory_page(source, [str(item_id) for item_id in range(100, 200)])
+    payload["articleCount"] = 101
+    page = _PaginatedPage({source.list_url: payload})
+    try:
+        collect_entries_from_page(
+            page,
+            source,
+            limit=30,
+            timeout_ms=45_000,
+            timeout_error=TimeoutError,
+            known_item_ids={"100"},
+        )
+    except AccessBlocked as exc:
+        assert "单页条目超过解析上限 100" in str(exc)
+    else:
+        raise AssertionError("truncated page must not establish the known-ID boundary")
 
 
 def test_waf_and_login_states_do_not_wait_for_articles() -> None:
@@ -808,11 +978,18 @@ def test_run_finishes_browser_collection_before_source_processing() -> None:
     events: list[str] = []
     original_collect = value_directory_monitor.collect_sources_with_previews
     original_enabled = value_directory_monitor.source_profile_enabled
+    original_states = value_directory_monitor.load_seen_item_states
     original_process = value_directory_monitor.process_collected_source
     try:
         value_directory_monitor.source_profile_enabled = lambda _source_id: True
+        value_directory_monitor.load_seen_item_states = lambda source_id: {
+            f"known-{source_id}": ("succeeded", "succeeded")
+        }
 
-        def fake_collect(source_ids, **_kwargs):
+        def fake_collect(source_ids, **kwargs):
+            assert kwargs["known_item_ids_by_source"] == {
+                source_id: {f"known-{source_id}"} for source_id in source_ids
+            }
             events.extend(["browser_start", "browser_close"])
             return types.SimpleNamespace(
                 entries_by_source={source_id: [] for source_id in source_ids},
@@ -842,6 +1019,7 @@ def test_run_finishes_browser_collection_before_source_processing() -> None:
     finally:
         value_directory_monitor.collect_sources_with_previews = original_collect
         value_directory_monitor.source_profile_enabled = original_enabled
+        value_directory_monitor.load_seen_item_states = original_states
         value_directory_monitor.process_collected_source = original_process
 
     assert payload["ok"] is True
@@ -1135,6 +1313,12 @@ def main() -> int:
     test_page_state_detection_separates_waf_login_and_empty()
     test_empty_list_waits_once_for_delayed_articles()
     test_persistent_empty_list_remains_empty_after_bounded_wait()
+    test_value_directory_baseline_reads_only_first_page()
+    test_value_directory_pagination_reads_complete_page_despite_cli_limit()
+    test_value_directory_paginates_until_complete_page_contains_known_id()
+    test_value_directory_known_first_page_does_not_import_older_pages()
+    test_value_directory_page_limit_fails_without_known_id_boundary()
+    test_value_directory_truncated_page_fails_before_boundary_check()
     test_waf_and_login_states_do_not_wait_for_articles()
     test_profile_lock_state_distinguishes_live_and_dead_same_host_owner()
     test_profile_lock_state_finds_registered_socket_holder()

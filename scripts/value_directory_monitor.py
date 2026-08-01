@@ -139,8 +139,12 @@ def production_preview_selector(
     *,
     notify_baseline: bool,
     recheck_item_id: str = "",
+    states_by_source: dict[str, dict[str, tuple[str, str]]] | None = None,
 ) -> Callable[[ValueDirectorySource, dict[str, Any]], bool]:
-    states_by_source = {source_id: load_seen_item_states(source_id) for source_id in source_ids}
+    if states_by_source is None:
+        states_by_source = {
+            source_id: load_seen_item_states(source_id) for source_id in source_ids
+        }
     unpushed_by_source = (
         {source_id: load_unpushed_review_ids(source_id) for source_id in source_ids}
         if recheck_unpushed_enabled()
@@ -597,13 +601,20 @@ def run(
     collection_error: Exception | None = None
     if enabled_sources:
         try:
+            states_by_source = {
+                source_id: load_seen_item_states(source_id) for source_id in enabled_sources
+            }
             collection = collect_sources_with_previews(
                 enabled_sources,
                 limit=limit,
+                known_item_ids_by_source={
+                    source_id: set(states) for source_id, states in states_by_source.items()
+                },
                 preview_selector=production_preview_selector(
                     enabled_sources,
                     notify_baseline=notify_baseline,
                     recheck_item_id=recheck_item_id,
+                    states_by_source=states_by_source,
                 ),
             )
         except Exception as exc:  # noqa: BLE001 - one browser session owns all enabled sources.
@@ -691,7 +702,12 @@ def main() -> int:
     load_env(ENV_PATH)
     parser = argparse.ArgumentParser(description="Monitor ValueList international-bank stock research index.")
     parser.add_argument("--notify-baseline", action="store_true", help="首次建立基线时也处理旧条目。默认只建立基线。")
-    parser.add_argument("--limit", type=int, default=30, help="读取列表页前 N 条。")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=30,
+        help="兼容参数；正常分页采集固定读取完整页面（单页最多 100 条）。",
+    )
     parser.add_argument(
         "--source",
         action="append",
