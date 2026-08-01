@@ -252,36 +252,6 @@ CREATE TABLE IF NOT EXISTS rule_alert_dedup (
 CREATE INDEX IF NOT EXISTS idx_rule_alert_dedup_rule_created
 ON rule_alert_dedup(rule_id, created_at);
 
-CREATE TABLE IF NOT EXISTS stock_relations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    symbol TEXT NOT NULL,
-    symbol_name TEXT,
-    related_symbol TEXT NOT NULL,
-    related_name TEXT,
-    relation_type TEXT NOT NULL,
-    impact_direction TEXT,
-    theme TEXT,
-    reason TEXT,
-    confidence TEXT,
-    relation_strength TEXT,
-    valid_from TEXT,
-    valid_to TEXT,
-    last_review_verdict TEXT,
-    hit_count INTEGER NOT NULL DEFAULT 0,
-    miss_count INTEGER NOT NULL DEFAULT 0,
-    source TEXT,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    raw_json TEXT,
-    updated_at TEXT NOT NULL,
-    UNIQUE(symbol, related_symbol, relation_type)
-);
-
-CREATE INDEX IF NOT EXISTS idx_stock_relations_symbol
-ON stock_relations(symbol, enabled);
-
-CREATE INDEX IF NOT EXISTS idx_stock_relations_related
-ON stock_relations(related_symbol, enabled);
-
 """
 
 

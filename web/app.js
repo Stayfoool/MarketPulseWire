@@ -7,8 +7,6 @@ let holdingsOperationId = 0;
 let holdingsBusyMode = '';
 // 拖拽排序时记录被拖动行的原始下标，null 表示当前未拖动。
 let dragIndex = null;
-let managedRelations = [];
-let editingRelationId = null;
 let sourceProfileCache = {categories: [], profiles: []};
 let sourceFilterOptionsLoaded = false;
 let marketOperationId = 0;
@@ -388,7 +386,6 @@ function showView(name) {
   if (name === 'llm-decisions') loadLlmDecisionsView();
   if (name === 'rules') loadCurrentRules();
   if (name === 'feedback') loadFeedbackQuality();
-  if (name === 'relations') loadRelationManager();
   if (name === 'sources') {
     loadSourceProfiles();
     loadHealthSummary();
@@ -922,184 +919,6 @@ async function loadLlmDecisions() {
         </tr>
       `;
     }).join('') || '<tr><td colspan="6">没有匹配的大模型决策。</td></tr>';
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-async function loadRelationManager() {
-  try {
-    const params = new URLSearchParams();
-    const q = document.getElementById('relationManageQuery') ? document.getElementById('relationManageQuery').value.trim() : '';
-    const enabled = document.getElementById('relationManageEnabled') ? document.getElementById('relationManageEnabled').value : 'all';
-    if (q) params.set('q', q);
-    if (enabled) params.set('enabled', enabled);
-    const data = await api('/api/relations?' + params.toString());
-    managedRelations = data.relations || [];
-    document.getElementById('relationManageRows').innerHTML = managedRelations.map(item => `
-      <tr>
-        <td>${badge(item.enabled ? '启用' : '停用')}<div class="hint">${formatTime(item.updated_at)}</div></td>
-        <td><strong>${escapeHtml(item.symbol || '')}</strong><div class="hint">${escapeHtml(item.symbol_name || '')}</div></td>
-        <td><strong>${escapeHtml(item.related_symbol || '')}</strong><div class="hint">${escapeHtml(item.related_name || '')}</div></td>
-        <td>${badge(item.impact_direction || '')}<div class="hint">强度 ${escapeHtml(item.relation_strength || '-')} / 置信 ${escapeHtml(item.confidence || '-')}</div></td>
-        <td class="summary-cell">
-          <div>${escapeHtml(item.relation_type || '')} / ${escapeHtml(item.theme || '')}</div>
-          <div class="hint">${escapeHtml(shortText(item.reason || '', 220))}</div>
-          <div class="hint">${escapeHtml(item.source || '')} ${item.valid_to ? ' / 有效至 ' + escapeHtml(item.valid_to) : ''}</div>
-        </td>
-        <td>${escapeHtml(item.last_review_verdict || '-')}<div class="hint">hit ${item.hit_count || 0} / miss ${item.miss_count || 0}</div></td>
-        <td>
-          <button onclick="editRelation(${item.id})">编辑</button>
-          <button onclick="toggleRelation(${item.id}, ${item.enabled ? 'false' : 'true'})">${item.enabled ? '停用' : '启用'}</button>
-          <button class="danger" onclick="deleteRelationRow(${item.id})">删除</button>
-        </td>
-      </tr>
-    `).join('') || '<tr><td colspan="7">暂无关系映射。</td></tr>';
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-function clearRelationForm() {
-  editingRelationId = null;
-  document.getElementById('relationModalTitle').textContent = '新增关系';
-  ['relSymbol','relSymbolName','relRelatedSymbol','relRelatedName','relRelationType','relTheme','relConfidence','relStrength','relSource','relValidFrom','relValidTo','relReason'].forEach(id => {
-    document.getElementById(id).value = '';
-  });
-  document.getElementById('relImpactDirection').value = 'positive';
-  document.getElementById('relEnabled').checked = true;
-}
-
-function openRelationModal(item=null) {
-  clearRelationForm();
-  if (item) {
-    editingRelationId = item.id;
-    document.getElementById('relationModalTitle').textContent = '编辑关系';
-    document.getElementById('relSymbol').value = item.symbol || '';
-    document.getElementById('relSymbolName').value = item.symbol_name || '';
-    document.getElementById('relRelatedSymbol').value = item.related_symbol || '';
-    document.getElementById('relRelatedName').value = item.related_name || '';
-    document.getElementById('relRelationType').value = item.relation_type || '';
-    document.getElementById('relImpactDirection').value = item.impact_direction || 'uncertain';
-    document.getElementById('relTheme').value = item.theme || '';
-    document.getElementById('relConfidence').value = item.confidence || '';
-    document.getElementById('relStrength').value = item.relation_strength || '';
-    document.getElementById('relSource').value = item.source || 'web';
-    document.getElementById('relValidFrom').value = item.valid_from || '';
-    document.getElementById('relValidTo').value = item.valid_to || '';
-    document.getElementById('relReason').value = item.reason || '';
-    document.getElementById('relEnabled').checked = item.enabled !== false;
-  } else {
-    document.getElementById('relSource').value = 'web';
-  }
-  document.getElementById('relationModal').style.display = 'flex';
-}
-
-function closeRelationModal() {
-  document.getElementById('relationModal').style.display = 'none';
-}
-
-function editRelation(id) {
-  const item = managedRelations.find(row => Number(row.id) === Number(id));
-  if (!item) {
-    showStatus('没有找到这条关系。', 'err');
-    return;
-  }
-  openRelationModal(item);
-}
-
-function relationFormPayload() {
-  return {
-    symbol: document.getElementById('relSymbol').value.trim(),
-    symbol_name: document.getElementById('relSymbolName').value.trim(),
-    related_symbol: document.getElementById('relRelatedSymbol').value.trim(),
-    related_name: document.getElementById('relRelatedName').value.trim(),
-    relation_type: document.getElementById('relRelationType').value.trim() || 'related',
-    impact_direction: document.getElementById('relImpactDirection').value.trim(),
-    theme: document.getElementById('relTheme').value.trim(),
-    confidence: document.getElementById('relConfidence').value.trim(),
-    relation_strength: document.getElementById('relStrength').value.trim(),
-    source: document.getElementById('relSource').value.trim() || 'web',
-    valid_from: document.getElementById('relValidFrom').value.trim(),
-    valid_to: document.getElementById('relValidTo').value.trim(),
-    reason: document.getElementById('relReason').value.trim(),
-    enabled: document.getElementById('relEnabled').checked
-  };
-}
-
-async function saveRelationFromModal() {
-  try {
-    const payload = {id: editingRelationId, relation: relationFormPayload()};
-    const data = await api('/api/relations/save', {method: 'POST', body: JSON.stringify(payload)});
-    closeRelationModal();
-    await loadRelationManager();
-    showStatus(`关系已保存并同步 JSON 快照：${(data.snapshot || {}).path || ''}`);
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-async function deleteRelationRow(id) {
-  if (!confirm('确认删除这条关系映射？')) return;
-  try {
-    const data = await api('/api/relations/delete', {method: 'POST', body: JSON.stringify({id})});
-    await loadRelationManager();
-    showStatus(`关系已删除并同步 JSON 快照：${(data.snapshot || {}).path || ''}`);
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-async function toggleRelation(id, enabled) {
-  try {
-    const data = await api('/api/relations/toggle', {method: 'POST', body: JSON.stringify({id, enabled})});
-    await loadRelationManager();
-    showStatus(`关系已${enabled ? '启用' : '停用'}并同步 JSON 快照：${(data.snapshot || {}).path || ''}`);
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-async function exportRelationJson() {
-  try {
-    const data = await api('/api/relations/export', {method: 'POST', body: JSON.stringify({})});
-    showStatus(`已导出 ${(data.snapshot || {}).count || 0} 条关系到 ${(data.snapshot || {}).path || ''}`);
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-async function importRelationJson() {
-  if (!confirm('确认从私有 config/stock_relations.json 导入并覆盖同 key 关系？')) return;
-  try {
-    const data = await api('/api/relations/import', {method: 'POST', body: JSON.stringify({})});
-    await loadRelationManager();
-    showStatus(`导入完成：读取 ${data.counts.read} 条，写入 ${data.counts.imported} 条，跳过 ${data.counts.skipped} 条。`);
-  } catch (err) {
-    showStatus(err.message, 'err');
-  }
-}
-
-async function diffRelationJson() {
-  try {
-    const data = await api('/api/relations/diff');
-    const diff = data.diff || {};
-    const text = [
-      `数据库：${diff.db_count || 0} 条`,
-      `JSON：${diff.json_count || 0} 条`,
-      `JSON 无效行：${diff.invalid_json_rows || 0}`,
-      '',
-      `仅数据库存在：${(diff.only_in_db || []).length}`,
-      JSON.stringify(diff.only_in_db || [], null, 2),
-      '',
-      `仅 JSON 存在：${(diff.only_in_json || []).length}`,
-      JSON.stringify(diff.only_in_json || [], null, 2),
-      '',
-      `内容不同：${(diff.changed || []).length}`,
-      JSON.stringify(diff.changed || [], null, 2)
-    ].join('\n');
-    document.getElementById('diffText').textContent = text;
-    document.getElementById('diffModal').style.display = 'flex';
   } catch (err) {
     showStatus(err.message, 'err');
   }

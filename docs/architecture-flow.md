@@ -133,8 +133,7 @@ Current stores are:
 - `source_state`, `source_health`, `x_stream_health`: bounded runtime state and
   health.
 - `rule_alert_dedup`: current delivery dedup reservations.
-- `portfolio_holdings`, `stocks`, `stock_relations`: Web-managed portfolio and
-  relationship data.
+- `portfolio_holdings`, `stocks`: Web-managed portfolio data.
 
 There is no alias table, no information-type identity mapping, no mirror trigger
 from `seen_items`, and no old result table. Readers,

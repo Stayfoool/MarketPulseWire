@@ -43,16 +43,6 @@ from current_rules_web import current_rules_payload
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
 from settings_store import save_settings, settings_payload
 from source_profiles import save_source_profile_config, source_profiles_payload
-from stock_relations import (
-    DEFAULT_CONFIG_PATH as STOCK_RELATIONS_CONFIG_PATH,
-    delete_relation,
-    diff_relations,
-    export_relations,
-    import_relations,
-    list_relations,
-    save_relation,
-    set_relation_enabled,
-)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -183,7 +173,6 @@ LOG_FILES = [
     "company-disclosures.err.log",
     "holdings-web.err.log",
     "feishu-feedback.err.log",
-    "stock-relations-import.err.log",
 ]
 
 
@@ -513,15 +502,6 @@ def fetch_llm_decision_rows(
             limit=limit,
         )
     return {"rows": rows, "summary": llm_decision_summary(rows)}
-
-
-def fetch_relation_rows(q: str = "", limit: int = 100, enabled: str = "all") -> list[dict[str, Any]]:
-    return list_relations(db_path=DEFAULT_DB_PATH, q=q, enabled=enabled, limit=limit)
-
-
-def relation_snapshot_payload() -> dict[str, Any]:
-    exported = export_relations(db_path=DEFAULT_DB_PATH, config_path=STOCK_RELATIONS_CONFIG_PATH)
-    return {"snapshot": exported}
 
 
 def overview_payload(day: str = "") -> dict[str, Any]:
@@ -1420,42 +1400,6 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 return
             self.send_json({"ok": True, **current_rules_payload()})
             return
-        if parsed.path == "/api/relations":
-            if not self.require_auth():
-                return
-            try:
-                qs = parse_qs(parsed.query)
-                limit_raw = (qs.get("limit") or ["300"])[0]
-                try:
-                    limit = int(limit_raw)
-                except ValueError:
-                    limit = 300
-                self.send_json(
-                    {
-                        "ok": True,
-                        "relations": fetch_relation_rows(
-                            q=(qs.get("q") or [""])[0],
-                            enabled=(qs.get("enabled") or ["all"])[0],
-                            limit=limit,
-                        ),
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001
-                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
-            return
-        if parsed.path == "/api/relations/diff":
-            if not self.require_auth():
-                return
-            try:
-                self.send_json(
-                    {
-                        "ok": True,
-                        "diff": diff_relations(db_path=DEFAULT_DB_PATH, config_path=STOCK_RELATIONS_CONFIG_PATH),
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001
-                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
-            return
         if parsed.path == "/api/health":
             if not self.require_auth():
                 return
@@ -1570,50 +1514,6 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                     self.send_json(response, HTTPStatus.BAD_REQUEST)
                 else:
                     self.send_json(response)
-                return
-            if parsed.path == "/api/relations/save":
-                relation = payload.get("relation")
-                if not isinstance(relation, dict):
-                    raise HoldingsError("请求缺少 relation 对象")
-                relation_id = payload.get("id")
-                saved_relation = save_relation(
-                    relation,
-                    db_path=DEFAULT_DB_PATH,
-                    relation_id=int(relation_id) if relation_id else None,
-                )
-                response = {"ok": True, "relation": saved_relation}
-                response.update(relation_snapshot_payload())
-                self.send_json(response)
-                return
-            if parsed.path == "/api/relations/delete":
-                relation_id = int(payload.get("id") or 0)
-                if relation_id <= 0:
-                    raise HoldingsError("请求缺少有效 id")
-                deleted = delete_relation(relation_id=relation_id, db_path=DEFAULT_DB_PATH)
-                response = {"ok": True, "deleted": deleted}
-                response.update(relation_snapshot_payload())
-                self.send_json(response)
-                return
-            if parsed.path == "/api/relations/toggle":
-                relation_id = int(payload.get("id") or 0)
-                if relation_id <= 0:
-                    raise HoldingsError("请求缺少有效 id")
-                enabled = bool(payload.get("enabled"))
-                relation = set_relation_enabled(relation_id=relation_id, enabled=enabled, db_path=DEFAULT_DB_PATH)
-                response = {"ok": True, "relation": relation}
-                response.update(relation_snapshot_payload())
-                self.send_json(response)
-                return
-            if parsed.path == "/api/relations/export":
-                response = {"ok": True}
-                response.update(relation_snapshot_payload())
-                self.send_json(response)
-                return
-            if parsed.path == "/api/relations/import":
-                counts = import_relations(db_path=DEFAULT_DB_PATH, config_path=STOCK_RELATIONS_CONFIG_PATH)
-                response = {"ok": True, "counts": counts}
-                response.update(relation_snapshot_payload())
-                self.send_json(response)
                 return
             items = payload.get("holdings")
             if not isinstance(items, list):

@@ -28,12 +28,8 @@ python3 -m venv .venv
 pip install -r requirements.txt
 cp .env.example .env
 cp config/portfolio.example.json config/portfolio.json
-# Optional private supply-chain/customer/competitor relation mappings:
-cp config/stock_relations.example.json config/stock_relations.json
 python scripts/market_db.py
 ```
-
-Relationship mappings can also be created and edited later from the Web workbench's `关系映射` tab. The SQLite database is the live source; `config/stock_relations.json` is a gitignored private seed/backup snapshot.
 
 Edit `.env`, then run the local Web workbench when needed:
 

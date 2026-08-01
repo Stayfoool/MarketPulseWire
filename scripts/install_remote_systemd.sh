@@ -72,6 +72,8 @@ if ! cd '$REMOTE_DIR' || ! sudo -u '$REMOTE_SERVICE_USER' env \
 fi
 cp /tmp/surveil-systemd/*.service /etc/systemd/system/
 cp /tmp/surveil-systemd/*.timer /etc/systemd/system/
+systemctl disable --now surveil-stock-relations-import.service >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/surveil-stock-relations-import.service
 systemctl daemon-reload
 install -d -m 700 -o '$REMOTE_SERVICE_USER' -g '$REMOTE_SERVICE_USER' '$REMOTE_DIR/logs'
 find '$REMOTE_DIR/logs' -maxdepth 1 -type f -exec chown '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' {} +
@@ -130,7 +132,6 @@ systemctl daemon-reload
 systemctl enable --now surveil-market-daily.timer
 systemctl enable --now surveil-llm-decision-audit-cleanup.timer
 echo '已启用每日 30 天大模型决策审计清理。'
-systemctl start surveil-stock-relations-import.service || true
 systemctl enable --now surveil-holdings-web.service
 systemctl restart surveil-holdings-web.service
 if grep -Eq '^FEISHU_FEEDBACK_(LISTENER_)?ENABLED=(1|true|yes|on)$' '$REMOTE_DIR/.env' 2>/dev/null; then

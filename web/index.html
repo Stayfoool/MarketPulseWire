@@ -18,7 +18,6 @@
     <button id="tab-llm-decisions" onclick="showView('llm-decisions')">大模型决策回顾</button>
     <button id="tab-rules" onclick="showView('rules')">规则</button>
     <button id="tab-feedback" onclick="showView('feedback')">反馈质量</button>
-    <button id="tab-relations" onclick="showView('relations')">关系映射</button>
     <button id="tab-sources" onclick="showView('sources')" aria-label="信息源，无当前故障"><span>信息源</span><span id="sourceAlertBadge" class="nav-alert-badge" hidden></span></button>
     <button id="tab-health" onclick="showView('health')" aria-label="任务健康，无当前故障"><span>任务健康</span><span id="healthAlertBadge" class="nav-alert-badge" hidden></span></button>
     <button id="tab-keywords" onclick="showView('keywords')">媒体关键词</button>
@@ -190,46 +189,6 @@
         <div class="list-row" style="padding:10px 12px"><strong>最近反馈样例</strong></div>
         <div class="table-wrap" style="max-height:420px">
           <table><thead><tr><th style="width:100px">反馈</th><th style="width:160px">来源</th><th style="width:220px">主规则</th><th>标题</th><th style="width:160px">推送时间</th></tr></thead><tbody id="feedbackExampleRows"></tbody></table>
-        </div>
-      </section>
-    </section>
-
-    <section id="view-relations" class="view">
-      <div class="section-title">
-        <h2>关系映射</h2>
-        <div>
-          <button onclick="loadRelationManager()">刷新</button>
-          <button class="primary" onclick="openRelationModal()">新增关系</button>
-        </div>
-      </div>
-      <div class="toolbar">
-        <input id="relationManageQuery" placeholder="搜索起点、终点、主题、原因" style="width:260px">
-        <select id="relationManageEnabled" style="width:130px">
-          <option value="all">全部</option>
-          <option value="enabled">启用</option>
-          <option value="disabled">停用</option>
-        </select>
-        <button class="primary" onclick="loadRelationManager()">查询</button>
-        <button onclick="exportRelationJson()">导出 JSON</button>
-        <button onclick="importRelationJson()">从 JSON 导入</button>
-        <button onclick="diffRelationJson()">检测差异</button>
-      </div>
-      <section class="panel">
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th style="width:80px">状态</th>
-                <th style="width:150px">触发</th>
-                <th style="width:150px">映射</th>
-                <th style="width:130px">方向/强度</th>
-                <th>关系与原因</th>
-                <th style="width:130px">复盘</th>
-                <th style="width:150px">操作</th>
-              </tr>
-            </thead>
-            <tbody id="relationManageRows"></tbody>
-          </table>
         </div>
       </section>
     </section>
@@ -428,41 +387,6 @@
       <div class="foot">
         <button id="holdingsPreviewCancelButton" onclick="closeDiff()">取消</button>
         <button id="holdingsConfirmButton" class="primary" onclick="confirmSave()">确认保存</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="relationModal" class="modal-backdrop">
-    <div class="modal">
-      <h2 id="relationModalTitle">编辑关系</h2>
-      <div class="body">
-        <div class="grid">
-          <div class="field"><label>触发代码/主题</label><input id="relSymbol" placeholder="例如 NVDA、HBM、人造钻石散热"></div>
-          <div class="field"><label>触发名称</label><input id="relSymbolName" placeholder="例如 NVIDIA、HBM、金刚石散热"></div>
-          <div class="field"><label>映射股票代码</label><input id="relRelatedSymbol" placeholder="例如 300308.SZ"></div>
-          <div class="field"><label>映射股票名称</label><input id="relRelatedName" placeholder="例如 中际旭创"></div>
-          <div class="field"><label>关系类型</label><input id="relRelationType" placeholder="例如 AI optical interconnect supply chain"></div>
-          <div class="field"><label>影响方向</label>
-            <select id="relImpactDirection">
-              <option value="positive">positive</option>
-              <option value="negative">negative</option>
-              <option value="neutral">neutral</option>
-              <option value="uncertain">uncertain</option>
-            </select>
-          </div>
-          <div class="field"><label>主题</label><input id="relTheme" placeholder="例如 光模块/CPO/AI 数据中心"></div>
-          <div class="field"><label>置信度</label><input id="relConfidence" placeholder="高 / 中 / 低 或 0-100"></div>
-          <div class="field"><label>强度</label><input id="relStrength" placeholder="1-5 或 高/中/低"></div>
-          <div class="field"><label>来源</label><input id="relSource" placeholder="web / Serenity / 机构研报 / UP主蒸馏"></div>
-          <div class="field"><label>生效日期</label><input id="relValidFrom" type="date"></div>
-          <div class="field"><label>失效日期</label><input id="relValidTo" type="date"></div>
-        </div>
-        <div class="field" style="margin-top:12px"><label>映射原因 / 证据</label><textarea id="relReason" style="min-height:110px" placeholder="说明为什么这个事件会传导到该股票，最好写清一阶/二阶逻辑。"></textarea></div>
-        <label style="display:flex; align-items:center; gap:8px; margin-top:10px"><input id="relEnabled" type="checkbox" checked> 启用</label>
-      </div>
-      <div class="foot">
-        <button onclick="closeRelationModal()">取消</button>
-        <button class="primary" onclick="saveRelationFromModal()">保存关系</button>
       </div>
     </div>
   </div>
