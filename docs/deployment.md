@@ -148,9 +148,11 @@ After the approved revision has been deployed to Alibaba Cloud:
    will be retained as a no-delivery baseline or replayed. A fresh database has
    no `seen_sources`, `seen_items`, review or delivery-dedup history; do not
    describe the first post-rebuild run as ordinary incremental collection.
-2. Move `surveil.sqlite3` and any `-wal` / `-shm` companions into a private
-   mode-`0700` retirement directory. This is the short rollback boundary; do
-   not mix files from different timestamps.
+2. Move `surveil.sqlite3`, any `-wal` / `-shm` companions and the complete
+   `reports/llm-decision-audits` directory into one private mode-`0700`
+   retirement directory. Recreate an empty service-account-owned mode-`0700`
+   audit directory before starting any writer. This is the short rollback
+   boundary; do not mix files from different database generations or timestamps.
 3. Run `scripts/market_db.py` as the production service account and verify the
    fresh schema, `PRAGMA quick_check`, foreign keys and expected table list.
 4. Install/restart the current systemd units, then verify Web APIs, enabled
@@ -164,13 +166,19 @@ After the approved revision has been deployed to Alibaba Cloud:
    baseline must be visible through the unified `market_items` reader while
    remaining absent from `market_reviews`, deliveries and rule dedup. Only then
    verify natural new collection.
-5. After the verification window, delete the retirement directory if historical
-   information is intentionally not retained.
+5. After the verification window, if historical information is intentionally
+   not retained, create outside the retirement directory a private mode-`0600`
+   deletion manifest containing only the retired audit file count, total bytes
+   and per-file SHA-256 values. Delete the complete retirement directory without
+   retaining audit request, response or article-content copies, then verify
+   every active audit has a complete current SQLite review, market-item and
+   source identity and was generated no earlier than its review.
 
 Before step 5, rollback requires stopping the same services, deploying the
-preceding revision and restoring the complete retired SQLite file set. After
-step 5, rollback can restore code and private configuration and create another
-fresh current database, but cannot restore historical collected information.
+preceding revision and restoring both the complete retired SQLite file set and
+its matching audit directory. After step 5, rollback can restore code and
+private configuration and create another fresh current database, but cannot
+restore historical collected information or its decision audits.
 If an enabled source has not established or explicitly failed its first-run
 baseline, keep the retirement database and treat rebuild verification as
 incomplete.

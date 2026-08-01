@@ -167,6 +167,10 @@ not change collection or decision configuration.
 Private LLM request/response audits are stored only in service-account-owned
 mode-`0600` files under `reports/llm-decision-audits`. Sensitive request and
 response content is removed after 30 days while bounded decision results remain.
+When an approved empty-database rebuild intentionally discards the retired
+database generation, its associated audits are retired and deleted with that
+generation after the same verification window; only a private bounded deletion
+manifest remains.
 Full model input, source body and raw response never enter SQLite, Web, Git or
 Feishu. The Web decision review associates a retained audit only when its
 review, market item and source identities match the current SQLite row and the
