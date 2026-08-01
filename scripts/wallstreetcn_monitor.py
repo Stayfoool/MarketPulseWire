@@ -10,7 +10,7 @@ import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import trafilatura
@@ -24,6 +24,7 @@ BASE_URL = "https://wallstreetcn.com"
 DEFAULT_CATEGORIES = ("global",)
 LAST_SURFACE_RESULTS: dict[str, dict[str, Any]] = {}
 PENDING_STATE: dict[str, Any] = {}
+SITEMAP_RECONCILE_LOOKBACK = timedelta(hours=72)
 
 
 def _timeout() -> int:
@@ -166,6 +167,29 @@ def _sitemap_items(surface: str, month: str) -> list[dict[str, Any]]:
     return parse_sitemap(response.content.decode("utf-8", errors="replace"), surface=surface, discovery_url=url)
 
 
+def sitemap_reconcile_months(now: datetime) -> list[str]:
+    cutoff = now.astimezone(timezone.utc) - SITEMAP_RECONCILE_LOOKBACK
+    current_month = now.astimezone(timezone.utc).strftime("%Y%m")
+    cutoff_month = cutoff.strftime("%Y%m")
+    return list(dict.fromkeys((current_month, cutoff_month)))
+
+
+def recent_sitemap_items(items: list[dict[str, Any]], *, now: datetime) -> list[dict[str, Any]]:
+    cutoff = now.astimezone(timezone.utc) - SITEMAP_RECONCILE_LOOKBACK
+    recent: list[dict[str, Any]] = []
+    for item in items:
+        raw_published_at = str(item.get("published_at") or "").strip()
+        try:
+            published_at = datetime.fromisoformat(raw_published_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(f"WallstreetCN sitemap item lacks valid publication time: {item.get('id', '')}") from exc
+        if published_at.tzinfo is None:
+            published_at = published_at.replace(tzinfo=timezone.utc)
+        if published_at.astimezone(timezone.utc) >= cutoff:
+            recent.append(item)
+    return recent
+
+
 def collect_items(*, state: dict[str, Any] | None = None, force_reconcile: bool = False) -> list[dict[str, Any]]:
     PENDING_STATE.clear()
     state = dict(state or {})
@@ -199,16 +223,13 @@ def collect_items(*, state: dict[str, Any] | None = None, force_reconcile: bool 
     reconcile = force_reconcile or now - float(state.get("last_sitemap_reconcile_epoch") or 0) >= interval
     if reconcile:
         sitemap_results: list[bool] = []
-        current_month = datetime.now(timezone.utc).strftime("%Y%m")
-        previous_state_month = str(state.get("last_sitemap_month") or "")
-        months = [current_month]
-        if previous_state_month and previous_state_month != current_month:
-            months.append(previous_state_month)
+        reconcile_at = datetime.now(timezone.utc)
+        months = sitemap_reconcile_months(reconcile_at)
         for month in months:
             for surface in ("article", "livenews"):
                 name = f"sitemap:{surface}:{month}"
                 try:
-                    rows = _sitemap_items(surface, month)
+                    rows = recent_sitemap_items(_sitemap_items(surface, month), now=reconcile_at)
                     for row in rows:
                         by_id.setdefault(row["id"], row)
                     results[name] = {"ok": True, "count": len(rows), "surface": surface, "error": ""}
@@ -225,8 +246,7 @@ def collect_items(*, state: dict[str, Any] | None = None, force_reconcile: bool 
             PENDING_STATE.update(
                 {
                     "last_sitemap_reconcile_epoch": now,
-                    "last_sitemap_reconcile_at": datetime.now(timezone.utc).isoformat(),
-                    "last_sitemap_month": current_month,
+                    "last_sitemap_reconcile_at": reconcile_at.isoformat(),
                 }
             )
     LAST_SURFACE_RESULTS.clear()

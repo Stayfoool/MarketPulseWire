@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import wallstreetcn_monitor as monitor
 from source_profiles import default_profile_map
@@ -196,32 +196,29 @@ def test_discovery_health_excludes_sitemap_results() -> None:
         monitor.LAST_SURFACE_RESULTS.update(original)
 
 
-def test_month_rollover_reconciles_previous_state_month() -> None:
-    original_list = monitor._fetch_list
-    original_sitemap = monitor._sitemap_items
-    calls: list[tuple[str, str]] = []
-    current_month = datetime.now(timezone.utc).strftime("%Y%m")
-    previous_state_month = "200001" if current_month != "200001" else "200002"
+def test_sitemap_reconcile_months_follow_rolling_72_hour_window() -> None:
+    assert monitor.sitemap_reconcile_months(datetime(2026, 8, 2, 12, tzinfo=timezone.utc)) == ["202608", "202607"]
+    assert monitor.sitemap_reconcile_months(datetime(2026, 8, 4, 12, tzinfo=timezone.utc)) == ["202608"]
+
+
+def test_recent_sitemap_items_keep_only_rolling_72_hours() -> None:
+    now = datetime(2026, 8, 4, 12, tzinfo=timezone.utc)
+    items = [
+        {"id": "article:cutoff", "published_at": (now - timedelta(hours=72)).isoformat()},
+        {"id": "article:recent", "published_at": (now - timedelta(hours=1)).isoformat()},
+        {"id": "article:old", "published_at": (now - timedelta(hours=72, seconds=1)).isoformat()},
+    ]
+    assert [item["id"] for item in monitor.recent_sitemap_items(items, now=now)] == [
+        "article:cutoff",
+        "article:recent",
+    ]
+
     try:
-        monitor._fetch_list = lambda _url, surface: monitor.parse_list_page(
-            ARTICLE_HTML if surface == "article" else LIVE_HTML,
-            surface=surface,
-            discovery_url="fixture",
-        )
-        monitor._sitemap_items = lambda surface, month: calls.append((surface, month)) or []
-        monitor.collect_items(
-            state={"last_sitemap_month": previous_state_month, "last_sitemap_reconcile_epoch": 0},
-            force_reconcile=True,
-        )
-    finally:
-        monitor._fetch_list = original_list
-        monitor._sitemap_items = original_sitemap
-    assert set(calls) == {
-        ("article", current_month),
-        ("livenews", current_month),
-        ("article", previous_state_month),
-        ("livenews", previous_state_month),
-    }
+        monitor.recent_sitemap_items([{"id": "article:invalid", "published_at": ""}], now=now)
+    except ValueError as exc:
+        assert "valid publication time" in str(exc)
+    else:
+        raise AssertionError("invalid sitemap publication time should fail visibly")
 
 
 if __name__ == "__main__":
@@ -234,5 +231,6 @@ if __name__ == "__main__":
     test_sitemap_preserves_news_title_and_publication_time()
     test_source_profile_is_peer_news_media()
     test_discovery_health_excludes_sitemap_results()
-    test_month_rollover_reconciles_previous_state_month()
+    test_sitemap_reconcile_months_follow_rolling_72_hour_window()
+    test_recent_sitemap_items_keep_only_rolling_72_hours()
     print("WallstreetCN monitor tests passed")

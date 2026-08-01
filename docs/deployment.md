@@ -314,9 +314,10 @@ market-information flow. The common `trade_friction_escalation` decision rule al
 to every existing and future normalized source; official-source identity alone
 does not create push eligibility.
 The same news collector runs WallstreetCN as a peer general news-media source.
-Public category/live pages provide normal discovery and official monthly
-sitemaps provide bounded catch-up; the source does not use login, member content,
-RSSHub, or a separate service. Its items use all existing generic content rules.
+Public category/live pages provide normal discovery. Hourly reconciliation downloads
+the official monthly sitemaps for the months touched by a rolling 72-hour window and
+processes only entries published within that window; the source does not use login,
+member content, RSSHub, or a separate service. Its items use all existing generic content rules.
 The international-bank Fed-path revision rule is cross-source and can be
 triggered by any normalized source, not only WallstreetCN.
 X/Serenity remains the deliberate independent route. `value_directory_monitor`
