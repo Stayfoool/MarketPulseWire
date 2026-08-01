@@ -228,6 +228,16 @@ function badge(value) {
   return `<span class="badge ${cls}">${escapeHtml(raw)}</span>`;
 }
 
+function overviewReviewStatusLabel(status) {
+  return {
+    excluded: '范围准入排除',
+    insufficient_evidence: '证据不足',
+    failed_retryable: '可重试失败',
+    failed_terminal: '终态失败',
+    admitted_pending: '等待程度决策'
+  }[status] || status || '未记录';
+}
+
 function safeExternalUrl(value) {
   try {
     const parsed = new URL(String(value || ''));
@@ -698,6 +708,8 @@ async function loadOverview() {
     (data.by_source || []).forEach(item => breakdown.push(`<div class="list-row">${escapeHtml(item.key)} <span class="summary">${item.count}</span></div>`));
     breakdown.push('<div class="list-row"><strong>程度分布</strong></div>');
     (data.decision_actions || []).forEach(item => breakdown.push(`<div class="list-row">${badge(item.key)} <span class="summary">${item.count}</span></div>`));
+    breakdown.push('<div class="list-row"><strong>范围准入和处理状态</strong></div>');
+    (data.review_statuses || []).forEach(item => breakdown.push(`<div class="list-row">${badge(overviewReviewStatusLabel(item.key))} <span class="summary">${item.count}</span></div>`));
     breakdown.push('<div class="list-row"><strong>飞书状态</strong></div>');
     (data.deliveries || []).forEach(item => breakdown.push(`<div class="list-row">${escapeHtml(item.key)} <span class="summary">${item.count}</span></div>`));
     document.getElementById('overviewBreakdown').innerHTML = breakdown.join('') || '<div class="list-row">暂无统计。</div>';
