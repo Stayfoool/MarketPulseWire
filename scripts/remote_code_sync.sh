@@ -29,6 +29,8 @@ remote_code_sync() {
     --exclude 'proxy.env' \
     --exclude "$private_proxy_yaml_pattern" \
     --exclude 'config/portfolio.json' \
+    --exclude 'config/portfolio.lock' \
+    --exclude 'config/backups/' \
     --exclude 'config/media_keywords.json' \
     --exclude 'config/llm_decision_rules.json' \
     --exclude 'config/source_profiles.local.json' \
