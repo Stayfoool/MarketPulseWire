@@ -198,22 +198,35 @@ Install services and timers:
 ```bash
 ./scripts/install_remote_systemd.sh
 ./scripts/prune_remote_code.sh
+./scripts/verify_remote_production.sh
 ```
 
 Every retained service uses `UMask=0077`. The installer also keeps the top-level
 `logs/` directory service-account-owned and mode `0700`, and normal log files
-mode `0600`; verify these permissions after deployment without printing log
-contents.
+mode `0600`. It installs `/etc/logrotate.d/surveil` for ordinary `logs/*.log`:
+rotate daily, retain 14 rotations, compress old files and use `copytruncate` so
+long-running services can keep their existing file descriptors. This policy
+does not cover `reports/llm-decision-audits`, whose sensitive-content retention
+remains the separate 30-day cleanup. The installer validates the rendered
+configuration with system logrotate in debug mode without rotating files.
 
 Code deployment deliberately uses three ordered stages. `deploy_remote.sh`
 first overlays the new checkout without deleting paths that may still be used
 by the installed systemd units. `install_remote_systemd.sh` then installs and
 reloads the new units and records the installed revision. Only
 `prune_remote_code.sh` uses rsync deletion, and it refuses to run unless the
-installed-systemd revision matches the deployed code revision. This prevents a
+installed-systemd revision matches the deployed code revision. After pruning,
+`verify_remote_production.sh` fails the deployment unless the revision is clean
+and aligned, required timers and configured long-running services are active,
+private rules load successfully, installed direct dependencies match the exact
+reviewed versions, ordinary log rotation is installed, SQLite integrity and
+current review state are healthy, and the loopback Web APIs report no active
+task or enabled-source failures. The verification is read-only and never prints
+the Web token or private rule contents. This prevents a
 timer from invoking a renamed executable after the old path has been deleted
 but before the replacement unit is installed. GitHub Deploy runs these three
-commands in this order. Both sync stages preserve the server-generated
+deployment stages followed by strict verification in this order. Both sync
+stages preserve the server-generated
 `REVISION` marker as well as the private configuration, data, logs and reports.
 After pruning, `prune_remote_code.sh` recursively restores the complete
 deployment tree to the configured service account and restores the deployment

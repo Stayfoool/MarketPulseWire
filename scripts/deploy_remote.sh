@@ -54,7 +54,6 @@ echo "==> remote venv and schema"
 "${SSH[@]}" "set -euo pipefail
 cd '$REMOTE_DIR'
 python3 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
 if [ -f requirements.txt ]; then
   .venv/bin/python -m pip install -r requirements.txt
 fi

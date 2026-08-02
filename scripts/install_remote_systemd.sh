@@ -35,6 +35,14 @@ done
 "${SSH[@]}" "rm -rf /tmp/surveil-systemd && mkdir -p /tmp/surveil-systemd"
 rsync -az -e "$RSYNC_RSH" "$RENDERED_SYSTEMD/" "$REMOTE_USER@$REMOTE_HOST:/tmp/surveil-systemd/"
 
+echo "==> render and sync ordinary log rotation policy"
+RENDERED_LOGROTATE="$TMP_DIR/surveil.logrotate"
+sed \
+  -e "s/__REMOTE_DIR__/$REMOTE_DIR_ESCAPED/g" \
+  -e "s/__SERVICE_USER__/$REMOTE_SERVICE_USER_ESCAPED/g" \
+  ./systemd/surveil.logrotate > "$RENDERED_LOGROTATE"
+rsync -az -e "$RSYNC_RSH" "$RENDERED_LOGROTATE" "$REMOTE_USER@$REMOTE_HOST:/tmp/surveil.logrotate"
+
 echo "==> install units"
 "${SSH[@]}" "set -euo pipefail
 RULE_CORE_CONFIG_PATH=\"\$(sed -n 's/^RULE_CORE_CONFIG=//p' '$REMOTE_DIR/.env' | tail -n 1)\"
@@ -68,6 +76,15 @@ if ! cd '$REMOTE_DIR' || ! sudo -u '$REMOTE_SERVICE_USER' env \
   LLM_DECISION_RULE_CONFIG=\"\$LLM_DECISION_RULE_CONFIG_PATH\" \
   '$REMOTE_DIR/.venv/bin/python' -c 'import llm_rule_catalog'; then
   echo 'LLM_DECISION_RULE_CONFIG 内容校验失败，停止启动生产采集服务。' >&2
+  exit 1
+fi
+if ! command -v logrotate >/dev/null 2>&1; then
+  echo '系统 logrotate 不存在，停止安装生产服务。' >&2
+  exit 1
+fi
+install -o root -g root -m 0644 /tmp/surveil.logrotate /etc/logrotate.d/surveil
+if ! logrotate --debug /etc/logrotate.d/surveil >/dev/null 2>&1; then
+  echo '普通日志 logrotate 配置校验失败，停止安装生产服务。' >&2
   exit 1
 fi
 cp /tmp/surveil-systemd/*.service /etc/systemd/system/

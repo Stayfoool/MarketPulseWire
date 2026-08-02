@@ -14,6 +14,8 @@ status-strict:
 deploy:
     ./scripts/deploy_remote.sh
     ./scripts/install_remote_systemd.sh
+    ./scripts/prune_remote_code.sh
+    ./scripts/verify_remote_production.sh
 
 remote-timers:
     ssh -i "$REMOTE_SSH_KEY" -o IdentitiesOnly=yes "$REMOTE_USER@$REMOTE_HOST" 'systemctl list-timers --all "surveil-*" --no-pager'
