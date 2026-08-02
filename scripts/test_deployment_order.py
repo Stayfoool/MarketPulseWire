@@ -168,6 +168,8 @@ def test_strict_verifier_covers_production_invariants() -> None:
         "load_rule_catalog",
         "verify_dependencies",
         "verify_logrotate",
+        "NextElapseUSecRealtime",
+        "NextElapseUSecMonotonic",
     ):
         assert required_check in verifier
     assert "sudo -u '$REMOTE_SERVICE_USER'" in remote
