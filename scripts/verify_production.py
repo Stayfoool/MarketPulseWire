@@ -72,8 +72,17 @@ def run_systemctl(*args: str, check: bool = True) -> subprocess.CompletedProcess
 def verify_timer(unit: str) -> None:
     run_systemctl("is-enabled", "--quiet", unit)
     run_systemctl("is-active", "--quiet", unit)
-    next_trigger = run_systemctl("show", unit, "--property=NextElapseUSecRealtime", "--value").stdout.strip()
-    require(next_trigger.lower() not in {"", "n/a"}, f"定时任务缺少下次触发时间：{unit}")
+    next_triggers = run_systemctl(
+        "show",
+        unit,
+        "--property=NextElapseUSecRealtime",
+        "--property=NextElapseUSecMonotonic",
+        "--value",
+    ).stdout.splitlines()
+    require(
+        any(value.strip().lower() not in {"", "n/a"} for value in next_triggers),
+        f"定时任务缺少下次触发时间：{unit}",
+    )
 
 
 def verify_service(unit: str) -> None:
