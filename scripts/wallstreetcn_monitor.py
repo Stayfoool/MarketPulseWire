@@ -25,6 +25,12 @@ DEFAULT_CATEGORIES = ("global",)
 LAST_SURFACE_RESULTS: dict[str, dict[str, Any]] = {}
 PENDING_STATE: dict[str, Any] = {}
 SITEMAP_RECONCILE_LOOKBACK = timedelta(hours=72)
+LIST_NOT_FOUND_MAX_ATTEMPTS = 3
+LIST_NOT_FOUND_RETRY_DELAY_SECONDS = 0.5
+
+
+class WallstreetCNListNotFound(ValueError):
+    """The public route returned its HTTP-200 404 document."""
 
 
 def _timeout() -> int:
@@ -71,6 +77,9 @@ def parse_list_page(html_text: str, *, surface: str, discovery_url: str) -> list
         document = html.fromstring(html_text)
     except (ValueError, TypeError) as exc:
         raise ValueError(f"WallstreetCN {surface} list HTML invalid") from exc
+    page_title = re.sub(r"\s+", " ", " ".join(document.xpath("//title//text()"))).strip()
+    if "404 Not Found" in page_title:
+        raise WallstreetCNListNotFound(f"WallstreetCN {surface} list returned HTTP 200 with 404 page")
     path = "articles" if surface == "article" else "livenews"
     links = document.xpath(f'//a[starts-with(@href, "/{path}/") or starts-with(@href, "/member/{path}/")]')
     by_id: dict[str, dict[str, Any]] = {}
@@ -111,12 +120,26 @@ def parse_list_page(html_text: str, *, surface: str, discovery_url: str) -> list
 
 
 def _fetch_list(url: str, surface: str) -> list[dict[str, Any]]:
-    response = http_get(
-        url,
-        headers={"Accept": "text/html,application/xhtml+xml", "User-Agent": "MarketPulseWire/1.0"},
-        timeout=_timeout(),
-    )
-    return parse_list_page(response.content.decode("utf-8", errors="replace"), surface=surface, discovery_url=url)
+    for attempt in range(1, LIST_NOT_FOUND_MAX_ATTEMPTS + 1):
+        response = http_get(
+            url,
+            headers={"Accept": "text/html,application/xhtml+xml", "User-Agent": "MarketPulseWire/1.0"},
+            timeout=_timeout(),
+        )
+        try:
+            return parse_list_page(
+                response.content.decode("utf-8", errors="replace"),
+                surface=surface,
+                discovery_url=url,
+            )
+        except WallstreetCNListNotFound as exc:
+            if attempt >= LIST_NOT_FOUND_MAX_ATTEMPTS:
+                raise ValueError(
+                    f"WallstreetCN {surface} list returned HTTP 200 with 404 page "
+                    f"after {LIST_NOT_FOUND_MAX_ATTEMPTS} attempts"
+                ) from exc
+            time.sleep(LIST_NOT_FOUND_RETRY_DELAY_SECONDS * attempt)
+    raise AssertionError("unreachable WallstreetCN list retry state")
 
 
 def parse_sitemap(xml_text: str, *, surface: str, discovery_url: str) -> list[dict[str, Any]]:

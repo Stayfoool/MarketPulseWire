@@ -23,6 +23,10 @@ LIVE_HTML = """
 </body></html>
 """
 
+NOT_FOUND_HTML = """
+<html><head><title>404 Not Found - 华尔街见闻</title></head><body><a href="/">首页</a></body></html>
+"""
+
 SITEMAP_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:news="http://www.google.com/schemas/sitemap-news/0.9">
   <url><loc>https://wallstreetcn.com/articles/3775241</loc><lastmod>2026-06-22</lastmod>
@@ -163,6 +167,83 @@ def test_invalid_list_and_sitemap_fail_visibly() -> None:
             raise AssertionError("invalid WallstreetCN payload must fail visibly")
 
 
+def test_list_fetch_retries_http_200_404_page() -> None:
+    original_get = monitor.http_get
+    original_sleep = monitor.time.sleep
+    responses = [NOT_FOUND_HTML, ARTICLE_HTML]
+    sleeps: list[float] = []
+
+    class Response:
+        def __init__(self, content: str):
+            self.content = content.encode()
+
+    try:
+        monitor.http_get = lambda *_args, **_kwargs: Response(responses.pop(0))
+        monitor.time.sleep = sleeps.append
+        rows = monitor._fetch_list("https://wallstreetcn.com/news/global", "article")
+    finally:
+        monitor.http_get = original_get
+        monitor.time.sleep = original_sleep
+    assert len(rows) == 2
+    assert sleeps == [0.5]
+    assert responses == []
+
+
+def test_list_fetch_exhausts_http_200_404_retries() -> None:
+    original_get = monitor.http_get
+    original_sleep = monitor.time.sleep
+    calls = 0
+    sleeps: list[float] = []
+
+    class Response:
+        content = NOT_FOUND_HTML.encode()
+
+    def fake_get(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return Response()
+
+    try:
+        monitor.http_get = fake_get
+        monitor.time.sleep = sleeps.append
+        try:
+            monitor._fetch_list("https://wallstreetcn.com/news/global", "article")
+        except ValueError as exc:
+            assert str(exc) == "WallstreetCN article list returned HTTP 200 with 404 page after 3 attempts"
+        else:
+            raise AssertionError("repeated HTTP-200 404 pages must fail visibly")
+    finally:
+        monitor.http_get = original_get
+        monitor.time.sleep = original_sleep
+    assert calls == 3
+    assert sleeps == [0.5, 1.0]
+
+
+def test_list_fetch_does_not_retry_other_parse_failures() -> None:
+    original_get = monitor.http_get
+    calls = 0
+
+    class Response:
+        content = b"<html><head><title>Normal shell</title></head><body></body></html>"
+
+    def fake_get(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return Response()
+
+    try:
+        monitor.http_get = fake_get
+        try:
+            monitor._fetch_list("https://wallstreetcn.com/news/global", "article")
+        except ValueError as exc:
+            assert str(exc) == "WallstreetCN article list contains no stable item links"
+        else:
+            raise AssertionError("other parse failures must remain immediately visible")
+    finally:
+        monitor.http_get = original_get
+    assert calls == 1
+
+
 def test_sitemap_preserves_news_title_and_publication_time() -> None:
     item = monitor.parse_sitemap(SITEMAP_XML, surface="article", discovery_url="https://wallstreetcn.com/sitemap.xml")[0]
     assert item["id"] == "article:3775241"
@@ -228,6 +309,9 @@ if __name__ == "__main__":
     test_livenews_keeps_non_generic_discovery_title()
     test_article_does_not_use_body_as_missing_title()
     test_invalid_list_and_sitemap_fail_visibly()
+    test_list_fetch_retries_http_200_404_page()
+    test_list_fetch_exhausts_http_200_404_retries()
+    test_list_fetch_does_not_retry_other_parse_failures()
     test_sitemap_preserves_news_title_and_publication_time()
     test_source_profile_is_peer_news_media()
     test_discovery_health_excludes_sitemap_results()
