@@ -23,7 +23,7 @@ from admission_rules import apply_source_admission_boundary, source_allowed_fami
 
 
 SCHEMA_VERSION = "llm-rule-action-v1"
-PROMPT_VERSION = "llm-rule-action-prompt-v1"
+PROMPT_VERSION = "llm-rule-action-prompt-v2"
 ENGINE_VERSION = "llm-rule-decision-v9"
 ACTION_RANK = {"archive": 1, "daily": 2, "push": 3}
 FAILURE_STATUSES = {
@@ -292,14 +292,20 @@ def build_llm_rule_prompt(
         "必须保留传出、考虑、计划、测试等限定，不得将预期改写为已执行事实。"
         "push 或 daily 只引用完整证明所选 action 必需的最少 source_segments 原文编号；"
         "每条规则最多 "
-        f"{MAX_EVIDENCE_REFS_PER_LIST} 个编号，同一规则内不得重复。archive 不引用证据。"
+        f"{MAX_EVIDENCE_REFS_PER_LIST} 个编号，同一规则内不得重复。"
+        "archive 只能包含 rule_id 和 action，不得包含 evidence_ids、reason 或其他字段。"
     )
     payload = {
         "rules": [rule.to_prompt_dict() for rule in rules],
         "source_segments": list(segments),
         "output_contract": {
             "top_level": {"rule_results": "每条提供的 rule_id 恰好一项"},
-            "archive": {"rule_id": "string", "action": "archive"},
+            "archive": {
+                "allowed_fields_only": ["rule_id", "action"],
+                "rule_id": "string",
+                "action": "archive",
+                "forbidden_fields": ["evidence_ids", "reason"],
+            },
             "push_or_daily": {
                 "rule_id": "string",
                 "action": "该规则提供的 push 或 daily",
@@ -347,6 +353,7 @@ def build_llm_rule_repair_prompt(
     payload["correction_instruction"] = (
         "只修正上述结构或原文编号错误，不得改变提供的规则、信息原文和准入范围。"
         "每个 rule_id 仍须恰好返回一次。"
+        "archive 只能包含 rule_id 和 action，不得包含 evidence_ids、reason 或其他字段。"
     )
     system_prompt = (
         f"{prompt.system_prompt} 这是唯一一次格式和原文编号修正。"

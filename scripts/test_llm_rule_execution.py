@@ -203,6 +203,84 @@ def test_all_archive_response_completes_without_retry() -> None:
     assert evaluation["usage"]["total_tokens"] == 150
 
 
+def test_archive_extra_fields_are_repaired_once() -> None:
+    rules = rules_for_families(("semiconductor_ai",))
+    invalid_payload = {
+        "rule_results": [
+            {
+                "rule_id": rule.rule_id,
+                "action": "archive",
+                "evidence_ids": ["T1"],
+                "reason": "不应随 archive 返回。",
+            }
+            for rule in rules
+        ]
+    }
+    valid_payload = {
+        "rule_results": [
+            {"rule_id": rule.rule_id, "action": "archive"}
+            for rule in rules
+        ]
+    }
+    calls = []
+
+    def caller(prompt):
+        calls.append(prompt)
+        payload = invalid_payload if len(calls) == 1 else valid_payload
+        return _model_response(json.dumps(payload, ensure_ascii=False))
+
+    execution = _execute(_item(), caller)
+    assert len(calls) == 2
+    assert execution.decision is not None and execution.decision.action == "archive"
+    assert execution.evaluation["evaluation_status"] == "completed"
+    assert execution.evaluation["model_calls"] == 2
+    repair_prompt = calls[1]
+    archive_constraint = (
+        "archive 只能包含 rule_id 和 action，不得包含 evidence_ids、reason 或其他字段"
+    )
+    assert archive_constraint in repair_prompt.system_prompt
+    assert archive_constraint in repair_prompt.user_payload["correction_instruction"]
+    assert repair_prompt.user_payload["output_contract"]["archive"]["allowed_fields_only"] == [
+        "rule_id",
+        "action",
+    ]
+    assert repair_prompt.user_payload["output_contract"]["archive"]["forbidden_fields"] == [
+        "evidence_ids",
+        "reason",
+    ]
+
+
+def test_repeated_archive_extra_fields_fail_closed_after_one_repair() -> None:
+    invalid_response = json.dumps(
+        {
+            "rule_results": [
+                {
+                    "rule_id": rule.rule_id,
+                    "action": "archive",
+                    "evidence_ids": ["T1"],
+                    "reason": "不应随 archive 返回。",
+                }
+                for rule in rules_for_families(("semiconductor_ai",))
+            ]
+        },
+        ensure_ascii=False,
+    )
+    calls = []
+
+    def caller(prompt):
+        calls.append(prompt)
+        return _model_response(invalid_response)
+
+    execution = _execute(_item(), caller)
+    assert len(calls) == 2
+    assert execution.decision is None
+    assert execution.evaluation["evaluation_status"] == "invalid_output"
+    assert execution.evaluation["action"] is None
+    assert execution.evaluation["model_calls"] == 2
+    assert len(execution.evaluation["model_audit"]["calls"]) == 2
+    assert "fields invalid" in execution.evaluation["failure_reason"]
+
+
 def test_company_disclosure_receives_only_holding_rules_without_admission_context() -> None:
     portfolio = parse_portfolio_config(
         [
@@ -247,6 +325,8 @@ def main() -> int:
     test_invalid_output_model_failure_and_missing_body_behavior()
     test_excluded_item_does_not_call_model()
     test_all_archive_response_completes_without_retry()
+    test_archive_extra_fields_are_repaired_once()
+    test_repeated_archive_extra_fields_fail_closed_after_one_repair()
     test_company_disclosure_receives_only_holding_rules_without_admission_context()
     print("LLM rule execution checks passed")
     return 0
