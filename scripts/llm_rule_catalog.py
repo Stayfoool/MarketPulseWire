@@ -17,7 +17,7 @@ from typing import Any, Mapping, cast
 from market_item import RuleFamily
 
 
-RULE_CONFIG_SCHEMA_VERSION = "llm-decision-rule-config-v2"
+RULE_CONFIG_SCHEMA_VERSION = "llm-decision-rule-config-v3"
 RULE_CONFIG_ENV = "LLM_DECISION_RULE_CONFIG"
 DEFAULT_RULE_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "llm_decision_rules.json"
 MAX_RULE_CONFIG_BYTES = 256_000
@@ -34,22 +34,20 @@ class LLMRuleDefinition:
     rule_id: str
     family: RuleFamily
     title: str
-    action_conditions: Mapping[str, str]
-    required_facts: tuple[str, ...]
-    exclusions: tuple[str, ...]
+    push: str | None
+    daily: str | None
     version: str
     applicable_families: tuple[RuleFamily, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.rule_id or not self.title or not self.version:
             raise ValueError("rule_id, title and version are required")
-        conditions = dict(self.action_conditions)
-        if not conditions or set(conditions) - set(MODEL_ACTIONS):
-            raise ValueError(f"invalid action conditions for {self.rule_id}")
-        if any(not str(value).strip() for value in conditions.values()):
-            raise ValueError(f"empty action condition for {self.rule_id}")
-        if not self.required_facts:
-            raise ValueError(f"required facts missing for {self.rule_id}")
+        if not self.push and not self.daily:
+            raise ValueError(f"push or daily condition required for {self.rule_id}")
+        if self.push is not None and not self.push.strip():
+            raise ValueError(f"empty push condition for {self.rule_id}")
+        if self.daily is not None and not self.daily.strip():
+            raise ValueError(f"empty daily condition for {self.rule_id}")
         applicable = self.applicable_families or (self.family,)
         if self.family not in applicable:
             raise ValueError(f"primary family missing from applicable_families for {self.rule_id}")
@@ -57,21 +55,28 @@ class LLMRuleDefinition:
             raise ValueError(f"duplicate applicable_families for {self.rule_id}")
         if any(family not in RULE_FAMILIES for family in applicable):
             raise ValueError(f"unsupported applicable_families for {self.rule_id}")
-        object.__setattr__(self, "action_conditions", MappingProxyType(conditions))
         object.__setattr__(self, "applicable_families", tuple(applicable))
 
     @property
     def allowed_actions(self) -> tuple[str, ...]:
-        return tuple(action for action in MODEL_ACTIONS if action in self.action_conditions)
+        actions = []
+        if self.push:
+            actions.append("push")
+        if self.daily:
+            actions.append("daily")
+        actions.append("archive")
+        return tuple(actions)
 
     def to_prompt_dict(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "rule_id": self.rule_id,
             "title": self.title,
-            "action_conditions": dict(self.action_conditions),
-            "required_facts": list(self.required_facts),
-            "exclusions": list(self.exclusions),
         }
+        if self.push:
+            result["push"] = self.push
+        if self.daily:
+            result["daily"] = self.daily
+        return result
 
 
 def configured_rule_path(env: Mapping[str, str] | None = None) -> Path:
@@ -99,15 +104,8 @@ def _parse_rule(payload: Any, index: int, version: str) -> LLMRuleDefinition:
     path = f"rules[{index}]"
     if not isinstance(payload, dict):
         raise LLMRuleCatalogError(f"{path} must be an object")
-    required_fields = {
-        "rule_id",
-        "family",
-        "title",
-        "action_conditions",
-        "required_facts",
-        "exclusions",
-    }
-    optional_fields = {"applicable_families"}
+    required_fields = {"rule_id", "family", "title"}
+    optional_fields = {"applicable_families", "push", "daily"}
     if not required_fields <= set(payload) or set(payload) - required_fields - optional_fields:
         allowed = sorted(required_fields | optional_fields)
         raise LLMRuleCatalogError(f"{path} fields must match {allowed}")
@@ -116,25 +114,15 @@ def _parse_rule(payload: Any, index: int, version: str) -> LLMRuleDefinition:
         raise LLMRuleCatalogError(f"{path}.family is unsupported: {family}")
     raw_applicable = payload.get("applicable_families", [family])
     applicable = _string_tuple(raw_applicable, f"{path}.applicable_families", required=True)
-    raw_conditions = payload["action_conditions"]
-    if not isinstance(raw_conditions, dict) or not raw_conditions:
-        raise LLMRuleCatalogError(f"{path}.action_conditions must be a non-empty object")
-    if set(raw_conditions) - set(MODEL_ACTIONS):
-        raise LLMRuleCatalogError(f"{path}.action_conditions contains an unsupported action")
-    conditions = {
-        _required_string(action, f"{path}.action_conditions action"): _required_string(
-            condition, f"{path}.action_conditions.{action}"
-        )
-        for action, condition in raw_conditions.items()
-    }
+    push = _required_string(payload["push"], f"{path}.push") if "push" in payload else None
+    daily = _required_string(payload["daily"], f"{path}.daily") if "daily" in payload else None
     try:
         return LLMRuleDefinition(
             rule_id=_required_string(payload["rule_id"], f"{path}.rule_id"),
             family=cast(RuleFamily, family),
             title=_required_string(payload["title"], f"{path}.title"),
-            action_conditions=conditions,
-            required_facts=_string_tuple(payload["required_facts"], f"{path}.required_facts", required=True),
-            exclusions=_string_tuple(payload["exclusions"], f"{path}.exclusions", required=False),
+            push=push,
+            daily=daily,
             version=version,
             applicable_families=cast(tuple[RuleFamily, ...], applicable),
         )

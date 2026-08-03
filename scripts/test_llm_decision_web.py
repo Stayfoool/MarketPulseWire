@@ -80,6 +80,26 @@ def audit_payload(
     }
 
 
+def current_audit_payload() -> dict:
+    payload = audit_payload(status="completed")
+    response = {
+        "rule_results": [
+            {
+                "rule_id": "company_industry_execution_change",
+                "action": "push",
+                "evidence_ids": ["T1"],
+                "reason": "标题完整证明 push。",
+            },
+            {"rule_id": "company_performance_change", "action": "archive"},
+        ]
+    }
+    payload["failure_reason"] = ""
+    payload["model_audit"]["calls"][0]["response"]["content"] = json.dumps(
+        response, ensure_ascii=False
+    )
+    return payload
+
+
 def walk_values(value):
     if isinstance(value, dict):
         for key, child in value.items():
@@ -90,7 +110,7 @@ def walk_values(value):
             yield from walk_values(child)
 
 
-def test_uncertain_projection_is_bounded() -> None:
+def test_historical_uncertain_projection_is_bounded() -> None:
     projection = build_web_projection(audit_payload())
     assert projection["version"] == WEB_PROJECTION_VERSION
     assert projection["evaluation_status"] == "uncertain"
@@ -108,6 +128,18 @@ def test_uncertain_projection_is_bounded() -> None:
         "user_payload",
     }
     assert not any(key in forbidden for key, _ in walk_values(projection))
+
+
+def test_current_action_projection_is_bounded() -> None:
+    projection = build_web_projection(current_audit_payload())
+    assessments = projection["calls"][0]["rule_assessments"]
+    assert assessments[0]["action"] == "push"
+    assert "judgement" not in assessments[0]
+    assert assessments[0]["evidence"][0]["quote"] == "标题证据"
+    assert assessments[1] == {
+        "rule_id": "company_performance_change",
+        "action": "archive",
+    }
 
 
 def test_existing_private_audits_remain_readable() -> None:
@@ -260,7 +292,8 @@ def test_retention_removes_raw_calls_but_keeps_web_projection() -> None:
 
 
 def main() -> None:
-    test_uncertain_projection_is_bounded()
+    test_historical_uncertain_projection_is_bounded()
+    test_current_action_projection_is_bounded()
     test_existing_private_audits_remain_readable()
     test_projection_write_is_idempotent_and_mode_bounded()
     test_rows_show_terminal_insufficient_evidence_without_action()

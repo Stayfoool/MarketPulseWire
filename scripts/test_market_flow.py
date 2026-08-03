@@ -9,11 +9,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import market_flow
-from llm_production_decision import ProductionLLMInsufficientEvidence
 from market_flow import evaluate_market_item
 from market_db import init_db
 from market_item import AdmissionEvidence, AdmissionResult, DecisionResult, InterpretationResult, MarketFlowResult, NormalizedMarketItem
-from market_store import processing_failure_status, record_delivery, record_production_admission
+from market_store import (
+    InsufficientEvidenceError,
+    processing_failure_status,
+    record_delivery,
+    record_production_admission,
+)
 
 
 def canonical_items() -> list[NormalizedMarketItem]:
@@ -539,7 +543,7 @@ def test_succeeded_review_without_decision_fails_retryable() -> None:
             assert conn.execute("SELECT COUNT(*) FROM deliveries").fetchone()[0] == 0
 
 
-def test_production_uncertain_terminates_review_without_delivery() -> None:
+def test_historical_insufficient_evidence_remains_terminal_without_delivery() -> None:
     original_decider = market_flow.decide_market_item_with_llm
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "llm-insufficient.sqlite3"
@@ -555,7 +559,7 @@ def test_production_uncertain_terminates_review_without_delivery() -> None:
         raw_item = {"id": "llm-insufficient-1", "title": item.title, "url": item.url}
         item_id, review_id = record_production_admission(item, admitted(), db_path=db_path)
         market_flow.decide_market_item_with_llm = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ProductionLLMInsufficientEvidence("valid uncertain result")
+            InsufficientEvidenceError("historical insufficient evidence")
         )
         try:
             market_flow.process_market_item(
@@ -568,7 +572,7 @@ def test_production_uncertain_terminates_review_without_delivery() -> None:
                 market_item_id=item_id,
                 market_review_id=review_id,
             )
-        except ProductionLLMInsufficientEvidence:
+        except InsufficientEvidenceError:
             pass
         else:
             raise AssertionError("valid uncertain must stop before interpretation and delivery")
@@ -627,7 +631,7 @@ def test_production_uncertain_terminates_review_without_delivery() -> None:
         assert repeated_calls == 0
 
 
-def test_event_uncertain_preserves_terminal_status_through_processing_wrapper() -> None:
+def test_historical_event_insufficient_evidence_preserves_terminal_status() -> None:
     original_decider = market_flow.decide_market_item_with_llm
     with TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "event-insufficient.sqlite3"
@@ -651,7 +655,7 @@ def test_event_uncertain_preserves_terminal_status_through_processing_wrapper() 
             db_path=db_path,
         )
         market_flow.decide_market_item_with_llm = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            ProductionLLMInsufficientEvidence("valid uncertain result")
+            InsufficientEvidenceError("historical insufficient evidence")
         )
         try:
             market_flow.process_market_item(
@@ -663,7 +667,7 @@ def test_event_uncertain_preserves_terminal_status_through_processing_wrapper() 
                 market_item_id=item_id,
                 market_review_id=review_id,
             )
-        except ProductionLLMInsufficientEvidence as exc:
+        except InsufficientEvidenceError as exc:
             assert processing_failure_status(exc) == "insufficient_evidence"
         else:
             raise AssertionError("event uncertain must retain the terminal processing status")
@@ -686,8 +690,8 @@ def main() -> int:
     test_production_official_runtime_uses_only_unified_result()
     test_production_llm_failure_retries_same_review_without_delivery()
     test_succeeded_review_without_decision_fails_retryable()
-    test_production_uncertain_terminates_review_without_delivery()
-    test_event_uncertain_preserves_terminal_status_through_processing_wrapper()
+    test_historical_insufficient_evidence_remains_terminal_without_delivery()
+    test_historical_event_insufficient_evidence_preserves_terminal_status()
     print("market flow checks passed")
     return 0
 

@@ -21,12 +21,11 @@ CONFIG = parse_rule_config(
 QUOTE = "HBM产能扩张项目已确认进入执行阶段。"
 
 
-def _assessment(rule_id: str, *, matched: bool, action: str | None = None) -> dict:
-    if not matched:
-        return {"rule_id": rule_id, "judgement": "not_matched"}
+def _assessment(rule_id: str, *, action: str = "archive") -> dict:
+    if action == "archive":
+        return {"rule_id": rule_id, "action": "archive"}
     return {
         "rule_id": rule_id,
-        "judgement": "matched",
         "action": action,
         "evidence_ids": ["T1"],
         "reason": "原文证明产能扩张已进入执行。",
@@ -37,7 +36,7 @@ def _response(family: RuleFamily, rule_id: str, action: str) -> str:
     return json.dumps(
         {
             "rule_results": [
-                _assessment(rule.rule_id, matched=rule.rule_id == rule_id, action=action)
+                _assessment(rule.rule_id, action=action if rule.rule_id == rule_id else "archive")
                 for rule in rules_for_families((family,))
             ],
         },
@@ -150,8 +149,8 @@ def test_invalid_output_model_failure_and_missing_body_behavior() -> None:
 
     calls = []
     response = json.loads(_response("semiconductor_ai", "company_industry_execution_change", "push"))
-    matched = next(result for result in response["rule_results"] if result["judgement"] == "matched")
-    matched["evidence_ids"] = ["T1"]
+    selected = next(result for result in response["rule_results"] if result["action"] == "push")
+    selected["evidence_ids"] = ["T1"]
 
     def title_summary_caller(prompt):
         calls.append(prompt)
@@ -177,12 +176,12 @@ def test_excluded_item_does_not_call_model() -> None:
     assert execution.evaluation["action"] is None
 
 
-def test_all_unmatched_response_completes_as_archive_without_retry() -> None:
+def test_all_archive_response_completes_without_retry() -> None:
     calls = []
-    all_unmatched = json.dumps(
+    all_archive = json.dumps(
         {
             "rule_results": [
-                {"rule_id": rule.rule_id, "judgement": "not_matched"}
+                {"rule_id": rule.rule_id, "action": "archive"}
                 for rule in rules_for_families(("semiconductor_ai",))
             ]
         },
@@ -190,7 +189,7 @@ def test_all_unmatched_response_completes_as_archive_without_retry() -> None:
     )
     def caller(prompt):
         calls.append(prompt)
-        return _model_response(all_unmatched)
+        return _model_response(all_archive)
 
     execution = _execute(_item(), caller)
     assert len(calls) == 1
@@ -202,41 +201,6 @@ def test_all_unmatched_response_completes_as_archive_without_retry() -> None:
     assert evaluation["model_calls"] == 1
     assert evaluation["attempts"] == 1
     assert evaluation["usage"]["total_tokens"] == 150
-
-
-def test_no_match_with_uncertain_does_not_retry_or_create_decision() -> None:
-    calls = []
-    rules = rules_for_families(("semiconductor_ai",))
-    response = json.dumps(
-        {
-            "rule_results": [
-                (
-                    {
-                        "rule_id": rule.rule_id,
-                        "judgement": "uncertain",
-                        "counterevidence_ids": ["B1"],
-                        "reason": "决定 action 所需事实仍有冲突。",
-                    }
-                    if rule.rule_id == "company_industry_execution_change"
-                    else {"rule_id": rule.rule_id, "judgement": "not_matched"}
-                )
-                for rule in rules
-            ]
-        },
-        ensure_ascii=False,
-    )
-
-    def caller(prompt):
-        calls.append(prompt)
-        return _model_response(response)
-
-    execution = _execute(_item(), caller)
-    assert len(calls) == 1
-    assert execution.decision is None
-    evaluation = execution.evaluation
-    assert evaluation["evaluation_status"] == "uncertain"
-    assert evaluation["action"] is None
-    assert evaluation["model_calls"] == 1
 
 
 def test_company_disclosure_receives_only_holding_rules_without_admission_context() -> None:
@@ -282,8 +246,7 @@ def main() -> int:
     test_completed_execution_records_usage_and_private_model_audit()
     test_invalid_output_model_failure_and_missing_body_behavior()
     test_excluded_item_does_not_call_model()
-    test_all_unmatched_response_completes_as_archive_without_retry()
-    test_no_match_with_uncertain_does_not_retry_or_create_decision()
+    test_all_archive_response_completes_without_retry()
     test_company_disclosure_receives_only_holding_rules_without_admission_context()
     print("LLM rule execution checks passed")
     return 0

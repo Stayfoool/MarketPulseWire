@@ -89,17 +89,21 @@ truth. Missing or invalid configuration fails closed.
 
 For every admitted item, `decision_engine.py` loads the reviewed private rules
 from `LLM_DECISION_RULE_CONFIG` and makes one bounded LLM decision request. The
-model must return every applicable rule, exact evidence references, allowed
-actions and a consistent final action. Code validates the structure, evidence,
-rule version and aggregation.
+model must return exactly one action for every applicable rule. It evaluates
+`push` before `daily`, returns `archive` when neither condition is met, and
+provides exact minimum evidence references only for `push` or `daily`. Code
+validates the structure, evidence, rule version and `push > daily > archive`
+aggregation.
 
 `DecisionResult.action` is the only push-eligibility authority. A model,
 validation or private-audit failure leaves no valid `DecisionResult`,
 interpretation, delivery or dedup reservation and marks the current review
-`failed_retryable`. A structurally valid `uncertain` result caused by missing or
-conflicting required facts becomes terminal `insufficient_evidence`; it is not
-an action and is not retried automatically. A stored successful review without
-a valid `DecisionResult` also fails closed and becomes `failed_retryable`.
+`failed_retryable`. Missing or conflicting facts select `daily` or `archive`
+under the reviewed rule text; the active decision path no longer produces
+`uncertain` or a new `insufficient_evidence` review. Existing historical
+`insufficient_evidence` rows remain readable without migration. A stored
+successful review without a valid `DecisionResult` also fails closed and becomes
+`failed_retryable`.
 
 After a valid decision, `market_interpreter.py` produces only a short
 `core_content` summary. It cannot add, promote or reduce an action. Delivery
