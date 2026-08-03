@@ -137,7 +137,6 @@ def decide_production_market_item(
     execution = execute_llm_rule_decision(
         item,
         admission=admission,
-        portfolio=portfolio,
         model_caller=caller,
         input_text_scope=resolve_input_text_scope(item),
         deadline_monotonic=deadline,
