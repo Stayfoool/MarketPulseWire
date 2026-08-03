@@ -86,7 +86,6 @@ def _execute(item: NormalizedMarketItem, caller, *, portfolio=None):
     return execute_llm_rule_decision(
         item,
         admission=admission,
-        portfolio=portfolio,
         model_caller=caller,
     )
 
@@ -114,11 +113,18 @@ def test_completed_execution_records_usage_and_private_model_audit() -> None:
     assert evaluation["elapsed_seconds"] == 0.25
     assert evaluation["rule_ids"] == ["company_industry_execution_change"]
     assert "source_metadata" not in captured["prompt"].user_payload
+    assert "matched_context" not in captured["prompt"].user_payload
+    assert "market_item_input" not in captured["prompt"].user_payload
     assert "current_decision" not in json.dumps(captured["prompt"].user_payload, ensure_ascii=False)
     assert evaluation["execution_engine"]
     audit = evaluation["model_audit"]
     assert "PRIVATE_BODY_START" in json.dumps(audit, ensure_ascii=False)
     assert "PRIVATE_BODY_START" not in json.dumps(evaluation["rule_evidence"], ensure_ascii=False)
+    request = audit["calls"][0]["request"]
+    assert request["provided_fields"] == ["title", "summary", "full_text"]
+    assert request["body_original_chars"] == len(item.full_text)
+    assert request["body_provided_chars"] == len(item.full_text)
+    assert request["body_truncated"] is False
 
 
 def test_invalid_output_model_failure_and_missing_body_behavior() -> None:
@@ -233,7 +239,7 @@ def test_no_match_with_uncertain_does_not_retry_or_create_decision() -> None:
     assert evaluation["model_calls"] == 1
 
 
-def test_company_disclosure_receives_only_holding_rules_and_minimal_matched_context() -> None:
+def test_company_disclosure_receives_only_holding_rules_without_admission_context() -> None:
     portfolio = parse_portfolio_config(
         [
             {
@@ -268,12 +274,7 @@ def test_company_disclosure_receives_only_holding_rules_and_minimal_matched_cont
         rule.rule_id for rule in rules_for_families(("holding",))
     )
     assert "admission" not in prompt.user_payload
-    assert prompt.user_payload["matched_context"] == {
-        "holding_subjects": ["甲公司"],
-        "holding_symbols": ["000001.SZ"],
-        "matched_related_keywords": ["HBM"],
-        "immediate_alert_keywords": ["临时停产"],
-    }
+    assert "matched_context" not in prompt.user_payload
     assert execution.decision is not None and execution.decision.action == "daily"
 
 
@@ -283,7 +284,7 @@ def main() -> int:
     test_excluded_item_does_not_call_model()
     test_all_unmatched_response_completes_as_archive_without_retry()
     test_no_match_with_uncertain_does_not_retry_or_create_decision()
-    test_company_disclosure_receives_only_holding_rules_and_minimal_matched_context()
+    test_company_disclosure_receives_only_holding_rules_without_admission_context()
     print("LLM rule execution checks passed")
     return 0
 

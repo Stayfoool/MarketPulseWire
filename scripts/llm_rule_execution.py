@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import time
 from dataclasses import dataclass, replace
 from typing import Any, Callable
@@ -20,9 +19,6 @@ from llm_rule_decision import (
     validate_llm_rule_response,
 )
 from market_item import AdmissionResult, DecisionResult, NormalizedMarketItem
-from admission_rules import (
-    PortfolioRuleConfig,
-)
 
 
 ModelCaller = Callable[[LLMRulePrompt], ChatCompletionResponse]
@@ -111,58 +107,6 @@ def _admission_evidence(admission: AdmissionResult) -> list[dict[str, Any]]:
         }
         for evidence in admission.evidence[:8]
     ]
-
-
-def _term_id(value: str) -> str:
-    return f"term:{hashlib.sha256(value.casefold().encode('utf-8')).hexdigest()[:12]}"
-
-
-def _matched_context(
-    item: NormalizedMarketItem,
-    admission: AdmissionResult,
-    portfolio: PortfolioRuleConfig,
-) -> dict[str, list[str]]:
-    holding_evidence = [evidence for evidence in admission.evidence if evidence.rule_family == "holding"]
-    holding_subjects = list(
-        dict.fromkeys(subject for evidence in holding_evidence for subject in evidence.matched_subjects if subject)
-    )
-    matched_term_ids = {
-        term_id for evidence in holding_evidence for term_id in evidence.matched_term_ids if term_id
-    }
-    matched_holdings = [
-        holding
-        for holding in portfolio.holdings
-        if any(subject in holding.names for subject in holding_subjects)
-    ]
-    related_keywords = [
-        keyword
-        for holding in matched_holdings
-        for keyword in holding.related_news_keywords
-        if _term_id(keyword) in matched_term_ids
-    ]
-    immediate_keywords = [
-        keyword for holding in matched_holdings for keyword in holding.immediate_alert_keywords
-    ]
-    trusted_ids: list[str] = []
-    extraction = item.raw.get("_attributed_research")
-    if isinstance(extraction, dict) and str(extraction.get("institution_id") or "").strip():
-        trusted_ids.append(str(extraction["institution_id"]).strip())
-    trusted_aliases = [
-        subject
-        for evidence in admission.evidence
-        if evidence.rule_family in {"semiconductor_ai", "fed_policy"}
-        for subject in evidence.matched_subjects
-        if subject
-    ]
-    context = {
-        "holding_subjects": holding_subjects,
-        "holding_symbols": [holding.symbol for holding in matched_holdings],
-        "matched_related_keywords": related_keywords,
-        "immediate_alert_keywords": immediate_keywords,
-        "trusted_institution_ids": trusted_ids,
-        "trusted_institution_aliases": trusted_aliases,
-    }
-    return {key: list(dict.fromkeys(values)) for key, values in context.items() if values}
 
 
 def _evaluation_base(admission: AdmissionResult) -> dict[str, Any]:
@@ -348,7 +292,6 @@ def execute_llm_rule_decision(
     item: NormalizedMarketItem,
     *,
     admission: AdmissionResult,
-    portfolio: PortfolioRuleConfig,
     model_caller: ModelCaller,
     input_text_scope: str | None = None,
     max_input_chars: int = 120_000,
@@ -363,7 +306,6 @@ def execute_llm_rule_decision(
             item,
             admission,
             input_text_scope=input_text_scope,
-            matched_context=_matched_context(item, admission, portfolio),
             max_input_chars=max_input_chars,
         )
     except LLMRuleInputError as exc:
