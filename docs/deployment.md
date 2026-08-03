@@ -53,11 +53,13 @@ the production service account and mode `0600`. `deploy_remote.sh` explicitly
 excludes this path, so normal deployment neither uploads, deletes nor replaces
 the private rules. Git contains only `config/llm_decision_rules.test.json`, whose
 synthetic text is for CI and must never be used in production.
-Schema v2 lets a rule declare multiple applicable range-admission groups. The
-loader accepts only this current schema and selects a rule only by intersection
-with the item's already matched and source-allowed groups; it cannot expand
-range admission. Older private rule files fail closed and must be reviewed and
-converted before a restart.
+Schema v3 stores only a rule's reviewed `push` and optional `daily` conditions;
+`archive` is the implicit result when neither condition is met. It also lets a
+rule declare multiple applicable range-admission groups. The loader accepts only
+this current schema and selects a rule only by intersection with the item's
+already matched and source-allowed groups; it cannot expand range admission.
+Older private rule files fail closed and must be reviewed and converted before a
+restart.
 
 Before restarting production after a rule change, validate both files through
 the loader and compare their SHA-256 digests without printing their content:
@@ -244,10 +246,11 @@ degree rules and returns the only production `DecisionResult`. There is no
 configuration selector or retained deterministic action code, and
 model failure does not fall back. A failed model request, invalid result or
 private-audit write marks the current review `failed_retryable` and creates no
-interpretation, delivery or dedup reservation. A structurally and evidentially
-valid no-match-plus-`uncertain` result instead records terminal
-`insufficient_evidence`; it creates no `DecisionResult` and is not automatically
-evaluated again.
+interpretation, delivery or dedup reservation. Each applicable rule returns
+exactly one `push`, `daily` or `archive` action; missing or conflicting facts are
+handled by the reviewed `daily` condition or the default `archive`. The active
+path no longer creates `uncertain` or new `insufficient_evidence` reviews;
+historical rows remain readable without migration.
 
 `RULE_CORE_CONFIG` is the persisted source for production five-group range
 admission and the Web workbench's `媒体关键词` page. The page edits only
@@ -275,9 +278,11 @@ source segments. The model returns segment ids instead of copying quotes; code
 resolves those ids to the original text. Each rule may cite at most three exact
 segments; response-wide evidence totals remain audit metrics rather than
 validity limits, and ellipsis punctuation does not invalidate a segment. The
-private file contains only reviewed degree-decision rules. All `not_matched` results
-produce `archive`; no match plus any valid `uncertain` result produces no decision
-and records terminal `insufficient_evidence`.
+private file contains only reviewed `push` and `daily` conditions. The model
+checks `push` first and does not check `daily` after a complete `push`; when
+neither condition is met it returns `archive`. `push` and `daily` require the
+minimum sufficient evidence references, while `archive` contains only the rule
+id and action.
 A structurally invalid, evidence-invalid or conflicting response may receive
 one correction request containing the validation errors. Network retries and
 that correction share one hard 120-second total wall-clock budget.
@@ -298,8 +303,9 @@ input, source body or raw provider response.
 The authenticated Web workbench's `大模型决策` view reads completed
 `DecisionResult` fields from unified SQLite and joins failed attempts to the
 bounded `web_projection` stored in the same private audit file. The projection
-contains only bounded rule judgments, reasons, evidence/counterevidence and
-version metadata; it is not a decision input.
+contains only bounded rule actions, reasons, evidence and version metadata; it
+also retains read compatibility for historical judgement/counterevidence
+audits and is not a decision input.
 
 The installer also copies the production collector units:
 

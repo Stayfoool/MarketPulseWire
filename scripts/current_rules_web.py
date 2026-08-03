@@ -185,9 +185,11 @@ def llm_decision_rules_payload(*, env: Mapping[str, str] | None = None) -> dict[
                 ],
                 "title": rule.title,
                 "allowed_actions": list(rule.allowed_actions),
-                "action_conditions": dict(rule.action_conditions),
-                "required_facts": list(rule.required_facts),
-                "exclusions": list(rule.exclusions),
+                "action_conditions": {
+                    action: condition
+                    for action, condition in (("push", rule.push), ("daily", rule.daily))
+                    if condition
+                },
                 "version": rule.version,
             }
             for rule in rules

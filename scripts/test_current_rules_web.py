@@ -85,8 +85,6 @@ def test_current_rules_projection_uses_strict_current_sources() -> None:
         "title",
         "allowed_actions",
         "action_conditions",
-        "required_facts",
-        "exclusions",
         "version",
     }
     shared_rules = {
@@ -192,8 +190,8 @@ def test_current_rules_frontend_is_read_only_and_distinct_from_review() -> None:
     assert "renderLlmRules" in source
     assert "allowed_actions" in source
     assert "action_conditions" in source
-    assert "required_facts" in source
-    assert "exclusions" in source
+    assert "llmRuleTextList('必需事实'" not in source
+    assert "llmRuleTextList('排除条件'" not in source
     assert "api('/api/current-rules', {method: 'POST'" not in source
     assert "api(\"/api/current-rules\", {method: \"POST\"" not in source
 

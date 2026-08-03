@@ -113,6 +113,18 @@ def _references(value: Any, segments: dict[str, dict[str, str]]) -> list[dict[st
 def _assessment(row: Any, segments: dict[str, dict[str, str]]) -> dict[str, Any] | None:
     if not isinstance(row, dict):
         return None
+    action = _text(row.get("action"), 30)
+    if action in {"push", "daily", "archive"} and "judgement" not in row:
+        result: dict[str, Any] = {
+            "rule_id": _text(row.get("rule_id"), 120),
+            "action": action,
+        }
+        if action != "archive":
+            result["reason"] = _text(row.get("reason"), MAX_REASON_CHARS)
+            result["evidence"] = _references(row.get("evidence_ids"), segments)
+        return result
+
+    # Existing private audits retain the preceding judgement-based response format.
     judgement = _text(row.get("judgement"), 30)
     if judgement not in {"matched", "not_matched", "uncertain"}:
         return None
@@ -174,7 +186,6 @@ def _decision_projection(decision: dict[str, Any]) -> dict[str, Any]:
         assessments.append(
             {
                 "rule_id": _text(hit.get("rule_id"), 120),
-                "judgement": "matched",
                 "action": _text(hit.get("decision_action"), 30),
                 "reason": _text(hit.get("reason"), MAX_REASON_CHARS),
                 "evidence": evidence,

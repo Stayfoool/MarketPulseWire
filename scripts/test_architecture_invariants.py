@@ -322,8 +322,8 @@ def test_production_decision_boundary_is_llm_only() -> None:
     assert "from llm_rule_execution import LLMRuleExecution, execute_llm_rule_decision" in production
     assert 'os.environ.get("LLM_THINKING_TYPE")' in production
     assert "RULE_COMPARISON_LLM_THINKING_TYPE" not in production
-    assert "class ProductionLLMInsufficientEvidence" in production
-    assert 'if status == "uncertain"' in production
+    assert "class ProductionLLMInsufficientEvidence" not in production
+    assert 'if status == "uncertain"' not in production
     for collector in (
         "rss_monitor.py",
         "trendforce_page_monitor.py",

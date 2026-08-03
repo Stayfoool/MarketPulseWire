@@ -18,7 +18,6 @@ import market_flow
 from llm_analysis import ChatCompletionResponse
 from llm_production_decision import (
     ProductionLLMDecisionError,
-    ProductionLLMInsufficientEvidence,
     decide_production_market_item,
 )
 from llm_rule_catalog import rules_for_families
@@ -66,13 +65,12 @@ def response(action: str = "push") -> ChatCompletionResponse:
             (
                 {
                     "rule_id": rule.rule_id,
-                    "judgement": "matched",
                     "action": action,
                     "evidence_ids": ["B2"],
                     "reason": "原文确认产能扩张进入执行阶段。",
                 }
-                if rule.rule_id == "company_industry_execution_change"
-                else {"rule_id": rule.rule_id, "judgement": "not_matched"}
+                if rule.rule_id == "company_industry_execution_change" and action != "archive"
+                else {"rule_id": rule.rule_id, "action": "archive"}
             )
             for rule in rules_for_families(("semiconductor_ai",))
         ]
@@ -83,34 +81,6 @@ def response(action: str = "push") -> ChatCompletionResponse:
         provider="provider.example",
         response_id="response-production-1",
         usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
-        attempts=1,
-        elapsed_seconds=0.1,
-    )
-
-
-def uncertain_response() -> ChatCompletionResponse:
-    rules = rules_for_families(("semiconductor_ai",))
-    payload = {
-        "rule_results": [
-            (
-                {
-                    "rule_id": rule.rule_id,
-                    "judgement": "uncertain",
-                    "counterevidence_ids": ["T1"],
-                    "reason": "现有标题缺少决定 action 所需的阶段和量级。",
-                }
-                if rule.rule_id == "company_industry_execution_change"
-                else {"rule_id": rule.rule_id, "judgement": "not_matched"}
-            )
-            for rule in rules
-        ]
-    }
-    return ChatCompletionResponse(
-        content=json.dumps(payload, ensure_ascii=False),
-        model="fixed-production-model",
-        provider="provider.example",
-        response_id="response-production-uncertain",
-        usage={},
         attempts=1,
         elapsed_seconds=0.1,
     )
@@ -220,35 +190,6 @@ def test_invalid_output_fails_closed_after_auditing() -> None:
         assert len(audit["model_audit"]["calls"]) == 2
 
 
-def test_valid_uncertain_is_terminal_insufficient_evidence_without_repair() -> None:
-    with TemporaryDirectory() as tmp:
-        calls = []
-
-        def uncertain(prompt):
-            calls.append(prompt)
-            return uncertain_response()
-
-        try:
-            decide_production_market_item(
-                item(),
-                admission=admission(),
-                portfolio=parse_portfolio_config([]),
-                market_item_id=3,
-                market_review_id=4,
-                audit_dir=Path(tmp),
-                model_caller=uncertain,
-            )
-        except ProductionLLMInsufficientEvidence as exc:
-            assert exc.review_status == "insufficient_evidence"
-        else:
-            raise AssertionError("valid uncertain must terminate without DecisionResult")
-        assert len(calls) == 1
-        audit = json.loads(next(Path(tmp).glob("llm-decision-audit-*.json")).read_text(encoding="utf-8"))
-        assert audit["evaluation_status"] == "uncertain"
-        assert audit["decision"] is None
-        assert len(audit["model_audit"]["calls"]) == 1
-
-
 def test_hard_deadline_cancels_inflight_http_request() -> None:
     original_config = llm_analysis.llm_config
     original_client = llm_analysis.httpx.AsyncClient
@@ -303,7 +244,6 @@ def main() -> int:
     test_valid_decisions_write_private_audits_and_keep_actions_authoritative()
     test_audit_source_item_id_matches_market_storage_fallback()
     test_invalid_output_fails_closed_after_auditing()
-    test_valid_uncertain_is_terminal_insufficient_evidence_without_repair()
     test_hard_deadline_cancels_inflight_http_request()
     print("production LLM decision checks passed")
     return 0

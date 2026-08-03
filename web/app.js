@@ -479,9 +479,7 @@ function llmRuleMatches(rule, families, actions, query) {
     ...(rule.applicable_families || []),
     ...(rule.applicable_family_labels || []),
     rule.title,
-    ...Object.values(rule.action_conditions || {}),
-    ...(rule.required_facts || []),
-    ...(rule.exclusions || [])
+    ...Object.values(rule.action_conditions || {})
   ].join(' ').toLowerCase();
   return searchable.includes(query);
 }
@@ -522,7 +520,7 @@ function renderLlmRules() {
   ].join('');
   list.innerHTML = filtered.map(rule => {
     const applicableLabels = rule.applicable_family_labels || [rule.family_label || rule.family || ''];
-    const actionConditions = ['push', 'daily', 'archive']
+    const actionConditions = ['push', 'daily']
       .filter(value => Object.prototype.hasOwnProperty.call(rule.action_conditions || {}, value))
       .map(value => `<div class="rule-action-condition"><span class="badge">${escapeHtml(value)}</span><p>${escapeHtml(rule.action_conditions[value])}</p></div>`)
       .join('');
@@ -535,8 +533,6 @@ function renderLlmRules() {
         <div class="rule-definition-body">
           <div class="rule-field-label">action 条件</div>
           ${actionConditions}
-          ${llmRuleTextList('必需事实', rule.required_facts)}
-          ${llmRuleTextList('排除条件', rule.exclusions)}
         </div>
       </details>
     `;
@@ -815,16 +811,17 @@ function llmDecisionStatusLabel(status) {
 
 function llmDecisionAssessmentHtml(assessment) {
   const judgement = String(assessment?.judgement || '');
-  const action = assessment?.action ? ` ${badge(assessment.action)}` : '';
+  const resultBadge = assessment?.action ? badge(assessment.action) : badge(judgement);
+  const isArchive = assessment?.action === 'archive';
   const references = [...(assessment?.evidence || []), ...(assessment?.counterevidence || [])];
   const referenceHtml = references.map(reference => `
     <div class="hint">${escapeHtml(reference.evidence_id || '')}${reference.field ? `（${escapeHtml(reference.field)}）` : ''}：${escapeHtml(reference.quote || '')}</div>
   `).join('');
   return `
     <div class="llm-assessment">
-      <div><strong>${escapeHtml(assessment?.rule_id || '未记录规则')}</strong> ${badge(judgement)}${action}</div>
-      <div class="summary-cell">${escapeHtml(assessment?.reason || '未记录理由')}</div>
-      ${referenceHtml || '<div class="hint">未记录证据或反证</div>'}
+      <div><strong>${escapeHtml(assessment?.rule_id || '未记录规则')}</strong> ${resultBadge}</div>
+      ${isArchive ? '' : `<div class="summary-cell">${escapeHtml(assessment?.reason || '未记录理由')}</div>`}
+      ${isArchive ? '' : (referenceHtml || '<div class="hint">未记录证据或反证</div>')}
     </div>
   `;
 }
