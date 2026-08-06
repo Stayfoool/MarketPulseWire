@@ -192,8 +192,9 @@ successful run establishes a no-delivery baseline through
 `process_market_item(..., baseline_only=True)`; later new identities use the
 same production admission, LLM `DecisionResult`, review and delivery flow as
 every other source. Login is performed manually on Alibaba through
-`scripts/open_x_browser_login.sh`; cookies and browser state never enter Git,
-SQLite, reports or deployment artifacts.
+`scripts/open_x_browser_login.sh`, which starts Chromium directly on a temporary
+Xvfb display rather than controlling the login window through Playwright.
+Cookies and browser state never enter Git, SQLite, reports or deployment artifacts.
 
 The older `x_stream.py`, `x_check.py` and related API smoke helpers remain only
 as uninvoked compatibility code for historical tests. They are not registered

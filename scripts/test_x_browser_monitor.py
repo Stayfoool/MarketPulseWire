@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import x_browser_login
 import x_browser_monitor
 from market_db import init_db
 from production_admission import production_admission_context
@@ -144,6 +145,45 @@ def test_missing_following_tab_fails_closed() -> None:
         assert "正在关注" in str(exc)
     else:
         raise AssertionError("missing Following tab must fail closed")
+
+
+class FakePlaywrightManager:
+    def __init__(self, executable_path: Path) -> None:
+        self.playwright = SimpleNamespace(
+            chromium=SimpleNamespace(executable_path=str(executable_path))
+        )
+
+    def __enter__(self):
+        return self.playwright
+
+    def __exit__(self, _exc_type, _exc, _traceback) -> None:
+        return None
+
+
+def test_manual_login_resolves_browser_without_playwright_launch() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        executable = Path(tmpdir) / "chrome"
+        executable.write_text("#!/bin/sh\n", encoding="utf-8")
+        executable.chmod(0o700)
+        resolved = x_browser_login.resolve_chromium_executable(
+            None,
+            playwright_factory=lambda: FakePlaywrightManager(executable),
+        )
+        assert resolved == executable
+
+
+def test_manual_login_command_has_no_playwright_automation_flags() -> None:
+    command = x_browser_login.direct_chromium_command(
+        Path("/opt/playwright/chrome"),
+        Path("/opt/surveil/data/browser-profiles/x"),
+        "https://x.com/home",
+    )
+    joined = " ".join(command)
+    assert command[0] == "/opt/playwright/chrome"
+    assert "--user-data-dir=/opt/surveil/data/browser-profiles/x" in command
+    assert "--remote-debugging-pipe" not in joined
+    assert "--disable-background-networking" not in joined
+    assert command[-1] == "https://x.com/home"
 
 
 def test_disabled_source_does_not_open_browser() -> None:
@@ -322,6 +362,8 @@ def main() -> int:
     test_normalize_tweet_record_requires_stable_identity_and_text()
     test_visible_collection_filters_promoted_reposts_and_deduplicates()
     test_missing_following_tab_fails_closed()
+    test_manual_login_resolves_browser_without_playwright_launch()
+    test_manual_login_command_has_no_playwright_automation_flags()
     test_disabled_source_does_not_open_browser()
     test_first_run_is_baseline_and_later_run_processes_only_new_posts()
     test_live_item_uses_unified_admission_and_market_flow()
