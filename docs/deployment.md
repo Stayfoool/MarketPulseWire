@@ -358,7 +358,9 @@ flow as every other source. Complete the one-time login through
 ./scripts/open_x_browser_login.sh
 ```
 
-Keep the SSH tunnel and VNC connection private. The Chromium profile is owned
+The script prints a one-time VNC password for the current session; enter that
+password in macOS Screen Sharing, not the Mac login password. Keep the SSH
+tunnel and VNC connection private. The Chromium profile is owned
 by the `surveil` service account under `/opt/surveil/data/browser-profiles/x`;
 never copy cookies or browser state to the Mac, Git, SQLite, or reports.
 
