@@ -27,6 +27,7 @@ UNIFIED_ITEM_COLLECTORS = (
     "sina_stock_news.py",
     "company_disclosures.py",
     "value_directory_monitor.py",
+    "x_browser_monitor.py",
 )
 
 UNIFIED_FETCHERS = {
@@ -49,6 +50,7 @@ UNIFIED_STORAGE_RUNTIME_MODULES = {
     "sina_flash.py",
     "sina_stock_news.py",
     "value_directory_monitor.py",
+    "x_browser_monitor.py",
 }
 
 LEGACY_RESULT_TABLES = (
@@ -133,13 +135,7 @@ REMOVED_OPERATOR_PATHS = (
     ROOT / "systemd" / "surveil-stock-relations-import.service",
 )
 
-INDEPENDENT_ROUTE_EXCEPTIONS = {
-    "x_stream.py": {
-        "reason": "X thread/media semantics and stream retry state use a dedicated card route.",
-        "boundary": "X collection, interpretation, seen_posts state, and delivery only.",
-        "test": "test_x_stream_health.py",
-    },
-}
+INDEPENDENT_ROUTE_EXCEPTIONS: dict[str, dict[str, str]] = {}
 
 DIRECT_URLLIB_EXCEPTIONS = {
     "disclosure_document.py": {
@@ -331,6 +327,7 @@ def test_production_decision_boundary_is_llm_only() -> None:
         "china_finance_media_monitor.py",
         "trade_policy_monitor.py",
         "value_directory_monitor.py",
+        "x_browser_monitor.py",
         "sina_flash.py",
         "sina_stock_news.py",
         "company_disclosures.py",
@@ -592,7 +589,7 @@ def test_deployment_preserves_private_state_and_retires_unused_units() -> None:
         assert "UMask=0077" in service_path.read_text(encoding="utf-8"), service_path.name
     assert "find '$REMOTE_DIR/logs' -maxdepth 1 -type f -exec chmod 600 {} +" in installer
     assert "chmod 600 '$REMOTE_DIR/logs/feishu-feedback.log' '$REMOTE_DIR/logs/feishu-feedback.err.log'" in installer
-    for service in ("surveil-feishu-feedback.service", "surveil-x-stream.service"):
+    for service in ("surveil-feishu-feedback.service",):
         enable = f"systemctl enable --now {service}"
         restart = f"systemctl restart {service}"
         assert installer.count(enable) == 1
@@ -614,6 +611,7 @@ def test_deployment_preserves_private_state_and_retires_unused_units() -> None:
         "surveil-research-collector.timer",
         "surveil-official-collector.timer",
         "surveil-news-collector.timer",
+        "surveil-x-browser-collector.timer",
     ):
         assert installer.count(f"systemctl enable --now {timer}") == 1
     assert "DISABLE_LEGACY_" not in installer
@@ -674,9 +672,6 @@ def test_source_profiles_have_complete_runtime_ownership() -> None:
             assert str(getattr(profile, field) or "").strip(), f"{profile.id}.{field}"
         assert profile.service_units, f"{profile.id}.service_units"
         assert profile.health_keys, f"{profile.id}.health_keys"
-        if profile.id == "x_serenity":
-            assert "x_stream.py" in profile.fetcher
-            continue
         assert any(fetcher in profile.fetcher for fetcher in UNIFIED_FETCHERS), (
             profile.id,
             profile.fetcher,

@@ -644,7 +644,6 @@ async function loadFeedbackQuality() {
 }
 
 function marketSourceFilterValue(profile) {
-  if (profile.id === 'x_serenity') return 'x:serenity';
   return String(profile.id || '').trim();
 }
 
@@ -1272,13 +1271,13 @@ function settingsRestartAdvice(changedItems) {
   const hasAny = names => keys.some(key => names.includes(key));
   const lines = [];
   if (hasPrefix('LLM_')) {
-    lines.push('大模型配置：重启常驻的 surveil-x-stream.service、surveil-sina-flash.service；研究机构/官网/新闻媒体 collector 下一轮自动读取，也可立即运行对应 timer。');
+    lines.push('大模型配置：重启常驻的 surveil-sina-flash.service；X、研究机构、官网和新闻媒体 collector 下一轮自动读取，也可立即运行对应 timer。');
   }
   if (hasPrefix('VALUE_DIRECTORY_')) {
     lines.push('价值目录：下一次 05:00 / 21:00 timer 会读取新配置；如需马上验证，在任务健康页立即运行 surveil-value-directory.timer。');
   }
   if (hasPrefix('X_')) {
-    lines.push('X 配置：重启 surveil-x-stream.service。');
+    lines.push('X 配置：重启 surveil-x-browser-collector.timer；首次登录需使用服务器操作员登录脚本。');
   }
   if (hasPrefix('SINA_')) {
     lines.push('新浪配置：重启 surveil-sina-flash.service；可选立即运行 surveil-sina-stock-news.timer。');

@@ -72,6 +72,7 @@ CI_SAFE_TESTS = (
     "test_trendforce_page_monitor.py",
     "test_value_directory_monitor.py",
     "test_wallstreetcn_monitor.py",
+    "test_x_browser_monitor.py",
     "test_x_stream_health.py",
 )
 

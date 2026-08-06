@@ -192,7 +192,7 @@ Write secrets:
 ```bash
 ./scripts/write_remote_secrets.sh
 ./scripts/write_remote_feishu.sh
-./scripts/write_remote_x_credentials.sh
+./scripts/install_value_directory_browser.sh
 ```
 
 Install services and timers:
@@ -347,9 +347,20 @@ processes only entries published within that window; the source does not use log
 member content, RSSHub, or a separate service. Its items use all existing generic content rules.
 The international-bank Fed-path revision rule is cross-source and can be
 triggered by any normalized source, not only WallstreetCN.
-X/Serenity remains the deliberate independent route. `value_directory_monitor`
-keeps its private Playwright/OCR collection boundary, but its final decision,
-compatible review write, dedup and delivery use the unified runtime.
+X/Serenity uses `surveil-x-browser-collector.timer`, which launches the private
+Chromium profile every 10 minutes and reads the visible “正在关注” timeline.
+The first successful run is a no-delivery baseline; later new tweets use the
+same production admission, LLM `DecisionResult`, review, dedup and delivery
+flow as every other source. Complete the one-time login through
+`scripts/open_x_browser_login.sh` after browser dependencies are installed:
+
+```bash
+./scripts/open_x_browser_login.sh
+```
+
+Keep the SSH tunnel and VNC connection private. The Chromium profile is owned
+by the `surveil` service account under `/opt/surveil/data/browser-profiles/x`;
+never copy cookies or browser state to the Mac, Git, SQLite, or reports.
 
 When changing settings programmatically on the server, invoke `settings_store`
 as the `surveil` service user. Do not write `/opt/surveil/.env` as root, because
@@ -360,6 +371,7 @@ The production fetching timers to inspect are:
 
 ```bash
 systemctl status --no-pager \
+  surveil-x-browser-collector.timer \
   surveil-research-collector.timer \
   surveil-official-collector.timer \
   surveil-news-collector.timer \
@@ -380,14 +392,13 @@ schedule.
 The high-frequency persistent fetchers remain:
 
 ```bash
-systemctl status --no-pager surveil-x-stream.service surveil-sina-flash.service
+systemctl status --no-pager surveil-sina-flash.service
 ```
 
 After the private rule/configuration preflight succeeds, the installer restarts
-an enabled `surveil-feishu-feedback.service` and `surveil-x-stream.service` even
-when each unit was already active. `systemctl enable --now` alone does not load
-new Python code into an existing long-running process. Verify their
-`ExecMainStartTimestamp` after deployment, in addition to enabled/active state.
+an enabled `surveil-feishu-feedback.service` and the X browser timer. For the
+timer, verify both its active waiting state and the next elapse; run the paired
+one-shot service manually only for an approved canary.
 
 `surveil-company-disclosures.timer` retains the former announcement schedule at
 08:00 and 20:00. Its source profile defaults to `provider=cninfo_public`. Every

@@ -1,0 +1,17 @@
+[Unit]
+Description=Surveil X Following browser collector
+After=network-online.target surveil-db-init.service surveil-proxy.service
+Wants=network-online.target surveil-proxy.service
+
+[Service]
+UMask=0077
+Type=oneshot
+User=surveil
+WorkingDirectory=/opt/surveil
+EnvironmentFile=-/opt/surveil/.env
+EnvironmentFile=-/opt/surveil/proxy.env
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/surveil/data/ms-playwright
+ExecStart=/usr/bin/env bash -c 'if command -v xvfb-run >/dev/null 2>&1; then xvfb-run -a -s "-screen 0 1280x900x24" /opt/surveil/.venv/bin/python -u /opt/surveil/scripts/x_browser_monitor.py --write-report --strict-exit; else /opt/surveil/.venv/bin/python -u /opt/surveil/scripts/x_browser_monitor.py --write-report --strict-exit; fi'
+TimeoutStartSec=330
+StandardOutput=append:/opt/surveil/logs/x-browser-collector.log
+StandardError=append:/opt/surveil/logs/x-browser-collector.err.log

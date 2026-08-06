@@ -117,7 +117,7 @@ MarketPulseWire is designed around official or authorized access paths:
 
 - Sina Finance public pages, with optional paid OpenAPI support
 - CNINFO public company-disclosure interfaces
-- X API tokens for the account you monitor
+- A private logged-in Chromium profile on the Alibaba server for the account you monitor
 - Official RSS feeds and public list pages
 - Optional logged-in cookies only for sources where your usage is authorized
 

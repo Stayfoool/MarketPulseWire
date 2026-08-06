@@ -68,14 +68,13 @@ SETTING_GROUPS: list[dict[str, Any]] = [
     {
         "id": "x",
         "title": "X / Serenity",
-        "restart_hint": "保存后建议重启 surveil-x-stream.service，使 X stream 立即使用新 token。",
+        "restart_hint": "保存后建议重启 surveil-x-browser-collector.timer；首次登录需使用服务器操作员登录脚本。",
         "fields": [
-            SettingField("X_USERNAME", "监控账号", "x", placeholder="example_user"),
-            SettingField("X_BEARER_TOKEN", "Bearer Token", "x", sensitive=True, help="服务器优先使用 Bearer Token。"),
-            SettingField("X_CLIENT_ID", "Client ID", "x"),
-            SettingField("X_CLIENT_SECRET", "Client Secret", "x", sensitive=True),
-            SettingField("X_REDIRECT_URI", "Redirect URI", "x", placeholder="http://127.0.0.1:8765/callback"),
-            SettingField("X_LINK_ENRICHMENT_ENABLED", "外链解析", "x", placeholder="1"),
+            SettingField("X_BROWSER_HEADLESS", "无界面采集", "x", placeholder="1"),
+            SettingField("X_BROWSER_TIMEOUT_MS", "页面超时毫秒", "x", placeholder="45000"),
+            SettingField("X_BROWSER_RUN_TIMEOUT_SECONDS", "单轮总超时秒数", "x", placeholder="90"),
+            SettingField("X_BROWSER_MAX_SCROLLS", "单轮滚动次数", "x", placeholder="5"),
+            SettingField("X_BROWSER_MAX_POSTS", "单轮最多推文", "x", placeholder="100"),
         ],
     },
     {
