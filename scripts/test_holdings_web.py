@@ -734,7 +734,7 @@ def test_list_filters_use_reusable_multi_selects() -> None:
     assert "params.set('to', endDate)" in html
     assert 'marketIncludeBaseline' in html
     assert '显示基线条目' in html
-    assert "x:serenity" in html
+    assert "return 'x:serenity'" not in html
 
 
 def insert_feedback(
@@ -1200,6 +1200,8 @@ def test_systemd_actions_are_whitelisted() -> None:
     assert RUN_ONCE_TARGETS["surveil-news-collector.timer"] == "surveil-news-collector.service"
     assert "run_once" in unit_actions("surveil-value-directory.timer")
     assert RUN_ONCE_TARGETS["surveil-value-directory.timer"] == "surveil-value-directory.service"
+    assert "run_once" in unit_actions("surveil-x-browser-collector.timer")
+    assert RUN_ONCE_TARGETS["surveil-x-browser-collector.timer"] == "surveil-x-browser-collector.service"
     assert all("-shadow" not in unit for unit in holdings_web.ALLOWED_SYSTEMD_UNITS)
     assert "05:00 / 21:00" in holdings_web.UNIT_METADATA["surveil-value-directory.timer"]["schedule"]
     assert unit_actions("surveil-holdings-web.service") == ["status"]
@@ -1385,16 +1387,24 @@ def test_health_summary_counts_only_enabled_failing_sources() -> None:
     assert summary["issues"][0]["reason"] == "来源连续失败 3 次"
 
 
-def test_health_summary_excludes_raw_x_detail_without_failing_source_profile() -> None:
+def test_x_browser_health_is_owned_by_source_profile() -> None:
     source = {
-        "monitor": "x_stream_detail",
-        "source": "connection",
+        "monitor": "x_browser",
+        "source": "x_serenity",
         "status": "failing",
         "consecutive_failures": 4,
     }
-    enabled = [{"id": "x_serenity", "name": "X", "enabled": True, "health_status": "ok"}]
-    assert ("x_stream_detail", "connection") in active_source_health_keys(enabled, [source])
-    assert build_health_summary([], enabled)["source_failures"] == 0
+    enabled = [
+        {
+            "id": "x_serenity",
+            "name": "X",
+            "enabled": True,
+            "health_status": "failing",
+            "health_records": [source],
+        }
+    ]
+    assert ("x_browser", "x_serenity") in active_source_health_keys(enabled, [source])
+    assert build_health_summary([], enabled)["source_failures"] == 1
 
 
 def test_unit_display_metadata_includes_research_production_collector() -> None:
@@ -1461,6 +1471,7 @@ def main() -> int:
     test_systemd_actions_are_whitelisted()
     test_health_tasks_pair_timer_with_service_and_prefer_execution_result()
     test_health_tasks_show_disabled_timer_and_last_success_separately()
+    test_x_browser_health_is_owned_by_source_profile()
     test_value_directory_task_projects_latest_bounded_report()
     test_unit_display_metadata_includes_research_production_collector()
     test_unit_display_metadata_includes_official_production_collector()

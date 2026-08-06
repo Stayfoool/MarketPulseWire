@@ -21,6 +21,7 @@ REQUIRED_TIMERS = (
     "surveil-research-collector.timer",
     "surveil-official-collector.timer",
     "surveil-news-collector.timer",
+    "surveil-x-browser-collector.timer",
     "surveil-market-daily.timer",
     "surveil-llm-decision-audit-cleanup.timer",
 )
@@ -219,8 +220,6 @@ def verify(root: Path, service_user: str, logrotate_config: Path) -> None:
     )
     if feedback_enabled:
         services.append("surveil-feishu-feedback.service")
-    if env.get("X_BEARER_TOKEN", "").strip():
-        services.append("surveil-x-stream.service")
     for unit in services:
         verify_service(unit)
 

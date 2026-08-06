@@ -99,7 +99,7 @@ SYSTEMCTL_BIN=\"\$(command -v systemctl)\"
 SUDOERS_PATH=/etc/sudoers.d/surveil-web-systemctl
 cat > \"\$SUDOERS_PATH\" <<SUDOERS
 Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
-    \$SYSTEMCTL_BIN --no-block restart surveil-x-stream.service, \\
+    \$SYSTEMCTL_BIN --no-block restart surveil-x-browser-collector.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-feishu-feedback.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-sina-flash.service, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-sina-stock-news.service, \\
@@ -118,6 +118,7 @@ Cmnd_Alias SURVEIL_WEB_SYSTEMCTL = \\
     \$SYSTEMCTL_BIN --no-block restart surveil-official-collector.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-news-collector.timer, \\
     \$SYSTEMCTL_BIN --no-block restart surveil-value-directory.timer, \\
+    \$SYSTEMCTL_BIN --no-block start surveil-x-browser-collector.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-sina-stock-news.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-market-daily.service, \\
     \$SYSTEMCTL_BIN --no-block start surveil-llm-decision-audit-cleanup.service, \\
@@ -164,13 +165,11 @@ else
 fi
 systemctl enable surveil-sina-flash.service
 systemctl restart surveil-sina-flash.service
-if grep -Eq '^X_BEARER_TOKEN=[^[:space:]]+' '$REMOTE_DIR/.env' 2>/dev/null; then
-  systemctl enable --now surveil-x-stream.service
-  systemctl restart surveil-x-stream.service
-else
-  systemctl disable --now surveil-x-stream.service >/dev/null 2>&1 || true
-  echo 'X_BEARER_TOKEN 未配置，保持 surveil-x-stream.service 停用。'
-fi
+systemctl disable --now surveil-x-stream.service >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/surveil-x-stream.service
+systemctl daemon-reload
+systemctl enable --now surveil-x-browser-collector.timer
+systemctl restart surveil-x-browser-collector.timer
 systemctl list-timers --all 'surveil-*' --no-pager
 systemctl --no-pager --full status surveil-sina-flash.service || true
 systemctl --no-pager --full status surveil-holdings-web.service || true
@@ -180,7 +179,7 @@ systemctl --no-pager --full status surveil-official-collector.timer || true
 systemctl --no-pager --full status surveil-news-collector.timer || true
 systemctl --no-pager --full status surveil-value-directory.timer || true
 systemctl --no-pager --full status surveil-llm-decision-audit-cleanup.timer || true
-systemctl --no-pager --full status surveil-x-stream.service || true
+systemctl --no-pager --full status surveil-x-browser-collector.timer || true
 REVISION_COMMIT=\"\$(sed -n 's/^commit=//p' '$REMOTE_DIR/REVISION' | tail -n 1)\"
 if [ -z \"\$REVISION_COMMIT\" ]; then
   echo '部署 revision 缺失，不写入 systemd 安装完成标记。' >&2
@@ -192,5 +191,5 @@ printf 'commit=%s\ninstalled_at=%s\n' \"\$REVISION_COMMIT\" \"\$(date -u +%Y-%m-
 chown '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' \"\$SYSTEMD_MARKER_TMP\"
 chmod 600 \"\$SYSTEMD_MARKER_TMP\"
 mv \"\$SYSTEMD_MARKER_TMP\" \"\$SYSTEMD_MARKER\"
-echo '已安装生产 systemd 单元，启用公司公告、Sina 个股新闻、三个统一 collector timer、市场信息日报、大模型审计清理和持仓 Web UI，并启动新浪快讯常驻服务。'
+echo '已安装生产 systemd 单元，启用 X 浏览器、公司公告、Sina 个股新闻、三个统一 collector timer、市场信息日报、大模型审计清理和持仓 Web UI，并启动新浪快讯常驻服务。'
 "

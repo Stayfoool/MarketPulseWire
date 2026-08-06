@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Surveil X Following browser collector every 10 minutes
+
+[Timer]
+OnActiveSec=2min
+OnUnitActiveSec=10min
+Persistent=true
+Unit=surveil-x-browser-collector.service
+
+[Install]
+WantedBy=timers.target

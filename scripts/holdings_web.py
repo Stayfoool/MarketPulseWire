@@ -84,7 +84,7 @@ SYSTEMCTL_SHOW_FIELDS = {
 }
 
 SERVICE_UNITS = [
-    "surveil-x-stream.service",
+    "surveil-x-browser-collector.service",
     "surveil-feishu-feedback.service",
     "surveil-sina-flash.service",
     "surveil-sina-stock-news.service",
@@ -100,6 +100,7 @@ SERVICE_UNITS = [
 ]
 
 TIMER_UNITS = [
+    "surveil-x-browser-collector.timer",
     "surveil-sina-stock-news.timer",
     "surveil-market-daily.timer",
     "surveil-llm-decision-audit-cleanup.timer",
@@ -111,6 +112,7 @@ TIMER_UNITS = [
 ]
 
 RUN_ONCE_TARGETS = {
+    "surveil-x-browser-collector.timer": "surveil-x-browser-collector.service",
     "surveil-sina-stock-news.timer": "surveil-sina-stock-news.service",
     "surveil-market-daily.timer": "surveil-market-daily.service",
     "surveil-llm-decision-audit-cleanup.timer": "surveil-llm-decision-audit-cleanup.service",
@@ -124,7 +126,7 @@ RUN_ONCE_TARGETS = {
 ALLOWED_SYSTEMD_UNITS = set(SERVICE_UNITS) | set(TIMER_UNITS) | set(RUN_ONCE_TARGETS.values())
 
 UNIT_METADATA = {
-    "surveil-x-stream.service": {"group": "fetching_persistent", "type": "常驻采集", "schedule": "X 长连接"},
+    "surveil-x-browser-collector.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 10 分钟；需先完成服务器浏览器登录"},
     "surveil-sina-flash.service": {"group": "fetching_persistent", "type": "常驻采集", "schedule": "脚本内高频轮询"},
     "surveil-sina-stock-news.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 每 30 分钟"},
     "surveil-company-disclosures.service": {"group": "fetching_scheduled", "type": "定时采集", "schedule": "timer 08:00 / 20:00"},
@@ -142,6 +144,7 @@ UNIT_METADATA = {
     "surveil-research-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 5 分钟"},
     "surveil-official-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 10 分钟"},
     "surveil-news-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 2 分钟"},
+    "surveil-x-browser-collector.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每 10 分钟"},
     "surveil-value-directory.timer": {"group": "fetching_scheduled", "type": "定时器", "schedule": "每天 05:00 / 21:00；默认需人工启用"},
     "surveil-market-daily.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "20:50"},
     "surveil-llm-decision-audit-cleanup.timer": {"group": "processing_scheduled", "type": "定时器", "schedule": "每天 15:30 北京时间"},
@@ -156,7 +159,7 @@ UNIT_GROUP_LABELS = {
 }
 
 UNIT_TASK_LABELS = {
-    "surveil-x-stream": "X / Serenity",
+    "surveil-x-browser-collector": "X / Serenity",
     "surveil-feishu-feedback": "飞书反馈",
     "surveil-sina-flash": "新浪财经快讯",
     "surveil-sina-stock-news": "新浪持仓个股新闻",
@@ -172,7 +175,7 @@ UNIT_TASK_LABELS = {
 }
 
 LOG_FILES = [
-    "x-stream.err.log",
+    "x-browser-collector.err.log",
     "research-collector.err.log",
     "official-collector.err.log",
     "news-collector.err.log",
@@ -1077,29 +1080,6 @@ def health_sources(db_path: Path = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
                         "updated_at": row["updated_at"] or "",
                     }
                 )
-        if table_exists(conn, "x_stream_health"):
-            for row in conn.execute(
-                """
-                SELECT issue_key, status, failure_count, first_failed_at, last_failed_at,
-                       last_error, last_alerted_at, last_recovered_at
-                FROM x_stream_health
-                ORDER BY CASE WHEN status = 'failing' THEN 0 ELSE 1 END, failure_count DESC, last_failed_at DESC
-                LIMIT 80
-                """
-            ):
-                sources.append(
-                    {
-                        "monitor": "x_stream_detail",
-                        "source": row["issue_key"],
-                        "status": row["status"] or "",
-                        "consecutive_failures": int(row["failure_count"] or 0),
-                        "last_success_at": row["last_recovered_at"] or "",
-                        "last_failure_at": row["last_failed_at"] or "",
-                        "last_error": row["last_error"] or "",
-                        "last_alerted_at": row["last_alerted_at"] or "",
-                        "updated_at": row["last_failed_at"] or row["last_recovered_at"] or "",
-                    }
-                )
     return sources
 
 
@@ -1135,20 +1115,12 @@ def build_health_summary(
 
 def active_source_health_keys(profiles: list[dict[str, Any]], sources: list[dict[str, Any]]) -> set[tuple[str, str]]:
     keys: set[tuple[str, str]] = set()
-    enabled_profile_ids: set[str] = set()
     for profile in profiles:
         if not profile.get("enabled", True):
             continue
-        enabled_profile_ids.add(str(profile.get("id") or ""))
         for record in profile.get("health_records") or []:
             if record.get("status") == "failing":
                 keys.add((str(record.get("monitor") or ""), str(record.get("source") or "")))
-    if "x_serenity" in enabled_profile_ids:
-        keys.update(
-            ("x_stream_detail", str(source.get("source") or ""))
-            for source in sources
-            if source.get("monitor") == "x_stream_detail" and source.get("status") == "failing"
-        )
     return keys
 
 

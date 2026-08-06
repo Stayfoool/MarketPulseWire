@@ -6,7 +6,7 @@ rules live in `AGENTS.md`, active work lives in the local
 
 ## Unified Information Flow
 
-Every enabled source except the explicit X route produces a
+Every enabled source, including X / Serenity, produces a
 `NormalizedMarketItem` and uses one downstream flow:
 
 ```text
@@ -69,6 +69,7 @@ cadence:
 | `surveil-sina-stock-news` | Holding-related Sina stock-news discovery |
 | `surveil-company-disclosures` | CNINFO public announcements and investor-relations records |
 | `surveil-value-directory` | Private Playwright/OCR collection boundary |
+| `surveil-x-browser-collector` | Private Chromium DOM collection of the logged-in X “正在关注” timeline |
 
 The three grouped collectors have one production entry each. Their retired
 shadow modes and the standalone overseas-media wrapper do not exist.
@@ -134,8 +135,9 @@ Current stores are:
   `market_item_id`.
 - `seen_items`, `seen_posts`, `seen_sources`,
   `trendforce_page_seen_items`: source-specific technical discovery state.
-- `source_state`, `source_health`, `x_stream_health`: bounded runtime state and
-  health.
+- `source_state`, `source_health`: bounded runtime state and health. The
+  historical `x_stream_health` table remains for non-destructive compatibility;
+  the browser collector uses `source_health` with monitor `x_browser`.
 - `rule_alert_dedup`: current delivery dedup reservations.
 - `portfolio_holdings`, `stocks`: Web-managed portfolio data.
 
@@ -180,13 +182,22 @@ review, market item and source identities match the current SQLite row and the
 audit was generated after that review was created. Reused integer IDs after an
 empty-database rebuild therefore cannot attach an older audit to a current item.
 
-## Explicit Independent Route
+## X Browser Boundary
 
-`x_stream.py` retains a dedicated long-lived X stream, REST backfill,
-thread/media enrichment, `seen_posts` state and X-specific card delivery. These
-stream and media semantics are not represented by the general collector
-boundary. Regression coverage is in `test_x_stream_health.py`. This is the only
-documented independent information route.
+`x_browser_monitor.py` is a scheduled browser collector, not a second decision
+or delivery path. It launches the private Chromium profile, reads only the
+visible “正在关注” timeline DOM, filters promoted/reposted cards, applies a
+bounded scroll and timeout, and normalizes each usable tweet. The first
+successful run establishes a no-delivery baseline through
+`process_market_item(..., baseline_only=True)`; later new identities use the
+same production admission, LLM `DecisionResult`, review and delivery flow as
+every other source. Login is performed manually on Alibaba through
+`scripts/open_x_browser_login.sh`; cookies and browser state never enter Git,
+SQLite, reports or deployment artifacts.
+
+The older `x_stream.py`, `x_check.py` and related API smoke helpers remain only
+as uninvoked compatibility code for historical tests. They are not registered
+in the source catalog or systemd and must not be enabled in production.
 
 ## Deployment Facts
 

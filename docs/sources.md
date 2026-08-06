@@ -24,7 +24,7 @@ The catalog is public configuration and code. Credentials, cookies, paid-content
 
 | Source | Default Account | Method | Notes |
 | --- | --- | --- | --- |
-| Serenity | `aleabitoreddit` | X API filtered stream or polling | Configure privately with `X_USERNAME=aleabitoreddit` and your own X API credentials. Public posts only unless X provides an authorized API path for your account. |
+| Serenity | `aleabitoreddit` | Alibaba Chromium, every 10 minutes | The operator logs in once in the private server Chromium profile; the collector reads only the visible “正在关注” timeline DOM. No paid X API, cookie export, or direct delivery path is used. |
 
 Surveil does not commit X tokens. The repository only contains the monitor logic.
 
