@@ -359,10 +359,13 @@ flow as every other source. Complete the one-time login through
 ```
 
 The script prints a one-time VNC password for the current session; enter that
-password in macOS Screen Sharing, not the Mac login password. Keep the SSH
-tunnel and VNC connection private. The Chromium profile is owned
-by the `surveil` service account under `/opt/surveil/data/browser-profiles/x`;
-never copy cookies or browser state to the Mac, Git, SQLite, or reports.
+password in macOS Screen Sharing, not the Mac login password. The manual login
+helper starts Chromium directly on the temporary server display; Playwright is
+used by scheduled collection, but it does not launch or control the login
+window. Keep the SSH tunnel and VNC connection private. The Chromium profile is
+owned by the `surveil` service account under
+`/opt/surveil/data/browser-profiles/x`; never copy cookies or browser state to
+the Mac, Git, SQLite, or reports.
 
 When changing settings programmatically on the server, invoke `settings_store`
 as the `surveil` service user. Do not write `/opt/surveil/.env` as root, because
