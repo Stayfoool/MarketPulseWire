@@ -25,6 +25,7 @@ set -euo pipefail
 
 command -v Xvfb >/dev/null 2>&1 || { echo "缺少 Xvfb。请先运行 scripts/install_value_directory_browser.sh 安装共享浏览器依赖。" >&2; exit 1; }
 command -v x11vnc >/dev/null 2>&1 || { echo "缺少 x11vnc。请先运行 scripts/install_value_directory_browser.sh 安装共享浏览器依赖。" >&2; exit 1; }
+command -v openssl >/dev/null 2>&1 || { echo "缺少 openssl，无法生成临时 VNC 密码。" >&2; exit 1; }
 [ -x "$REMOTE_DIR/.venv/bin/python" ] || { echo "缺少 $REMOTE_DIR/.venv/bin/python。请先部署项目。" >&2; exit 1; }
 
 mkdir -p "$PROFILE_DIR"
@@ -35,6 +36,7 @@ cleanup() {
   if [ -n "${browser_pid:-}" ]; then kill "$browser_pid" >/dev/null 2>&1 || true; fi
   if [ -n "${vnc_pid:-}" ]; then kill "$vnc_pid" >/dev/null 2>&1 || true; fi
   if [ -n "${xvfb_pid:-}" ]; then kill "$xvfb_pid" >/dev/null 2>&1 || true; fi
+  if [ -n "${vnc_password_file:-}" ] && [ -e "$vnc_password_file" ]; then rm "$vnc_password_file"; fi
 }
 trap cleanup EXIT INT TERM
 
@@ -42,12 +44,28 @@ export DISPLAY=":$DISPLAY_ID"
 Xvfb "$DISPLAY" -screen 0 1280x900x24 -nolisten tcp >/tmp/surveil-x-browser-xvfb.log 2>&1 &
 xvfb_pid=$!
 sleep 1
-x11vnc -display "$DISPLAY" -localhost -rfbport "$VNC_PORT" -forever -shared -nopw >/tmp/surveil-x-browser-x11vnc.log 2>&1 &
+umask 077
+vnc_password_file="$(mktemp /tmp/surveil-x-browser-vnc.XXXXXX)"
+vnc_password="$(openssl rand -hex 4)"
+x11vnc -storepasswd "$vnc_password" "$vnc_password_file" >/dev/null 2>&1
+x11vnc -display "$DISPLAY" -localhost -rfbport "$VNC_PORT" -forever -shared -rfbauth "$vnc_password_file" >/tmp/surveil-x-browser-x11vnc.log 2>&1 &
 vnc_pid=$!
 sleep 1
 
-echo "远程 VNC 已启动在 127.0.0.1:$VNC_PORT。请通过 SSH 隧道登录 X。"
+if [ -f "$REMOTE_DIR/proxy.env" ]; then
+  set -a
+  . "$REMOTE_DIR/proxy.env"
+  set +a
+fi
+proxy_env=()
+for key in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy; do
+  value="${!key:-}"
+  if [ -n "$value" ]; then proxy_env+=("$key=$value"); fi
+done
+
+echo "远程 VNC 已启动在 127.0.0.1:$VNC_PORT。临时 VNC 密码：$vnc_password"
 runuser -u "$REMOTE_SERVICE_USER" -- env \
+  "${proxy_env[@]}" \
   DISPLAY="$DISPLAY" \
   PLAYWRIGHT_BROWSERS_PATH="$REMOTE_DIR/data/ms-playwright" \
   X_BROWSER_PROFILE_DIR="$PROFILE_DIR" \
