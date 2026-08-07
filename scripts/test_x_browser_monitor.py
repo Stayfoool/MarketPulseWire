@@ -183,7 +183,16 @@ def test_manual_login_command_has_no_playwright_automation_flags() -> None:
     assert "--user-data-dir=/opt/surveil/data/browser-profiles/x" in command
     assert "--remote-debugging-pipe" not in joined
     assert "--disable-background-networking" not in joined
+    assert "--no-sandbox" not in joined
     assert command[-1] == "https://x.com/home"
+
+
+def test_shared_browser_installer_provides_standard_chromium() -> None:
+    installer = (ROOT / "scripts" / "install_value_directory_browser.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "chromium chromium-sandbox" in installer
+    assert "shared browser dependencies for ValueList and X collectors" in installer
 
 
 def test_disabled_source_does_not_open_browser() -> None:
@@ -364,6 +373,7 @@ def main() -> int:
     test_missing_following_tab_fails_closed()
     test_manual_login_resolves_browser_without_playwright_launch()
     test_manual_login_command_has_no_playwright_automation_flags()
+    test_shared_browser_installer_provides_standard_chromium()
     test_disabled_source_does_not_open_browser()
     test_first_run_is_baseline_and_later_run_processes_only_new_posts()
     test_live_item_uses_unified_admission_and_market_flow()

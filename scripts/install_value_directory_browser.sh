@@ -8,7 +8,7 @@ require_remote_host
 
 SSH=(ssh -i "$REMOTE_SSH_KEY" -o IdentitiesOnly=yes "$REMOTE_USER@$REMOTE_HOST")
 
-echo "==> install browser dependencies for ValueList collector"
+echo "==> install shared browser dependencies for ValueList and X collectors"
 "${SSH[@]}" "set -euo pipefail
 if ! command -v apt-get >/dev/null 2>&1; then
   echo '当前脚本只支持 apt-get 系统；请手动安装 Chrome/Chromium、xvfb、x11vnc。' >&2
@@ -17,15 +17,20 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends \
+  chromium chromium-sandbox \
   xvfb x11vnc xauth dbus-x11 fonts-noto-cjk ca-certificates \
   libnss3 libatk-bridge2.0-0 libgtk-3-0 libxss1 libasound2 libgbm1 \
   libxshmfence1 libdrm2 libxrandr2 libxcomposite1 libxdamage1 libxfixes3 \
   libpango-1.0-0 libcairo2
 mkdir -p '$REMOTE_DIR/data/browser-profiles/valuelist'
+mkdir -p '$REMOTE_DIR/data/browser-profiles/x'
 mkdir -p '$REMOTE_DIR/data/ms-playwright'
 chown -R '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' '$REMOTE_DIR/data/browser-profiles'
 chown -R '$REMOTE_SERVICE_USER:$REMOTE_SERVICE_USER' '$REMOTE_DIR/data/ms-playwright'
-chmod 700 '$REMOTE_DIR/data/browser-profiles' '$REMOTE_DIR/data/browser-profiles/valuelist'
+chmod 700 \
+  '$REMOTE_DIR/data/browser-profiles' \
+  '$REMOTE_DIR/data/browser-profiles/valuelist' \
+  '$REMOTE_DIR/data/browser-profiles/x'
 if [ -x '$REMOTE_DIR/.venv/bin/python' ]; then
   PLAYWRIGHT_INSTALL_ARGS='chromium'
   if runuser -u '$REMOTE_SERVICE_USER' -- '$REMOTE_DIR/.venv/bin/python' -m playwright install --help | grep -q -- '--no-shell'; then
@@ -50,5 +55,5 @@ command -v Xvfb
 command -v x11vnc
 "
 
-echo "已安装/确认浏览器依赖，并创建服务器私有 profile：$REMOTE_DIR/data/browser-profiles/valuelist"
-echo "下一步运行：./scripts/open_value_directory_login.sh"
+echo "已安装/确认 ValueList 与 X 共用的浏览器运行依赖，并创建各来源独立的服务器私有 profile 目录。"
+echo "按需运行：./scripts/open_value_directory_login.sh 或 ./scripts/open_x_browser_login.sh"

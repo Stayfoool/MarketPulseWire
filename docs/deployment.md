@@ -360,10 +360,12 @@ flow as every other source. Complete the one-time login through
 
 The script prints a one-time VNC password for the current session; enter that
 password in macOS Screen Sharing, not the Mac login password. The manual login
-helper starts Chromium directly on the temporary server display; Playwright is
-used by scheduled collection, but it does not launch or control the login
-window. Keep the SSH tunnel and VNC connection private. The Chromium profile is
-owned by the `surveil` service account under
+helper starts the Debian system Chromium directly on the temporary server
+display; it does not use Chrome for Testing or let Playwright launch or control
+the login window. `scripts/install_value_directory_browser.sh` installs this
+shared browser runtime from the configured Debian repositories. Keep the SSH
+tunnel and VNC connection private. The Chromium profile is owned by the
+`surveil` service account under
 `/opt/surveil/data/browser-profiles/x`; never copy cookies or browser state to
 the Mac, Git, SQLite, or reports.
 

@@ -43,7 +43,6 @@ def direct_chromium_command(executable: Path, profile_dir: Path, url: str) -> li
         f"--user-data-dir={profile_dir}",
         "--no-first-run",
         "--no-default-browser-check",
-        "--no-sandbox",
         "--disable-dev-shm-usage",
         "--window-size=1280,900",
         "--lang=zh-CN",
