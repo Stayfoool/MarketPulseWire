@@ -1514,7 +1514,10 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 values = payload.get("values")
                 if not isinstance(values, dict):
                     raise HoldingsError("请求缺少 values 对象")
-                saved = save_settings(values)
+                clear_keys = payload.get("clear_keys")
+                if clear_keys is not None and not isinstance(clear_keys, list):
+                    raise HoldingsError("clear_keys 必须是数组")
+                saved = save_settings(values, clear_keys=clear_keys)
                 saved["ok"] = True
                 self.send_json(saved)
                 return

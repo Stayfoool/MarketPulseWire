@@ -29,6 +29,7 @@ from holdings_web import (
     unit_display_metadata,
 )
 from market_db import init_db
+from settings_store import save_settings, settings_payload
 from source_profiles import (
     default_profile_map,
     filter_enabled_named_sources,
@@ -200,6 +201,84 @@ def frontend_source() -> str:
             (holdings_web.WEB_ROOT / "app.js").read_text(encoding="utf-8"),
         )
     )
+
+
+def test_value_directory_preview_settings_inherit_and_clear_overrides() -> None:
+    with TemporaryDirectory() as tmpdir:
+        env_path = Path(tmpdir) / ".env"
+        env_path.write_text(
+            "\n".join(
+                (
+                    "LLM_BASE_URL=https://api.deepseek.com",
+                    "LLM_MODEL=deepseek-v4-flash",
+                    "LLM_API_KEY=common-secret-key",
+                    "VALUE_DIRECTORY_PREVIEW_BASE_URL=https://old.example",
+                    "VALUE_DIRECTORY_PREVIEW_MODEL=old-preview-model",
+                    "VALUE_DIRECTORY_PREVIEW_API_KEY=old-preview-secret",
+                    "FEISHU_SECRET=keep-existing-secret",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+
+        before = settings_payload(env_path)
+        before_fields = {
+            field["key"]: field
+            for group in before["groups"]
+            for field in group["fields"]
+        }
+        assert before_fields["VALUE_DIRECTORY_PREVIEW_API_KEY"]["configured"] is True
+        assert before_fields["VALUE_DIRECTORY_PREVIEW_API_KEY"]["value"] == ""
+        assert before_fields["VALUE_DIRECTORY_PREVIEW_API_KEY"]["masked"]
+
+        saved = save_settings(
+            {},
+            clear_keys=[
+                "VALUE_DIRECTORY_PREVIEW_BASE_URL",
+                "VALUE_DIRECTORY_PREVIEW_MODEL",
+                "VALUE_DIRECTORY_PREVIEW_API_KEY",
+            ],
+            path=env_path,
+        )
+        assert saved["changed_count"] == 3
+        assert "VALUE_DIRECTORY_PREVIEW_" not in env_path.read_text(encoding="utf-8")
+
+        after = settings_payload(env_path)
+        after_fields = {
+            field["key"]: field
+            for group in after["groups"]
+            for field in group["fields"]
+        }
+        assert after_fields["VALUE_DIRECTORY_PREVIEW_BASE_URL"]["inherited"] is True
+        assert after_fields["VALUE_DIRECTORY_PREVIEW_BASE_URL"]["effective"] == "https://api.deepseek.com"
+        assert after_fields["VALUE_DIRECTORY_PREVIEW_MODEL"]["effective"] == "deepseek-v4-flash"
+        assert after_fields["VALUE_DIRECTORY_PREVIEW_API_KEY"]["inherited"] is True
+        assert after_fields["VALUE_DIRECTORY_PREVIEW_API_KEY"]["effective"] == "comm...-key"
+        assert after_fields["VALUE_DIRECTORY_PREVIEW_API_KEY"]["value"] == ""
+
+        save_settings(
+            {
+                "VALUE_DIRECTORY_PREVIEW_BASE_URL": "https://custom.example",
+                "VALUE_DIRECTORY_PREVIEW_MODEL": "custom-preview-model",
+                "VALUE_DIRECTORY_PREVIEW_API_KEY": "custom-preview-secret",
+                "FEISHU_SECRET": "",
+            },
+            path=env_path,
+        )
+        restored = env_path.read_text(encoding="utf-8")
+        assert "VALUE_DIRECTORY_PREVIEW_BASE_URL=https://custom.example" in restored
+        assert "VALUE_DIRECTORY_PREVIEW_MODEL=custom-preview-model" in restored
+        assert "VALUE_DIRECTORY_PREVIEW_API_KEY=custom-preview-secret" in restored
+        assert "FEISHU_SECRET=keep-existing-secret" in restored
+
+
+def test_value_directory_preview_settings_ui_exposes_inheritance_and_clear_action() -> None:
+    source = frontend_source()
+    assert "默认复用通用大模型" in source
+    assert "清除独立覆盖，复用通用大模型" in source
+    assert "clear_keys" in source
+    assert "留空表示复用 LLM_API_KEY 或保留现有覆盖" not in source
 
 
 def test_page_uses_extracted_assets_and_bounded_placeholders() -> None:
@@ -1440,6 +1519,8 @@ def test_unit_display_metadata_includes_news_production_collector() -> None:
 
 
 def main() -> int:
+    test_value_directory_preview_settings_inherit_and_clear_overrides()
+    test_value_directory_preview_settings_ui_exposes_inheritance_and_clear_action()
     test_page_uses_extracted_assets_and_bounded_placeholders()
     test_overview_separates_actions_from_review_statuses()
     test_media_keywords_use_one_master_list_and_a_title_only_subset()
