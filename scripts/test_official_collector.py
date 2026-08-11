@@ -51,7 +51,11 @@ def test_collect_delegates_to_unified_rss_pipeline() -> None:
         official_collector.run_rss_once = original
 
     assert payload["ok"] is True
-    assert payload["counts"] == {"rss_sources": 1, "new_items": 2}
+    assert payload["counts"] == {
+        "rss_sources": 1,
+        "new_items": 2,
+        "processing_failed_items": 0,
+    }
     assert calls == [({"nvidia_blog": "https://example.com/feed.xml"}, True)]
 
 

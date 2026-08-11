@@ -48,7 +48,7 @@ def run_batch(
     runner: Callable[..., Any] = subprocess.run,
 ) -> int:
     env = dict(env or os.environ)
-    production_command = collector_command(collector)
+    production_command = (*collector_command(collector), "--write-report", "--strict-exit")
     production_result = _run(production_command, env=env, runner=runner)
     return int(getattr(production_result, "returncode", 1))
 

@@ -18,7 +18,12 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Iterable
 
-from collector_runtime import load_source_state, save_source_state
+from collector_runtime import (
+    ProcessingBatchError,
+    load_source_state,
+    save_source_state,
+    strict_processing_enabled,
+)
 from db_utils import (
     connect_sqlite,
     retry_on_locked,
@@ -576,6 +581,7 @@ def notify_item(item: dict[str, Any], *, source: AlphaAbstractSource = DEFAULT_S
 def run_once(sources: list[AlphaAbstractSource] | None = None, notify_baseline: bool = False) -> int:
     sources = sources or list(ALPHAABSTRACT_SOURCES)
     total_new = 0
+    processing_failed_items = 0
     for source in sources:
         if not source_profile_enabled(source.name):
             print(f"source profile: {source.name} 已停用，跳过本轮。", flush=True)
@@ -625,7 +631,10 @@ def run_once(sources: list[AlphaAbstractSource] | None = None, notify_baseline: 
             try:
                 notify_item(item, source=source)
             except Exception as exc:  # noqa: BLE001 - retry state is already persisted
+                processing_failed_items += 1
                 print(f"{source.name} 条目处理失败，留待重试：{exc}", flush=True)
+    if processing_failed_items and strict_processing_enabled():
+        raise ProcessingBatchError(processing_failed_items, completed_items=total_new)
     return total_new
 
 

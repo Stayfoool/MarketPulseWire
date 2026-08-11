@@ -91,10 +91,13 @@ def collect_production(
     errors: list[dict[str, str]] = []
     media_new_items = 0
     policy_new_items = 0
+    processing_failed_items = 0
     if sources:
         try:
             media_new_items = china_media.run_once(list(sources), notify_baseline=notify_baseline)
         except Exception as exc:  # noqa: BLE001 - retain a source-family result for service health
+            media_new_items = int(getattr(exc, "completed_items", media_new_items) or 0)
+            processing_failed_items += int(getattr(exc, "failed_items", 0) or 0)
             errors.append({"stage": "news_media", "error": f"{type(exc).__name__}: {exc}"})
     if policy_sources:
         try:
@@ -111,6 +114,7 @@ def collect_production(
             "news_media_sources": len(sources),
             "trade_policy_sources": len(policy_sources or []),
             "new_items": media_new_items + policy_new_items,
+            "processing_failed_items": processing_failed_items,
             "news_media_new_items": media_new_items,
             "trade_policy_new_items": policy_new_items,
         },
@@ -132,6 +136,7 @@ def print_text_summary(payload: dict[str, Any]) -> None:
         "news_collector: "
         f"sources={counts.get('sources', 0)} "
         f"new_items={counts.get('new_items', 0)} "
+        f"processing_failed={counts.get('processing_failed_items', 0)} "
         f"errors={len(payload.get('errors', []))}",
         flush=True,
     )
@@ -148,6 +153,8 @@ def main() -> int:
     parser.add_argument("--write-report", action="store_true", help="把 JSON 报告写入 reports/。")
     parser.add_argument("--strict-exit", action="store_true", help="任一 source 失败时返回非 0。")
     args = parser.parse_args()
+    if args.strict_exit:
+        os.environ["SURVEIL_STRICT_PROCESSING"] = "1"
 
     sources, policy_sources = selected_source_groups(args.source)
     payload = collect_production(

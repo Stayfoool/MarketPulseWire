@@ -19,12 +19,14 @@ import feedparser
 import trafilatura
 
 from collector_runtime import (
+    ProcessingBatchError,
     filter_enabled_mapping_for_run,
     load_source_state as runtime_load_source_state,
     load_source_states,
     save_source_state as runtime_save_source_state,
     source_state_key,
     split_sources_by_backoff,
+    strict_processing_enabled,
 )
 from db_utils import (
     connect_sqlite,
@@ -530,6 +532,7 @@ def run_once(feeds: dict[str, str], notify_baseline: bool = False) -> int:
     if not feeds:
         return 0
     total_new = 0
+    processing_failed_items = 0
     with connect_db() as conn:
         feed_states = load_source_states(conn, feeds, prefix="rss_feed")
     max_workers = max(1, int(os.getenv("RSS_FETCH_MAX_WORKERS", "8") or "8"))
@@ -599,7 +602,10 @@ def run_once(feeds: dict[str, str], notify_baseline: bool = False) -> int:
             try:
                 notify_item(source, item)
             except Exception as exc:  # noqa: BLE001 - keep other feeds alive
+                processing_failed_items += 1
                 print(f"{source} 通知失败：{exc}")
+    if processing_failed_items and strict_processing_enabled():
+        raise ProcessingBatchError(processing_failed_items, completed_items=total_new)
     return total_new
 
 
