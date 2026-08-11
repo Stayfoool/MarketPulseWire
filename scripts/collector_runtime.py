@@ -29,10 +29,22 @@ T = TypeVar("T")
 class ProcessingBatchError(RuntimeError):
     """Signals item-level processing failures after a batch has been retained for retry."""
 
-    def __init__(self, failed_items: int, *, completed_items: int = 0) -> None:
+    def __init__(
+        self,
+        failed_items: int,
+        *,
+        completed_items: int = 0,
+        global_failure: bool = False,
+    ) -> None:
         self.failed_items = max(1, int(failed_items))
         self.completed_items = max(0, int(completed_items))
+        self.global_failure = bool(global_failure)
+        self.aborted_due_global_failure = self.global_failure
         super().__init__(f"本轮处理失败 {self.failed_items} 条，已保留待重试")
+
+
+def is_global_llm_failure(error: BaseException) -> bool:
+    return bool(getattr(error, "global_failure", False))
 
 
 def strict_processing_enabled() -> bool:

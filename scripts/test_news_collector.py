@@ -104,12 +104,29 @@ def test_processing_failure_is_explicit_in_report() -> None:
     assert payload["ok"] is False
     assert payload["counts"]["new_items"] == 4
     assert payload["counts"]["processing_failed_items"] == 2
+    assert payload["counts"]["processing_aborted_due_global_failure"] is False
     assert payload["errors"] == [
         {
             "stage": "news_media",
             "error": "ProcessingBatchError: 本轮处理失败 2 条，已保留待重试",
         }
     ]
+
+
+def test_global_processing_failure_marks_batch_aborted() -> None:
+    original_media = news_collector.china_media.run_once
+    news_collector.china_media.run_once = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        ProcessingBatchError(1, completed_items=1, global_failure=True)
+    )
+    try:
+        payload = news_collector.collect_production(
+            sources={"wallstreetcn_news": "https://example.com"},
+            policy_sources=[],
+        )
+    finally:
+        news_collector.china_media.run_once = original_media
+
+    assert payload["counts"]["processing_aborted_due_global_failure"] is True
 
 
 def main() -> int:

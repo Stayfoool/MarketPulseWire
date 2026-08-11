@@ -21,6 +21,7 @@ import trafilatura
 from collector_runtime import (
     ProcessingBatchError,
     filter_enabled_mapping_for_run,
+    is_global_llm_failure,
     load_source_state as runtime_load_source_state,
     load_source_states,
     save_source_state as runtime_save_source_state,
@@ -604,6 +605,12 @@ def run_once(feeds: dict[str, str], notify_baseline: bool = False) -> int:
             except Exception as exc:  # noqa: BLE001 - keep other feeds alive
                 processing_failed_items += 1
                 print(f"{source} 通知失败：{exc}")
+                if strict_processing_enabled() and is_global_llm_failure(exc):
+                    raise ProcessingBatchError(
+                        processing_failed_items,
+                        completed_items=total_new,
+                        global_failure=True,
+                    ) from exc
     if processing_failed_items and strict_processing_enabled():
         raise ProcessingBatchError(processing_failed_items, completed_items=total_new)
     return total_new

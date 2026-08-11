@@ -55,6 +55,7 @@ def test_collect_delegates_to_unified_rss_pipeline() -> None:
         "rss_sources": 1,
         "new_items": 2,
         "processing_failed_items": 0,
+        "processing_aborted_due_global_failure": False,
     }
     assert calls == [({"nvidia_blog": "https://example.com/feed.xml"}, True)]
 

@@ -190,6 +190,21 @@ def test_invalid_output_fails_closed_after_auditing() -> None:
         assert len(audit["model_audit"]["calls"]) == 2
 
 
+def test_model_unavailable_is_marked_as_global_failure() -> None:
+    unavailable = ProductionLLMDecisionError(
+        "LLM degree decision failed: model_unavailable: request_failed",
+        status="model_unavailable",
+        reason="request_failed",
+    )
+    invalid = ProductionLLMDecisionError(
+        "LLM degree decision failed: invalid_output: bad JSON",
+        status="invalid_output",
+        reason="bad JSON",
+    )
+    assert unavailable.global_failure is True
+    assert invalid.global_failure is False
+
+
 def test_hard_deadline_cancels_inflight_http_request() -> None:
     original_config = llm_analysis.llm_config
     original_client = llm_analysis.httpx.AsyncClient
