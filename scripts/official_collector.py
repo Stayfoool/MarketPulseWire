@@ -61,12 +61,14 @@ def collect_production(
     errors: list[dict[str, str]] = []
     new_items = 0
     processing_failed_items = 0
+    processing_aborted_due_global_failure = False
     if feeds:
         try:
             new_items = run_rss_once(feeds, notify_baseline=notify_baseline)
         except Exception as exc:  # noqa: BLE001 - retain a source-family result for service health
             new_items = int(getattr(exc, "completed_items", new_items) or 0)
             processing_failed_items += int(getattr(exc, "failed_items", 0) or 0)
+            processing_aborted_due_global_failure |= bool(getattr(exc, "aborted_due_global_failure", False))
             errors.append({"stage": "rss", "error": f"{type(exc).__name__}: {exc}"})
     return {
         "ok": not errors,
@@ -77,6 +79,7 @@ def collect_production(
             "rss_sources": len(feeds),
             "new_items": new_items,
             "processing_failed_items": processing_failed_items,
+            "processing_aborted_due_global_failure": processing_aborted_due_global_failure,
         },
         "errors": errors,
     }

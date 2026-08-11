@@ -30,6 +30,14 @@ PRODUCTION_MAX_OUTPUT_TOKENS = 6000
 class ProductionLLMDecisionError(RuntimeError):
     """Raised when an admitted item cannot produce an audited production decision."""
 
+    def __init__(self, message: str, *, status: str = "", reason: str = "") -> None:
+        self.status = status
+        self.reason = reason
+        # model_unavailable means the failure is shared by the provider/configuration,
+        # rather than being specific to this item's content.
+        self.global_failure = status == "model_unavailable"
+        super().__init__(message)
+
 
 def _default_model_caller(deadline_monotonic: float):
     thinking = str(os.environ.get("LLM_THINKING_TYPE") or "").strip() or None
@@ -154,7 +162,11 @@ def decide_production_market_item(
     if execution.decision is None:
         status = str(execution.evaluation.get("evaluation_status") or "invalid_output")
         reason = str(execution.evaluation.get("failure_reason") or "no valid DecisionResult")
-        raise ProductionLLMDecisionError(f"LLM degree decision failed: {status}: {reason}")
+        raise ProductionLLMDecisionError(
+            f"LLM degree decision failed: {status}: {reason}",
+            status=status,
+            reason=reason,
+        )
     decision_audit = dict(execution.decision.audit_json)
     decision_audit.update(
         {

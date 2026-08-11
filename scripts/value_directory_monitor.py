@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from db_utils import update_seen_item_lifecycle
+from collector_runtime import ProcessingBatchError, is_global_llm_failure, strict_processing_enabled
 from market_item import NormalizedMarketItem, raw_item_id
 from market_flow import normalize_market_item, process_market_item
 from market_store import processing_failure_status, source_item_review_snapshot
@@ -409,6 +410,25 @@ def collect_production(
         )
     pushed = 0
     reviewed = 0
+    def review_item_or_abort(item: dict[str, Any], *, recheck_rules: bool) -> bool:
+        try:
+            return review_and_maybe_push(
+                item,
+                source=source,
+                recheck_rules=recheck_rules,
+                collected_previews=collected_previews,
+                preview_errors=preview_errors,
+                browser_collection_complete=browser_collection_complete,
+            )
+        except Exception as exc:
+            if strict_processing_enabled() and is_global_llm_failure(exc):
+                raise ProcessingBatchError(
+                    1,
+                    completed_items=max(0, reviewed - 1),
+                    global_failure=True,
+                ) from exc
+            raise
+
     new_item_ids = {raw_item_id(item) for item in new_items}
     retryable_items = [
         item
@@ -417,14 +437,7 @@ def collect_production(
     ]
     for item in [*new_items, *retryable_items]:
         reviewed += 1
-        if review_and_maybe_push(
-            item,
-            source=source,
-            recheck_rules=raw_item_id(item) in retryable_ids,
-            collected_previews=collected_previews,
-            preview_errors=preview_errors,
-            browser_collection_complete=browser_collection_complete,
-        ):
+        if review_item_or_abort(item, recheck_rules=raw_item_id(item) in retryable_ids):
             pushed += 1
     rechecked = 0
     rechecked_item_ids: set[str] = set()
@@ -443,14 +456,7 @@ def collect_production(
             rechecked += 1
             rechecked_item_ids.add(item_id)
             reviewed += 1
-            if review_and_maybe_push(
-                item,
-                source=source,
-                recheck_rules=True,
-                collected_previews=collected_previews,
-                preview_errors=preview_errors,
-                browser_collection_complete=browser_collection_complete,
-            ):
+            if review_item_or_abort(item, recheck_rules=True):
                 pushed += 1
     target_id = recheck_item_id.strip()
     if (
@@ -464,14 +470,7 @@ def collect_production(
                 continue
             rechecked += 1
             reviewed += 1
-            if review_and_maybe_push(
-                item,
-                source=source,
-                recheck_rules=True,
-                collected_previews=collected_previews,
-                preview_errors=preview_errors,
-                browser_collection_complete=browser_collection_complete,
-            ):
+            if review_item_or_abort(item, recheck_rules=True):
                 pushed += 1
             break
     return {
@@ -516,7 +515,9 @@ def print_summary(payload: dict[str, Any]) -> None:
         f"new={counts.get('new_items', '-')} "
         f"retryable={counts.get('retryable_items', '-')} "
         f"reviewed={counts.get('reviewed_items', '-')} "
-        f"pushed={counts.get('pushed_items', '-')}",
+        f"pushed={counts.get('pushed_items', '-')} "
+        f"processing_failed={counts.get('processing_failed_items', 0)} "
+        f"aborted_global={counts.get('processing_aborted_due_global_failure', False)}",
         flush=True,
     )
     if payload.get("mode") != "production":
@@ -553,7 +554,13 @@ def source_payload_error(
         "url": source.list_url,
         "started_at": started_at,
         "finished_at": utc_now(),
-        "counts": {"raw_items": 0},
+        "counts": {
+            "raw_items": 0,
+            "processing_failed_items": int(getattr(error, "failed_items", 0) or 0),
+            "processing_aborted_due_global_failure": bool(
+                getattr(error, "aborted_due_global_failure", False)
+            ),
+        },
         "errors": [error_text],
     }
 
@@ -621,6 +628,7 @@ def run(
             collection_error = exc
 
     payloads: list[dict[str, Any]] = []
+    global_failure_abort = False
     for source_id in sources:
         source = source_configs[source_id]
         source_started_at = started_at
@@ -637,6 +645,26 @@ def run(
                     "finished_at": utc_now(),
                     "counts": {"raw_items": 0},
                     "errors": [],
+                }
+            )
+            continue
+        if global_failure_abort:
+            payloads.append(
+                {
+                    "ok": False,
+                    "mode": "production",
+                    "skipped": True,
+                    "reason": "本轮已因大模型全局不可用中止，留待下轮重试",
+                    "source": source.source_id,
+                    "url": source.list_url,
+                    "started_at": source_started_at,
+                    "finished_at": utc_now(),
+                    "counts": {
+                        "raw_items": 0,
+                        "processing_failed_items": 0,
+                        "processing_aborted_due_global_failure": True,
+                    },
+                    "errors": ["本轮已因大模型全局不可用中止，未发起后续请求"],
                 }
             )
             continue
@@ -659,16 +687,18 @@ def run(
                 )
             )
             continue
-        payloads.append(
-            process_collected_source(
-                source,
-                collection.entries_by_source.get(source_id, []),
-                notify_baseline=notify_baseline,
-                started_at=source_started_at,
-                recheck_item_id=recheck_item_id,
-                collected_previews=collection.previews,
-                preview_errors=collection.preview_errors,
-            )
+        payload = process_collected_source(
+            source,
+            collection.entries_by_source.get(source_id, []),
+            notify_baseline=notify_baseline,
+            started_at=source_started_at,
+            recheck_item_id=recheck_item_id,
+            collected_previews=collection.previews,
+            preview_errors=collection.preview_errors,
+        )
+        payloads.append(payload)
+        global_failure_abort = bool(
+            payload.get("counts", {}).get("processing_aborted_due_global_failure")
         )
     errors = [error for payload in payloads for error in payload.get("errors", [])]
     counts = {
@@ -679,6 +709,12 @@ def run(
         "reviewed_items": sum(int(payload.get("counts", {}).get("reviewed_items") or 0) for payload in payloads),
         "rechecked_items": sum(int(payload.get("counts", {}).get("rechecked_items") or 0) for payload in payloads),
         "pushed_items": sum(int(payload.get("counts", {}).get("pushed_items") or 0) for payload in payloads),
+        "processing_failed_items": sum(
+            int(payload.get("counts", {}).get("processing_failed_items") or 0) for payload in payloads
+        ),
+        "processing_aborted_due_global_failure": any(
+            payload.get("counts", {}).get("processing_aborted_due_global_failure") for payload in payloads
+        ),
     }
     return {
         "ok": all(payload.get("ok") for payload in payloads),

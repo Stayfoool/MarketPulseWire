@@ -92,12 +92,14 @@ def collect_production(
     media_new_items = 0
     policy_new_items = 0
     processing_failed_items = 0
+    processing_aborted_due_global_failure = False
     if sources:
         try:
             media_new_items = china_media.run_once(list(sources), notify_baseline=notify_baseline)
         except Exception as exc:  # noqa: BLE001 - retain a source-family result for service health
             media_new_items = int(getattr(exc, "completed_items", media_new_items) or 0)
             processing_failed_items += int(getattr(exc, "failed_items", 0) or 0)
+            processing_aborted_due_global_failure |= bool(getattr(exc, "aborted_due_global_failure", False))
             errors.append({"stage": "news_media", "error": f"{type(exc).__name__}: {exc}"})
     if policy_sources:
         try:
@@ -115,6 +117,7 @@ def collect_production(
             "trade_policy_sources": len(policy_sources or []),
             "new_items": media_new_items + policy_new_items,
             "processing_failed_items": processing_failed_items,
+            "processing_aborted_due_global_failure": processing_aborted_due_global_failure,
             "news_media_new_items": media_new_items,
             "trade_policy_new_items": policy_new_items,
         },

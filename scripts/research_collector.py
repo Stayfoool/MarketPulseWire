@@ -160,6 +160,7 @@ def collect_production(
     page_new = 0
     alphabstract_new = 0
     processing_failed_items = 0
+    processing_aborted_due_global_failure = False
     due_pages: list[PageSource] = []
     due_alphabstract: list[AlphaAbstractSource] = []
     skipped_pages: list[dict[str, str]] = []
@@ -171,6 +172,7 @@ def collect_production(
         except Exception as exc:  # noqa: BLE001 - retain a source-family result for service health
             rss_new = int(getattr(exc, "completed_items", rss_new) or 0)
             processing_failed_items += int(getattr(exc, "failed_items", 0) or 0)
+            processing_aborted_due_global_failure |= bool(getattr(exc, "aborted_due_global_failure", False))
             errors.append({"stage": "rss", "error": f"{type(exc).__name__}: {exc}"})
     if page_sources:
         try:
@@ -198,6 +200,7 @@ def collect_production(
         except Exception as exc:  # noqa: BLE001 - retain a source-family result for service health
             alphabstract_new = int(getattr(exc, "completed_items", alphabstract_new) or 0)
             processing_failed_items += int(getattr(exc, "failed_items", 0) or 0)
+            processing_aborted_due_global_failure |= bool(getattr(exc, "aborted_due_global_failure", False))
             errors.append({"stage": "alphabstract", "error": f"{type(exc).__name__}: {exc}"})
 
     return {
@@ -218,6 +221,7 @@ def collect_production(
             "alphabstract_new_items": alphabstract_new,
             "new_items": rss_new + page_new + alphabstract_new,
             "processing_failed_items": processing_failed_items,
+            "processing_aborted_due_global_failure": processing_aborted_due_global_failure,
         },
         "skipped_pages": skipped_pages,
         "skipped_alphabstract": skipped_alphabstract,

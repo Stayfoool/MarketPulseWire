@@ -31,6 +31,7 @@ from china_media_sources import (
 from collector_runtime import (
     ProcessingBatchError,
     filter_enabled_mapping_for_run,
+    is_global_llm_failure,
     load_source_state as runtime_load_source_state,
     save_source_state as runtime_save_source_state,
     split_sources_by_backoff,
@@ -1541,6 +1542,12 @@ def run_once(sources: list[str], notify_baseline: bool = False) -> int:
                     if source == WALLSTREETCN_SOURCE:
                         record_source_failure(conn, "wallstreetcn", "detail", exc)
                 print(f"{china_media_module(source)} 条目处理失败，已保留为可重试：{type(exc).__name__}: {exc}", flush=True)
+                if strict_processing_enabled() and is_global_llm_failure(exc):
+                    raise ProcessingBatchError(
+                        processing_failed_items,
+                        completed_items=total_new,
+                        global_failure=True,
+                    ) from exc
         if source == WALLSTREETCN_SOURCE and not processing_failed:
             with connect_db() as conn:
                 record_source_success(conn, "wallstreetcn", "detail")

@@ -20,6 +20,7 @@ from typing import Any, Iterable
 
 from collector_runtime import (
     ProcessingBatchError,
+    is_global_llm_failure,
     load_source_state,
     save_source_state,
     strict_processing_enabled,
@@ -633,6 +634,12 @@ def run_once(sources: list[AlphaAbstractSource] | None = None, notify_baseline: 
             except Exception as exc:  # noqa: BLE001 - retry state is already persisted
                 processing_failed_items += 1
                 print(f"{source.name} 条目处理失败，留待重试：{exc}", flush=True)
+                if strict_processing_enabled() and is_global_llm_failure(exc):
+                    raise ProcessingBatchError(
+                        processing_failed_items,
+                        completed_items=total_new,
+                        global_failure=True,
+                    ) from exc
     if processing_failed_items and strict_processing_enabled():
         raise ProcessingBatchError(processing_failed_items, completed_items=total_new)
     return total_new
