@@ -29,10 +29,12 @@ from china_media_sources import (
     is_china_media_source,
 )
 from collector_runtime import (
+    ProcessingBatchError,
     filter_enabled_mapping_for_run,
     load_source_state as runtime_load_source_state,
     save_source_state as runtime_save_source_state,
     split_sources_by_backoff,
+    strict_processing_enabled,
 )
 from db_utils import connect_sqlite, retry_on_locked, update_seen_item_lifecycle
 from env_utils import load_env
@@ -1464,6 +1466,7 @@ def run_once(sources: list[str], notify_baseline: bool = False) -> int:
     if not sources:
         return 0
     total_new = 0
+    processing_failed_items = 0
     fetched: dict[str, list[dict[str, Any]]] = {}
     max_workers = min(len(sources), env_int("CHINA_MEDIA_FETCH_MAX_WORKERS", 3, minimum=1))
     source_states = {source: load_source_state(source) for source in sources}
@@ -1516,6 +1519,7 @@ def run_once(sources: list[str], notify_baseline: bool = False) -> int:
                 save_source_state(source, next_state)
                 wallstreetcn.PENDING_STATE.clear()
         except Exception as exc:
+            processing_failed_items += 1
             with connect_db() as conn:
                 record_source_failure(conn, "china_finance_media", source, exc)
             print(f"{china_media_module(source)} 处理失败：{exc}", flush=True)
@@ -1531,6 +1535,7 @@ def run_once(sources: list[str], notify_baseline: bool = False) -> int:
                 notify_item(source, item)
             except Exception as exc:  # noqa: BLE001 - retain retry state and continue the batch
                 processing_failed = True
+                processing_failed_items += 1
                 with connect_db() as conn:
                     record_source_failure(conn, "china_finance_media", source, exc)
                     if source == WALLSTREETCN_SOURCE:
@@ -1539,6 +1544,8 @@ def run_once(sources: list[str], notify_baseline: bool = False) -> int:
         if source == WALLSTREETCN_SOURCE and not processing_failed:
             with connect_db() as conn:
                 record_source_success(conn, "wallstreetcn", "detail")
+    if processing_failed_items and strict_processing_enabled():
+        raise ProcessingBatchError(processing_failed_items, completed_items=total_new)
     return total_new
 
 

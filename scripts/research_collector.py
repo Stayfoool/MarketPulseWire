@@ -159,6 +159,7 @@ def collect_production(
     rss_new = 0
     page_new = 0
     alphabstract_new = 0
+    processing_failed_items = 0
     due_pages: list[PageSource] = []
     due_alphabstract: list[AlphaAbstractSource] = []
     skipped_pages: list[dict[str, str]] = []
@@ -168,6 +169,8 @@ def collect_production(
         try:
             rss_new = run_rss_once(feeds, notify_baseline=notify_baseline)
         except Exception as exc:  # noqa: BLE001 - retain a source-family result for service health
+            rss_new = int(getattr(exc, "completed_items", rss_new) or 0)
+            processing_failed_items += int(getattr(exc, "failed_items", 0) or 0)
             errors.append({"stage": "rss", "error": f"{type(exc).__name__}: {exc}"})
     if page_sources:
         try:
@@ -193,6 +196,8 @@ def collect_production(
                 alphabstract_new = run_alphabstract_once(due_alphabstract, notify_baseline=notify_baseline)
                 mark_page_sources_checked(due_alphabstract)
         except Exception as exc:  # noqa: BLE001 - retain a source-family result for service health
+            alphabstract_new = int(getattr(exc, "completed_items", alphabstract_new) or 0)
+            processing_failed_items += int(getattr(exc, "failed_items", 0) or 0)
             errors.append({"stage": "alphabstract", "error": f"{type(exc).__name__}: {exc}"})
 
     return {
@@ -212,6 +217,7 @@ def collect_production(
             "page_new_items": page_new,
             "alphabstract_new_items": alphabstract_new,
             "new_items": rss_new + page_new + alphabstract_new,
+            "processing_failed_items": processing_failed_items,
         },
         "skipped_pages": skipped_pages,
         "skipped_alphabstract": skipped_alphabstract,
@@ -235,6 +241,7 @@ def print_text_summary(payload: dict[str, Any]) -> None:
         f"page_sources={counts.get('page_sources', 0)} "
         f"alphabstract_sources={counts.get('alphabstract_sources', 0)} "
         f"new_items={counts.get('new_items', 0)} "
+        f"processing_failed={counts.get('processing_failed_items', 0)} "
         f"errors={len(payload.get('errors', []))}",
         flush=True,
     )
@@ -262,6 +269,8 @@ def main() -> int:
     parser.add_argument("--write-report", action="store_true", help="把 JSON 报告写入 reports/。")
     parser.add_argument("--strict-exit", action="store_true", help="任一 source 失败时返回非 0。")
     args = parser.parse_args()
+    if args.strict_exit:
+        os.environ["SURVEIL_STRICT_PROCESSING"] = "1"
     if args.rss_only and args.pages_only:
         raise SystemExit("--rss-only 和 --pages-only 不能同时使用")
 

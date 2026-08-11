@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import news_collector
+from collector_runtime import ProcessingBatchError
 from source_profiles import save_source_profile_config
 
 
@@ -79,10 +80,35 @@ def test_collect_delegates_to_unified_source_pipelines() -> None:
 
     assert payload["ok"] is True
     assert payload["counts"]["new_items"] == 5
+    assert payload["counts"]["processing_failed_items"] == 0
     assert payload["counts"]["sources"] == 3
     assert calls == [
         (["yicai_brief"], True),
         ([source.name for source in policy_sources], True),
+    ]
+
+
+def test_processing_failure_is_explicit_in_report() -> None:
+    original_media = news_collector.china_media.run_once
+    news_collector.china_media.run_once = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        ProcessingBatchError(2, completed_items=4)
+    )
+    try:
+        payload = news_collector.collect_production(
+            sources={"wallstreetcn_news": "https://example.com"},
+            policy_sources=[],
+        )
+    finally:
+        news_collector.china_media.run_once = original_media
+
+    assert payload["ok"] is False
+    assert payload["counts"]["new_items"] == 4
+    assert payload["counts"]["processing_failed_items"] == 2
+    assert payload["errors"] == [
+        {
+            "stage": "news_media",
+            "error": "ProcessingBatchError: 本轮处理失败 2 条，已保留待重试",
+        }
     ]
 
 
@@ -93,6 +119,7 @@ def main() -> int:
         test_enabled_sources_include_current_groups()
         test_disabled_source_is_filtered()
         test_collect_delegates_to_unified_source_pipelines()
+        test_processing_failure_is_explicit_in_report()
     finally:
         if previous is None:
             os.environ.pop("RULE_CORE_CONFIG", None)

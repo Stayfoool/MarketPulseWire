@@ -60,17 +60,24 @@ def collect_production(
     started_at = utc_now()
     errors: list[dict[str, str]] = []
     new_items = 0
+    processing_failed_items = 0
     if feeds:
         try:
             new_items = run_rss_once(feeds, notify_baseline=notify_baseline)
         except Exception as exc:  # noqa: BLE001 - retain a source-family result for service health
+            new_items = int(getattr(exc, "completed_items", new_items) or 0)
+            processing_failed_items += int(getattr(exc, "failed_items", 0) or 0)
             errors.append({"stage": "rss", "error": f"{type(exc).__name__}: {exc}"})
     return {
         "ok": not errors,
         "mode": "production",
         "started_at": started_at,
         "finished_at": utc_now(),
-        "counts": {"rss_sources": len(feeds), "new_items": new_items},
+        "counts": {
+            "rss_sources": len(feeds),
+            "new_items": new_items,
+            "processing_failed_items": processing_failed_items,
+        },
         "errors": errors,
     }
 
@@ -89,6 +96,7 @@ def print_text_summary(payload: dict[str, Any]) -> None:
         "official_collector: "
         f"rss_sources={counts.get('rss_sources', 0)} "
         f"new_items={counts.get('new_items', 0)} "
+        f"processing_failed={counts.get('processing_failed_items', 0)} "
         f"errors={len(payload.get('errors', []))}",
         flush=True,
     )
@@ -105,6 +113,8 @@ def main() -> int:
     parser.add_argument("--write-report", action="store_true", help="把 JSON 报告写入 reports/。")
     parser.add_argument("--strict-exit", action="store_true", help="任一 source 失败时返回非 0。")
     args = parser.parse_args()
+    if args.strict_exit:
+        os.environ["SURVEIL_STRICT_PROCESSING"] = "1"
 
     payload = collect_production(
         feeds=selected_sources(args.source),

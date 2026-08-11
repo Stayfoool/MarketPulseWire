@@ -8,6 +8,7 @@ research/official/news collectors.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
@@ -23,6 +24,24 @@ from source_profiles import (
 
 
 T = TypeVar("T")
+
+
+class ProcessingBatchError(RuntimeError):
+    """Signals item-level processing failures after a batch has been retained for retry."""
+
+    def __init__(self, failed_items: int, *, completed_items: int = 0) -> None:
+        self.failed_items = max(1, int(failed_items))
+        self.completed_items = max(0, int(completed_items))
+        super().__init__(f"本轮处理失败 {self.failed_items} 条，已保留待重试")
+
+
+def strict_processing_enabled() -> bool:
+    return str(os.getenv("SURVEIL_STRICT_PROCESSING", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def source_id_for(source: Any) -> str:
