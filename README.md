@@ -1,84 +1,132 @@
 # MarketPulseWire
 
-MarketPulseWire is an event-driven market and industry monitoring system for personal research. It watches holdings, watchlists, official company/news sources, filings/notices, RSS feeds, X accounts, and selected industry media; then uses five-group range admission, reviewed LLM degree decisions and thin LLM interpretation to produce concise summaries and send alerts to Feishu or a local Web workbench.
+[简体中文](README.zh-CN.md) | English
+
+[![CI](https://github.com/Stayfoool/MarketPulseWire/actions/workflows/ci.yml/badge.svg)](https://github.com/Stayfoool/MarketPulseWire/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/Stayfoool/MarketPulseWire)](https://github.com/Stayfoool/MarketPulseWire/releases)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+**A self-hosted AI market-information radar that turns scattered official sources, filings, RSS feeds, industry media, and holding-related news into validated immediate alerts, daily-digest items, or archives.**
+
+MarketPulseWire is built for personal market and industry research, with a particular focus on semiconductors and AI infrastructure. It keeps credentials, portfolios, private decision rules, and runtime data on infrastructure you control, while providing Feishu delivery and a local Web workbench.
 
 MarketPulseWire is not an investment adviser and does not generate buy/sell recommendations.
 
-## Why This Exists
+## Why MarketPulseWire
 
-Market-moving semiconductor and AI infrastructure signals are scattered across X, sell-side-style research headlines, official company blogs, regional supply-chain media, company notices, and paid/authorized data services. MarketPulseWire turns that messy stream into a self-hosted research radar:
+Important market signals rarely arrive through one clean feed. They are spread across company announcements, official blogs, exchange disclosures, regional supply-chain media, research summaries, fast-news services, and social sources. A keyword alert catches too much noise; an unconstrained LLM cannot be trusted to decide what should be pushed.
 
-- Track your own holdings and adjacent supply-chain names.
-- Watch high-signal sources such as Serenity on X, SEMI, TrendForce, DIGITIMES, Nikkei xTECH, The Elec, OpenAI, NVIDIA, Samsung, SK hynix, Micron, Sina Finance, WallstreetCN, and CNINFO.
-- Use reviewed private decision rules with strict evidence validation to decide what deserves immediate attention and what can wait for a daily digest.
-- Keep credentials and personal research data on your own machine or server.
+MarketPulseWire addresses both problems:
 
-## Features
+- **One information flow:** every admitted source becomes a `NormalizedMarketItem` and uses the same decision, storage, deduplication, delivery, and display path.
+- **Evidence-validated decisions:** the LLM evaluates reviewed private rules and must return exact minimum source evidence for every `push` or `daily` result.
+- **Fail-closed behavior:** model, schema, evidence, version, or private-audit failures create no valid `DecisionResult` and cannot enter delivery.
+- **No source privilege:** a source name, category, or content type cannot create immediate-push eligibility.
+- **Self-hosted operation:** credentials, portfolios, cookies, private rules, SQLite data, and sensitive decision audits stay outside Git.
+- **Operational visibility:** the Web workbench exposes market information, decision results, source profiles, task health, source health, feedback, settings, and holdings management.
 
-- Holdings/watchlist management through a local-only Web workbench
-- Sina Finance news adapters for holdings-related news
-- CNINFO company-disclosure ingestion and bounded PDF text extraction
-- X account monitoring through official API credentials
-- RSS/Atom/RDF monitoring for official company and industry sources
-- DIGITIMES, Nikkei xTECH, The Elec, TrendForce-style media adapters
-- Five-group range admission, reviewed LLM degree decisions, and thin structured summaries
-- Feishu card delivery
-- Linux systemd deployment
-- GitHub Actions CI and optional SSH deployment workflow
+## Information Processing Flow
+
+Every enabled source shares this structure. `DecisionResult.action` is the only authority for immediate-push eligibility.
+
+```mermaid
+flowchart LR
+    Sources["Official sources · filings · RSS · industry media · holding news · optional X browser source"]
+    Collector["collector<br/>compliant fetching · technical dedup · enrichment · source health"]
+    Item["NormalizedMarketItem"]
+    Admission["Range admission<br/>holding · semiconductor/AI · macro data · Fed policy · trade policy"]
+    Process["process_market_item"]
+    Decision["decision_engine<br/>validated DecisionResult"]
+    Interpreter["market_interpreter<br/>thin interpretation"]
+    Review["review_store<br/>market_reviews"]
+    Delivery["market_delivery<br/>delivery dedup · execution audit"]
+    Web["Web workbench"]
+    Feishu["Feishu immediate alert"]
+    Daily["Daily digest"]
+    Archive["Archive"]
+    Excluded["Admission audit"]
+    Retry["failed_retryable<br/>no DecisionResult · no delivery"]
+
+    Sources --> Collector --> Item --> Admission
+    Admission -->|excluded| Excluded
+    Admission -->|admitted| Process --> Decision
+    Decision -->|model, validation, evidence, version, or audit failure| Retry
+    Decision -->|valid| Interpreter --> Review
+    Review --> Web
+    Review -->|push| Delivery --> Feishu
+    Review -->|daily| Daily
+    Review -->|archive| Archive
+```
+
+The key correctness boundary is deliberately narrow:
+
+1. A collector discovers and normalizes information, but cannot persist a completed review or send an item.
+2. Range admission decides whether the content is in scope, but cannot assign an action.
+3. `decision_engine` produces and strictly validates one `DecisionResult`.
+4. `market_interpreter` adds only a short explanation and cannot change the action.
+5. `review_store` persists the decision; `market_delivery` may block duplicates but cannot change it.
+6. Only `push` reaches immediate Feishu delivery. `daily` waits for the digest, and `archive` remains searchable history.
+
+For the complete current implementation, see [Architecture](docs/architecture-flow.md).
+
+## Product Surfaces
+
+### Web workbench
+
+The loopback-only Web workbench provides:
+
+- information center with source, action, status, date, and text filters;
+- LLM decision review with rule results and retained audit metadata;
+- current range-admission and decision-rule views;
+- source profiles, source health, task health, and failure visibility;
+- Feishu feedback metrics and examples;
+- private settings, media keywords, and holdings management.
+
+### Feishu delivery
+
+Items with a valid `DecisionResult.action=push` can be sent as Feishu cards. Delivery records execution outcomes only; it cannot create or promote push eligibility. Optional signed feedback actions record whether a delivered item was especially useful, duplicated, or invalid.
 
 ## Built-In Source Radar
 
-MarketPulseWire keeps a public, reusable source catalog for semiconductor and AI infrastructure monitoring:
+MarketPulseWire includes reusable collectors and source definitions for:
 
-| Source | Why It Matters |
+| Source group | Examples |
 | --- | --- |
-| Serenity on X | High-signal public market commentary around AI infrastructure, photonics, memory, CPO/optical interconnects, and global semiconductor equities. |
-| TrendForce | Widely followed supply-chain research source for memory, HBM, MLCC, foundry, panels, LEDs, batteries, AI servers, and component pricing. |
-| DIGITIMES | Taiwan-centered supply-chain media with early signals from foundries, IC design, packaging, servers, AI hardware, and electronics manufacturing. |
-| Nikkei xTECH | Japan technology and manufacturing coverage, useful for materials, components, equipment, automotive electronics, and industrial technology shifts. |
-| The Elec | Korea-centered semiconductor/display/battery supply-chain media, useful for Samsung, SK hynix, OLED, memory, equipment, and materials signals. |
-| OpenAI / NVIDIA / Samsung / SK hynix / Micron official feeds | First-party product, architecture, capex, platform, memory, and AI infrastructure announcements. |
-| Sina Finance / WallstreetCN / CNINFO | China-market and global-macro news plus official company disclosures and investor-relations records. |
+| Official company feeds | OpenAI, NVIDIA, Samsung Semiconductor, SK hynix, Micron |
+| Official policy sources | U.S. Federal Register, USTR, European Commission, MOFCOM |
+| Company disclosures | CNINFO announcements and investor-relations records |
+| Industry and supply-chain media | TrendForce, SEMI releases, DIGITIMES, Nikkei xTECH, The Elec |
+| China financial information | Sina Finance, First Yicai, CLS, Star Market Daily, WallstreetCN |
+| Research summaries | AlphaAbstract and configured public/authorized research sources |
+| Optional browser source | Logged-in X “Following” timeline through a private Chromium profile |
 
-See [docs/sources.md](docs/sources.md) for URLs, access methods, and compliance notes.
+Source access is intentionally bounded. MarketPulseWire does not bypass paywalls, login walls, WAF challenges, or other access controls. See the [Source Catalog](docs/sources.md) for URLs, methods, and compliance notes.
 
-## Quick Start
+## Quick Start: Open the Web Workbench
+
+This starts a local empty workbench for evaluating the interface and configuration model. Python 3.10 or newer is required; CI runs on Python 3.11.
 
 ```bash
-git clone https://github.com/<you>/<repo>.git
-cd <repo>
+git clone https://github.com/Stayfoool/MarketPulseWire.git
+cd MarketPulseWire
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 cp config/portfolio.example.json config/portfolio.json
 python scripts/market_db.py
-```
-
-Set `RULE_CORE_CONFIG` in the private `.env` to a complete private global
-rule configuration before using media collection or the Web `媒体关键词` page.
-The repository `config/rule_core_v1.test.json` is a test fixture, not a
-production configuration.
-
-Start the Web workbench:
-
-```bash
+python scripts/portfolio_import.py
 python scripts/holdings_web.py --host 127.0.0.1 --port 8787
 ```
 
-Open:
+Open `http://127.0.0.1:8787`.
 
-```text
-http://127.0.0.1:8787
-```
+The workbench alone does not start collectors. Production monitoring requires reviewed private range-admission rules, reviewed private LLM decision rules, an OpenAI-compatible model, and configuration for only the sources you are authorized to use.
 
-For production, run Surveil on a Linux server with systemd. See [docs/deployment.md](docs/deployment.md).
+## Configure Monitoring
 
-## Configuration
-
-Copy `.env.example` to `.env` and fill only the sources you use.
-
-The preferred LLM configuration is:
+Copy `.env.example` to `.env` and fill only the capabilities you use. The preferred model configuration is:
 
 ```env
 LLM_PROVIDER=openai_compatible
@@ -89,179 +137,46 @@ LLM_TIMEOUT_SECONDS=90
 LLM_RETRY_COUNT=2
 ```
 
-Examples:
+Two separate private rule files are required for production collection:
 
-```env
-# DeepSeek OpenAI-compatible
-LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-chat
-```
+- `RULE_CORE_CONFIG`: range admission, maintained outside Git;
+- `LLM_DECISION_RULE_CONFIG`: reviewed `push` and `daily` conditions, maintained outside Git with mode `0600`.
 
-```env
-# Zhipu GLM Coding Plan / Token Plan
-LLM_BASE_URL=https://api.z.ai/api/coding/paas/v4
-LLM_MODEL=glm-5.2
-```
+The tracked files `config/rule_core_v1.test.json` and `config/llm_decision_rules.test.json` contain synthetic CI fixtures. They are not production configurations and must not be treated as recommended market rules.
 
-```env
-# Aliyun compatible mode
-LLM_BASE_URL=https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
-LLM_MODEL=glm-5.2
-```
+Common model providers can be configured through their OpenAI-compatible endpoints. Only the `LLM_*` names are supported for the primary decision model.
 
-Only the `LLM_*` names are supported for model configuration.
+## Deployment
 
-## Data Sources
+The recommended always-on deployment is a Linux server with:
 
-MarketPulseWire is designed around official or authorized access paths:
+- Python 3.10+ and SQLite;
+- systemd services and timers;
+- the Web workbench bound to `127.0.0.1`;
+- an SSH tunnel for operator access;
+- private `.env`, rule files, browser profiles, reports, and SQLite owned by the service account.
 
-- Sina Finance public pages, with optional paid OpenAPI support
-- CNINFO public company-disclosure interfaces
-- A private logged-in Chromium profile on the Alibaba server for the account you monitor
-- Official RSS feeds and public list pages
-- Optional logged-in cookies only for sources where your usage is authorized
+MarketPulseWire also includes an optional manually triggered GitHub Actions SSH deployment workflow. GitHub deploys code; runtime secrets and private rules remain on the target server.
 
-Do not commit raw paid content, cookies, private API responses, logs, generated reports, or real portfolios.
+See [Deployment](docs/deployment.md) for the complete systemd, secret, browser, synchronization, log-retention, and production-verification procedures.
 
-## Deployment Options
+## Privacy and Security Boundaries
 
-MarketPulseWire supports three common deployment paths:
+Do not commit or publish:
 
-- Local development on macOS/Linux
-- Linux server deployment with systemd timers/services
-- GitHub Actions SSH deployment to your own server
+- real portfolios or watchlists;
+- `.env`, API keys, Feishu secrets, cookies, or browser profiles;
+- private range-admission or LLM decision rules;
+- SQLite databases, logs, reports, private model audits, or paid content;
+- raw private API responses or source material your access rights do not permit you to redistribute.
 
-GitHub Actions should deploy code, not run monitors long term. Runtime credentials should normally stay in the target server's `.env`.
+Sensitive LLM request/response audits are designed to remain in service-account-owned mode-`0600` files. Full model input, source bodies, and raw model responses do not enter Git, SQLite, the Web workbench, or Feishu.
 
-See:
+Read [Security](docs/security.md) and [Compliance](docs/compliance.md) before enabling production sources.
 
-- [Deployment](docs/deployment.md)
-- [Source Catalog](docs/sources.md)
-- [Security](docs/security.md)
-- [Compliance](docs/compliance.md)
+## Development and Verification
 
-## Remote Helper Scripts
-
-Set these variables before using remote helper scripts:
-
-```bash
-export REMOTE_HOST=your.server.example.com
-export REMOTE_USER=root
-export REMOTE_SSH_KEY=~/.ssh/id_ed25519
-export REMOTE_DIR=/opt/surveil
-export REMOTE_PROXY_DIR=/opt/surveil-proxy
-export REMOTE_SERVICE_USER=surveil
-```
-
-Deploy and install services:
-
-```bash
-./scripts/deploy_remote.sh
-./scripts/write_remote_secrets.sh
-./scripts/write_remote_feishu.sh
-./scripts/install_remote_systemd.sh
-```
-
-Pull the private portfolio from the server when the server Web workbench is
-your production source of truth:
-
-```bash
-./scripts/pull_remote_portfolio.sh
-```
-
-This is deliberately one-way (server to local): it validates the downloaded
-JSON, backs up the local private file, then imports it into local SQLite. It
-does not upload or overwrite the server portfolio.
-
-Open the Web workbench through an SSH tunnel:
-
-```bash
-ssh -L 8787:127.0.0.1:8787 \
-  -i ~/.ssh/<your_deploy_key> \
-  -o IdentitiesOnly=yes \
-  <remote_user>@<remote_host>
-```
-
-Then open `http://127.0.0.1:8787`.
-
-If local port `8787` is already in use, bind a different local port while keeping the remote port as `8787`:
-
-```bash
-ssh -L 8788:127.0.0.1:8787 \
-  -i ~/.ssh/<your_deploy_key> \
-  -o IdentitiesOnly=yes \
-  <remote_user>@<remote_host>
-```
-
-Then open `http://127.0.0.1:8788`.
-
-## GitHub Actions Deployment
-
-The repository includes `.github/workflows/deploy.yml`, triggered manually with `workflow_dispatch`.
-
-Configure these repository secrets:
-
-```text
-DEPLOY_HOST
-DEPLOY_USER
-DEPLOY_SSH_KEY
-DEPLOY_DIR
-DEPLOY_SERVICE_USER
-DEPLOY_PROXY_DIR
-```
-
-The deploy workflow runs `scripts/deploy_remote.sh` over SSH/rsync. It does not write your business/API secrets; configure those on the server through `.env`, the Web workbench, or the write helper scripts.
-
-## Sync Harness
-
-Use GitHub as the source of truth for code. The server is a runtime target and stores only deployed code, `.env`, SQLite data, logs, and other private runtime state.
-
-Deployment writes `/opt/surveil/REVISION` on the server with the deployed commit, branch, dirty flag, and timestamp. Check local/GitHub/server alignment with:
-
-```bash
-python3 scripts/status_sync.py
-```
-
-If you use `just`:
-
-```bash
-just status
-just deploy
-just remote-revision
-```
-
-`just status-strict` exits non-zero when the local tree is dirty, local `HEAD` differs from `origin/main`, or the server deployed commit differs from GitHub.
-
-### Source Health Noise
-
-Some public feeds throttle or temporarily fail. SemiAnalysis may return `429`, and public RSSHub routes such as Jin10 may return `503`. MarketPulseWire records these in `source_health`, backs off the noisy source, and only alerts after consecutive failures.
-
-Useful settings:
-
-```bash
-SOURCE_HEALTH_ALERT_FAILURES=3
-SOURCE_HEALTH_ALERT_COOLDOWN_MINUTES=60
-SOURCE_HEALTH_ALERT_RECOVERY=1
-SOURCE_BACKOFF_SEMIANALYSIS_SECONDS=1800
-SOURCE_BACKOFF_JIN10_SECONDS=600
-```
-
-Increasing the backoff values reduces Feishu noise and source pressure; lowering them improves freshness but may trigger more upstream rate limits.
-
-## PR Automation
-
-This repository uses GitHub Actions and Dependabot for low-risk PR automation:
-
-- `CI` runs Python compilation, shell syntax checks, lightweight tests, and secret scanning on every PR.
-- `PR Governance` labels PRs as `docs-only`, `dependencies`, `safe-to-merge`, `needs-human-review`, or `security-sensitive`.
-- `Low-risk PR auto-merge` may squash-merge docs-only PRs after CI passes.
-- Dependabot opens weekly PRs for `pip` and GitHub Actions updates.
-
-Core monitoring, alerting, deployment, credentials, database, and LLM behavior changes require maintainer review even when CI passes.
-
-## Pre-Publish Checks
-
-Before making a fork public:
+The CI-safe regression list has one entry point:
 
 ```bash
 python -m py_compile scripts/*.py
@@ -270,8 +185,19 @@ python scripts/run_test_suite.py
 python scripts/scan_secrets.py
 ```
 
-The scanner is intentionally lightweight. Also manually inspect the file list before publishing.
+Tests that use real credentials, send messages, upload media, or call production services remain operator smoke tests and do not run in ordinary CI.
+
+Contributions are welcome for official source adapters, parser fixes, Web workbench improvements, model-output validation, failure handling, tests, and documentation. See [Contributing](CONTRIBUTING.md).
+
+## Documentation
+
+- [Current architecture](docs/architecture-flow.md)
+- [Deployment and operations](docs/deployment.md)
+- [Source catalog](docs/sources.md)
+- [Security](docs/security.md)
+- [Compliance](docs/compliance.md)
+- [Changelog](CHANGELOG.md)
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE)
