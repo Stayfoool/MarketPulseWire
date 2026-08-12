@@ -1,6 +1,6 @@
 # Deployment
 
-Surveil can run locally for development or on a Linux server for 24/7 monitoring.
+MarketPulseWire can run locally for development or on a Linux server for 24/7 monitoring.
 
 The recommended production setup is:
 
@@ -21,14 +21,15 @@ Do not commit `.env`, runtime databases, logs, reports, proxy configs, or real p
 ## Local Development
 
 ```bash
-git clone https://github.com/<you>/<repo>.git
-cd <repo>
+git clone https://github.com/Stayfoool/MarketPulseWire.git
+cd MarketPulseWire
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 cp config/portfolio.example.json config/portfolio.json
 python scripts/market_db.py
+python scripts/portfolio_import.py
 ```
 
 Edit `.env`, then run the local Web workbench when needed:
