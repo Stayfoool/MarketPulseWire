@@ -6,3 +6,4 @@
 paddlepaddle==2.6.2
 paddleocr==2.7.3
 numpy==1.26.4
+Pillow==11.3.0
