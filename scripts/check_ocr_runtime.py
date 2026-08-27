@@ -15,8 +15,8 @@ from typing import Any, Callable
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_PATH = ROOT / ".env"
 DEFAULT_REQUIREMENTS_PATH = ROOT / "requirements-ocr.txt"
-REQUIRED_DISTRIBUTIONS = ("paddlepaddle", "paddleocr", "numpy")
-REQUIRED_IMPORTS = ("paddle", "paddleocr", "numpy", "cv2")
+REQUIRED_DISTRIBUTIONS = ("paddlepaddle", "paddleocr", "numpy", "pillow")
+REQUIRED_IMPORTS = ("paddle", "paddleocr", "numpy", "PIL", "cv2")
 
 
 def parse_env_file(path: Path) -> dict[str, str]:

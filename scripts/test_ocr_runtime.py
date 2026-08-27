@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def fixture_requirements(root: Path) -> Path:
     path = root / "requirements-ocr.txt"
     path.write_text(
-        "paddlepaddle==2.6.2\npaddleocr==2.7.3\nnumpy==1.26.4\n",
+        "paddlepaddle==2.6.2\npaddleocr==2.7.3\nnumpy==1.26.4\nPillow==11.3.0\n",
         encoding="utf-8",
     )
     return path
@@ -39,13 +39,19 @@ def test_repository_ocr_requirements_keep_exact_runtime_pins() -> None:
         "paddlepaddle": "2.6.2",
         "paddleocr": "2.7.3",
         "numpy": "1.26.4",
+        "pillow": "11.3.0",
     }
 
 
 def test_valid_runtime_checks_versions_and_imports() -> None:
     with TemporaryDirectory() as tmpdir:
         requirements = fixture_requirements(Path(tmpdir))
-        versions = {"paddlepaddle": "2.6.2", "paddleocr": "2.7.3", "numpy": "1.26.4"}
+        versions = {
+            "paddlepaddle": "2.6.2",
+            "paddleocr": "2.7.3",
+            "numpy": "1.26.4",
+            "pillow": "11.3.0",
+        }
         imported: list[str] = []
         installed, errors = check_ocr_runtime(
             requirements,
@@ -54,7 +60,7 @@ def test_valid_runtime_checks_versions_and_imports() -> None:
         )
     assert installed == versions
     assert errors == []
-    assert imported == ["paddle", "paddleocr", "numpy", "cv2"]
+    assert imported == ["paddle", "paddleocr", "numpy", "PIL", "cv2"]
 
 
 def test_missing_and_wrong_versions_fail_before_native_imports() -> None:
@@ -65,7 +71,11 @@ def test_missing_and_wrong_versions_fail_before_native_imports() -> None:
         def version_lookup(name: str) -> str:
             if name == "paddleocr":
                 raise importlib.metadata.PackageNotFoundError(name)
-            return "3.0.0" if name == "paddlepaddle" else "1.26.4"
+            if name == "paddlepaddle":
+                return "3.0.0"
+            if name == "pillow":
+                return "11.3.0"
+            return "1.26.4"
 
         _installed, errors = check_ocr_runtime(
             requirements,
@@ -82,7 +92,12 @@ def test_missing_and_wrong_versions_fail_before_native_imports() -> None:
 def test_native_import_failure_is_reported() -> None:
     with TemporaryDirectory() as tmpdir:
         requirements = fixture_requirements(Path(tmpdir))
-        versions = {"paddlepaddle": "2.6.2", "paddleocr": "2.7.3", "numpy": "1.26.4"}
+        versions = {
+            "paddlepaddle": "2.6.2",
+            "paddleocr": "2.7.3",
+            "numpy": "1.26.4",
+            "pillow": "11.3.0",
+        }
 
         def importer(name: str) -> None:
             if name == "cv2":
