@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -34,6 +35,7 @@ OPERATOR = "ou_operator"
 
 def insert_delivered_article(db_path: Path) -> None:
     init_db(db_path).close()
+    delivered_at = datetime.now(timezone.utc).isoformat()
     decision = {
         "action": "push",
         "brief_reason": "test",
@@ -55,7 +57,7 @@ def insert_delivered_article(db_path: Path) -> None:
                       '[]','[]','{}','','fixture-hash','live','succeeded','',
                       'succeeded','',?,?)
             """,
-            ("2026-07-15T00:00:00+00:00",) * 3,
+            (delivered_at,) * 3,
         ).lastrowid)
         feedback_card = {
             "_feedback_card_base": {
@@ -78,8 +80,8 @@ def insert_delivered_article(db_path: Path) -> None:
             (
                 item_id,
                 json.dumps(decision),
-                "2026-07-15T00:00:00+00:00",
-                "2026-07-15T00:00:00+00:00",
+                delivered_at,
+                delivered_at,
             ),
         ).lastrowid)
         conn.execute(
@@ -92,8 +94,8 @@ def insert_delivered_article(db_path: Path) -> None:
             (
                 item_id,
                 review_id,
-                "2026-07-15T00:00:00+00:00",
-                "2026-07-15T00:00:00+00:00",
+                delivered_at,
+                delivered_at,
                 json.dumps(feedback_card),
             ),
         )

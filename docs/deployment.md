@@ -11,10 +11,18 @@ The recommended production setup is:
 - Web workbench bound to `127.0.0.1`
 - SSH tunnel for browser access
 
-The current production target is an Alibaba Cloud Debian 12 server with 2
-vCPU, 2 GiB plan memory, a persistent 2 GiB swap file, and a 40 GiB system
-disk. Host/IP and operator-key details remain in the private local operator
-notes, not this repository.
+The current production target is a JD Cloud Debian 12 server with 2 vCPU,
+2 GiB plan memory, a persistent 2 GiB swap file, and a 40 GiB system disk.
+The host also runs other projects. MarketPulseWire remains isolated through its
+dedicated `surveil` service account, `/opt/surveil`, `/opt/surveil-proxy`,
+project virtual environment, mode-`0700` private directories and `surveil-*`
+systemd units. It must not reuse another project's account, working directory,
+virtual environment, secrets, logs or runtime state. Shared OS packages include
+Debian Python 3.11, Git, SQLite, rsync, curl, CA certificates and Noto CJK
+fonts; FFmpeg is installed for another project but is not a MarketPulseWire
+runtime dependency. Chromium, Xvfb and x11vnc remain MarketPulseWire browser
+runtime dependencies. Host/IP and operator-key details remain in the private
+local operator notes, not this repository.
 
 Do not commit `.env`, runtime databases, logs, reports, proxy configs, or real portfolio files.
 
@@ -49,7 +57,7 @@ production configuration.
 `LLM_DECISION_RULE_CONFIG` must point to the separate private LLM decision-rule
 JSON before any production collector is started. Keep the Mac development copy
 at `config/llm_decision_rules.json`; it is gitignored and must be mode `0600`.
-Keep the Alibaba copy at `/opt/surveil/config/llm_decision_rules.json`, owned by
+Keep the JD Cloud copy at `/opt/surveil/config/llm_decision_rules.json`, owned by
 the production service account and mode `0600`. `deploy_remote.sh` explicitly
 excludes this path, so normal deployment neither uploads, deletes nor replaces
 the private rules. Git contains only `config/llm_decision_rules.test.json`, whose
@@ -69,7 +77,7 @@ the loader and compare their SHA-256 digests without printing their content:
 LLM_DECISION_RULE_CONFIG=config/llm_decision_rules.json \
   PYTHONPATH=scripts python3 -c 'import llm_rule_catalog; print(llm_rule_catalog.LLM_DECISION_RULE_VERSION, len(llm_rule_catalog.RULES))'
 shasum -a 256 config/llm_decision_rules.json
-ssh surveil-alibaba "sudo -u surveil env PYTHONPATH=/opt/surveil/scripts LLM_DECISION_RULE_CONFIG=/opt/surveil/config/llm_decision_rules.json /opt/surveil/.venv/bin/python -c 'import llm_rule_catalog; print(llm_rule_catalog.LLM_DECISION_RULE_VERSION, len(llm_rule_catalog.RULES))' && sha256sum /opt/surveil/config/llm_decision_rules.json"
+ssh surveil-jd "sudo -u surveil env PYTHONPATH=/opt/surveil/scripts LLM_DECISION_RULE_CONFIG=/opt/surveil/config/llm_decision_rules.json /opt/surveil/.venv/bin/python -c 'import llm_rule_catalog; print(llm_rule_catalog.LLM_DECISION_RULE_VERSION, len(llm_rule_catalog.RULES))' && sha256sum /opt/surveil/config/llm_decision_rules.json"
 ```
 
 The version, rule count and SHA-256 digest must match. Missing, unreadable,
@@ -77,7 +85,7 @@ wrong-permission or invalid private rules stop systemd installation and fail
 production decisions closed; they never fall back to tracked test rules.
 After a reviewed private-rule change, restore production-service ownership and
 mode `0600`, compare version/count/SHA-256, and only then restart affected
-Alibaba collectors. Never upload or replace the private file as part of normal
+JD Cloud collectors. Never upload or replace the private file as part of normal
 code deployment.
 
 The Web process requires the repository `web/` directory alongside `scripts/`.
@@ -139,7 +147,7 @@ private configuration backup containing `.env`, the source-profile override,
 the range-admission rules and the LLM decision rules. Record only version,
 ownership, mode and SHA-256; do not print file contents.
 
-After the approved revision has been deployed to Alibaba Cloud:
+After the approved revision has been deployed to JD Cloud:
 
 1. Stop the collector timers and persistent services that can read or write
    SQLite. Do not operate on Huawei Cloud. Record which source profiles are
@@ -325,7 +333,7 @@ runtime selector or compatibility wrapper.
 The LLM decision cutover follows the same rule: there is no runtime selector
 back to another decision implementation. For later deployments, record the
 preceding supported Git revision before deployment. If rollback criteria are
-met, stop affected Alibaba collectors, deploy that exact preceding revision,
+met, stop affected JD Cloud collectors, deploy that exact preceding revision,
 restart the same services and verify service health, logs and SQLite integrity.
 Only revisions using the current unified schema and LLM-only degree decision are
 supported; do not rewrite already completed reviews or deliveries during rollback.
