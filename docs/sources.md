@@ -24,7 +24,7 @@ The catalog is public configuration and code. Credentials, cookies, paid-content
 
 | Source | Default Account | Method | Notes |
 | --- | --- | --- | --- |
-| Serenity | `aleabitoreddit` | Alibaba Chromium, every 10 minutes | The operator logs in once in the private server Chromium profile; the collector reads only the visible “正在关注” timeline DOM. No paid X API, cookie export, or direct delivery path is used. |
+| Serenity | `aleabitoreddit` | JD Cloud Chromium, every 10 minutes | The operator logs in once in the private server Chromium profile; the collector reads only the visible “正在关注” timeline DOM. No paid X API, cookie export, or direct delivery path is used. |
 
 Surveil does not commit X tokens. The repository only contains the monitor logic.
 

@@ -151,7 +151,7 @@ The Web page is named `信息中心`; it does not route or filter through an ite
 kind. A source filter is a display condition only.
 
 New reviews persist `DecisionResult.action` without the retired derived
-`importance`, interpretation-switch or push-boolean fields. Existing Alibaba
+`importance`, interpretation-switch or push-boolean fields. Existing production
 SQLite rows and their extra JSON fields remain untouched for non-destructive
 compatibility, but current runtime readers and writers ignore them. Physical
 removal of an existing production column is a separate database operation.
@@ -191,7 +191,7 @@ bounded scroll and timeout, and normalizes each usable tweet. The first
 successful run establishes a no-delivery baseline through
 `process_market_item(..., baseline_only=True)`; later new identities use the
 same production admission, LLM `DecisionResult`, review and delivery flow as
-every other source. Login is performed manually on Alibaba through
+every other source. Login is performed manually on the JD Cloud host through
 `scripts/open_x_browser_login.sh`, which starts Chromium directly on a temporary
 Xvfb display rather than controlling the login window through Playwright. The
 production browser installer provides Debian system Chromium as the shared
@@ -204,7 +204,10 @@ in the source catalog or systemd and must not be enabled in production.
 
 ## Deployment Facts
 
-- Production runs only on Alibaba Cloud Debian 12 under systemd.
+- Production runs only on JD Cloud Debian 12 under systemd. The shared host may
+  run other projects, but MarketPulseWire retains its own `surveil` service
+  account, `/opt/surveil`, `/opt/surveil-proxy`, virtual environment, private
+  state, logs and `surveil-*` units.
 - The server Web panel, private `.env`, private rule files, source-profile
   override and production SQLite are production configuration/data truths.
 - Normal deployment preserves private configuration, data, reports, logs,
@@ -213,4 +216,5 @@ in the source catalog or systemd and must not be enabled in production.
   it is never hidden inside normal db-init or collector startup.
 - CI calls `scripts/run_test_suite.py`, which classifies every `test_*.py`
   exactly once. Operator smoke tests with real external effects stay outside CI.
-- Huawei Cloud is not a deployment target and must not be started or changed.
+- Alibaba Cloud and Huawei Cloud are not active deployment targets and must not
+  be started or changed during ordinary production operation.
