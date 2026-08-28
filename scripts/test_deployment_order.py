@@ -127,6 +127,7 @@ def test_production_dependencies_are_exactly_pinned() -> None:
         "lark-oapi==1.7.1",
         "playwright==1.61.0",
         "trafilatura==2.1.0",
+        "lxml-html-clean==0.4.5",
     }
     assert {line.strip() for line in requirements if line.strip()} == expected
     deploy = (ROOT / "scripts" / "deploy_remote.sh").read_text(encoding="utf-8")
