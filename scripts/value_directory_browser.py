@@ -32,7 +32,9 @@ LIST_EMPTY_WAIT_MS = 15_000
 BROWSER_CLOSE_WAIT_SECONDS = 5.0
 BROWSER_DIAGNOSTIC_LIMIT = 800
 LIST_PAGE_ENTRY_LIMIT = 100
-LIST_MAX_PAGES = 10
+# Keep pagination bounded while allowing a normal backlog to converge after a
+# short outage or deployment gap. The existing-ID boundary remains mandatory.
+LIST_MAX_PAGES = 30
 
 WAF_PATTERNS = (
     "人机验证",

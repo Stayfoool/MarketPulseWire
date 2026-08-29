@@ -520,7 +520,10 @@ model files. The service-account `.paddleocr/` model cache and runtime `reports/
 are excluded from rsync deletion, retained across normal deploys and never copied
 back into Git. The model cache is populated on the first approved OCR run.
 
-ValueList runs at 05:00 and 21:00 Beijing time. The installer restarts the timer
+ValueList runs at 05:00 and 21:00 Beijing time. The browser follows at most 30
+normal list pages per source before requiring an existing `seen_items` ID; this
+bounded backlog allowance does not permit unbounded pagination. The installer
+restarts the timer
 to load those times only when the timer was already enabled; it does not enable
 a deliberately disabled ValueList timer. Browser launches retain bounded Playwright error and profile-lock
 diagnostics without page content, cookies or browser storage. One timer run uses
