@@ -280,6 +280,34 @@ def test_value_directory_page_limit_fails_without_known_id_boundary() -> None:
     assert page.gotos == [source.list_url, second_url]
 
 
+def test_value_directory_default_page_limit_allows_current_backlog() -> None:
+    source = source_config()
+    pages = {
+        source.list_url: _value_directory_page(
+            source, ["new-1"], next_page_url=source.list_url + "/page/2"
+        )
+    }
+    for page_number in range(2, 15):
+        next_url = source.list_url + f"/page/{page_number + 1}"
+        pages[source.list_url + f"/page/{page_number}"] = _value_directory_page(
+            source,
+            [f"new-{page_number}"],
+            next_page_url=next_url if page_number < 14 else "",
+        )
+    pages[source.list_url + "/page/14"] = _value_directory_page(source, ["known"])
+    page = _PaginatedPage(pages)
+    entries = collect_entries_from_page(
+        page,
+        source,
+        limit=30,
+        timeout_ms=45_000,
+        timeout_error=TimeoutError,
+        known_item_ids={"known"},
+    )
+    assert [item["id"] for item in entries] == [*(f"new-{i}" for i in range(1, 14)), "known"]
+    assert len(page.gotos) == 14
+
+
 def test_value_directory_truncated_page_fails_before_boundary_check() -> None:
     source = source_config()
     payload = _value_directory_page(source, [str(item_id) for item_id in range(100, 200)])
