@@ -18,11 +18,10 @@ import urllib.request
 from typing import Any
 
 from llm_analysis import (
+    apply_llm_response_preferences,
     chat_completions_url,
-    json_response_format_enabled,
     llm_config,
     parse_json_object,
-    thinking_type,
 )
 
 
@@ -368,13 +367,7 @@ def request_preview_llm(payload: dict[str, Any], *, base_url: str, api_key: str)
 
 def apply_preview_llm_response_preferences(payload: dict[str, Any], *, base_url: str, model: str) -> None:
     """Mirror the shared LLM client's JSON/thinking policy for preview extraction."""
-    thinking = thinking_type(base_url, model).strip().lower()
-    if "deepseek" in base_url.lower() and thinking == "enabled" and os.getenv("LLM_ALLOW_DEEPSEEK_THINKING", "").strip() != "1":
-        thinking = "disabled"
-    if thinking in {"enabled", "disabled"}:
-        payload["thinking"] = {"type": thinking}
-    if json_response_format_enabled(base_url):
-        payload["response_format"] = {"type": "json_object"}
+    apply_llm_response_preferences(payload, base_url=base_url, model=model)
 
 
 def parse_preview_llm_result(result: dict[str, Any]) -> dict[str, Any]:

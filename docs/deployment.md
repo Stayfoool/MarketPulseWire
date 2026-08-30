@@ -300,7 +300,9 @@ and does not inherit collector `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY`
 variables. DeepSeek and existing compatible configurations use `LLM_BASE_URL`;
 `LLM_PROVIDER=zhipu_glm` uses the code-fixed official
 `https://open.bigmodel.cn/api/paas/v4` endpoint and `glm-5.3-flash` with the
-separate private `LLM_GLM_API_KEY`. The Web workbench's `当前模型` control writes
+separate private `LLM_GLM_API_KEY`. Its requests always use code-fixed
+`thinking=enabled`, `reasoning_effort=low` and JSON mode, independent of the
+DeepSeek thinking setting. The Web workbench's `当前模型` control writes
 the selection atomically, restarts the long-running Sina flash service and
 leaves already-running one-shot collectors to finish with their starting
 environment; later timer runs read the new selection. Source fetching continues

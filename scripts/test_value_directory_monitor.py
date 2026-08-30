@@ -703,6 +703,33 @@ def test_preview_llm_policy_disables_deepseek_thinking() -> None:
     assert payload["response_format"] == {"type": "json_object"}
 
 
+def test_preview_llm_policy_forces_glm_supported_preferences() -> None:
+    original_thinking = os.environ.get("LLM_THINKING_TYPE")
+    original_json = os.environ.get("LLM_RESPONSE_FORMAT_JSON")
+    try:
+        os.environ["LLM_THINKING_TYPE"] = "disabled"
+        os.environ["LLM_RESPONSE_FORMAT_JSON"] = "0"
+        payload: dict[str, object] = {}
+        apply_preview_llm_response_preferences(
+            payload,
+            base_url="https://open.bigmodel.cn/api/paas/v4",
+            model="glm-5.3-flash",
+        )
+    finally:
+        if original_thinking is None:
+            os.environ.pop("LLM_THINKING_TYPE", None)
+        else:
+            os.environ["LLM_THINKING_TYPE"] = original_thinking
+        if original_json is None:
+            os.environ.pop("LLM_RESPONSE_FORMAT_JSON", None)
+        else:
+            os.environ["LLM_RESPONSE_FORMAT_JSON"] = original_json
+
+    assert payload["thinking"] == {"type": "enabled"}
+    assert payload["reasoning_effort"] == "low"
+    assert payload["response_format"] == {"type": "json_object"}
+
+
 def test_preview_llm_config_uses_only_common_llm_settings() -> None:
     names = (
         "LLM_API_KEY",
@@ -1398,6 +1425,7 @@ def main() -> int:
     test_paddleocr_result_flatten_supports_common_shapes()
     test_paddleocr_instance_retries_unknown_argument_errors()
     test_preview_llm_policy_disables_deepseek_thinking()
+    test_preview_llm_policy_forces_glm_supported_preferences()
     test_preview_llm_config_uses_only_common_llm_settings()
     test_preview_ocr_text_path_uses_text_llm_without_vision()
     test_preview_ocr_failure_falls_back_without_blocking()

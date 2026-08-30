@@ -101,7 +101,9 @@ Flash and existing OpenAI-compatible configurations. `LLM_PROVIDER=deepseek`
 uses `LLM_API_KEY`, `LLM_BASE_URL` and `LLM_MODEL`;
 `LLM_PROVIDER=zhipu_glm` uses the separate `LLM_GLM_API_KEY` and the code-fixed
 official endpoint `https://open.bigmodel.cn/api/paas/v4` with
-`glm-5.3-flash`. The Web workbench changes only this model selection and its
+`glm-5.3-flash`; the shared transport always applies `thinking=enabled`,
+`reasoning_effort=low` and JSON mode because this model does not support
+disabled thinking. The Web workbench changes only this model selection and its
 private connection values. It does not select a different decision, review,
 storage, dedup or delivery path. A missing key for the selected model fails
 closed instead of using the other model's key.

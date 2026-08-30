@@ -99,9 +99,63 @@ def test_glm_provider_uses_dedicated_fixed_connection_and_fails_closed_without_k
                 os.environ[name] = value
 
 
+def test_glm_request_forces_supported_response_preferences() -> None:
+    names = ("LLM_THINKING_TYPE", "LLM_RESPONSE_FORMAT_JSON")
+    original = {name: os.environ.get(name) for name in names}
+    original_config = llm_analysis.llm_config
+    original_urlopen = llm_analysis.urllib.request.urlopen
+    original_retry_count = llm_analysis.retry_count
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return b'{"id":"glm-response","choices":[{"message":{"content":"{\\"ok\\":true}"}}]}'
+
+    try:
+        os.environ["LLM_THINKING_TYPE"] = "disabled"
+        os.environ["LLM_RESPONSE_FORMAT_JSON"] = "0"
+        llm_analysis.llm_config = lambda: (
+            "glm-key",
+            "https://open.bigmodel.cn/api/paas/v4",
+            "glm-5.3-flash",
+        )
+        llm_analysis.retry_count = lambda: 0
+
+        def fake_urlopen(request, timeout):
+            captured["payload"] = json.loads(request.data.decode("utf-8"))
+            return FakeResponse()
+
+        llm_analysis.urllib.request.urlopen = fake_urlopen
+        llm_analysis.call_chat_completion_raw_with_prompts(
+            "system",
+            "user",
+            thinking_override="disabled",
+        )
+    finally:
+        llm_analysis.llm_config = original_config
+        llm_analysis.urllib.request.urlopen = original_urlopen
+        llm_analysis.retry_count = original_retry_count
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    assert captured["payload"]["thinking"] == {"type": "enabled"}
+    assert captured["payload"]["reasoning_effort"] == "low"
+    assert captured["payload"]["response_format"] == {"type": "json_object"}
+
+
 def main() -> int:
     test_raw_chat_completion_returns_bounded_usage_metadata()
     test_glm_provider_uses_dedicated_fixed_connection_and_fails_closed_without_key()
+    test_glm_request_forces_supported_response_preferences()
     if analyze_with_llm("AI ASIC demand lifts MLCC demand") is not None:
         raise AssertionError("LLM should be disabled during this test")
 
