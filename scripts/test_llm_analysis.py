@@ -66,8 +66,42 @@ def test_raw_chat_completion_returns_bounded_usage_metadata() -> None:
     assert captured["payload"]["messages"][1]["content"] == "user"
 
 
+def test_glm_provider_uses_dedicated_fixed_connection_and_fails_closed_without_key() -> None:
+    names = (
+        "SURVEIL_DISABLE_LLM",
+        "LLM_PROVIDER",
+        "LLM_API_KEY",
+        "LLM_BASE_URL",
+        "LLM_MODEL",
+        "LLM_GLM_API_KEY",
+    )
+    original = {name: os.environ.get(name) for name in names}
+    try:
+        os.environ.pop("SURVEIL_DISABLE_LLM", None)
+        os.environ["LLM_PROVIDER"] = "zhipu_glm"
+        os.environ["LLM_API_KEY"] = "deepseek-key-must-not-be-used"
+        os.environ["LLM_BASE_URL"] = "https://api.deepseek.com"
+        os.environ["LLM_MODEL"] = "deepseek-chat"
+        os.environ["LLM_GLM_API_KEY"] = "glm-key"
+        assert llm_analysis.llm_config() == (
+            "glm-key",
+            "https://open.bigmodel.cn/api/paas/v4",
+            "glm-5.3-flash",
+        )
+
+        os.environ.pop("LLM_GLM_API_KEY")
+        assert llm_analysis.llm_config() is None
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def main() -> int:
     test_raw_chat_completion_returns_bounded_usage_metadata()
+    test_glm_provider_uses_dedicated_fixed_connection_and_fails_closed_without_key()
     if analyze_with_llm("AI ASIC demand lifts MLCC demand") is not None:
         raise AssertionError("LLM should be disabled during this test")
 

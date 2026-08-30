@@ -41,7 +41,7 @@ from market_feedback import FEEDBACK_LABELS, feedback_projection_by_item, feedba
 from llm_decision_web import llm_decision_rows, llm_decision_summary
 from current_rules_web import current_rules_payload
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
-from settings_store import save_settings, settings_payload
+from settings_store import save_settings, settings_payload, switch_llm_provider
 from source_profiles import save_source_profile_config, source_profiles_payload
 
 
@@ -1515,6 +1515,29 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 if not isinstance(values, dict):
                     raise HoldingsError("请求缺少 values 对象")
                 saved = save_settings(values)
+                saved["ok"] = True
+                self.send_json(saved)
+                return
+            if parsed.path == "/api/llm-provider":
+                provider = str(payload.get("provider") or "").strip()
+                values = payload.get("values") or {}
+                if not isinstance(values, dict):
+                    raise HoldingsError("请求中的 values 必须是对象")
+                saved = switch_llm_provider(provider, values)
+                activation: dict[str, Any] = {"attempted": False, "ok": True}
+                if saved["changed_count"]:
+                    activation["attempted"] = True
+                    try:
+                        restart = service_action_payload("surveil-sina-flash.service", "restart")
+                        activation.update(
+                            {
+                                "ok": int(restart.get("returncode") or 0) == 0,
+                                "error": restart.get("stderr") or restart.get("stdout") or "",
+                            }
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        activation.update({"ok": False, "error": str(exc)})
+                saved["activation"] = activation
                 saved["ok"] = True
                 self.send_json(saved)
                 return

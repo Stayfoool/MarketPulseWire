@@ -252,7 +252,7 @@ entry. Retired shadow collector code and units are not part of the current
 runtime.
 After five-group range admission, `decision_engine.py` calls the reviewed LLM
 degree rules and returns the only production `DecisionResult`. There is no
-configuration selector or retained deterministic action code, and
+decision-implementation selector or retained deterministic action code, and
 model failure does not fall back. A failed model request, invalid result or
 private-audit write marks the current review `failed_retryable` and creates no
 interpretation, delivery or dedup reservation. Each applicable rule returns
@@ -295,10 +295,16 @@ id and action.
 A structurally invalid, evidence-invalid or conflicting response may receive
 one correction request containing the validation errors. Network retries and
 that correction share one hard 120-second total wall-clock budget.
-The production LLM HTTP client connects to `LLM_BASE_URL` directly and does not
-inherit collector `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` variables. Source
-fetching continues to use `proxy.env`; no SOCKS dependency is required for the
-model provider request.
+The production LLM HTTP client connects directly to the selected model endpoint
+and does not inherit collector `HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY`
+variables. DeepSeek and existing compatible configurations use `LLM_BASE_URL`;
+`LLM_PROVIDER=zhipu_glm` uses the code-fixed official
+`https://open.bigmodel.cn/api/paas/v4` endpoint and `glm-5.3-flash` with the
+separate private `LLM_GLM_API_KEY`. The Web workbench's `当前模型` control writes
+the selection atomically, restarts the long-running Sina flash service and
+leaves already-running one-shot collectors to finish with their starting
+environment; later timer runs read the new selection. Source fetching continues
+to use `proxy.env`; no SOCKS dependency is required for model requests.
 
 Each production decision audit stores exact requests, raw responses, response
 metadata and validation details for all calls under

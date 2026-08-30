@@ -8,6 +8,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from llm_provider_config import (
+    DEEPSEEK_PROVIDER,
+    ZHIPU_GLM_BASE_URL,
+    ZHIPU_GLM_MODEL,
+    ZHIPU_GLM_PROVIDER,
+    canonical_llm_provider,
+    selected_llm_provider,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
@@ -27,12 +36,12 @@ SETTING_GROUPS: list[dict[str, Any]] = [
     {
         "id": "llm",
         "title": "大模型",
-        "restart_hint": "保存后建议重启统一 collector 和 X 常驻服务；价值目录下一次 timer 运行会自动读取新模型配置。",
+        "restart_hint": "点击当前模型即可切换；新浪财经快讯常驻服务会立即重启，其他定时采集任务下一轮读取新模型。",
         "fields": [
-            SettingField("LLM_PROVIDER", "供应商类型", "llm", placeholder="openai_compatible"),
-            SettingField("LLM_BASE_URL", "Base URL", "llm", placeholder="https://api.deepseek.com"),
-            SettingField("LLM_MODEL", "模型名称", "llm", placeholder="deepseek-chat"),
-            SettingField("LLM_API_KEY", "API Key", "llm", sensitive=True, help="留空表示保留现有密钥。"),
+            SettingField("LLM_BASE_URL", "DeepSeek / 兼容模型 Base URL", "llm", placeholder="https://api.deepseek.com"),
+            SettingField("LLM_MODEL", "DeepSeek / 兼容模型名称", "llm", placeholder="deepseek-chat"),
+            SettingField("LLM_API_KEY", "DeepSeek / 兼容模型 API Key", "llm", sensitive=True, help="留空表示保留现有密钥。"),
+            SettingField("LLM_GLM_API_KEY", "智谱 GLM 5.3 Flash API Key", "llm", sensitive=True, help="单独保存；留空表示保留现有密钥。"),
             SettingField("LLM_TIMEOUT_SECONDS", "超时秒数", "llm", placeholder="90"),
             SettingField("LLM_RETRY_COUNT", "重试次数", "llm", placeholder="2"),
             SettingField("LLM_THINKING_TYPE", "默认 thinking", "llm", placeholder="disabled"),
@@ -139,6 +148,31 @@ SETTING_GROUPS: list[dict[str, Any]] = [
 
 FIELDS_BY_KEY = {field.key: field for group in SETTING_GROUPS for field in group["fields"]}
 
+
+def llm_model_selector(values: dict[str, str]) -> dict[str, Any]:
+    current = selected_llm_provider(values)
+    return {
+        "current": current,
+        "options": [
+            {
+                "id": DEEPSEEK_PROVIDER,
+                "label": "DeepSeek",
+                "base_url": values.get("LLM_BASE_URL") or "https://api.deepseek.com",
+                "model": values.get("LLM_MODEL") or "deepseek-chat",
+                "configured": bool(
+                    values.get("LLM_API_KEY") and values.get("LLM_BASE_URL") and values.get("LLM_MODEL")
+                ),
+            },
+            {
+                "id": ZHIPU_GLM_PROVIDER,
+                "label": "智谱 GLM 5.3 Flash",
+                "base_url": ZHIPU_GLM_BASE_URL,
+                "model": ZHIPU_GLM_MODEL,
+                "configured": bool(values.get("LLM_GLM_API_KEY")),
+            },
+        ],
+    }
+
 def parse_env_file(path: Path = ENV_PATH) -> dict[str, str]:
     values: dict[str, str] = {}
     if not path.exists():
@@ -178,14 +212,15 @@ def settings_payload(path: Path = ENV_PATH) -> dict[str, Any]:
                 "placeholder": field.placeholder,
             }
             fields.append(item)
-        groups.append(
-            {
-                "id": group["id"],
-                "title": group["title"],
-                "restart_hint": group["restart_hint"],
-                "fields": fields,
-            }
-        )
+        item = {
+            "id": group["id"],
+            "title": group["title"],
+            "restart_hint": group["restart_hint"],
+            "fields": fields,
+        }
+        if group["id"] == "llm":
+            item["model_selector"] = llm_model_selector(values)
+        groups.append(item)
     return {"groups": groups, "path": str(path)}
 
 
@@ -258,3 +293,53 @@ def save_settings(
     if updates:
         write_env_updates(updates, path=path)
     return {"changed": changes, "changed_count": len(changes), "path": str(path)}
+
+
+def switch_llm_provider(
+    provider: str,
+    raw_values: dict[str, Any] | None = None,
+    *,
+    path: Path = ENV_PATH,
+) -> dict[str, Any]:
+    target = canonical_llm_provider(provider)
+    allowed_fields = {
+        DEEPSEEK_PROVIDER: {"LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL"},
+        ZHIPU_GLM_PROVIDER: {"LLM_GLM_API_KEY"},
+    }
+    if target not in allowed_fields:
+        raise ValueError("只允许切换 DeepSeek 或智谱 GLM 5.3 Flash")
+
+    supplied = raw_values or {}
+    unknown = set(supplied) - allowed_fields[target]
+    if unknown:
+        raise ValueError(f"当前模型切换不允许修改配置项：{sorted(unknown)}")
+
+    current = parse_env_file(path)
+    updates, changes = build_updates(supplied, current)
+    effective = {**current, **updates}
+    if target == DEEPSEEK_PROVIDER:
+        missing = [key for key in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL") if not effective.get(key)]
+        if missing:
+            raise ValueError("请先配置完整的 DeepSeek / 兼容模型 Base URL、模型名称和 API Key")
+    elif not effective.get("LLM_GLM_API_KEY"):
+        raise ValueError("请先配置智谱 GLM 5.3 Flash API Key")
+
+    old_provider = current.get("LLM_PROVIDER", "")
+    if old_provider != target:
+        updates["LLM_PROVIDER"] = target
+        changes.append(
+            {
+                "key": "LLM_PROVIDER",
+                "sensitive": "0",
+                "old": old_provider,
+                "new": target,
+            }
+        )
+    if updates:
+        write_env_updates(updates, path=path)
+    return {
+        "provider": target,
+        "changed": changes,
+        "changed_count": len(changes),
+        "path": str(path),
+    }

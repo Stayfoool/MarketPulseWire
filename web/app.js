@@ -1242,6 +1242,7 @@ async function loadSettings() {
       <section class="settings-card">
         <h3>${escapeHtml(group.title || group.id || '')}</h3>
         <div class="hint">${escapeHtml(group.restart_hint || '')}</div>
+        ${group.model_selector ? llmModelSelectorHtml(group.model_selector) : ''}
         ${(group.fields || []).map(field => `
           <div class="setting-field">
             <label>
@@ -1261,6 +1262,62 @@ async function loadSettings() {
       </section>
     `).join('');
   } catch (err) {
+    showStatus(err.message, 'err');
+  }
+}
+
+function llmModelSelectorHtml(selector) {
+  const current = selector.current || '';
+  return `
+    <div class="setting-field llm-model-field">
+      <label><span>当前模型</span></label>
+      <div class="llm-model-switch" role="group" aria-label="当前模型">
+        ${(selector.options || []).map(option => `
+          <button
+            type="button"
+            class="${option.id === current ? 'active' : ''}"
+            aria-pressed="${option.id === current ? 'true' : 'false'}"
+            onclick="switchLlmProvider('${escapeHtml(option.id || '')}')"
+            title="${escapeHtml(`${option.base_url || ''} / ${option.model || ''}`)}"
+          >
+            <span>${escapeHtml(option.label || option.id || '')}</span>
+            <small>${escapeHtml(option.configured ? (option.model || '') : '未配置 API Key')}</small>
+          </button>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+async function switchLlmProvider(provider) {
+  const keys = provider === 'zhipu_glm'
+    ? ['LLM_GLM_API_KEY']
+    : ['LLM_API_KEY', 'LLM_BASE_URL', 'LLM_MODEL'];
+  const values = {};
+  keys.forEach(key => {
+    const input = document.querySelector(`[data-setting-key="${key}"]`);
+    const value = input?.value?.trim() || '';
+    if (value) values[key] = value;
+  });
+  const buttons = document.querySelectorAll('.llm-model-switch button');
+  buttons.forEach(button => { button.disabled = true; });
+  showStatus('正在切换当前模型...', 'busy');
+  try {
+    const data = await api('/api/llm-provider', {
+      method: 'POST',
+      body: JSON.stringify({provider, values})
+    });
+    await loadSettings();
+    const label = provider === 'zhipu_glm' ? '智谱 GLM 5.3 Flash' : 'DeepSeek';
+    const activation = data.activation || {};
+    const activationText = activation.attempted
+      ? (activation.ok
+          ? '新浪财经快讯常驻服务已重启；其他定时采集任务下一轮生效。'
+          : `模型选择已保存；新浪财经快讯常驻服务重启未完成：${activation.error || '未知错误'}`)
+      : '当前模型没有变化。';
+    showStatus(`当前模型：${label}\n${activationText}`, activation.ok === false ? 'err' : 'ok');
+  } catch (err) {
+    buttons.forEach(button => { button.disabled = false; });
     showStatus(err.message, 'err');
   }
 }
