@@ -255,11 +255,80 @@ def test_hard_deadline_cancels_inflight_http_request() -> None:
         llm_analysis.retry_count = original_retries
 
 
+def test_hard_deadline_glm_request_uses_official_model_contract() -> None:
+    original_config = llm_analysis.llm_config
+    original_client = llm_analysis.httpx.AsyncClient
+    original_retries = llm_analysis.retry_count
+    original_thinking = os.environ.get("LLM_THINKING_TYPE")
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        is_error = False
+        text = '{"choices":[{"message":{"content":"{\\"ok\\":true}"}}]}'
+
+        def json(self):
+            return {
+                "id": "glm-response-1",
+                "choices": [{"message": {"content": '{"ok":true}'}}],
+            }
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            assert kwargs == {"timeout": None, "trust_env": False}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, *, json, headers):
+            captured.update({"url": url, "payload": json, "headers": headers})
+            return FakeResponse()
+
+    try:
+        os.environ.pop("LLM_THINKING_TYPE", None)
+        llm_analysis.llm_config = lambda: (
+            "glm-secret",
+            "https://open.bigmodel.cn/api/paas/v4",
+            "glm-5.3-flash",
+        )
+        llm_analysis.httpx.AsyncClient = FakeClient
+        llm_analysis.retry_count = lambda: 0
+        response = llm_analysis.call_chat_completion_raw_with_prompts_hard_deadline(
+            "system",
+            "user",
+            deadline_monotonic=time.monotonic() + 2,
+            temperature_override=0,
+        )
+    finally:
+        llm_analysis.llm_config = original_config
+        llm_analysis.httpx.AsyncClient = original_client
+        llm_analysis.retry_count = original_retries
+        if original_thinking is None:
+            os.environ.pop("LLM_THINKING_TYPE", None)
+        else:
+            os.environ["LLM_THINKING_TYPE"] = original_thinking
+
+    assert response.model == "glm-5.3-flash"
+    assert response.provider == "open.bigmodel.cn"
+    assert captured["url"] == "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    assert captured["headers"]["Authorization"] == "Bearer glm-secret"
+    assert captured["payload"]["model"] == "glm-5.3-flash"
+    assert captured["payload"]["thinking"] == {"type": "enabled"}
+    assert captured["payload"]["messages"] == [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "user"},
+    ]
+
+
 def main() -> int:
     test_valid_decisions_write_private_audits_and_keep_actions_authoritative()
     test_audit_source_item_id_matches_market_storage_fallback()
     test_invalid_output_fails_closed_after_auditing()
     test_hard_deadline_cancels_inflight_http_request()
+    test_hard_deadline_glm_request_uses_official_model_contract()
     print("production LLM decision checks passed")
     return 0
 

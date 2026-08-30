@@ -29,7 +29,7 @@ from holdings_web import (
     unit_display_metadata,
 )
 from market_db import init_db
-from settings_store import save_settings, settings_payload
+from settings_store import save_settings, settings_payload, switch_llm_provider
 from source_profiles import (
     default_profile_map,
     filter_enabled_named_sources,
@@ -203,15 +203,17 @@ def frontend_source() -> str:
     )
 
 
-def test_settings_expose_only_one_llm_connection_config() -> None:
+def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> None:
     with TemporaryDirectory() as tmpdir:
         env_path = Path(tmpdir) / ".env"
         env_path.write_text(
             "\n".join(
                 (
+                    "LLM_PROVIDER=openai_compatible",
                     "LLM_BASE_URL=https://api.deepseek.com",
                     "LLM_MODEL=deepseek-v4-flash",
                     "LLM_API_KEY=common-secret-key",
+                    "LLM_GLM_API_KEY=glm-secret-key",
                     "VALUE_DIRECTORY_PREVIEW_BASE_URL=https://old.example",
                     "VALUE_DIRECTORY_PREVIEW_MODEL=old-preview-model",
                     "VALUE_DIRECTORY_PREVIEW_API_KEY=old-preview-secret",
@@ -233,6 +235,20 @@ def test_settings_expose_only_one_llm_connection_config() -> None:
         assert fields["LLM_API_KEY"]["configured"] is True
         assert fields["LLM_API_KEY"]["value"] == ""
         assert fields["LLM_API_KEY"]["masked"]
+        assert fields["LLM_GLM_API_KEY"]["configured"] is True
+        assert fields["LLM_GLM_API_KEY"]["value"] == ""
+        llm_group = next(group for group in payload["groups"] if group["id"] == "llm")
+        selector = llm_group["model_selector"]
+        assert selector["current"] == "deepseek"
+        assert [option["id"] for option in selector["options"]] == ["deepseek", "zhipu_glm"]
+        glm = next(option for option in selector["options"] if option["id"] == "zhipu_glm")
+        assert glm == {
+            "id": "zhipu_glm",
+            "label": "智谱 GLM 5.3 Flash",
+            "base_url": "https://open.bigmodel.cn/api/paas/v4",
+            "model": "glm-5.3-flash",
+            "configured": True,
+        }
         assert "VALUE_DIRECTORY_PREVIEW_BASE_URL" not in fields
         assert "VALUE_DIRECTORY_PREVIEW_MODEL" not in fields
         assert "VALUE_DIRECTORY_PREVIEW_API_KEY" not in fields
@@ -255,13 +271,106 @@ def test_settings_expose_only_one_llm_connection_config() -> None:
         else:
             raise AssertionError("retired value-directory model override must not be writable")
 
+        switched = switch_llm_provider("zhipu_glm", path=env_path)
+        assert switched["provider"] == "zhipu_glm"
+        assert switched["changed_count"] == 1
+        assert "LLM_PROVIDER=zhipu_glm" in env_path.read_text(encoding="utf-8")
+        assert "LLM_API_KEY=common-secret-key" in env_path.read_text(encoding="utf-8")
+        assert "LLM_GLM_API_KEY=glm-secret-key" in env_path.read_text(encoding="utf-8")
 
-def test_settings_ui_describes_one_llm_connection_config() -> None:
+        switched_back = switch_llm_provider("deepseek", path=env_path)
+        assert switched_back["provider"] == "deepseek"
+        assert "LLM_PROVIDER=deepseek" in env_path.read_text(encoding="utf-8")
+
+
+def test_glm_switch_requires_its_own_key_and_accepts_first_switch_key() -> None:
+    with TemporaryDirectory() as tmpdir:
+        env_path = Path(tmpdir) / ".env"
+        env_path.write_text(
+            "LLM_PROVIDER=deepseek\nLLM_API_KEY=deepseek-secret\n"
+            "LLM_BASE_URL=https://api.deepseek.com\nLLM_MODEL=deepseek-chat\n",
+            encoding="utf-8",
+        )
+        try:
+            switch_llm_provider("zhipu_glm", path=env_path)
+        except ValueError as exc:
+            assert "请先配置智谱 GLM 5.3 Flash API Key" in str(exc)
+        else:
+            raise AssertionError("GLM selection without its dedicated key must fail closed")
+        assert "LLM_PROVIDER=deepseek" in env_path.read_text(encoding="utf-8")
+
+        result = switch_llm_provider(
+            "zhipu_glm",
+            {"LLM_GLM_API_KEY": "new-glm-key"},
+            path=env_path,
+        )
+        assert result["changed_count"] == 2
+        assert "LLM_PROVIDER=zhipu_glm" in env_path.read_text(encoding="utf-8")
+        assert "LLM_GLM_API_KEY=new-glm-key" in env_path.read_text(encoding="utf-8")
+
+
+def test_settings_ui_exposes_current_model_switch() -> None:
     source = frontend_source()
-    assert "价值目录的预览提取统一使用“大模型”中的 Base URL、模型名称和 API Key" in source
+    assert "价值目录的预览提取统一使用“大模型”中的当前模型" in source
+    assert "当前模型" in source
+    assert "智谱 GLM 5.3 Flash" in source
+    assert "/api/llm-provider" in source
     assert "清除独立覆盖" not in source
     assert "clear_keys" not in source
     assert "data-inherit-from" not in source
+
+
+def test_llm_provider_http_endpoint_switches_and_restarts_persistent_collector() -> None:
+    captured = {}
+    original_switch = holdings_web.switch_llm_provider
+    original_action = holdings_web.service_action_payload
+
+    def fake_switch(provider, values):
+        captured.update({"provider": provider, "values": values})
+        return {
+            "provider": provider,
+            "changed": [{"key": "LLM_PROVIDER", "old": "deepseek", "new": provider}],
+            "changed_count": 1,
+            "path": "/private/.env",
+        }
+
+    def fake_action(unit, action):
+        captured.update({"unit": unit, "action": action})
+        return {"returncode": 0, "stderr": "", "stdout": ""}
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), HoldingsHandler)
+    server.token = "test-token"
+    server.restart_sina_flash = False
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    try:
+        holdings_web.switch_llm_provider = fake_switch
+        holdings_web.service_action_payload = fake_action
+        thread.start()
+        connection = http.client.HTTPConnection(*server.server_address, timeout=5)
+        body = json.dumps({"provider": "zhipu_glm", "values": {"LLM_GLM_API_KEY": "test-key"}})
+        connection.request(
+            "POST",
+            "/api/llm-provider",
+            body=body,
+            headers={"X-Holdings-Token": "test-token", "Content-Type": "application/json"},
+        )
+        response = connection.getresponse()
+        payload = json.loads(response.read().decode("utf-8"))
+        assert response.status == 200
+        assert payload["provider"] == "zhipu_glm"
+        assert payload["activation"] == {"attempted": True, "ok": True, "error": ""}
+        assert captured == {
+            "provider": "zhipu_glm",
+            "values": {"LLM_GLM_API_KEY": "test-key"},
+            "unit": "surveil-sina-flash.service",
+            "action": "restart",
+        }
+    finally:
+        holdings_web.switch_llm_provider = original_switch
+        holdings_web.service_action_payload = original_action
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 def test_page_uses_extracted_assets_and_bounded_placeholders() -> None:
@@ -1502,8 +1611,10 @@ def test_unit_display_metadata_includes_news_production_collector() -> None:
 
 
 def main() -> int:
-    test_settings_expose_only_one_llm_connection_config()
-    test_settings_ui_describes_one_llm_connection_config()
+    test_settings_expose_switchable_llm_models_without_revealing_secrets()
+    test_glm_switch_requires_its_own_key_and_accepts_first_switch_key()
+    test_settings_ui_exposes_current_model_switch()
+    test_llm_provider_http_endpoint_switches_and_restarts_persistent_collector()
     test_page_uses_extracted_assets_and_bounded_placeholders()
     test_overview_separates_actions_from_review_statuses()
     test_media_keywords_use_one_master_list_and_a_title_only_subset()

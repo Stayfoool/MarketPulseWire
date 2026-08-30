@@ -9,7 +9,7 @@ require_remote_host
 echo "将写入远程服务器 $REMOTE_HOST:$REMOTE_ENV"
 echo "直接回车 = 保留远程现有值；输入新值 = 覆盖对应配置。"
 echo "DeepSeek 常用配置：Base URL=https://api.deepseek.com，模型=deepseek-chat"
-echo "智谱 GLM-5.2 常用配置：Base URL=https://api.z.ai/api/coding/paas/v4，模型=glm-5.2"
+echo "智谱 GLM 5.3 Flash 固定配置：Base URL=https://open.bigmodel.cn/api/paas/v4，模型=glm-5.3-flash"
 echo
 
 ssh -n -i "$REMOTE_SSH_KEY" -o IdentitiesOnly=yes "$REMOTE_USER@$REMOTE_HOST" \
@@ -20,6 +20,7 @@ import os
 env_path = Path(os.environ['REMOTE_ENV'])
 sensitive = {
     'LLM_API_KEY',
+    'LLM_GLM_API_KEY',
 }
 visible = [
     'LLM_PROVIDER',
@@ -48,13 +49,18 @@ else:
 PY"
 echo
 
-printf "请输入模型 API Key（回车保留现有值）: "
+printf "请输入 DeepSeek API Key（回车保留现有值）: "
 IFS= read -r -s LLM_API_KEY
 echo
-printf "请输入模型 Base URL（回车保留现有值）: "
+printf "请输入 DeepSeek Base URL（回车保留现有值）: "
 IFS= read -r LLM_BASE_URL
-printf "请输入模型名称（回车保留现有值）: "
+printf "请输入 DeepSeek 模型名称（回车保留现有值）: "
 IFS= read -r LLM_MODEL
+printf "请输入智谱 GLM 5.3 Flash API Key（回车保留现有值）: "
+IFS= read -r -s LLM_GLM_API_KEY
+echo
+printf "请输入当前模型 deepseek 或 zhipu_glm（回车保留现有值）: "
+IFS= read -r LLM_PROVIDER
 
 PAYLOAD_FILE="$(mktemp)"
 REMOTE_PAYLOAD="/tmp/surveil-secrets-$$.json"
@@ -67,6 +73,8 @@ PAYLOAD_FILE="$PAYLOAD_FILE" \
 LLM_API_KEY="$LLM_API_KEY" \
 LLM_BASE_URL="$LLM_BASE_URL" \
 LLM_MODEL="$LLM_MODEL" \
+LLM_GLM_API_KEY="$LLM_GLM_API_KEY" \
+LLM_PROVIDER="$LLM_PROVIDER" \
 python3 - <<'PY'
 from pathlib import Path
 import json
@@ -76,6 +84,8 @@ payload = {
     "LLM_API_KEY": os.environ["LLM_API_KEY"],
     "LLM_BASE_URL": os.environ["LLM_BASE_URL"],
     "LLM_MODEL": os.environ["LLM_MODEL"],
+    "LLM_GLM_API_KEY": os.environ["LLM_GLM_API_KEY"],
+    "LLM_PROVIDER": os.environ["LLM_PROVIDER"],
 }
 path = Path(os.environ["PAYLOAD_FILE"])
 path.write_text(json.dumps(payload), encoding="utf-8")
@@ -97,19 +107,25 @@ env_path.parent.mkdir(parents=True, exist_ok=True)
 payload_path = Path(os.environ['REMOTE_PAYLOAD'])
 payload = json.loads(payload_path.read_text(encoding='utf-8'))
 
-updates = {
-    'LLM_PROVIDER': 'openai_compatible',
-}
+updates = {}
 
 llm_api_key = str(payload.get('LLM_API_KEY') or '').strip()
 llm_base_url = str(payload.get('LLM_BASE_URL') or '').strip()
 llm_model = str(payload.get('LLM_MODEL') or '').strip()
+llm_glm_api_key = str(payload.get('LLM_GLM_API_KEY') or '').strip()
+llm_provider = str(payload.get('LLM_PROVIDER') or '').strip()
+if llm_provider and llm_provider not in {'deepseek', 'zhipu_glm'}:
+    raise SystemExit('LLM_PROVIDER 只允许 deepseek 或 zhipu_glm')
 if llm_api_key:
     updates['LLM_API_KEY'] = llm_api_key
 if llm_base_url:
     updates['LLM_BASE_URL'] = llm_base_url
 if llm_model:
     updates['LLM_MODEL'] = llm_model
+if llm_glm_api_key:
+    updates['LLM_GLM_API_KEY'] = llm_glm_api_key
+if llm_provider:
+    updates['LLM_PROVIDER'] = llm_provider
 
 lines = env_path.read_text(encoding='utf-8').splitlines() if env_path.exists() else []
 seen = set()
@@ -138,7 +154,9 @@ payload_path.unlink(missing_ok=True)
 changed_sensitive = []
 if llm_api_key:
     changed_sensitive.append('LLM_API_KEY=<redacted>')
-changed_plain = [key for key in ('LLM_BASE_URL', 'LLM_MODEL') if key in updates]
+if llm_glm_api_key:
+    changed_sensitive.append('LLM_GLM_API_KEY=<redacted>')
+changed_plain = [key for key in ('LLM_PROVIDER', 'LLM_BASE_URL', 'LLM_MODEL') if key in updates]
 changed = changed_sensitive + changed_plain
 if changed:
     print(f'已更新 {env_path}: ' + ', '.join(changed))
@@ -146,4 +164,4 @@ else:
     print(f'已检查 {env_path}: 未输入新值，保留现有模型配置')
 PY"
 
-unset LLM_API_KEY LLM_BASE_URL LLM_MODEL
+unset LLM_API_KEY LLM_BASE_URL LLM_MODEL LLM_GLM_API_KEY LLM_PROVIDER

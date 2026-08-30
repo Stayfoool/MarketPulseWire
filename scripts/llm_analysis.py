@@ -15,6 +15,9 @@ from typing import Any
 
 import httpx
 
+from llm_provider_config import resolve_llm_connection
+
+
 class LLMBalanceInsufficientError(RuntimeError):
     """Raised when the model provider reports insufficient balance."""
 
@@ -130,12 +133,7 @@ USER_PROMPT_TEMPLATE = """请分析以下内容，并输出 JSON：
 def llm_config() -> tuple[str, str, str] | None:
     if os.getenv("SURVEIL_DISABLE_LLM", "").strip() == "1":
         return None
-    api_key = os.getenv("LLM_API_KEY", "").strip()
-    base_url = os.getenv("LLM_BASE_URL", "").strip()
-    model = os.getenv("LLM_MODEL", "").strip()
-    if not api_key or not base_url or not model:
-        return None
-    return api_key, base_url, model
+    return resolve_llm_connection(os.environ)
 
 
 def chat_completions_url(base_url: str) -> str:
@@ -198,6 +196,8 @@ def thinking_type(base_url: str, model: str) -> str:
     raw = os.getenv("LLM_THINKING_TYPE", "").strip().lower()
     if raw:
         return raw
+    if "open.bigmodel.cn" in base_url.lower() and model.lower() == "glm-5.3-flash":
+        return "enabled"
     if "z.ai" in base_url.lower() and model.lower().startswith("glm-"):
         return "disabled"
     if "deepseek" in base_url.lower():
