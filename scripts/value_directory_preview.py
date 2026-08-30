@@ -17,7 +17,6 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from env_utils import get_env
 from llm_analysis import (
     chat_completions_url,
     json_response_format_enabled,
@@ -84,17 +83,7 @@ def env_bool(name: str, default: bool) -> bool:
 
 
 def preview_llm_config() -> tuple[str, str, str] | None:
-    base = llm_config()
-    api_key = get_env("VALUE_DIRECTORY_PREVIEW_API_KEY")
-    base_url = get_env("VALUE_DIRECTORY_PREVIEW_BASE_URL")
-    model = get_env("VALUE_DIRECTORY_PREVIEW_MODEL")
-    if base:
-        api_key = api_key or base[0]
-        base_url = base_url or base[1]
-        model = model or base[2]
-    if not api_key or not base_url or not model:
-        return None
-    return api_key, base_url, model
+    return llm_config()
 
 
 def ocr_enabled() -> bool:

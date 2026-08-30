@@ -47,6 +47,7 @@ from value_directory_preview import (
     fallback_facts,
     flatten_paddleocr_result,
     paddle_ocr_instance,
+    preview_llm_config,
 )
 
 
@@ -700,6 +701,42 @@ def test_preview_llm_policy_disables_deepseek_thinking() -> None:
 
     assert payload["thinking"] == {"type": "disabled"}
     assert payload["response_format"] == {"type": "json_object"}
+
+
+def test_preview_llm_config_uses_only_common_llm_settings() -> None:
+    names = (
+        "LLM_API_KEY",
+        "LLM_BASE_URL",
+        "LLM_MODEL",
+        "VALUE_DIRECTORY_PREVIEW_API_KEY",
+        "VALUE_DIRECTORY_PREVIEW_BASE_URL",
+        "VALUE_DIRECTORY_PREVIEW_MODEL",
+        "SURVEIL_DISABLE_LLM",
+    )
+    original = {name: os.environ.get(name) for name in names}
+    try:
+        os.environ["LLM_API_KEY"] = "common-key"
+        os.environ["LLM_BASE_URL"] = "https://common.example"
+        os.environ["LLM_MODEL"] = "common-model"
+        os.environ["VALUE_DIRECTORY_PREVIEW_API_KEY"] = "retired-key"
+        os.environ["VALUE_DIRECTORY_PREVIEW_BASE_URL"] = "https://retired.example"
+        os.environ["VALUE_DIRECTORY_PREVIEW_MODEL"] = "retired-model"
+        os.environ.pop("SURVEIL_DISABLE_LLM", None)
+
+        assert preview_llm_config() == (
+            "common-key",
+            "https://common.example",
+            "common-model",
+        )
+
+        os.environ.pop("LLM_MODEL")
+        assert preview_llm_config() is None
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 def test_preview_ocr_text_path_uses_text_llm_without_vision() -> None:
@@ -1361,6 +1398,7 @@ def main() -> int:
     test_paddleocr_result_flatten_supports_common_shapes()
     test_paddleocr_instance_retries_unknown_argument_errors()
     test_preview_llm_policy_disables_deepseek_thinking()
+    test_preview_llm_config_uses_only_common_llm_settings()
     test_preview_ocr_text_path_uses_text_llm_without_vision()
     test_preview_ocr_failure_falls_back_without_blocking()
     test_recheck_uses_enriched_item_without_a_preliminary_decision_gate()

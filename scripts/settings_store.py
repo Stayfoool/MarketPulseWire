@@ -21,14 +21,13 @@ class SettingField:
     sensitive: bool = False
     help: str = ""
     placeholder: str = ""
-    inherit_from: str = ""
 
 
 SETTING_GROUPS: list[dict[str, Any]] = [
     {
         "id": "llm",
         "title": "大模型",
-        "restart_hint": "保存后建议重启统一 collector 和 X 常驻服务，使新模型配置立即生效。",
+        "restart_hint": "保存后建议重启统一 collector 和 X 常驻服务；价值目录下一次 timer 运行会自动读取新模型配置。",
         "fields": [
             SettingField("LLM_PROVIDER", "供应商类型", "llm", placeholder="openai_compatible"),
             SettingField("LLM_BASE_URL", "Base URL", "llm", placeholder="https://api.deepseek.com"),
@@ -54,28 +53,6 @@ SETTING_GROUPS: list[dict[str, Any]] = [
             SettingField("VALUE_DIRECTORY_PREVIEW_OCR_LANG", "OCR 语言", "value_directory", placeholder="ch"),
             SettingField("VALUE_DIRECTORY_PREVIEW_OCR_MIN_CHARS", "OCR 最少字数", "value_directory", placeholder="40"),
             SettingField("VALUE_DIRECTORY_PREVIEW_LLM_ENABLED", "启用 OCR 文本提取", "value_directory", placeholder="1"),
-            SettingField(
-                "VALUE_DIRECTORY_PREVIEW_BASE_URL",
-                "预览提取模型 Base URL",
-                "value_directory",
-                placeholder="留空复用通用大模型 Base URL",
-                inherit_from="LLM_BASE_URL",
-            ),
-            SettingField(
-                "VALUE_DIRECTORY_PREVIEW_MODEL",
-                "预览提取模型名称",
-                "value_directory",
-                placeholder="留空复用通用大模型模型名称",
-                inherit_from="LLM_MODEL",
-            ),
-            SettingField(
-                "VALUE_DIRECTORY_PREVIEW_API_KEY",
-                "预览提取模型 API Key",
-                "value_directory",
-                sensitive=True,
-                help="输入值会建立独立覆盖；留空保存会保留现有独立覆盖。点击“清除独立覆盖”后复用通用大模型 API Key。",
-                inherit_from="LLM_API_KEY",
-            ),
             SettingField("VALUE_DIRECTORY_PREVIEW_LLM_TIMEOUT_SECONDS", "第一页提取超时秒数", "value_directory", placeholder="45"),
             SettingField("VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT", "第一页提取重试次数", "value_directory", placeholder="1"),
             SettingField("VALUE_DIRECTORY_PREVIEW_VISION_FALLBACK_ENABLED", "启用视觉模型兜底", "value_directory", placeholder="0"),
@@ -190,8 +167,6 @@ def settings_payload(path: Path = ENV_PATH) -> dict[str, Any]:
         fields = []
         for field in group["fields"]:
             value = values.get(field.key, "")
-            inherited_value = values.get(field.inherit_from, "") if field.inherit_from else ""
-            inherited = bool(field.inherit_from and not value)
             item = {
                 "key": field.key,
                 "label": field.label,
@@ -201,11 +176,6 @@ def settings_payload(path: Path = ENV_PATH) -> dict[str, Any]:
                 "value": "" if field.sensitive else value,
                 "help": field.help,
                 "placeholder": field.placeholder,
-                "inherit_from": field.inherit_from,
-                "inherited": inherited,
-                "effective": (
-                    mask_secret(inherited_value) if field.sensitive else inherited_value
-                ) if inherited else "",
             }
             fields.append(item)
         groups.append(
@@ -217,24 +187,6 @@ def settings_payload(path: Path = ENV_PATH) -> dict[str, Any]:
             }
         )
     return {"groups": groups, "path": str(path)}
-
-
-def _clear_keys(raw_clear_keys: Any) -> list[str]:
-    if raw_clear_keys is None:
-        return []
-    if not isinstance(raw_clear_keys, list):
-        raise ValueError("clear_keys 必须是数组")
-    clear_keys: list[str] = []
-    for raw_key in raw_clear_keys:
-        key = str(raw_key or "").strip()
-        field = FIELDS_BY_KEY.get(key)
-        if field is None:
-            raise ValueError(f"不允许清除未知配置项：{key}")
-        if not field.inherit_from:
-            raise ValueError(f"该配置项不支持清除覆盖：{key}")
-        if key not in clear_keys:
-            clear_keys.append(key)
-    return clear_keys
 
 
 def build_updates(raw_values: dict[str, Any], current: dict[str, str]) -> tuple[dict[str, str], list[dict[str, str]]]:
@@ -265,10 +217,8 @@ def build_updates(raw_values: dict[str, Any], current: dict[str, str]) -> tuple[
 def write_env_updates(
     updates: dict[str, str],
     *,
-    clear_keys: list[str] | None = None,
     path: Path = ENV_PATH,
 ) -> None:
-    cleared = set(clear_keys or [])
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
     seen: set[str] = set()
@@ -276,9 +226,6 @@ def write_env_updates(
     for line in lines:
         stripped = line.strip()
         key = stripped.split("=", 1)[0].strip() if "=" in stripped and not stripped.startswith("#") else ""
-        if key in cleared:
-            seen.add(key)
-            continue
         if key in updates:
             out.append(f"{key}={updates[key]}")
             seen.add(key)
@@ -304,24 +251,10 @@ def write_env_updates(
 def save_settings(
     raw_values: dict[str, Any],
     *,
-    clear_keys: list[str] | None = None,
     path: Path = ENV_PATH,
 ) -> dict[str, Any]:
     current = parse_env_file(path)
-    keys_to_clear = _clear_keys(clear_keys)
     updates, changes = build_updates(raw_values, current)
-    for key in keys_to_clear:
-        updates.pop(key, None)
-        old_value = current.get(key, "")
-        if old_value:
-            changes.append(
-                {
-                    "key": key,
-                    "sensitive": "1" if FIELDS_BY_KEY[key].sensitive else "0",
-                    "old": "<redacted>" if FIELDS_BY_KEY[key].sensitive else old_value,
-                    "new": "<复用通用大模型>",
-                }
-            )
-    if updates or keys_to_clear:
-        write_env_updates(updates, clear_keys=keys_to_clear, path=path)
+    if updates:
+        write_env_updates(updates, path=path)
     return {"changed": changes, "changed_count": len(changes), "path": str(path)}

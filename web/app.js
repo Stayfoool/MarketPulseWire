@@ -1246,22 +1246,15 @@ async function loadSettings() {
           <div class="setting-field">
             <label>
               <span>${escapeHtml(field.label || field.key || '')}</span>
-              <span class="setting-mask">${field.inherited
-                ? `复用通用大模型${field.effective ? ' ' + escapeHtml(field.effective) : '（通用项未配置）'}`
-                : (field.sensitive ? (field.configured ? '独立覆盖 ' + escapeHtml(field.masked || '') : '未配置') : (field.inherit_from ? '独立覆盖' : ''))}</span>
+              <span class="setting-mask">${field.sensitive ? (field.configured ? escapeHtml(field.masked || '') : '未配置') : ''}</span>
             </label>
             <input
               data-setting-key="${escapeHtml(field.key || '')}"
               data-sensitive="${field.sensitive ? '1' : '0'}"
-              data-inherit-from="${escapeHtml(field.inherit_from || '')}"
               value="${field.sensitive ? '' : escapeHtml(field.value || '')}"
-              placeholder="${escapeHtml(field.inherit_from
-                ? '留空不修改；输入值建立独立覆盖'
-                : (field.sensitive ? '留空保留现有值；输入新值覆盖' : (field.placeholder || ''))) }"
+              placeholder="${escapeHtml(field.sensitive ? '留空保留现有值；输入新值覆盖' : (field.placeholder || ''))}"
               autocomplete="off"
-              oninput="markSettingOverrideInput(this)"
             >
-            ${field.inherit_from ? `<button type="button" class="secondary" data-clear-setting-key="${escapeHtml(field.key || '')}" onclick="clearSettingOverride(this)">清除独立覆盖，复用通用大模型</button>` : ''}
             ${field.help ? `<div class="hint">${escapeHtml(field.help)}</div>` : ''}
           </div>
         `).join('')}
@@ -1278,7 +1271,7 @@ function settingsRestartAdvice(changedItems) {
   const hasAny = names => keys.some(key => names.includes(key));
   const lines = [];
   if (hasPrefix('LLM_')) {
-    lines.push('大模型配置：重启常驻的 surveil-sina-flash.service；X、研究机构、官网和新闻媒体 collector 下一轮自动读取，也可立即运行对应 timer。');
+    lines.push('大模型配置：重启常驻的 surveil-sina-flash.service；X、研究机构、官网、新闻媒体和价值目录下一轮自动读取，也可立即运行对应 timer。');
   }
   if (hasPrefix('VALUE_DIRECTORY_')) {
     lines.push('价值目录：下一次 05:00 / 21:00 timer 会读取新配置；如需马上验证，在任务健康页立即运行 surveil-value-directory.timer。');
@@ -1295,42 +1288,18 @@ function settingsRestartAdvice(changedItems) {
   return lines;
 }
 
-function clearSettingOverride(button) {
-  const field = button.closest('.setting-field');
-  const input = field && field.querySelector('[data-setting-key]');
-  if (!field || !input) return;
-  input.value = '';
-  field.dataset.clearOverride = '1';
-  button.textContent = '将清除独立覆盖';
-}
-
-function markSettingOverrideInput(input) {
-  const field = input.closest('.setting-field');
-  if (field && input.value.trim()) {
-    delete field.dataset.clearOverride;
-    const button = field.querySelector('[data-clear-setting-key]');
-    if (button) button.textContent = '清除独立覆盖，复用通用大模型';
-  }
-}
-
 async function saveSettings() {
   try {
     const values = {};
-    const clearKeys = [];
     document.querySelectorAll('[data-setting-key]').forEach(input => {
       const key = input.dataset.settingKey;
       const sensitive = input.dataset.sensitive === '1';
       const value = input.value.trim();
-      const field = input.closest('.setting-field');
       if (!key) return;
-      if (field && field.dataset.clearOverride === '1') {
-        clearKeys.push(key);
-        return;
-      }
       if (sensitive && !value) return;
       values[key] = value;
     });
-    const data = await api('/api/settings', {method: 'POST', body: JSON.stringify({values, clear_keys: clearKeys})});
+    const data = await api('/api/settings', {method: 'POST', body: JSON.stringify({values})});
     const changedItems = data.changed || [];
     const changed = changedItems.map(item => `${item.key}: ${item.old || '<空>'} -> ${item.new || '<空>'}`).join('\n');
     const advice = settingsRestartAdvice(changedItems);
