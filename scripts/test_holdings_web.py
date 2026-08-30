@@ -203,7 +203,7 @@ def frontend_source() -> str:
     )
 
 
-def test_value_directory_preview_settings_inherit_and_clear_overrides() -> None:
+def test_settings_expose_only_one_llm_connection_config() -> None:
     with TemporaryDirectory() as tmpdir:
         env_path = Path(tmpdir) / ".env"
         env_path.write_text(
@@ -222,63 +222,46 @@ def test_value_directory_preview_settings_inherit_and_clear_overrides() -> None:
             encoding="utf-8",
         )
 
-        before = settings_payload(env_path)
-        before_fields = {
+        payload = settings_payload(env_path)
+        fields = {
             field["key"]: field
-            for group in before["groups"]
+            for group in payload["groups"]
             for field in group["fields"]
         }
-        assert before_fields["VALUE_DIRECTORY_PREVIEW_API_KEY"]["configured"] is True
-        assert before_fields["VALUE_DIRECTORY_PREVIEW_API_KEY"]["value"] == ""
-        assert before_fields["VALUE_DIRECTORY_PREVIEW_API_KEY"]["masked"]
-
-        saved = save_settings(
-            {},
-            clear_keys=[
-                "VALUE_DIRECTORY_PREVIEW_BASE_URL",
-                "VALUE_DIRECTORY_PREVIEW_MODEL",
-                "VALUE_DIRECTORY_PREVIEW_API_KEY",
-            ],
-            path=env_path,
-        )
-        assert saved["changed_count"] == 3
-        assert "VALUE_DIRECTORY_PREVIEW_" not in env_path.read_text(encoding="utf-8")
-
-        after = settings_payload(env_path)
-        after_fields = {
-            field["key"]: field
-            for group in after["groups"]
-            for field in group["fields"]
-        }
-        assert after_fields["VALUE_DIRECTORY_PREVIEW_BASE_URL"]["inherited"] is True
-        assert after_fields["VALUE_DIRECTORY_PREVIEW_BASE_URL"]["effective"] == "https://api.deepseek.com"
-        assert after_fields["VALUE_DIRECTORY_PREVIEW_MODEL"]["effective"] == "deepseek-v4-flash"
-        assert after_fields["VALUE_DIRECTORY_PREVIEW_API_KEY"]["inherited"] is True
-        assert after_fields["VALUE_DIRECTORY_PREVIEW_API_KEY"]["effective"] == "comm...-key"
-        assert after_fields["VALUE_DIRECTORY_PREVIEW_API_KEY"]["value"] == ""
+        assert fields["LLM_BASE_URL"]["value"] == "https://api.deepseek.com"
+        assert fields["LLM_MODEL"]["value"] == "deepseek-v4-flash"
+        assert fields["LLM_API_KEY"]["configured"] is True
+        assert fields["LLM_API_KEY"]["value"] == ""
+        assert fields["LLM_API_KEY"]["masked"]
+        assert "VALUE_DIRECTORY_PREVIEW_BASE_URL" not in fields
+        assert "VALUE_DIRECTORY_PREVIEW_MODEL" not in fields
+        assert "VALUE_DIRECTORY_PREVIEW_API_KEY" not in fields
 
         save_settings(
             {
-                "VALUE_DIRECTORY_PREVIEW_BASE_URL": "https://custom.example",
-                "VALUE_DIRECTORY_PREVIEW_MODEL": "custom-preview-model",
-                "VALUE_DIRECTORY_PREVIEW_API_KEY": "custom-preview-secret",
                 "FEISHU_SECRET": "",
             },
             path=env_path,
         )
-        restored = env_path.read_text(encoding="utf-8")
-        assert "VALUE_DIRECTORY_PREVIEW_BASE_URL=https://custom.example" in restored
-        assert "VALUE_DIRECTORY_PREVIEW_MODEL=custom-preview-model" in restored
-        assert "VALUE_DIRECTORY_PREVIEW_API_KEY=custom-preview-secret" in restored
-        assert "FEISHU_SECRET=keep-existing-secret" in restored
+        assert "FEISHU_SECRET=keep-existing-secret" in env_path.read_text(encoding="utf-8")
+
+        try:
+            save_settings(
+                {"VALUE_DIRECTORY_PREVIEW_MODEL": "custom-preview-model"},
+                path=env_path,
+            )
+        except ValueError as exc:
+            assert "不允许修改未知配置项" in str(exc)
+        else:
+            raise AssertionError("retired value-directory model override must not be writable")
 
 
-def test_value_directory_preview_settings_ui_exposes_inheritance_and_clear_action() -> None:
+def test_settings_ui_describes_one_llm_connection_config() -> None:
     source = frontend_source()
-    assert "默认复用通用大模型" in source
-    assert "清除独立覆盖，复用通用大模型" in source
-    assert "clear_keys" in source
-    assert "留空表示复用 LLM_API_KEY 或保留现有覆盖" not in source
+    assert "价值目录的预览提取统一使用“大模型”中的 Base URL、模型名称和 API Key" in source
+    assert "清除独立覆盖" not in source
+    assert "clear_keys" not in source
+    assert "data-inherit-from" not in source
 
 
 def test_page_uses_extracted_assets_and_bounded_placeholders() -> None:
@@ -1519,8 +1502,8 @@ def test_unit_display_metadata_includes_news_production_collector() -> None:
 
 
 def main() -> int:
-    test_value_directory_preview_settings_inherit_and_clear_overrides()
-    test_value_directory_preview_settings_ui_exposes_inheritance_and_clear_action()
+    test_settings_expose_only_one_llm_connection_config()
+    test_settings_ui_describes_one_llm_connection_config()
     test_page_uses_extracted_assets_and_bounded_placeholders()
     test_overview_separates_actions_from_review_statuses()
     test_media_keywords_use_one_master_list_and_a_title_only_subset()
