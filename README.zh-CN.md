@@ -138,7 +138,7 @@ LLM_TIMEOUT_SECONDS=90
 LLM_RETRY_COUNT=2
 ```
 
-配置中心的“当前模型”可在 DeepSeek 与智谱 GLM 5.3 Flash 之间一键切换。智谱连接固定使用官方 `https://open.bigmodel.cn/api/paas/v4` 和 `glm-5.3-flash`；两个 API Key 都只保存在 mode `0600` 的私有 `.env`，不会回显明文。既有 `LLM_PROVIDER=openai_compatible` 配置继续使用 `LLM_API_KEY`、`LLM_BASE_URL` 和 `LLM_MODEL`。
+配置中心的“当前模型”可在 DeepSeek 与智谱 GLM 5.3 Flash 之间一键切换。智谱连接固定使用官方 `https://open.bigmodel.cn/api/paas/v4` 和 `glm-5.3-flash`；请求始终使用该模型支持的 `thinking=enabled`、`reasoning_effort=low` 和 JSON mode，不继承 DeepSeek 的关闭思考设置。两个 API Key 都只保存在 mode `0600` 的私有 `.env`，不会回显明文。既有 `LLM_PROVIDER=openai_compatible` 配置继续使用 `LLM_API_KEY`、`LLM_BASE_URL` 和 `LLM_MODEL`。
 
 生产 collector 需要两份相互独立的私有规则文件：
 

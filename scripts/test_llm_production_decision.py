@@ -13,6 +13,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import llm_analysis
+import llm_production_decision
 from market_card_view import market_result_view
 import market_flow
 from llm_analysis import ChatCompletionResponse
@@ -260,6 +261,7 @@ def test_hard_deadline_glm_request_uses_official_model_contract() -> None:
     original_client = llm_analysis.httpx.AsyncClient
     original_retries = llm_analysis.retry_count
     original_thinking = os.environ.get("LLM_THINKING_TYPE")
+    original_json = os.environ.get("LLM_RESPONSE_FORMAT_JSON")
     captured = {}
 
     class FakeResponse:
@@ -288,7 +290,8 @@ def test_hard_deadline_glm_request_uses_official_model_contract() -> None:
             return FakeResponse()
 
     try:
-        os.environ.pop("LLM_THINKING_TYPE", None)
+        os.environ["LLM_THINKING_TYPE"] = "disabled"
+        os.environ["LLM_RESPONSE_FORMAT_JSON"] = "0"
         llm_analysis.llm_config = lambda: (
             "glm-secret",
             "https://open.bigmodel.cn/api/paas/v4",
@@ -301,6 +304,7 @@ def test_hard_deadline_glm_request_uses_official_model_contract() -> None:
             "user",
             deadline_monotonic=time.monotonic() + 2,
             temperature_override=0,
+            thinking_override="disabled",
         )
     finally:
         llm_analysis.llm_config = original_config
@@ -310,6 +314,10 @@ def test_hard_deadline_glm_request_uses_official_model_contract() -> None:
             os.environ.pop("LLM_THINKING_TYPE", None)
         else:
             os.environ["LLM_THINKING_TYPE"] = original_thinking
+        if original_json is None:
+            os.environ.pop("LLM_RESPONSE_FORMAT_JSON", None)
+        else:
+            os.environ["LLM_RESPONSE_FORMAT_JSON"] = original_json
 
     assert response.model == "glm-5.3-flash"
     assert response.provider == "open.bigmodel.cn"
@@ -317,10 +325,60 @@ def test_hard_deadline_glm_request_uses_official_model_contract() -> None:
     assert captured["headers"]["Authorization"] == "Bearer glm-secret"
     assert captured["payload"]["model"] == "glm-5.3-flash"
     assert captured["payload"]["thinking"] == {"type": "enabled"}
+    assert captured["payload"]["reasoning_effort"] == "low"
+    assert captured["payload"]["response_format"] == {"type": "json_object"}
     assert captured["payload"]["messages"] == [
         {"role": "system", "content": "system"},
         {"role": "user", "content": "user"},
     ]
+
+
+def test_glm_production_audit_records_effective_request_preferences() -> None:
+    original_config = llm_production_decision.llm_config
+    original_transport = llm_production_decision.call_chat_completion_raw_with_prompts_hard_deadline
+    original_thinking = os.environ.get("LLM_THINKING_TYPE")
+    original_json = os.environ.get("LLM_RESPONSE_FORMAT_JSON")
+    try:
+        os.environ["LLM_THINKING_TYPE"] = "disabled"
+        os.environ["LLM_RESPONSE_FORMAT_JSON"] = "0"
+        llm_production_decision.llm_config = lambda: (
+            "glm-secret",
+            "https://open.bigmodel.cn/api/paas/v4",
+            "glm-5.3-flash",
+        )
+        llm_production_decision.call_chat_completion_raw_with_prompts_hard_deadline = (
+            lambda *_args, **_kwargs: response("archive")
+        )
+        caller = llm_production_decision._default_model_caller(time.monotonic() + 2)
+        with TemporaryDirectory() as tmp:
+            decide_production_market_item(
+                item(),
+                admission=admission(),
+                portfolio=parse_portfolio_config([]),
+                market_item_id=31,
+                market_review_id=41,
+                audit_dir=Path(tmp),
+                model_caller=caller,
+            )
+            audit = json.loads(
+                next(Path(tmp).glob("llm-decision-audit-*.json")).read_text(encoding="utf-8")
+            )
+    finally:
+        llm_production_decision.llm_config = original_config
+        llm_production_decision.call_chat_completion_raw_with_prompts_hard_deadline = original_transport
+        if original_thinking is None:
+            os.environ.pop("LLM_THINKING_TYPE", None)
+        else:
+            os.environ["LLM_THINKING_TYPE"] = original_thinking
+        if original_json is None:
+            os.environ.pop("LLM_RESPONSE_FORMAT_JSON", None)
+        else:
+            os.environ["LLM_RESPONSE_FORMAT_JSON"] = original_json
+
+    options = audit["model_audit"]["calls"][0]["request"]["options"]
+    assert options["thinking_type"] == "enabled"
+    assert options["reasoning_effort"] == "low"
+    assert options["response_format"] == {"type": "json_object"}
 
 
 def main() -> int:
@@ -329,6 +387,7 @@ def main() -> int:
     test_invalid_output_fails_closed_after_auditing()
     test_hard_deadline_cancels_inflight_http_request()
     test_hard_deadline_glm_request_uses_official_model_contract()
+    test_glm_production_audit_records_effective_request_preferences()
     print("production LLM decision checks passed")
     return 0
 

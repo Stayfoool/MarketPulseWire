@@ -11,7 +11,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from llm_analysis import call_chat_completion_raw_with_prompts_hard_deadline
+from llm_analysis import (
+    call_chat_completion_raw_with_prompts_hard_deadline,
+    llm_config,
+    llm_response_preferences,
+)
 from llm_decision_web import build_web_projection
 from llm_rule_decision import LLMRulePrompt, resolve_input_text_scope
 from llm_rule_execution import LLMRuleExecution, execute_llm_rule_decision
@@ -41,6 +45,18 @@ class ProductionLLMDecisionError(RuntimeError):
 
 def _default_model_caller(deadline_monotonic: float):
     thinking = str(os.environ.get("LLM_THINKING_TYPE") or "").strip() or None
+    config = llm_config()
+    preferences = (
+        llm_response_preferences(
+            base_url=config[1],
+            model=config[2],
+            thinking_override=thinking,
+        )
+        if config
+        else {}
+    )
+    effective_thinking = preferences.get("thinking")
+    effective_response_format = preferences.get("response_format")
 
     def call(prompt: LLMRulePrompt):
         return call_chat_completion_raw_with_prompts_hard_deadline(
@@ -57,7 +73,17 @@ def _default_model_caller(deadline_monotonic: float):
     call.audit_options = {  # type: ignore[attr-defined]
         "temperature": 0,
         "max_output_tokens": PRODUCTION_MAX_OUTPUT_TOKENS,
-        "thinking_type": thinking or "",
+        "thinking_type": (
+            str(effective_thinking.get("type") or "")
+            if isinstance(effective_thinking, dict)
+            else ""
+        ),
+        "reasoning_effort": str(preferences.get("reasoning_effort") or ""),
+        "response_format": (
+            dict(effective_response_format)
+            if isinstance(effective_response_format, dict)
+            else {}
+        ),
         "truncate_user_prompt": False,
         "total_deadline_seconds": PRODUCTION_DECISION_TIMEOUT_SECONDS,
     }

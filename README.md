@@ -138,7 +138,7 @@ LLM_TIMEOUT_SECONDS=90
 LLM_RETRY_COUNT=2
 ```
 
-The workbench's `当前模型` control switches between DeepSeek and Zhipu GLM 5.3 Flash. The Zhipu connection is fixed to the official `https://open.bigmodel.cn/api/paas/v4` endpoint and `glm-5.3-flash`; both API keys remain only in the private mode-`0600` `.env` and are never returned in clear text. Existing `LLM_PROVIDER=openai_compatible` configurations continue to use `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL`.
+The workbench's `当前模型` control switches between DeepSeek and Zhipu GLM 5.3 Flash. The Zhipu connection is fixed to the official `https://open.bigmodel.cn/api/paas/v4` endpoint and `glm-5.3-flash`; requests always use the model-supported `thinking=enabled`, `reasoning_effort=low`, and JSON mode instead of inheriting DeepSeek's disabled-thinking setting. Both API keys remain only in the private mode-`0600` `.env` and are never returned in clear text. Existing `LLM_PROVIDER=openai_compatible` configurations continue to use `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL`.
 
 Two separate private rule files are required for production collection:
 

@@ -183,7 +183,13 @@ def max_output_tokens() -> int:
         return 1200
 
 
+def is_glm_53_flash(base_url: str, model: str) -> bool:
+    return "open.bigmodel.cn" in base_url.lower() and model.lower() == "glm-5.3-flash"
+
+
 def json_response_format_enabled(base_url: str) -> bool:
+    if "open.bigmodel.cn" in base_url.lower():
+        return True
     raw = os.getenv("LLM_RESPONSE_FORMAT_JSON", "").strip().lower()
     if raw:
         return raw in {"1", "true", "yes", "y", "on", "是"}
@@ -193,16 +199,56 @@ def json_response_format_enabled(base_url: str) -> bool:
 
 
 def thinking_type(base_url: str, model: str) -> str:
+    if is_glm_53_flash(base_url, model):
+        return "enabled"
     raw = os.getenv("LLM_THINKING_TYPE", "").strip().lower()
     if raw:
         return raw
-    if "open.bigmodel.cn" in base_url.lower() and model.lower() == "glm-5.3-flash":
-        return "enabled"
     if "z.ai" in base_url.lower() and model.lower().startswith("glm-"):
         return "disabled"
     if "deepseek" in base_url.lower():
         return "disabled"
     return ""
+
+
+def llm_response_preferences(
+    *,
+    base_url: str,
+    model: str,
+    thinking_override: str | None = None,
+) -> dict[str, Any]:
+    preferences: dict[str, Any] = {}
+    thinking = (thinking_override or thinking_type(base_url, model)).strip().lower()
+    if is_glm_53_flash(base_url, model):
+        thinking = "enabled"
+        preferences["reasoning_effort"] = "low"
+    elif (
+        "deepseek" in base_url.lower()
+        and thinking == "enabled"
+        and os.getenv("LLM_ALLOW_DEEPSEEK_THINKING", "").strip() != "1"
+    ):
+        thinking = "disabled"
+    if thinking in {"enabled", "disabled"}:
+        preferences["thinking"] = {"type": thinking}
+    if json_response_format_enabled(base_url):
+        preferences["response_format"] = {"type": "json_object"}
+    return preferences
+
+
+def apply_llm_response_preferences(
+    payload: dict[str, Any],
+    *,
+    base_url: str,
+    model: str,
+    thinking_override: str | None = None,
+) -> None:
+    payload.update(
+        llm_response_preferences(
+            base_url=base_url,
+            model=model,
+            thinking_override=thinking_override,
+        )
+    )
 
 
 def retry_sleep_seconds(attempt: int) -> float:
@@ -255,13 +301,12 @@ def call_chat_completion_raw_with_prompts(
         "temperature": 0.2 if temperature_override is None else float(temperature_override),
         "max_tokens": max_tokens_override or max_output_tokens(),
     }
-    thinking = (thinking_override or thinking_type(base_url, model)).strip().lower()
-    if "deepseek" in base_url.lower() and thinking == "enabled" and os.getenv("LLM_ALLOW_DEEPSEEK_THINKING", "").strip() != "1":
-        thinking = "disabled"
-    if thinking in {"enabled", "disabled"}:
-        payload["thinking"] = {"type": thinking}
-    if json_response_format_enabled(base_url):
-        payload["response_format"] = {"type": "json_object"}
+    apply_llm_response_preferences(
+        payload,
+        base_url=base_url,
+        model=model,
+        thinking_override=thinking_override,
+    )
     request = urllib.request.Request(
         chat_completions_url(base_url),
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -366,13 +411,12 @@ def call_chat_completion_raw_with_prompts_hard_deadline(
         "temperature": 0.2 if temperature_override is None else float(temperature_override),
         "max_tokens": max_tokens_override or max_output_tokens(),
     }
-    thinking = (thinking_override or thinking_type(base_url, model)).strip().lower()
-    if "deepseek" in base_url.lower() and thinking == "enabled" and os.getenv("LLM_ALLOW_DEEPSEEK_THINKING", "").strip() != "1":
-        thinking = "disabled"
-    if thinking in {"enabled", "disabled"}:
-        payload["thinking"] = {"type": thinking}
-    if json_response_format_enabled(base_url):
-        payload["response_format"] = {"type": "json_object"}
+    apply_llm_response_preferences(
+        payload,
+        base_url=base_url,
+        model=model,
+        thinking_override=thinking_override,
+    )
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json; charset=utf-8",
