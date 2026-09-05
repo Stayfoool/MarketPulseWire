@@ -131,6 +131,76 @@ def test_market_item_card_prefers_unified_decision_and_interpretation_metadata()
     assert "旧 daily summary" not in text
 
 
+def test_value_directory_stock_card_merges_preview_into_core_without_preview_section() -> None:
+    card = build_market_item_card(
+        "value_directory_ib_stocks",
+        {
+            "title": "花旗-澜起科技：2026年二季报表现稳健",
+            "source_module": "价值目录 / 国际投行-个股",
+            "summary": "花旗重申澜起科技买入评级并上调目标价。",
+            "raw": {
+                "value_directory_preview": {
+                    "facts": {
+                        "status": "ok",
+                        "core_content": "花旗重申澜起科技买入评级并上调目标价。",
+                        "key_points": ["2Q26营收18.75亿元创历史新高，同比增长33%", "MRDIMM与CXL预计2027年放量"],
+                    }
+                }
+            },
+            "preview_lines": ["第一页提取：花旗重申澜起科技买入评级并上调目标价。", "要点：2Q26营收创历史新高"],
+            "review": {
+                "interpretation_result": {
+                    "core_content": "花旗重申澜起科技买入评级并上调目标价，2Q26营收创历史新高；MRDIMM与CXL预计2027年放量。"
+                },
+                "raw": {"_decision_result": {"action": "push", "reason": "个股研报规则命中。"}},
+            },
+        },
+    )
+    text = flatten_card_text(card)
+    assert "核心内容" in text
+    assert "MRDIMM与CXL预计2027年放量" in text
+    assert "第一页提取" not in text
+
+
+def test_value_directory_stock_card_keeps_preview_failure_notice() -> None:
+    card = build_market_item_card(
+        "value_directory_ib_stocks",
+        {
+            "title": "投行个股报告",
+            "source_module": "价值目录 / 国际投行-个股",
+            "summary": "标题摘要",
+            "raw": {"value_directory_preview": {"facts": {"status": "failed", "error": "OCR 失败"}}},
+            "preview_lines": ["第一页提取：失败/不可用（OCR 失败）"],
+            "review": {"raw": {"_decision_result": {"action": "push", "reason": "规则命中。"}}},
+        },
+    )
+    text = flatten_card_text(card)
+    assert "第一页提取：失败/不可用（OCR 失败）" in text
+
+
+def test_value_directory_macro_card_keeps_successful_preview_section() -> None:
+    card = build_market_item_card(
+        "value_directory_ib_industry_macro",
+        {
+            "title": "瑞银-亚太科技策略",
+            "source_module": "价值目录 / 国际投行-行业宏观",
+            "summary": "瑞银看好亚太科技。",
+            "raw": {
+                "value_directory_preview": {
+                    "facts": {
+                        "status": "ok",
+                        "core_content": "瑞银看好亚太科技。",
+                    }
+                }
+            },
+            "preview_lines": ["第一页提取：瑞银看好亚太科技。"],
+            "review": {"raw": {"_decision_result": {"action": "push", "reason": "行业策略规则命中。"}}},
+        },
+    )
+    text = flatten_card_text(card)
+    assert "第一页提取：瑞银看好亚太科技。" in text
+
+
 def test_market_item_card_bounds_winning_decision_reasons() -> None:
     hits = [
         {"rule_id": f"push_{index}", "decision_action": "push", "reason": f"强推依据 {index}"}
@@ -215,6 +285,9 @@ def main() -> int:
     test_market_item_card_ignores_collector_push_reason()
     test_decision_basis_reads_persisted_raw_decision_only()
     test_market_item_card_prefers_unified_decision_and_interpretation_metadata()
+    test_value_directory_stock_card_merges_preview_into_core_without_preview_section()
+    test_value_directory_stock_card_keeps_preview_failure_notice()
+    test_value_directory_macro_card_keeps_successful_preview_section()
     test_market_item_card_bounds_winning_decision_reasons()
     test_market_item_card_shows_cls_vip_product_metadata_and_author_targets()
     test_market_item_card_shows_cls_metadata()

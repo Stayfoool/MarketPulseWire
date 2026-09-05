@@ -36,6 +36,8 @@ SYSTEM_PROMPT = """你是投资研报第一页预览的信息抽取器。
 - 目标价、历史收盘价及其日期、评级、上调/下调、报告日期、机构、涉及公司/行业/环节
 - 如果图片不可读或信息不足，明确写 unknown / 信息不足。
 
+对于“价值目录 / 国际投行-个股”，core_content 请写成一到三句自然中文：先写投行的评级、研报动作和目标价等结论，再自然接上第一页可见的具体论据（如业绩数据、增长驱动、产品管线和重要反向信息）。不要把结论和理由写成固定标签，也不要在理由中机械重复评级或目标价。key_points 仅保留有助于说明结论的具体论据，避免重复 core_content 中已经完整表达的结论。
+
 只输出 JSON，不要 Markdown。"""
 
 
@@ -43,7 +45,7 @@ USER_PROMPT = """请提取这份价值目录研报可见第一页预览中的关
 
 输出 JSON：
 {
-  "core_content": "一句中文概括，只基于标题和第一页可见信息",
+  "core_content": "一到三句自然中文概括，只基于标题和第一页可见信息；个股研报先写投行结论，再接具体论据",
   "stance": "bullish/bearish/neutral/mixed/unknown",
   "research_action": "buy/sell/overweight/underweight/upgrade/downgrade/initiate/long/short/none/unknown",
   "institution": "机构名或 unknown",
@@ -493,9 +495,11 @@ def normalize_facts(
     targets = parsed.get("targets")
     if not isinstance(targets, list):
         targets = []
-    core = compact(parsed.get("core_content"), 420)
+    core = compact(parsed.get("core_content"), 700)
     if not core:
         core = compact(item.get("title"), 420)
+    if str(item.get("source_module") or "").strip() == "价值目录 / 国际投行-个股":
+        core = merge_stock_core_content(core, key_points)
     facts = {
         "status": "ok",
         "core_content": core,
@@ -519,6 +523,27 @@ def normalize_facts(
         "ocr": ocr or {},
     }
     return facts
+
+
+def merge_stock_core_content(core: str, key_points: list[Any]) -> str:
+    """Keep stock-report conclusions and concrete preview evidence together."""
+    content = compact(core, 700)
+    points: list[str] = []
+    normalized_core = re.sub(r"\s+", "", content).casefold()
+    for point in key_points:
+        cleaned = compact(point, 180)
+        if not cleaned:
+            continue
+        normalized_point = re.sub(r"\s+", "", cleaned).casefold()
+        if normalized_point in normalized_core or cleaned in points:
+            continue
+        points.append(cleaned)
+    if not points:
+        return content
+    evidence = "；".join(points[:3])
+    if content.endswith(("。", "！", "？", ".", "!", "?")):
+        return compact(f"{content}此外，{evidence}。", 700)
+    return compact(f"{content}。此外，{evidence}。", 700)
 
 
 def fallback_facts(
