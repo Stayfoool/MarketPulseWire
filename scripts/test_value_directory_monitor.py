@@ -46,6 +46,7 @@ from value_directory_preview import (
     extract_preview_facts,
     fallback_facts,
     flatten_paddleocr_result,
+    normalize_facts,
     paddle_ocr_instance,
     preview_llm_config,
 )
@@ -81,6 +82,32 @@ def test_normalize_entry_supports_industry_macro_source() -> None:
     assert item["source_module"] == "价值目录 / 国际投行-行业宏观"
     assert item["categories"] == ["国际投行-行业宏观"]
     assert item["raw"]["source"] == "value_directory_ib_industry_macro"
+
+
+def test_stock_preview_core_content_includes_concrete_points_after_conclusion() -> None:
+    facts = normalize_facts(
+        {
+            "core_content": "花旗重申澜起科技买入评级并上调目标价至320元。",
+            "key_points": [
+                "2Q26营收18.75亿元创历史新高，同比增长33%",
+                "MRDIMM与CXL预计2027年放量",
+            ],
+        },
+        {
+            "title": "花旗-澜起科技：2026年二季报表现稳健",
+            "source_module": "价值目录 / 国际投行-个股",
+        },
+        {"previewImages": []},
+        "test-model",
+    )
+    assert facts["core_content"].startswith("花旗重申澜起科技买入评级并上调目标价至320元。")
+    assert "2Q26营收18.75亿元创历史新高，同比增长33%" in facts["core_content"]
+    assert "MRDIMM与CXL预计2027年放量" in facts["core_content"]
+
+
+def test_stock_preview_prompt_requests_natural_conclusion_then_reasons() -> None:
+    assert "先写投行的评级、研报动作和目标价等结论" in value_directory_preview.SYSTEM_PROMPT
+    assert "不要把结论和理由写成固定标签" in value_directory_preview.SYSTEM_PROMPT
 
 
 def test_page_state_detection_separates_waf_login_and_empty() -> None:
@@ -1402,6 +1429,8 @@ def test_collect_production_rechecks_current_unpushed_reviews() -> None:
 def main() -> int:
     test_normalize_entry_extracts_stable_id_and_utc_date()
     test_normalize_entry_supports_industry_macro_source()
+    test_stock_preview_core_content_includes_concrete_points_after_conclusion()
+    test_stock_preview_prompt_requests_natural_conclusion_then_reasons()
     test_page_state_detection_separates_waf_login_and_empty()
     test_empty_list_waits_once_for_delayed_articles()
     test_persistent_empty_list_remains_empty_after_bounded_wait()
