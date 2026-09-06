@@ -110,6 +110,18 @@ def test_stock_preview_prompt_requests_natural_conclusion_then_reasons() -> None
     assert "不要把结论和理由写成固定标签" in value_directory_preview.SYSTEM_PROMPT
 
 
+def test_macro_preview_omits_points_already_in_core() -> None:
+    core = "示例投行预计设备需求改善，资本开支预计增长20%。"
+    facts = normalize_facts(
+        {"core_content": core, "key_points": ["资本开支预计增长20%", "资本开支预计增长20%", ""]},
+        {"title": "示例投行-行业展望", "source_module": "价值目录 / 国际投行-行业宏观"},
+        {"previewImages": []}, "test-model",
+    )
+    assert facts["core_content"] == core
+    assert "先写投行对行业趋势、宏观政策或市场的主要结论" in value_directory_preview.SYSTEM_PROMPT
+    assert "同一结论或论据只表达一次" in value_directory_preview.SYSTEM_PROMPT
+
+
 def test_page_state_detection_separates_waf_login_and_empty() -> None:
     assert classify_page_state("宝塔防火墙正在检查您的访问", article_count=0) == "waf"
     assert classify_page_state("请先 登录 后继续", article_count=0, url="https://www.valuelist.cn/login") == "login"
@@ -1431,6 +1443,7 @@ def main() -> int:
     test_normalize_entry_supports_industry_macro_source()
     test_stock_preview_core_content_includes_concrete_points_after_conclusion()
     test_stock_preview_prompt_requests_natural_conclusion_then_reasons()
+    test_macro_preview_omits_points_already_in_core()
     test_page_state_detection_separates_waf_login_and_empty()
     test_empty_list_waits_once_for_delayed_articles()
     test_persistent_empty_list_remains_empty_after_bounded_wait()
