@@ -5,6 +5,9 @@ from __future__ import annotations
 
 from cards import build_market_item_card
 from market_card_view import decision_basis_reasons
+from market_flow import evaluate_item, normalize_market_item
+from market_item import DecisionResult
+from value_directory_preview import apply_preview_to_item, normalize_facts
 
 
 def flatten_card_text(card: dict) -> str:
@@ -178,12 +181,57 @@ def test_value_directory_stock_card_keeps_preview_failure_notice() -> None:
     assert "第一页提取：失败/不可用（OCR 失败）" in text
 
 
-def test_value_directory_macro_card_keeps_successful_preview_section() -> None:
+def test_value_directory_macro_card_merges_preview_without_repeated_points() -> None:
+    source = "value_directory_ib_industry_macro"
+    item = {
+        "title": "示例投行-科技行业展望",
+        "source_module": "价值目录 / 国际投行-行业宏观",
+    }
+    conclusion = "示例投行预计科技设备需求改善。"
+    point = "数据中心资本开支预计增长20%"
+    facts = normalize_facts(
+        {"core_content": conclusion, "key_points": [conclusion, point, point]},
+        item, {"previewImages": []}, "test-model",
+    )
+    item = apply_preview_to_item(item, {}, facts)
+    decision = DecisionResult(action="push", reason="行业策略规则命中。")
+    flow = evaluate_item(normalize_market_item(source, item), item, decision, storage_ref={})
+    assert flow.decision.action == "push"
+    assert flow.interpretation.core_content == facts["core_content"]
+    item["review"] = {
+        "interpretation_result": {"core_content": flow.interpretation.core_content},
+        "raw": {"_decision_result": {"action": decision.action, "reason": decision.reason}},
+    }
+    card = build_market_item_card(source, item)
+    blocks = [element.get("text", {}).get("content", "") for element in card["elements"]]
+    core = next(block for block in blocks if block.startswith("**核心内容**"))
+    assert core.count(conclusion) == 1
+    assert core.count(point) == 1
+    assert not any(block.startswith("**第一页提取**") for block in blocks)
+    assert any(block.startswith("**推送依据**") for block in blocks)
+    assert any(block.startswith("**原文/摘要**") for block in blocks)
+
+
+def test_value_directory_macro_card_keeps_preview_failure_notice() -> None:
+    for status in ("failed", "unavailable"):
+        card = build_market_item_card(
+            "value_directory_ib_industry_macro",
+            {
+                "title": "行业宏观报告",
+                "summary": "标题摘要",
+                "raw": {"value_directory_preview": {"facts": {"status": status, "error": "OCR 不可用"}}},
+                "review": {"raw": {"_decision_result": {"action": "push", "reason": "规则命中。"}}},
+            },
+        )
+        assert "第一页提取：失败/不可用（OCR 不可用）" in flatten_card_text(card)
+
+
+def test_other_source_card_keeps_successful_preview_section() -> None:
     card = build_market_item_card(
-        "value_directory_ib_industry_macro",
+        "other_source",
         {
             "title": "瑞银-亚太科技策略",
-            "source_module": "价值目录 / 国际投行-行业宏观",
+            "source_module": "其他来源",
             "summary": "瑞银看好亚太科技。",
             "raw": {
                 "value_directory_preview": {
@@ -287,7 +335,9 @@ def main() -> int:
     test_market_item_card_prefers_unified_decision_and_interpretation_metadata()
     test_value_directory_stock_card_merges_preview_into_core_without_preview_section()
     test_value_directory_stock_card_keeps_preview_failure_notice()
-    test_value_directory_macro_card_keeps_successful_preview_section()
+    test_value_directory_macro_card_merges_preview_without_repeated_points()
+    test_value_directory_macro_card_keeps_preview_failure_notice()
+    test_other_source_card_keeps_successful_preview_section()
     test_market_item_card_bounds_winning_decision_reasons()
     test_market_item_card_shows_cls_vip_product_metadata_and_author_targets()
     test_market_item_card_shows_cls_metadata()

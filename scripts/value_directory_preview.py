@@ -38,6 +38,8 @@ SYSTEM_PROMPT = """你是投资研报第一页预览的信息抽取器。
 
 对于“价值目录 / 国际投行-个股”，core_content 请写成一到三句自然中文：先写投行的评级、研报动作和目标价等结论，再自然接上第一页可见的具体论据（如业绩数据、增长驱动、产品管线和重要反向信息）。不要把结论和理由写成固定标签，也不要在理由中机械重复评级或目标价。key_points 仅保留有助于说明结论的具体论据，避免重复 core_content 中已经完整表达的结论。
 
+对于“价值目录 / 国际投行-行业宏观”，core_content 请写成一到三句自然中文：先写投行对行业趋势、宏观政策或市场的主要结论，再自然接上第一页可见的具体数据、驱动因素和重要反向信息。同一结论或论据只表达一次，不要把结论和理由写成固定标签。key_points 仅保留有助于说明结论的具体论据，避免重复 core_content 中已经完整表达的内容。
+
 只输出 JSON，不要 Markdown。"""
 
 
@@ -45,7 +47,7 @@ USER_PROMPT = """请提取这份价值目录研报可见第一页预览中的关
 
 输出 JSON：
 {
-  "core_content": "一到三句自然中文概括，只基于标题和第一页可见信息；个股研报先写投行结论，再接具体论据",
+  "core_content": "一到三句自然中文概括，只基于标题和第一页可见信息；个股和行业宏观研报均先写投行结论，再接具体论据，避免重复",
   "stance": "bullish/bearish/neutral/mixed/unknown",
   "research_action": "buy/sell/overweight/underweight/upgrade/downgrade/initiate/long/short/none/unknown",
   "institution": "机构名或 unknown",
@@ -498,8 +500,10 @@ def normalize_facts(
     core = compact(parsed.get("core_content"), 700)
     if not core:
         core = compact(item.get("title"), 420)
-    if str(item.get("source_module") or "").strip() == "价值目录 / 国际投行-个股":
-        core = merge_stock_core_content(core, key_points)
+    if str(item.get("source_module") or "").strip() in {
+        "价值目录 / 国际投行-个股", "价值目录 / 国际投行-行业宏观",
+    }:
+        core = merge_preview_core_content(core, key_points)
     facts = {
         "status": "ok",
         "core_content": core,
@@ -525,8 +529,8 @@ def normalize_facts(
     return facts
 
 
-def merge_stock_core_content(core: str, key_points: list[Any]) -> str:
-    """Keep stock-report conclusions and concrete preview evidence together."""
+def merge_preview_core_content(core: str, key_points: list[Any]) -> str:
+    """Keep report conclusions and concrete preview evidence together."""
     content = compact(core, 700)
     points: list[str] = []
     normalized_core = re.sub(r"\s+", "", content).casefold()

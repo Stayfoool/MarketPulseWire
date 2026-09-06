@@ -140,8 +140,10 @@ def value_directory_preview_lines(item: dict[str, Any]) -> list[str]:
     return lines[:4]
 
 
-def hide_value_directory_stock_preview(item: dict[str, Any], source: str) -> bool:
-    if source != "value_directory_ib_stocks" and str(item.get("source_module") or "").strip() != "价值目录 / 国际投行-个股":
+def hide_value_directory_preview(item: dict[str, Any], source: str) -> bool:
+    if source not in {"value_directory_ib_stocks", "value_directory_ib_industry_macro"} and str(item.get("source_module") or "").strip() not in {
+        "价值目录 / 国际投行-个股", "价值目录 / 国际投行-行业宏观",
+    }:
         return False
     raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
     preview = raw.get("value_directory_preview") if isinstance(raw.get("value_directory_preview"), dict) else {}
@@ -206,7 +208,7 @@ def build_market_item_card(
     source_label = str(item.get("source_module") or source_module(source, url))
     push_basis, omitted_basis = decision_basis_reasons(review)
     core = thin_core_content(item, review)
-    preview_lines = [] if hide_value_directory_stock_preview(item, source) else value_directory_preview_lines(item)
+    preview_lines = [] if hide_value_directory_preview(item, source) else value_directory_preview_lines(item)
     cls_lines = cls_metadata_lines(item, review)
     elements: list[dict[str, Any]] = [
         div_markdown(f"**发送时间**：{md_escape(now_beijing())}"),
