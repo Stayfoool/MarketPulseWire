@@ -302,7 +302,16 @@ variables. DeepSeek and existing compatible configurations use `LLM_BASE_URL`;
 `https://open.bigmodel.cn/api/paas/v4` endpoint and `glm-5.3-flash` with the
 separate private `LLM_GLM_API_KEY`. Its requests always use code-fixed
 `thinking=enabled`, `reasoning_effort=low` and JSON mode, independent of the
-DeepSeek thinking setting. The Web workbench's `当前模型` control writes
+DeepSeek thinking setting. `LLM_PROVIDER=qwen_flash_snapshot` (default model
+`qwen3.7-flash-2026-07-15`) and `LLM_PROVIDER=qwen_flash`
+(`qwen3.7-flash`) use the separate private `LLM_QWEN_API_KEY` and
+`LLM_QWEN_BASE_URL`, which defaults to the 百炼 OpenAI-compatible endpoint
+`https://dashscope.aliyuncs.com/compatible-mode/v1`; use the workspace-specific
+`https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` URL
+when the API key belongs to a business space. 千问 requests send
+`enable_thinking=false` and JSON mode, and a 千问 snapshot request that reports
+insufficient balance is retried once against `qwen3.7-flash`. The Web
+workbench's `当前模型` control writes
 the selection atomically, restarts the long-running Sina flash service and
 leaves already-running one-shot collectors to finish with their starting
 environment; later timer runs read the new selection. Source fetching continues

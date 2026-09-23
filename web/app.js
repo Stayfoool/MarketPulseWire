@@ -1289,10 +1289,22 @@ function llmModelSelectorHtml(selector) {
   `;
 }
 
+const LLM_MODEL_FIELDS = {
+  deepseek: ['LLM_API_KEY', 'LLM_BASE_URL', 'LLM_MODEL'],
+  zhipu_glm: ['LLM_GLM_API_KEY'],
+  qwen_flash_snapshot: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
+  qwen_flash: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
+};
+
+const LLM_MODEL_LABELS = {
+  deepseek: 'DeepSeek',
+  zhipu_glm: '智谱 GLM 5.3 Flash',
+  qwen_flash_snapshot: '阿里云百炼 Qwen3.7 Flash（2026-07-15 快照）',
+  qwen_flash: '阿里云百炼 Qwen3.7 Flash（稳定版）',
+};
+
 async function switchLlmProvider(provider) {
-  const keys = provider === 'zhipu_glm'
-    ? ['LLM_GLM_API_KEY']
-    : ['LLM_API_KEY', 'LLM_BASE_URL', 'LLM_MODEL'];
+  const keys = LLM_MODEL_FIELDS[provider] || LLM_MODEL_FIELDS.deepseek;
   const values = {};
   keys.forEach(key => {
     const input = document.querySelector(`[data-setting-key="${key}"]`);
@@ -1308,7 +1320,7 @@ async function switchLlmProvider(provider) {
       body: JSON.stringify({provider, values})
     });
     await loadSettings();
-    const label = provider === 'zhipu_glm' ? '智谱 GLM 5.3 Flash' : 'DeepSeek';
+    const label = LLM_MODEL_LABELS[provider] || provider;
     const activation = data.activation || {};
     const activationText = activation.attempted
       ? (activation.ok

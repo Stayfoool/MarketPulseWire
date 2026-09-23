@@ -10,6 +10,12 @@ from typing import Any
 
 from llm_provider_config import (
     DEEPSEEK_PROVIDER,
+    QWEN_BAILIAN_BASE_URL,
+    QWEN_BAILIAN_PROVIDER_MODELS,
+    QWEN_FLASH_MODEL,
+    QWEN_FLASH_PROVIDER,
+    QWEN_FLASH_SNAPSHOT_MODEL,
+    QWEN_FLASH_SNAPSHOT_PROVIDER,
     ZHIPU_GLM_BASE_URL,
     ZHIPU_GLM_MODEL,
     ZHIPU_GLM_PROVIDER,
@@ -36,12 +42,23 @@ SETTING_GROUPS: list[dict[str, Any]] = [
     {
         "id": "llm",
         "title": "大模型",
-        "restart_hint": "点击当前模型即可切换；新浪财经快讯常驻服务会立即重启，其他定时采集任务下一轮读取新模型。",
+        "restart_hint": (
+            "点击当前模型即可切换；新浪财经快讯常驻服务会立即重启，其他定时采集任务下一轮读取新模型。"
+            "阿里云百炼千问快照模型余额不足时，同一轮自动改用稳定版 qwen3.7-flash。"
+        ),
         "fields": [
             SettingField("LLM_BASE_URL", "DeepSeek / 兼容模型 Base URL", "llm", placeholder="https://api.deepseek.com"),
             SettingField("LLM_MODEL", "DeepSeek / 兼容模型名称", "llm", placeholder="deepseek-chat"),
             SettingField("LLM_API_KEY", "DeepSeek / 兼容模型 API Key", "llm", sensitive=True, help="留空表示保留现有密钥。"),
             SettingField("LLM_GLM_API_KEY", "智谱 GLM 5.3 Flash API Key", "llm", sensitive=True, help="单独保存；留空表示保留现有密钥。"),
+            SettingField("LLM_QWEN_API_KEY", "阿里云百炼（千问）API Key", "llm", sensitive=True, help="单独保存；留空表示保留现有密钥。"),
+            SettingField(
+                "LLM_QWEN_BASE_URL",
+                "阿里云百炼 Base URL",
+                "llm",
+                placeholder=QWEN_BAILIAN_BASE_URL,
+                help="默认北京地域 OpenAI 兼容端点；使用业务空间专属端点时填写完整地址。",
+            ),
             SettingField("LLM_TIMEOUT_SECONDS", "超时秒数", "llm", placeholder="90"),
             SettingField("LLM_RETRY_COUNT", "重试次数", "llm", placeholder="2"),
             SettingField("LLM_THINKING_TYPE", "默认 thinking", "llm", placeholder="disabled"),
@@ -169,6 +186,20 @@ def llm_model_selector(values: dict[str, str]) -> dict[str, Any]:
                 "base_url": ZHIPU_GLM_BASE_URL,
                 "model": ZHIPU_GLM_MODEL,
                 "configured": bool(values.get("LLM_GLM_API_KEY")),
+            },
+            {
+                "id": QWEN_FLASH_SNAPSHOT_PROVIDER,
+                "label": "阿里云百炼 Qwen3.7 Flash（快照）",
+                "base_url": values.get("LLM_QWEN_BASE_URL") or QWEN_BAILIAN_BASE_URL,
+                "model": QWEN_FLASH_SNAPSHOT_MODEL,
+                "configured": bool(values.get("LLM_QWEN_API_KEY")),
+            },
+            {
+                "id": QWEN_FLASH_PROVIDER,
+                "label": "阿里云百炼 Qwen3.7 Flash（稳定版）",
+                "base_url": values.get("LLM_QWEN_BASE_URL") or QWEN_BAILIAN_BASE_URL,
+                "model": QWEN_FLASH_MODEL,
+                "configured": bool(values.get("LLM_QWEN_API_KEY")),
             },
         ],
     }
@@ -305,9 +336,11 @@ def switch_llm_provider(
     allowed_fields = {
         DEEPSEEK_PROVIDER: {"LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL"},
         ZHIPU_GLM_PROVIDER: {"LLM_GLM_API_KEY"},
+        QWEN_FLASH_SNAPSHOT_PROVIDER: {"LLM_QWEN_API_KEY", "LLM_QWEN_BASE_URL"},
+        QWEN_FLASH_PROVIDER: {"LLM_QWEN_API_KEY", "LLM_QWEN_BASE_URL"},
     }
     if target not in allowed_fields:
-        raise ValueError("只允许切换 DeepSeek 或智谱 GLM 5.3 Flash")
+        raise ValueError("只允许切换 DeepSeek、智谱 GLM 5.3 Flash 或阿里云百炼千问模型")
 
     supplied = raw_values or {}
     unknown = set(supplied) - allowed_fields[target]
@@ -321,8 +354,21 @@ def switch_llm_provider(
         missing = [key for key in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL") if not effective.get(key)]
         if missing:
             raise ValueError("请先配置完整的 DeepSeek / 兼容模型 Base URL、模型名称和 API Key")
-    elif not effective.get("LLM_GLM_API_KEY"):
+    elif target == ZHIPU_GLM_PROVIDER and not effective.get("LLM_GLM_API_KEY"):
         raise ValueError("请先配置智谱 GLM 5.3 Flash API Key")
+    elif target in QWEN_BAILIAN_PROVIDER_MODELS:
+        if not effective.get("LLM_QWEN_API_KEY"):
+            raise ValueError("请先配置阿里云百炼（千问）API Key")
+        if not effective.get("LLM_QWEN_BASE_URL"):
+            updates["LLM_QWEN_BASE_URL"] = QWEN_BAILIAN_BASE_URL
+            changes.append(
+                {
+                    "key": "LLM_QWEN_BASE_URL",
+                    "sensitive": "0",
+                    "old": "",
+                    "new": QWEN_BAILIAN_BASE_URL,
+                }
+            )
 
     old_provider = current.get("LLM_PROVIDER", "")
     if old_provider != target:

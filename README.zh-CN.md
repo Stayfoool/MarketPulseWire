@@ -129,16 +129,18 @@ python scripts/holdings_web.py --host 127.0.0.1 --port 8787
 把 `.env.example` 复制为 `.env`，只填写实际使用的能力。推荐的大模型配置为：
 
 ```env
-LLM_PROVIDER=deepseek
+LLM_PROVIDER=qwen_flash_snapshot
 LLM_API_KEY=<your_deepseek_api_key>
 LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-chat
 LLM_GLM_API_KEY=<your_zhipu_api_key>
+LLM_QWEN_API_KEY=<your_bailian_api_key>
+LLM_QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 LLM_TIMEOUT_SECONDS=90
 LLM_RETRY_COUNT=2
 ```
 
-配置中心的“当前模型”可在 DeepSeek 与智谱 GLM 5.3 Flash 之间一键切换。智谱连接固定使用官方 `https://open.bigmodel.cn/api/paas/v4` 和 `glm-5.3-flash`；请求始终使用该模型支持的 `thinking=enabled`、`reasoning_effort=low` 和 JSON mode，不继承 DeepSeek 的关闭思考设置。两个 API Key 都只保存在 mode `0600` 的私有 `.env`，不会回显明文。既有 `LLM_PROVIDER=openai_compatible` 配置继续使用 `LLM_API_KEY`、`LLM_BASE_URL` 和 `LLM_MODEL`。
+配置中心的“当前模型”可在阿里云百炼千问、DeepSeek 与智谱 GLM 5.3 Flash 之间一键切换。默认模型是阿里云百炼 `qwen3.7-flash-2026-07-15`（`LLM_PROVIDER=qwen_flash_snapshot`），余额不足时同一轮自动改用同端点的稳定版 `qwen3.7-flash`；也可以直接选择 `qwen_flash` 只用稳定版。千问连接使用单独的 `LLM_QWEN_API_KEY`，端点由 `LLM_QWEN_BASE_URL` 指定，默认为北京地域 OpenAI 兼容端点，请求发送 `enable_thinking=false` 与 JSON mode。智谱连接固定使用官方 `https://open.bigmodel.cn/api/paas/v4` 和 `glm-5.3-flash`；请求始终使用该模型支持的 `thinking=enabled`、`reasoning_effort=low` 和 JSON mode，不继承其他模型的关闭思考设置。这些 API Key 都只保存在 mode `0600` 的私有 `.env`，不会回显明文。既有 `LLM_PROVIDER=openai_compatible` 配置继续使用 `LLM_API_KEY`、`LLM_BASE_URL` 和 `LLM_MODEL`。
 
 生产 collector 需要两份相互独立的私有规则文件：
 
@@ -147,7 +149,7 @@ LLM_RETRY_COUNT=2
 
 仓库中的 `config/rule_core_v1.test.json` 和 `config/llm_decision_rules.test.json` 只包含虚构 CI 测试配置，不是生产配置，也不代表推荐的市场判断规则。
 
-主程度决策模型只支持 `LLM_*` 配置名称；DeepSeek、智谱 GLM 5.3 Flash 和既有兼容模型共用同一 OpenAI-compatible 调用链。
+主程度决策模型只支持 `LLM_*` 配置名称；阿里云百炼千问、DeepSeek、智谱 GLM 5.3 Flash 和既有兼容模型共用同一 OpenAI-compatible 调用链。
 
 ## 部署
 

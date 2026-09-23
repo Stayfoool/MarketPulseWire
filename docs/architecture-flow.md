@@ -97,16 +97,23 @@ validates the structure, evidence, rule version and `push > daily > archive`
 aggregation.
 
 `llm_analysis.py` is the single model transport for DeepSeek, Zhipu GLM 5.3
-Flash and existing OpenAI-compatible configurations. `LLM_PROVIDER=deepseek`
-uses `LLM_API_KEY`, `LLM_BASE_URL` and `LLM_MODEL`;
+Flash, 阿里云百炼千问 and existing OpenAI-compatible configurations.
+`LLM_PROVIDER=deepseek` uses `LLM_API_KEY`, `LLM_BASE_URL` and `LLM_MODEL`;
 `LLM_PROVIDER=zhipu_glm` uses the separate `LLM_GLM_API_KEY` and the code-fixed
 official endpoint `https://open.bigmodel.cn/api/paas/v4` with
 `glm-5.3-flash`; the shared transport always applies `thinking=enabled`,
 `reasoning_effort=low` and JSON mode because this model does not support
-disabled thinking. The Web workbench changes only this model selection and its
-private connection values. It does not select a different decision, review,
-storage, dedup or delivery path. A missing key for the selected model fails
-closed instead of using the other model's key.
+disabled thinking. `LLM_PROVIDER=qwen_flash_snapshot` (default) and
+`LLM_PROVIDER=qwen_flash` use the separate `LLM_QWEN_API_KEY` with
+`LLM_QWEN_BASE_URL`, defaulting to the 百炼 OpenAI-compatible endpoint
+`https://dashscope.aliyuncs.com/compatible-mode/v1`, and send `enable_thinking`
+plus JSON mode. When the selected 千问 snapshot model reports insufficient
+balance, the same request is retried once against `qwen3.7-flash` on the same
+endpoint; other models have no fallback and fail closed. The Web workbench
+changes only this model selection and its private connection values. It does
+not select a different decision, review, storage, dedup or delivery path. A
+missing key for the selected model fails closed instead of using the other
+model's key.
 
 `DecisionResult.action` is the only push-eligibility authority. A model,
 validation or private-audit failure leaves no valid `DecisionResult`,
