@@ -16,7 +16,7 @@ def main() -> int:
     load_env(ROOT / ".env")
     config = llm_config()
     if not config:
-        print("LLM 未配置：缺少 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL")
+        print("LLM 未配置：当前模型缺少 API Key（LLM_QWEN_API_KEY / LLM_GLM_API_KEY / LLM_API_KEY）")
         return 1
     _, base_url, model = config
     print(f"LLM base_url={base_url}")

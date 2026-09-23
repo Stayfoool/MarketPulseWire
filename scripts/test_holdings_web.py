@@ -28,6 +28,7 @@ from holdings_web import (
     unit_actions,
     unit_display_metadata,
 )
+from llm_provider_config import QWEN_BAILIAN_BASE_URL
 from market_db import init_db
 from settings_store import save_settings, settings_payload, switch_llm_provider
 from source_profiles import (
@@ -240,7 +241,19 @@ def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> No
         llm_group = next(group for group in payload["groups"] if group["id"] == "llm")
         selector = llm_group["model_selector"]
         assert selector["current"] == "deepseek"
-        assert [option["id"] for option in selector["options"]] == ["deepseek", "zhipu_glm"]
+        assert [option["id"] for option in selector["options"]] == [
+            "deepseek",
+            "zhipu_glm",
+            "qwen_flash_snapshot",
+            "qwen_flash",
+        ]
+        snapshot = next(option for option in selector["options"] if option["id"] == "qwen_flash_snapshot")
+        assert snapshot["model"] == "qwen3.7-flash-2026-07-15"
+        assert snapshot["base_url"] == QWEN_BAILIAN_BASE_URL
+        assert snapshot["configured"] is False
+        stable = next(option for option in selector["options"] if option["id"] == "qwen_flash")
+        assert stable["model"] == "qwen3.7-flash"
+        assert stable["configured"] is False
         glm = next(option for option in selector["options"] if option["id"] == "zhipu_glm")
         assert glm == {
             "id": "zhipu_glm",
@@ -309,11 +322,54 @@ def test_glm_switch_requires_its_own_key_and_accepts_first_switch_key() -> None:
         assert "LLM_GLM_API_KEY=new-glm-key" in env_path.read_text(encoding="utf-8")
 
 
+def test_qwen_bailian_switch_requires_its_own_key_and_writes_default_base_url() -> None:
+    with TemporaryDirectory() as tmpdir:
+        env_path = Path(tmpdir) / ".env"
+        env_path.write_text(
+            "LLM_PROVIDER=deepseek\nLLM_API_KEY=deepseek-secret\n"
+            "LLM_BASE_URL=https://api.deepseek.com\nLLM_MODEL=deepseek-chat\n",
+            encoding="utf-8",
+        )
+        try:
+            switch_llm_provider("qwen_flash_snapshot", path=env_path)
+        except ValueError as exc:
+            assert "请先配置阿里云百炼（千问）API Key" in str(exc)
+        else:
+            raise AssertionError("qwen selection without its dedicated key must fail closed")
+        assert "LLM_PROVIDER=deepseek" in env_path.read_text(encoding="utf-8")
+
+        result = switch_llm_provider(
+            "qwen_flash_snapshot",
+            {"LLM_QWEN_API_KEY": "qwen-secret-key"},
+            path=env_path,
+        )
+        assert result["provider"] == "qwen_flash_snapshot"
+        assert result["changed_count"] == 3
+        text = env_path.read_text(encoding="utf-8")
+        assert "LLM_PROVIDER=qwen_flash_snapshot" in text
+        assert "LLM_QWEN_API_KEY=qwen-secret-key" in text
+        assert f"LLM_QWEN_BASE_URL={QWEN_BAILIAN_BASE_URL}" in text
+
+        switched = switch_llm_provider("qwen_flash", path=env_path)
+        assert switched["provider"] == "qwen_flash"
+        assert switched["changed_count"] == 1
+        assert "LLM_PROVIDER=qwen_flash" in env_path.read_text(encoding="utf-8")
+
+        try:
+            switch_llm_provider("qwen_flash", {"LLM_API_KEY": "other-key"}, path=env_path)
+        except ValueError as exc:
+            assert "当前模型切换不允许修改配置项" in str(exc)
+        else:
+            raise AssertionError("qwen selection must not accept another provider key")
+
+
 def test_settings_ui_exposes_current_model_switch() -> None:
     source = frontend_source()
     assert "价值目录的预览提取统一使用“大模型”中的当前模型" in source
     assert "当前模型" in source
     assert "智谱 GLM 5.3 Flash" in source
+    assert "阿里云百炼 Qwen3.7 Flash（2026-07-15 快照）" in source
+    assert "阿里云百炼 Qwen3.7 Flash（稳定版）" in source
     assert "/api/llm-provider" in source
     assert "清除独立覆盖" not in source
     assert "clear_keys" not in source
@@ -1613,6 +1669,7 @@ def test_unit_display_metadata_includes_news_production_collector() -> None:
 def main() -> int:
     test_settings_expose_switchable_llm_models_without_revealing_secrets()
     test_glm_switch_requires_its_own_key_and_accepts_first_switch_key()
+    test_qwen_bailian_switch_requires_its_own_key_and_writes_default_base_url()
     test_settings_ui_exposes_current_model_switch()
     test_llm_provider_http_endpoint_switches_and_restarts_persistent_collector()
     test_page_uses_extracted_assets_and_bounded_placeholders()

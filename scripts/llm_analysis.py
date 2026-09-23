@@ -15,11 +15,24 @@ from typing import Any
 
 import httpx
 
-from llm_provider_config import resolve_llm_connection
+from llm_provider_config import (
+    is_qwen_bailian_base_url,
+    resolve_llm_connection,
+    resolve_llm_fallback_connection,
+)
 
 
 class LLMBalanceInsufficientError(RuntimeError):
     """Raised when the model provider reports insufficient balance."""
+
+
+_BALANCE_ERROR_MARKERS = (
+    "insufficient balance",
+    "余额不足",
+    "欠费",
+    "arrearage",
+    "out of balance",
+)
 
 
 @dataclass(frozen=True)
@@ -136,6 +149,26 @@ def llm_config() -> tuple[str, str, str] | None:
     return resolve_llm_connection(os.environ)
 
 
+def llm_fallback_config() -> tuple[str, str, str] | None:
+    """Return the same-endpoint fallback model used when the current model has no balance."""
+    if os.getenv("SURVEIL_DISABLE_LLM", "").strip() == "1":
+        return None
+    return resolve_llm_fallback_connection(os.environ)
+
+
+def is_balance_insufficient(body: str, status_code: int | None = None) -> bool:
+    if status_code == 402:
+        return True
+    lowered = str(body or "").lower()
+    return any(marker in lowered for marker in _BALANCE_ERROR_MARKERS)
+
+
+def log_llm_fallback(fallback_model: str) -> None:
+    if os.getenv("LLM_RETRY_LOG", "1").strip() == "0":
+        return
+    print(f"当前模型余额不足，改用备用模型：{fallback_model}", flush=True)
+
+
 def chat_completions_url(base_url: str) -> str:
     normalized = base_url.rstrip("/")
     if normalized.endswith("/chat/completions"):
@@ -193,9 +226,9 @@ def json_response_format_enabled(base_url: str) -> bool:
     raw = os.getenv("LLM_RESPONSE_FORMAT_JSON", "").strip().lower()
     if raw:
         return raw in {"1", "true", "yes", "y", "on", "是"}
-    # DeepSeek's OpenAI-compatible API supports JSON object response format,
-    # which materially reduces malformed JSON from flash-class models.
-    return "deepseek" in base_url.lower()
+    # DeepSeek's and 阿里云百炼's OpenAI-compatible APIs support JSON object
+    # response format, which materially reduces malformed JSON from flash-class models.
+    return "deepseek" in base_url.lower() or is_qwen_bailian_base_url(base_url)
 
 
 def thinking_type(base_url: str, model: str) -> str:
@@ -207,6 +240,8 @@ def thinking_type(base_url: str, model: str) -> str:
     if "z.ai" in base_url.lower() and model.lower().startswith("glm-"):
         return "disabled"
     if "deepseek" in base_url.lower():
+        return "disabled"
+    if is_qwen_bailian_base_url(base_url):
         return "disabled"
     return ""
 
@@ -222,13 +257,16 @@ def llm_response_preferences(
     if is_glm_53_flash(base_url, model):
         thinking = "enabled"
         preferences["reasoning_effort"] = "low"
+    elif is_qwen_bailian_base_url(base_url):
+        # 百炼 OpenAI 兼容模式用 enable_thinking 控制思考模式，不接受 thinking 对象。
+        preferences["enable_thinking"] = thinking == "enabled"
     elif (
         "deepseek" in base_url.lower()
         and thinking == "enabled"
         and os.getenv("LLM_ALLOW_DEEPSEEK_THINKING", "").strip() != "1"
     ):
         thinking = "disabled"
-    if thinking in {"enabled", "disabled"}:
+    if "enable_thinking" not in preferences and thinking in {"enabled", "disabled"}:
         preferences["thinking"] = {"type": thinking}
     if json_response_format_enabled(base_url):
         preferences["response_format"] = {"type": "json_object"}
@@ -275,7 +313,7 @@ def log_llm_retry(message: str) -> None:
     print(message, flush=True)
 
 
-def call_chat_completion_raw_with_prompts(
+def _chat_completion_once(
     system_prompt: str,
     user_prompt: str,
     *,
@@ -284,11 +322,14 @@ def call_chat_completion_raw_with_prompts(
     thinking_override: str | None = None,
     max_tokens_override: int | None = None,
     temperature_override: float | None = None,
+    model_override: str | None = None,
 ) -> ChatCompletionResponse:
     config = llm_config()
     if not config:
         raise RuntimeError("LLM 未配置")
     api_key, base_url, model = config
+    if model_override:
+        model = model_override
     payload = {
         "model": model,
         "messages": [
@@ -334,8 +375,7 @@ def call_chat_completion_raw_with_prompts(
             break
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
-            lower_body = body.lower()
-            if exc.code == 402 or "insufficient balance" in lower_body or "余额不足" in body:
+            if is_balance_insufficient(body, exc.code):
                 raise LLMBalanceInsufficientError(f"LLM 余额不足：{body}") from exc
             if 500 <= exc.code < 600 and attempt < attempts - 1:
                 last_error = RuntimeError(f"LLM 请求失败：HTTP {exc.code}\n{body}")
@@ -383,7 +423,44 @@ def call_chat_completion_raw_with_prompts(
     )
 
 
-def call_chat_completion_raw_with_prompts_hard_deadline(
+def call_chat_completion_raw_with_prompts(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    user_agent: str = "surveil-llm-analysis/0.1",
+    truncate_user_prompt: bool = True,
+    thinking_override: str | None = None,
+    max_tokens_override: int | None = None,
+    temperature_override: float | None = None,
+) -> ChatCompletionResponse:
+    try:
+        return _chat_completion_once(
+            system_prompt,
+            user_prompt,
+            user_agent=user_agent,
+            truncate_user_prompt=truncate_user_prompt,
+            thinking_override=thinking_override,
+            max_tokens_override=max_tokens_override,
+            temperature_override=temperature_override,
+        )
+    except LLMBalanceInsufficientError:
+        fallback = llm_fallback_config()
+        if not fallback:
+            raise
+        log_llm_fallback(fallback[2])
+        return _chat_completion_once(
+            system_prompt,
+            user_prompt,
+            user_agent=user_agent,
+            truncate_user_prompt=truncate_user_prompt,
+            thinking_override=thinking_override,
+            max_tokens_override=max_tokens_override,
+            temperature_override=temperature_override,
+            model_override=fallback[2],
+        )
+
+
+def _chat_completion_once_hard_deadline(
     system_prompt: str,
     user_prompt: str,
     *,
@@ -393,12 +470,15 @@ def call_chat_completion_raw_with_prompts_hard_deadline(
     thinking_override: str | None = None,
     max_tokens_override: int | None = None,
     temperature_override: float | None = None,
+    model_override: str | None = None,
 ) -> ChatCompletionResponse:
     """Call the compatible chat API without exceeding one shared wall-clock deadline."""
     config = llm_config()
     if not config:
         raise RuntimeError("LLM 未配置")
     api_key, base_url, model = config
+    if model_override:
+        model = model_override
     payload: dict[str, Any] = {
         "model": model,
         "messages": [
@@ -451,8 +531,7 @@ def call_chat_completion_raw_with_prompts_hard_deadline(
                         raise RuntimeError(f"LLM 网络请求失败：{exc}") from exc
                 else:
                     body = response.text
-                    lower_body = body.lower()
-                    if response.status_code == 402 or "insufficient balance" in lower_body or "余额不足" in body:
+                    if is_balance_insufficient(body, response.status_code):
                         raise LLMBalanceInsufficientError(f"LLM 余额不足：{body}")
                     if 500 <= response.status_code < 600 and attempt < attempts - 1:
                         last_error = RuntimeError(f"LLM 请求失败：HTTP {response.status_code}\n{body}")
@@ -509,6 +588,49 @@ def call_chat_completion_raw_with_prompts_hard_deadline(
         attempts=attempts_used,
         elapsed_seconds=round(time.monotonic() - total_started_at, 6),
     )
+
+
+def call_chat_completion_raw_with_prompts_hard_deadline(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    deadline_monotonic: float,
+    user_agent: str = "surveil-llm-analysis/0.1",
+    truncate_user_prompt: bool = True,
+    thinking_override: str | None = None,
+    max_tokens_override: int | None = None,
+    temperature_override: float | None = None,
+) -> ChatCompletionResponse:
+    try:
+        return _chat_completion_once_hard_deadline(
+            system_prompt,
+            user_prompt,
+            deadline_monotonic=deadline_monotonic,
+            user_agent=user_agent,
+            truncate_user_prompt=truncate_user_prompt,
+            thinking_override=thinking_override,
+            max_tokens_override=max_tokens_override,
+            temperature_override=temperature_override,
+        )
+    except LLMBalanceInsufficientError as exc:
+        fallback = llm_fallback_config()
+        if not fallback or time.monotonic() >= deadline_monotonic:
+            raise
+        log_llm_fallback(fallback[2])
+        try:
+            return _chat_completion_once_hard_deadline(
+                system_prompt,
+                user_prompt,
+                deadline_monotonic=deadline_monotonic,
+                user_agent=user_agent,
+                truncate_user_prompt=truncate_user_prompt,
+                thinking_override=thinking_override,
+                max_tokens_override=max_tokens_override,
+                temperature_override=temperature_override,
+                model_override=fallback[2],
+            )
+        except TimeoutError:
+            raise exc
 
 
 def call_chat_completion_with_prompts(

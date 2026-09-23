@@ -129,16 +129,18 @@ The workbench alone does not start collectors. Production monitoring requires re
 Copy `.env.example` to `.env` and fill only the capabilities you use. The preferred model configuration is:
 
 ```env
-LLM_PROVIDER=deepseek
+LLM_PROVIDER=qwen_flash_snapshot
 LLM_API_KEY=<your_deepseek_api_key>
 LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-chat
 LLM_GLM_API_KEY=<your_zhipu_api_key>
+LLM_QWEN_API_KEY=<your_bailian_api_key>
+LLM_QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 LLM_TIMEOUT_SECONDS=90
 LLM_RETRY_COUNT=2
 ```
 
-The workbench's `当前模型` control switches between DeepSeek and Zhipu GLM 5.3 Flash. The Zhipu connection is fixed to the official `https://open.bigmodel.cn/api/paas/v4` endpoint and `glm-5.3-flash`; requests always use the model-supported `thinking=enabled`, `reasoning_effort=low`, and JSON mode instead of inheriting DeepSeek's disabled-thinking setting. Both API keys remain only in the private mode-`0600` `.env` and are never returned in clear text. Existing `LLM_PROVIDER=openai_compatible` configurations continue to use `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL`.
+The workbench's `当前模型` control switches between 阿里云百炼千问, DeepSeek and Zhipu GLM 5.3 Flash. The default model is 阿里云百炼 `qwen3.7-flash-2026-07-15` (`LLM_PROVIDER=qwen_flash_snapshot`); when it reports insufficient balance the same request is retried once against the stable `qwen3.7-flash` on the same endpoint, and `qwen_flash` selects the stable model directly. The Qwen connection uses the separate `LLM_QWEN_API_KEY` with `LLM_QWEN_BASE_URL`, which defaults to the Beijing OpenAI-compatible endpoint, and sends `enable_thinking=false` plus JSON mode. The Zhipu connection is fixed to the official `https://open.bigmodel.cn/api/paas/v4` endpoint and `glm-5.3-flash`; requests always use the model-supported `thinking=enabled`, `reasoning_effort=low`, and JSON mode instead of inheriting another model's disabled-thinking setting. These API keys remain only in the private mode-`0600` `.env` and are never returned in clear text. Existing `LLM_PROVIDER=openai_compatible` configurations continue to use `LLM_API_KEY`, `LLM_BASE_URL`, and `LLM_MODEL`.
 
 Two separate private rule files are required for production collection:
 
@@ -147,7 +149,7 @@ Two separate private rule files are required for production collection:
 
 The tracked files `config/rule_core_v1.test.json` and `config/llm_decision_rules.test.json` contain synthetic CI fixtures. They are not production configurations and must not be treated as recommended market rules.
 
-DeepSeek, Zhipu GLM 5.3 Flash, and existing compatible models share one OpenAI-compatible call path. Only the `LLM_*` names are supported for the primary decision model.
+阿里云百炼 Qwen, DeepSeek, Zhipu GLM 5.3 Flash, and existing compatible models share one OpenAI-compatible call path. Only the `LLM_*` names are supported for the primary decision model.
 
 ## Deployment
 
