@@ -1320,7 +1320,8 @@ async function switchLlmProvider(provider) {
       body: JSON.stringify({provider, values})
     });
     await loadSettings();
-    const label = LLM_MODEL_LABELS[provider] || provider;
+    const activeLabel = document.querySelector('.llm-model-switch button.active span')?.textContent?.trim();
+    const label = activeLabel || LLM_MODEL_LABELS[provider] || provider;
     const activation = data.activation || {};
     const activationText = activation.attempted
       ? (activation.ok
