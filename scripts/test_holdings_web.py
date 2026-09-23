@@ -241,6 +241,8 @@ def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> No
         llm_group = next(group for group in payload["groups"] if group["id"] == "llm")
         selector = llm_group["model_selector"]
         assert selector["current"] == "deepseek"
+        deepseek_option = next(option for option in selector["options"] if option["id"] == "deepseek")
+        assert deepseek_option["label"] == "DeepSeek"
         assert [option["id"] for option in selector["options"]] == [
             "deepseek",
             "zhipu_glm",
@@ -361,6 +363,26 @@ def test_qwen_bailian_switch_requires_its_own_key_and_writes_default_base_url() 
             assert "当前模型切换不允许修改配置项" in str(exc)
         else:
             raise AssertionError("qwen selection must not accept another provider key")
+
+
+def test_llm_selector_labels_bailian_hosted_deepseek() -> None:
+    with TemporaryDirectory() as tmpdir:
+        env_path = Path(tmpdir) / ".env"
+        env_path.write_text(
+            "LLM_PROVIDER=deepseek\nLLM_API_KEY=bailian-secret\n"
+            f"LLM_BASE_URL={QWEN_BAILIAN_BASE_URL}\nLLM_MODEL=deepseek-v4-flash-0731\n",
+            encoding="utf-8",
+        )
+
+        payload = settings_payload(env_path)
+        llm_group = next(group for group in payload["groups"] if group["id"] == "llm")
+        selector = llm_group["model_selector"]
+        assert selector["current"] == "deepseek"
+        deepseek_option = next(option for option in selector["options"] if option["id"] == "deepseek")
+        assert deepseek_option["label"] == "阿里云百炼 DeepSeek"
+        assert deepseek_option["base_url"] == QWEN_BAILIAN_BASE_URL
+        assert deepseek_option["model"] == "deepseek-v4-flash-0731"
+        assert deepseek_option["configured"] is True
 
 
 def test_settings_ui_exposes_current_model_switch() -> None:
@@ -1670,6 +1692,7 @@ def main() -> int:
     test_settings_expose_switchable_llm_models_without_revealing_secrets()
     test_glm_switch_requires_its_own_key_and_accepts_first_switch_key()
     test_qwen_bailian_switch_requires_its_own_key_and_writes_default_base_url()
+    test_llm_selector_labels_bailian_hosted_deepseek()
     test_settings_ui_exposes_current_model_switch()
     test_llm_provider_http_endpoint_switches_and_restarts_persistent_collector()
     test_page_uses_extracted_assets_and_bounded_placeholders()

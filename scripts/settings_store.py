@@ -20,6 +20,7 @@ from llm_provider_config import (
     ZHIPU_GLM_MODEL,
     ZHIPU_GLM_PROVIDER,
     canonical_llm_provider,
+    is_qwen_bailian_base_url,
     selected_llm_provider,
 )
 
@@ -168,13 +169,17 @@ FIELDS_BY_KEY = {field.key: field for group in SETTING_GROUPS for field in group
 
 def llm_model_selector(values: dict[str, str]) -> dict[str, Any]:
     current = selected_llm_provider(values)
+    deepseek_base_url = values.get("LLM_BASE_URL") or "https://api.deepseek.com"
+    deepseek_label = (
+        "阿里云百炼 DeepSeek" if is_qwen_bailian_base_url(deepseek_base_url) else "DeepSeek"
+    )
     return {
         "current": current,
         "options": [
             {
                 "id": DEEPSEEK_PROVIDER,
-                "label": "DeepSeek",
-                "base_url": values.get("LLM_BASE_URL") or "https://api.deepseek.com",
+                "label": deepseek_label,
+                "base_url": deepseek_base_url,
                 "model": values.get("LLM_MODEL") or "deepseek-chat",
                 "configured": bool(
                     values.get("LLM_API_KEY") and values.get("LLM_BASE_URL") and values.get("LLM_MODEL")
