@@ -140,7 +140,7 @@ LLM_TIMEOUT_SECONDS=90
 LLM_RETRY_COUNT=2
 ```
 
-配置中心的“当前模型”可在阿里云百炼千问、DeepSeek 与智谱 GLM 5.3 Flash 之间一键切换。默认模型是阿里云百炼 `qwen3.7-flash-2026-07-15`（`LLM_PROVIDER=qwen_flash_snapshot`），余额不足时同一轮自动改用同端点的稳定版 `qwen3.7-flash`；也可以直接选择 `qwen_flash` 只用稳定版。千问连接使用单独的 `LLM_QWEN_API_KEY`，端点由 `LLM_QWEN_BASE_URL` 指定，默认为北京地域 OpenAI 兼容端点，请求发送 `enable_thinking=false` 与 JSON mode。智谱连接固定使用官方 `https://open.bigmodel.cn/api/paas/v4` 和 `glm-5.3-flash`；请求始终使用该模型支持的 `thinking=enabled`、`reasoning_effort=low` 和 JSON mode，不继承其他模型的关闭思考设置。这些 API Key 都只保存在 mode `0600` 的私有 `.env`，不会回显明文。既有 `LLM_PROVIDER=openai_compatible` 配置继续使用 `LLM_API_KEY`、`LLM_BASE_URL` 和 `LLM_MODEL`。
+配置中心的“当前模型”可在阿里云百炼千问、百炼 GLM 5.3、DeepSeek 与智谱 GLM 5.3 Flash 之间一键切换。默认模型是阿里云百炼 `qwen3.7-flash-2026-07-15`（`LLM_PROVIDER=qwen_flash_snapshot`），余额不足时同一轮自动改用同端点的稳定版 `qwen3.7-flash`；也可以直接选择 `qwen_flash` 只用稳定版。`glm_bailian` 选择百炼托管版 `glm-5.3`，与千问共用下方百炼连接且无余额回退。千问连接使用单独的 `LLM_QWEN_API_KEY`，端点由 `LLM_QWEN_BASE_URL` 指定，默认为北京地域 OpenAI 兼容端点，请求发送 `enable_thinking=false` 与 JSON mode。智谱连接固定使用官方 `https://open.bigmodel.cn/api/paas/v4` 和 `glm-5.3-flash`；请求始终使用该模型支持的 `thinking=enabled`、`reasoning_effort=low` 和 JSON mode，不继承其他模型的关闭思考设置。这些 API Key 都只保存在 mode `0600` 的私有 `.env`，不会回显明文。既有 `LLM_PROVIDER=openai_compatible` 配置继续使用 `LLM_API_KEY`、`LLM_BASE_URL` 和 `LLM_MODEL`。
 
 生产 collector 需要两份相互独立的私有规则文件：
 

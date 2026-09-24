@@ -202,6 +202,72 @@ def test_qwen_bailian_provider_uses_dedicated_connection_and_fails_closed_withou
                 os.environ[name] = value
 
 
+def test_glm_bailian_provider_uses_bailian_connection_without_qwen_fallback() -> None:
+    names = (
+        "SURVEIL_DISABLE_LLM",
+        "LLM_PROVIDER",
+        "LLM_API_KEY",
+        "LLM_BASE_URL",
+        "LLM_MODEL",
+        "LLM_GLM_API_KEY",
+        "LLM_QWEN_API_KEY",
+        "LLM_QWEN_BASE_URL",
+    )
+    original = {name: os.environ.get(name) for name in names}
+    try:
+        os.environ.pop("SURVEIL_DISABLE_LLM", None)
+        os.environ["LLM_PROVIDER"] = "glm_bailian"
+        os.environ["LLM_API_KEY"] = "deepseek-key-must-not-be-used"
+        os.environ["LLM_BASE_URL"] = "https://api.deepseek.com"
+        os.environ["LLM_MODEL"] = "deepseek-chat"
+        os.environ["LLM_GLM_API_KEY"] = "zhipu-key-must-not-be-used"
+        os.environ["LLM_QWEN_API_KEY"] = "bailian-key"
+        assert llm_analysis.llm_config() == (
+            "bailian-key",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "glm-5.3",
+        )
+        # 百炼 GLM 不参与千问快照模型的余额回退。
+        assert llm_analysis.llm_fallback_config() is None
+
+        os.environ["LLM_QWEN_BASE_URL"] = "https://space.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+        assert llm_analysis.llm_config()[1] == (
+            "https://space.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+        )
+
+        os.environ.pop("LLM_QWEN_API_KEY")
+        assert llm_analysis.llm_config() is None
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def test_glm_bailian_request_uses_bailian_response_preferences() -> None:
+    names = ("LLM_THINKING_TYPE", "LLM_RESPONSE_FORMAT_JSON")
+    original = {name: os.environ.get(name) for name in names}
+    try:
+        os.environ.pop("LLM_THINKING_TYPE", None)
+        os.environ.pop("LLM_RESPONSE_FORMAT_JSON", None)
+        preferences = llm_analysis.llm_response_preferences(
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            model="glm-5.3",
+        )
+        assert preferences["enable_thinking"] is False
+        assert preferences["response_format"] == {"type": "json_object"}
+        # 百炼端点不接受智谱官方的 thinking 对象 / reasoning_effort 参数。
+        assert "thinking" not in preferences
+        assert "reasoning_effort" not in preferences
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def test_qwen_bailian_request_uses_supported_response_preferences() -> None:
     names = ("LLM_THINKING_TYPE", "LLM_RESPONSE_FORMAT_JSON")
     original = {name: os.environ.get(name) for name in names}

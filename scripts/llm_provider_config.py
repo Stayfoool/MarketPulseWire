@@ -22,6 +22,12 @@ QWEN_FLASH_PROVIDER = "qwen_flash"
 QWEN_FLASH_SNAPSHOT_MODEL = "qwen3.7-flash-2026-07-15"
 QWEN_FLASH_MODEL = "qwen3.7-flash"
 
+# 百炼托管的智谱 GLM 5.3：与百炼千问模型共用 LLM_QWEN_API_KEY / LLM_QWEN_BASE_URL，
+# 但不参与千问快照模型的余额回退（回退仅限同品牌 qwen3.7-flash）。
+GLM_BAILIAN_PROVIDER = "glm_bailian"
+GLM_BAILIAN_MODEL = "glm-5.3"
+_GLM_BAILIAN_ALIASES = {GLM_BAILIAN_PROVIDER, GLM_BAILIAN_MODEL}
+
 # 千问快照模型是当前模型；余额不足时改用同一端点的稳定版模型。
 QWEN_BAILIAN_PROVIDER_MODELS = {
     QWEN_FLASH_SNAPSHOT_PROVIDER: QWEN_FLASH_SNAPSHOT_MODEL,
@@ -47,6 +53,8 @@ def canonical_llm_provider(value: str) -> str:
         return ZHIPU_GLM_PROVIDER
     if normalized == DEEPSEEK_PROVIDER:
         return DEEPSEEK_PROVIDER
+    if normalized in _GLM_BAILIAN_ALIASES:
+        return GLM_BAILIAN_PROVIDER
     if normalized in QWEN_BAILIAN_PROVIDER_MODELS:
         return normalized
     if normalized in _QWEN_SNAPSHOT_ALIASES:
@@ -61,7 +69,8 @@ def selected_llm_provider(values: Mapping[str, str]) -> str:
     configured = canonical_llm_provider(values.get("LLM_PROVIDER", ""))
     if (
         configured
-        in {DEEPSEEK_PROVIDER, ZHIPU_GLM_PROVIDER} | set(QWEN_BAILIAN_PROVIDER_MODELS)
+        in {DEEPSEEK_PROVIDER, ZHIPU_GLM_PROVIDER, GLM_BAILIAN_PROVIDER}
+        | set(QWEN_BAILIAN_PROVIDER_MODELS)
     ):
         return configured
     base_url = str(values.get("LLM_BASE_URL") or "").lower()
@@ -71,6 +80,8 @@ def selected_llm_provider(values: Mapping[str, str]) -> str:
     if "open.bigmodel.cn" in base_url and model == ZHIPU_GLM_MODEL:
         return ZHIPU_GLM_PROVIDER
     if is_qwen_bailian_base_url(base_url):
+        if model == GLM_BAILIAN_MODEL:
+            return GLM_BAILIAN_PROVIDER
         return QWEN_FLASH_PROVIDER if model == QWEN_FLASH_MODEL else QWEN_FLASH_SNAPSHOT_PROVIDER
     return configured
 
@@ -83,6 +94,13 @@ def resolve_llm_connection(values: Mapping[str, str]) -> tuple[str, str, str] | 
         if not api_key:
             return None
         return api_key, ZHIPU_GLM_BASE_URL, ZHIPU_GLM_MODEL
+
+    if provider == GLM_BAILIAN_PROVIDER:
+        api_key = str(values.get("LLM_QWEN_API_KEY") or "").strip()
+        if not api_key:
+            return None
+        base_url = str(values.get("LLM_QWEN_BASE_URL") or "").strip() or QWEN_BAILIAN_BASE_URL
+        return api_key, base_url, GLM_BAILIAN_MODEL
 
     if provider in QWEN_BAILIAN_PROVIDER_MODELS:
         api_key = str(values.get("LLM_QWEN_API_KEY") or "").strip()

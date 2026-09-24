@@ -97,13 +97,16 @@ validates the structure, evidence, rule version and `push > daily > archive`
 aggregation.
 
 `llm_analysis.py` is the single model transport for DeepSeek, Zhipu GLM 5.3
-Flash, 阿里云百炼千问 and existing OpenAI-compatible configurations.
+Flash, 百炼 GLM 5.3, 阿里云百炼千问 and existing OpenAI-compatible configurations.
 `LLM_PROVIDER=deepseek` uses `LLM_API_KEY`, `LLM_BASE_URL` and `LLM_MODEL`;
 `LLM_PROVIDER=zhipu_glm` uses the separate `LLM_GLM_API_KEY` and the code-fixed
 official endpoint `https://open.bigmodel.cn/api/paas/v4` with
 `glm-5.3-flash`; the shared transport always applies `thinking=enabled`,
 `reasoning_effort=low` and JSON mode because this model does not support
-disabled thinking. `LLM_PROVIDER=qwen_flash_snapshot` (default) and
+disabled thinking. `LLM_PROVIDER=glm_bailian` is the 百炼-hosted
+`glm-5.3`; it shares the 千问 connection (`LLM_QWEN_API_KEY` with
+`LLM_QWEN_BASE_URL`) but has no balance fallback.
+`LLM_PROVIDER=qwen_flash_snapshot` (default) and
 `LLM_PROVIDER=qwen_flash` use the separate `LLM_QWEN_API_KEY` with
 `LLM_QWEN_BASE_URL`, defaulting to the 百炼 OpenAI-compatible endpoint
 `https://dashscope.aliyuncs.com/compatible-mode/v1`, and send `enable_thinking`

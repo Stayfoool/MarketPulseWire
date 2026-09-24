@@ -302,7 +302,11 @@ variables. DeepSeek and existing compatible configurations use `LLM_BASE_URL`;
 `https://open.bigmodel.cn/api/paas/v4` endpoint and `glm-5.3-flash` with the
 separate private `LLM_GLM_API_KEY`. Its requests always use code-fixed
 `thinking=enabled`, `reasoning_effort=low` and JSON mode, independent of the
-DeepSeek thinking setting. `LLM_PROVIDER=qwen_flash_snapshot` (default model
+DeepSeek thinking setting. `LLM_PROVIDER=glm_bailian` selects the
+百炼-hosted `glm-5.3` and shares the private `LLM_QWEN_API_KEY` /
+`LLM_QWEN_BASE_URL` connection with the 千问 models; it sends the same
+`enable_thinking=false` and JSON mode and has no balance fallback.
+`LLM_PROVIDER=qwen_flash_snapshot` (default model
 `qwen3.7-flash-2026-07-15`) and `LLM_PROVIDER=qwen_flash`
 (`qwen3.7-flash`) use the separate private `LLM_QWEN_API_KEY` and
 `LLM_QWEN_BASE_URL`, which defaults to the 百炼 OpenAI-compatible endpoint
