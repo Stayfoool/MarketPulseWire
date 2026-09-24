@@ -246,9 +246,15 @@ def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> No
         assert [option["id"] for option in selector["options"]] == [
             "deepseek",
             "zhipu_glm",
+            "glm_bailian",
             "qwen_flash_snapshot",
             "qwen_flash",
         ]
+        glm_bailian = next(option for option in selector["options"] if option["id"] == "glm_bailian")
+        assert glm_bailian["label"] == "阿里云百炼 GLM 5.3"
+        assert glm_bailian["model"] == "glm-5.3"
+        assert glm_bailian["base_url"] == QWEN_BAILIAN_BASE_URL
+        assert glm_bailian["configured"] is False
         snapshot = next(option for option in selector["options"] if option["id"] == "qwen_flash_snapshot")
         assert snapshot["model"] == "qwen3.7-flash-2026-07-15"
         assert snapshot["base_url"] == QWEN_BAILIAN_BASE_URL
@@ -335,10 +341,17 @@ def test_qwen_bailian_switch_requires_its_own_key_and_writes_default_base_url() 
         try:
             switch_llm_provider("qwen_flash_snapshot", path=env_path)
         except ValueError as exc:
-            assert "请先配置阿里云百炼（千问）API Key" in str(exc)
+            assert "请先配置阿里云百炼 API Key" in str(exc)
         else:
             raise AssertionError("qwen selection without its dedicated key must fail closed")
         assert "LLM_PROVIDER=deepseek" in env_path.read_text(encoding="utf-8")
+
+        try:
+            switch_llm_provider("glm_bailian", path=env_path)
+        except ValueError as exc:
+            assert "请先配置阿里云百炼 API Key" in str(exc)
+        else:
+            raise AssertionError("bailian glm selection without the bailian key must fail closed")
 
         result = switch_llm_provider(
             "qwen_flash_snapshot",
@@ -356,6 +369,13 @@ def test_qwen_bailian_switch_requires_its_own_key_and_writes_default_base_url() 
         assert switched["provider"] == "qwen_flash"
         assert switched["changed_count"] == 1
         assert "LLM_PROVIDER=qwen_flash" in env_path.read_text(encoding="utf-8")
+
+        switched_glm = switch_llm_provider("glm_bailian", path=env_path)
+        assert switched_glm["provider"] == "glm_bailian"
+        assert switched_glm["changed_count"] == 1
+        text = env_path.read_text(encoding="utf-8")
+        assert "LLM_PROVIDER=glm_bailian" in text
+        assert "LLM_QWEN_API_KEY=qwen-secret-key" in text
 
         try:
             switch_llm_provider("qwen_flash", {"LLM_API_KEY": "other-key"}, path=env_path)
@@ -390,6 +410,7 @@ def test_settings_ui_exposes_current_model_switch() -> None:
     assert "价值目录的预览提取统一使用“大模型”中的当前模型" in source
     assert "当前模型" in source
     assert "智谱 GLM 5.3 Flash" in source
+    assert "阿里云百炼 GLM 5.3" in source
     assert "阿里云百炼 Qwen3.7 Flash（2026-07-15 快照）" in source
     assert "阿里云百炼 Qwen3.7 Flash（稳定版）" in source
     assert "/api/llm-provider" in source
