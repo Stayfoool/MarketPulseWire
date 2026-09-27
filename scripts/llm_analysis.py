@@ -18,7 +18,7 @@ import httpx
 from llm_provider_config import (
     is_qwen_bailian_base_url,
     resolve_llm_connection,
-    resolve_llm_fallback_connection,
+    resolve_llm_fallback_connections,
 )
 
 
@@ -152,11 +152,11 @@ def llm_config() -> tuple[str, str, str] | None:
     return resolve_llm_connection(os.environ)
 
 
-def llm_fallback_config() -> tuple[str, str, str] | None:
-    """Return the same-endpoint fallback model used when the current model has no balance."""
+def llm_fallback_configs() -> list[tuple[str, str, str]]:
+    """Return the ordered same-endpoint fallback models used when the current model has no balance."""
     if os.getenv("SURVEIL_DISABLE_LLM", "").strip() == "1":
-        return None
-    return resolve_llm_fallback_connection(os.environ)
+        return []
+    return resolve_llm_fallback_connections(os.environ)
 
 
 def is_balance_insufficient(body: str, status_code: int | None = None) -> bool:
@@ -447,20 +447,22 @@ def call_chat_completion_raw_with_prompts(
             temperature_override=temperature_override,
         )
     except LLMBalanceInsufficientError:
-        fallback = llm_fallback_config()
-        if not fallback:
-            raise
-        log_llm_fallback(fallback[2])
-        return _chat_completion_once(
-            system_prompt,
-            user_prompt,
-            user_agent=user_agent,
-            truncate_user_prompt=truncate_user_prompt,
-            thinking_override=thinking_override,
-            max_tokens_override=max_tokens_override,
-            temperature_override=temperature_override,
-            model_override=fallback[2],
-        )
+        for fallback in llm_fallback_configs():
+            log_llm_fallback(fallback[2])
+            try:
+                return _chat_completion_once(
+                    system_prompt,
+                    user_prompt,
+                    user_agent=user_agent,
+                    truncate_user_prompt=truncate_user_prompt,
+                    thinking_override=thinking_override,
+                    max_tokens_override=max_tokens_override,
+                    temperature_override=temperature_override,
+                    model_override=fallback[2],
+                )
+            except LLMBalanceInsufficientError:
+                continue
+        raise
 
 
 def _chat_completion_once_hard_deadline(
@@ -616,24 +618,27 @@ def call_chat_completion_raw_with_prompts_hard_deadline(
             temperature_override=temperature_override,
         )
     except LLMBalanceInsufficientError as exc:
-        fallback = llm_fallback_config()
-        if not fallback or time.monotonic() >= deadline_monotonic:
-            raise
-        log_llm_fallback(fallback[2])
-        try:
-            return _chat_completion_once_hard_deadline(
-                system_prompt,
-                user_prompt,
-                deadline_monotonic=deadline_monotonic,
-                user_agent=user_agent,
-                truncate_user_prompt=truncate_user_prompt,
-                thinking_override=thinking_override,
-                max_tokens_override=max_tokens_override,
-                temperature_override=temperature_override,
-                model_override=fallback[2],
-            )
-        except TimeoutError:
-            raise exc
+        for fallback in llm_fallback_configs():
+            if time.monotonic() >= deadline_monotonic:
+                break
+            log_llm_fallback(fallback[2])
+            try:
+                return _chat_completion_once_hard_deadline(
+                    system_prompt,
+                    user_prompt,
+                    deadline_monotonic=deadline_monotonic,
+                    user_agent=user_agent,
+                    truncate_user_prompt=truncate_user_prompt,
+                    thinking_override=thinking_override,
+                    max_tokens_override=max_tokens_override,
+                    temperature_override=temperature_override,
+                    model_override=fallback[2],
+                )
+            except LLMBalanceInsufficientError:
+                continue
+            except TimeoutError:
+                raise exc
+        raise
 
 
 def call_chat_completion_with_prompts(

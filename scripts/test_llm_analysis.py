@@ -176,11 +176,13 @@ def test_qwen_bailian_provider_uses_dedicated_connection_and_fails_closed_withou
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "qwen3.7-flash-2026-07-15",
         )
-        assert llm_analysis.llm_fallback_config() == (
-            "qwen-key",
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "qwen3.7-flash",
-        )
+        assert llm_analysis.llm_fallback_configs() == [
+            (
+                "qwen-key",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen3.7-flash",
+            )
+        ]
 
         os.environ["LLM_QWEN_BASE_URL"] = "https://space.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
         assert llm_analysis.llm_config()[1] == (
@@ -189,11 +191,11 @@ def test_qwen_bailian_provider_uses_dedicated_connection_and_fails_closed_withou
 
         os.environ["LLM_PROVIDER"] = "qwen_flash"
         assert llm_analysis.llm_config()[2] == "qwen3.7-flash"
-        assert llm_analysis.llm_fallback_config() is None
+        assert llm_analysis.llm_fallback_configs() == []
 
         os.environ.pop("LLM_QWEN_API_KEY")
         assert llm_analysis.llm_config() is None
-        assert llm_analysis.llm_fallback_config() is None
+        assert llm_analysis.llm_fallback_configs() == []
     finally:
         for name, value in original.items():
             if value is None:
@@ -227,8 +229,8 @@ def test_glm_bailian_provider_uses_bailian_connection_without_qwen_fallback() ->
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "glm-5.3",
         )
-        # 百炼 GLM 不参与千问快照模型的余额回退。
-        assert llm_analysis.llm_fallback_config() is None
+        # 百炼 GLM 不参与千问快照模型和 qwen3.8 系列的余额回退。
+        assert llm_analysis.llm_fallback_configs() == []
 
         os.environ["LLM_QWEN_BASE_URL"] = "https://space.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
         assert llm_analysis.llm_config()[1] == (
@@ -319,7 +321,7 @@ def test_qwen_bailian_request_uses_supported_response_preferences() -> None:
 
 def test_balance_insufficient_falls_back_to_qwen_flash_stable_model() -> None:
     original_config = llm_analysis.llm_config
-    original_fallback = llm_analysis.llm_fallback_config
+    original_fallback = llm_analysis.llm_fallback_configs
     original_urlopen = llm_analysis.urllib.request.urlopen
     original_retry_count = llm_analysis.retry_count
     requested_models: list[str] = []
@@ -357,17 +359,19 @@ def test_balance_insufficient_falls_back_to_qwen_flash_stable_model() -> None:
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "qwen3.7-flash-2026-07-15",
         )
-        llm_analysis.llm_fallback_config = lambda: (
-            "qwen-key",
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "qwen3.7-flash",
-        )
+        llm_analysis.llm_fallback_configs = lambda: [
+            (
+                "qwen-key",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen3.7-flash",
+            )
+        ]
         llm_analysis.retry_count = lambda: 0
         llm_analysis.urllib.request.urlopen = fake_urlopen
         response = llm_analysis.call_chat_completion_raw_with_prompts("system", "user")
     finally:
         llm_analysis.llm_config = original_config
-        llm_analysis.llm_fallback_config = original_fallback
+        llm_analysis.llm_fallback_configs = original_fallback
         llm_analysis.urllib.request.urlopen = original_urlopen
         llm_analysis.retry_count = original_retry_count
 
@@ -375,9 +379,112 @@ def test_balance_insufficient_falls_back_to_qwen_flash_stable_model() -> None:
     assert response.model == "qwen3.7-flash"
 
 
-def test_bailian_free_quota_exhausted_falls_back_to_qwen_flash() -> None:
+def test_qwen38_providers_resolve_ordered_fallback_chain() -> None:
+    names = ("SURVEIL_DISABLE_LLM", "LLM_PROVIDER", "LLM_QWEN_API_KEY", "LLM_QWEN_BASE_URL")
+    original = {name: os.environ.get(name) for name in names}
+    try:
+        os.environ.pop("SURVEIL_DISABLE_LLM", None)
+        os.environ["LLM_PROVIDER"] = "qwen38_max"
+        os.environ["LLM_QWEN_API_KEY"] = "qwen-key"
+        os.environ.pop("LLM_QWEN_BASE_URL", None)
+        assert llm_analysis.llm_config() == (
+            "qwen-key",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.8-max",
+        )
+        assert llm_analysis.llm_fallback_configs() == [
+            (
+                "qwen-key",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                model,
+            )
+            for model in (
+                "qwen3.8-2.4t-a95b",
+                "qwen3.8-27b",
+                "qwen3.8-flash",
+                "qwen3.8-max-0902",
+            )
+        ]
+
+        os.environ["LLM_PROVIDER"] = "qwen38_flash"
+        assert llm_analysis.llm_config()[2] == "qwen3.8-flash"
+        assert [connection[2] for connection in llm_analysis.llm_fallback_configs()] == ["qwen3.8-max-0902"]
+
+        os.environ["LLM_PROVIDER"] = "qwen38_max_0902"
+        assert llm_analysis.llm_config()[2] == "qwen3.8-max-0902"
+        assert llm_analysis.llm_fallback_configs() == []
+
+        os.environ.pop("LLM_QWEN_API_KEY")
+        assert llm_analysis.llm_config() is None
+        assert llm_analysis.llm_fallback_configs() == []
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def test_balance_insufficient_walks_qwen38_fallback_chain() -> None:
     original_config = llm_analysis.llm_config
-    original_fallback = llm_analysis.llm_fallback_config
+    original_fallback = llm_analysis.llm_fallback_configs
+    original_urlopen = llm_analysis.urllib.request.urlopen
+    original_retry_count = llm_analysis.retry_count
+    requested_models: list[str] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return b'{"id":"qwen38-fallback","choices":[{"message":{"content":"{\\"ok\\":true}"}}]}'
+
+    def fake_urlopen(request, timeout):
+        payload = json.loads(request.data.decode("utf-8"))
+        requested_models.append(payload["model"])
+        if payload["model"] in {"qwen3.8-max", "qwen3.8-2.4t-a95b", "qwen3.8-27b"}:
+            raise llm_analysis.urllib.error.HTTPError(
+                "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                400,
+                "Bad Request",
+                {},
+                io.BytesIO(
+                    json.dumps(
+                        {"error": {"code": "Arrearage", "message": "Insufficient balance."}}
+                    ).encode("utf-8")
+                ),
+            )
+        return FakeResponse()
+
+    try:
+        llm_analysis.llm_config = lambda: (
+            "qwen-key",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.8-max",
+        )
+        llm_analysis.llm_fallback_configs = lambda: [
+            ("qwen-key", "https://dashscope.aliyuncs.com/compatible-mode/v1", model)
+            for model in ("qwen3.8-2.4t-a95b", "qwen3.8-27b", "qwen3.8-flash", "qwen3.8-max-0902")
+        ]
+        llm_analysis.retry_count = lambda: 0
+        llm_analysis.urllib.request.urlopen = fake_urlopen
+        response = llm_analysis.call_chat_completion_raw_with_prompts("system", "user")
+    finally:
+        llm_analysis.llm_config = original_config
+        llm_analysis.llm_fallback_configs = original_fallback
+        llm_analysis.urllib.request.urlopen = original_urlopen
+        llm_analysis.retry_count = original_retry_count
+
+    assert requested_models == ["qwen3.8-max", "qwen3.8-2.4t-a95b", "qwen3.8-27b", "qwen3.8-flash"]
+    assert response.model == "qwen3.8-flash"
+
+
+def test_bailian_free_quota_exhausted_falls_back_along_chain() -> None:
+    original_config = llm_analysis.llm_config
+    original_fallback = llm_analysis.llm_fallback_configs
     original_urlopen = llm_analysis.urllib.request.urlopen
     original_retry_count = llm_analysis.retry_count
     requested_models: list[str] = []
@@ -395,7 +502,7 @@ def test_bailian_free_quota_exhausted_falls_back_to_qwen_flash() -> None:
     def fake_urlopen(request, timeout):
         payload = json.loads(request.data.decode("utf-8"))
         requested_models.append(payload["model"])
-        if payload["model"] == "qwen3.7-flash-2026-07-15":
+        if payload["model"] != "qwen3.7-flash":
             raise llm_analysis.urllib.error.HTTPError(
                 "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
                 403,
@@ -420,17 +527,15 @@ def test_bailian_free_quota_exhausted_falls_back_to_qwen_flash() -> None:
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "qwen3.7-flash-2026-07-15",
         )
-        llm_analysis.llm_fallback_config = lambda: (
-            "qwen-key",
-            "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "qwen3.7-flash",
-        )
+        llm_analysis.llm_fallback_configs = lambda: [
+            ("qwen-key", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen3.7-flash")
+        ]
         llm_analysis.retry_count = lambda: 0
         llm_analysis.urllib.request.urlopen = fake_urlopen
         response = llm_analysis.call_chat_completion_raw_with_prompts("system", "user")
     finally:
         llm_analysis.llm_config = original_config
-        llm_analysis.llm_fallback_config = original_fallback
+        llm_analysis.llm_fallback_configs = original_fallback
         llm_analysis.urllib.request.urlopen = original_urlopen
         llm_analysis.retry_count = original_retry_count
 
@@ -440,7 +545,7 @@ def test_bailian_free_quota_exhausted_falls_back_to_qwen_flash() -> None:
 
 def test_balance_insufficient_without_fallback_model_still_fails_closed() -> None:
     original_config = llm_analysis.llm_config
-    original_fallback = llm_analysis.llm_fallback_config
+    original_fallback = llm_analysis.llm_fallback_configs
     original_urlopen = llm_analysis.urllib.request.urlopen
     original_retry_count = llm_analysis.retry_count
     requested_models: list[str] = []
@@ -457,7 +562,7 @@ def test_balance_insufficient_without_fallback_model_still_fails_closed() -> Non
 
     try:
         llm_analysis.llm_config = lambda: ("key", "https://provider.example/v1", "deepseek-chat")
-        llm_analysis.llm_fallback_config = lambda: None
+        llm_analysis.llm_fallback_configs = lambda: []
         llm_analysis.retry_count = lambda: 0
         llm_analysis.urllib.request.urlopen = fake_urlopen
         try:
@@ -468,7 +573,7 @@ def test_balance_insufficient_without_fallback_model_still_fails_closed() -> Non
             raise AssertionError("balance failure without fallback must fail closed")
     finally:
         llm_analysis.llm_config = original_config
-        llm_analysis.llm_fallback_config = original_fallback
+        llm_analysis.llm_fallback_configs = original_fallback
         llm_analysis.urllib.request.urlopen = original_urlopen
         llm_analysis.retry_count = original_retry_count
 
@@ -482,7 +587,9 @@ def main() -> int:
     test_qwen_bailian_provider_uses_dedicated_connection_and_fails_closed_without_key()
     test_qwen_bailian_request_uses_supported_response_preferences()
     test_balance_insufficient_falls_back_to_qwen_flash_stable_model()
-    test_bailian_free_quota_exhausted_falls_back_to_qwen_flash()
+    test_qwen38_providers_resolve_ordered_fallback_chain()
+    test_balance_insufficient_walks_qwen38_fallback_chain()
+    test_bailian_free_quota_exhausted_falls_back_along_chain()
     test_balance_insufficient_without_fallback_model_still_fails_closed()
     if analyze_with_llm("AI ASIC demand lifts MLCC demand") is not None:
         raise AssertionError("LLM should be disabled during this test")
