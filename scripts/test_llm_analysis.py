@@ -375,6 +375,69 @@ def test_balance_insufficient_falls_back_to_qwen_flash_stable_model() -> None:
     assert response.model == "qwen3.7-flash"
 
 
+def test_bailian_free_quota_exhausted_falls_back_to_qwen_flash() -> None:
+    original_config = llm_analysis.llm_config
+    original_fallback = llm_analysis.llm_fallback_config
+    original_urlopen = llm_analysis.urllib.request.urlopen
+    original_retry_count = llm_analysis.retry_count
+    requested_models: list[str] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return b'{"id":"qwen-fallback","choices":[{"message":{"content":"{\\"ok\\":true}"}}]}'
+
+    def fake_urlopen(request, timeout):
+        payload = json.loads(request.data.decode("utf-8"))
+        requested_models.append(payload["model"])
+        if payload["model"] == "qwen3.7-flash-2026-07-15":
+            raise llm_analysis.urllib.error.HTTPError(
+                "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                403,
+                "Forbidden",
+                {},
+                io.BytesIO(
+                    json.dumps(
+                        {
+                            "error": {
+                                "message": 'Free quota exhausted. To continue accessing the model on a paid basis, please add funds or disable the "use free tier only" mode in the management console.',
+                                "code": "AllocationQuota.FreeTierOnly",
+                            }
+                        }
+                    ).encode("utf-8")
+                ),
+            )
+        return FakeResponse()
+
+    try:
+        llm_analysis.llm_config = lambda: (
+            "qwen-key",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.7-flash-2026-07-15",
+        )
+        llm_analysis.llm_fallback_config = lambda: (
+            "qwen-key",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.7-flash",
+        )
+        llm_analysis.retry_count = lambda: 0
+        llm_analysis.urllib.request.urlopen = fake_urlopen
+        response = llm_analysis.call_chat_completion_raw_with_prompts("system", "user")
+    finally:
+        llm_analysis.llm_config = original_config
+        llm_analysis.llm_fallback_config = original_fallback
+        llm_analysis.urllib.request.urlopen = original_urlopen
+        llm_analysis.retry_count = original_retry_count
+
+    assert requested_models == ["qwen3.7-flash-2026-07-15", "qwen3.7-flash"]
+    assert response.model == "qwen3.7-flash"
+
+
 def test_balance_insufficient_without_fallback_model_still_fails_closed() -> None:
     original_config = llm_analysis.llm_config
     original_fallback = llm_analysis.llm_fallback_config
@@ -419,6 +482,7 @@ def main() -> int:
     test_qwen_bailian_provider_uses_dedicated_connection_and_fails_closed_without_key()
     test_qwen_bailian_request_uses_supported_response_preferences()
     test_balance_insufficient_falls_back_to_qwen_flash_stable_model()
+    test_bailian_free_quota_exhausted_falls_back_to_qwen_flash()
     test_balance_insufficient_without_fallback_model_still_fails_closed()
     if analyze_with_llm("AI ASIC demand lifts MLCC demand") is not None:
         raise AssertionError("LLM should be disabled during this test")
