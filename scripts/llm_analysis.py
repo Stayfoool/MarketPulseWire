@@ -32,6 +32,9 @@ _BALANCE_ERROR_MARKERS = (
     "欠费",
     "arrearage",
     "out of balance",
+    # 阿里云百炼免费额度用尽：HTTP 403 AllocationQuota.FreeTierOnly。
+    "free quota exhausted",
+    "allocationquota.freetieronly",
 )
 
 
