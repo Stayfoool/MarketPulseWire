@@ -53,9 +53,7 @@ SETTING_GROUPS: list[dict[str, Any]] = [
         "title": "大模型",
         "restart_hint": (
             "点击当前模型即可切换；新浪财经快讯常驻服务会立即重启，其他定时采集任务下一轮读取新模型。"
-            "阿里云百炼 qwen3.8 系列额度用尽时，同一轮按 Max → 2.4T A95B → 27B → Flash → Max 0902 自动切换下一个；"
-            "百炼托管的 DeepSeek 额度用尽时，同一轮也从该链头部开始切换（需先配置阿里云百炼 API Key）；"
-            "千问快照模型余额不足时，同一轮自动改用稳定版 qwen3.7-flash。"
+            "各百炼模型余额不足时的自动回退顺序见“当前模型”按钮下方的说明。"
         ),
         "fields": [
             SettingField("LLM_BASE_URL", "DeepSeek / 兼容模型 Base URL", "llm", placeholder="https://api.deepseek.com"),
@@ -184,6 +182,13 @@ QWEN38_MODEL_LABELS = {
     QWEN38_MAX_0902_PROVIDER: "阿里云百炼 Qwen3.8 Max（0902）",
 }
 
+QWEN38_FALLBACK_NOTE = (
+    "百炼 qwen3.8 余额回退顺序："
+    + " → ".join(model for _, model in QWEN38_BAILIAN_CHAIN)
+    + "。qwen3.8 模型额度用尽后从链中下一个继续；百炼托管的 DeepSeek 额度用尽后从链头开始；"
+    "千问快照模型余额不足时改用稳定版 qwen3.7-flash。"
+)
+
 
 def llm_model_selector(values: dict[str, str]) -> dict[str, Any]:
     current = selected_llm_provider(values)
@@ -193,6 +198,7 @@ def llm_model_selector(values: dict[str, str]) -> dict[str, Any]:
     )
     return {
         "current": current,
+        "fallback_note": QWEN38_FALLBACK_NOTE,
         "options": [
             {
                 "id": DEEPSEEK_PROVIDER,

@@ -1285,6 +1285,7 @@ function llmModelSelectorHtml(selector) {
           </button>
         `).join('')}
       </div>
+      ${selector.fallback_note ? `<div class="hint">${escapeHtml(selector.fallback_note)}</div>` : ''}
     </div>
   `;
 }
