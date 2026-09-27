@@ -136,6 +136,13 @@ under the reviewed rule text; the active decision path no longer produces
 successful review without a valid `DecisionResult` also fails closed and becomes
 `failed_retryable`.
 
+WallstreetCN item retries are source-paced: `pending`/`failed_retryable`
+discoveries wait for list/sitemap rediscovery instead of re-entering every
+two-minute run. When such a row passes the 24-hour retry window it is closed
+instead of retried, and the current `failed_retryable` review is synchronized
+to `failed_terminal` in the same transaction; succeeded or already-terminal
+reviews are never touched.
+
 After a valid decision, `market_interpreter.py` produces only a short
 `core_content` summary. It cannot add, promote or reduce an action. Delivery
 cards show `推送依据` from the persisted winning `DecisionResult` rule reasons,

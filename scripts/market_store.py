@@ -430,6 +430,44 @@ def processing_failure_status(error: BaseException) -> str:
     return "failed_retryable"
 
 
+def expire_market_review(
+    conn: sqlite3.Connection,
+    source: str,
+    source_item_id: str,
+    *,
+    reason: str,
+) -> None:
+    """Close the current retryable review after the item's processing window has ended.
+
+    使用既有 seen_items 24h 过期判定作为同步点：条目终止重试时，把仍停留在
+    failed_retryable 的当前 review 一并关闭为 failed_terminal，已成功/终态的
+    review 不受影响。
+    """
+    row = conn.execute(
+        "SELECT id FROM market_items WHERE source = ? AND source_item_id = ?",
+        (source, source_item_id),
+    ).fetchone()
+    if not row:
+        return
+    market_item_id = int(row[0])
+    now = utc_now()
+    cursor = conn.execute(
+        """
+        UPDATE market_reviews SET review_status = 'failed_terminal', completed_at = ?
+        WHERE market_item_id = ? AND is_current = 1 AND review_status = 'failed_retryable'
+        """,
+        (now, market_item_id),
+    )
+    if cursor.rowcount:
+        conn.execute(
+            """
+            UPDATE market_items SET processing_status = 'failed_terminal', processing_error = ?, updated_at = ?
+            WHERE id = ? AND processing_status = 'failed_retryable'
+            """,
+            (reason[:400], now, market_item_id),
+        )
+
+
 def record_delivery(
     market_item_id: int,
     market_review_id: int,

@@ -1055,6 +1055,111 @@ def test_default_sources_include_star_market_daily() -> None:
     assert "sina_finance_articles" in cfm.parse_sources_arg([])
 
 
+def test_wallstreetcn_stranded_retryable_review_closes_with_expiry() -> None:
+    original_db = cfm.DB_PATH
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            use_test_database(Path(tmpdir) / "test.sqlite3")
+            now = datetime.now(timezone.utc)
+            stranded_seen = now - timedelta(days=3)
+            with cfm.connect_db() as conn:
+                conn.execute(
+                    "INSERT INTO seen_sources (source, first_seen_at) VALUES (?, ?)",
+                    (cfm.WALLSTREETCN_SOURCE, now.isoformat()),
+                )
+                for item_id, first_seen_at in (
+                    ("article:stranded", stranded_seen),
+                    ("article:recent", now - timedelta(hours=2)),
+                ):
+                    conn.execute(
+                        """
+                        INSERT INTO seen_items (
+                            source, item_id, url, title, summary, published_at, first_seen_at,
+                            collection_class, processability_status, processability_reason,
+                            admission_status, admission_reason, processing_status,
+                            processing_error, processed_at, lifecycle_updated_at
+                        ) VALUES (?, ?, ?, ?, '', '', ?, 'live', 'failed_retryable',
+                                  'ProductionLLMDecisionError: model_unavailable',
+                                  'pending', '', 'not_applicable', '', NULL, ?)
+                        """,
+                        (
+                            cfm.WALLSTREETCN_SOURCE,
+                            item_id,
+                            f"https://wallstreetcn.com/articles/{item_id.split(':', 1)[1]}",
+                            item_id,
+                            first_seen_at.isoformat(),
+                            first_seen_at.isoformat(),
+                        ),
+                    )
+                item_cursor = conn.execute(
+                    """
+                    INSERT INTO market_items (
+                        source, source_item_id, dedupe_key, title, first_seen_at,
+                        content_hash, processing_status, created_at, updated_at
+                    ) VALUES (?, 'article:stranded', 'dedupe-stranded', '搁浅条目', ?,
+                              'hash-stranded', 'failed_retryable', ?, ?)
+                    """,
+                    (cfm.WALLSTREETCN_SOURCE, stranded_seen.isoformat(), now.isoformat(), now.isoformat()),
+                )
+                market_item_id = int(item_cursor.lastrowid)
+                conn.execute(
+                    """
+                    INSERT INTO market_reviews (
+                        market_item_id, task, run_key, is_current, review_status,
+                        admission_status, created_at
+                    ) VALUES (?, 'production', 'run-stranded', 1, 'failed_retryable',
+                              'admitted', ?)
+                    """,
+                    (market_item_id, stranded_seen.isoformat()),
+                )
+                conn.commit()
+
+            # 跌出来源发现窗口的过期重试行按 24h 窗口被选中，用于终态关闭；
+            # 24h 内的失败行保持来源节奏，不被本轮重选。
+            assert [row["id"] for row in cfm.retryable_seen_items(cfm.WALLSTREETCN_SOURCE)] == [
+                "article:stranded"
+            ]
+
+            selected = cfm.save_new_items_with_retry(
+                cfm.WALLSTREETCN_SOURCE,
+                [
+                    {
+                        "id": "article:stranded",
+                        "url": "https://wallstreetcn.com/articles/stranded",
+                        "title": "搁浅条目",
+                    }
+                ],
+            )
+            assert selected == []
+
+            with cfm.connect_db() as conn:
+                seen_state = conn.execute(
+                    "SELECT processability_status, admission_status FROM seen_items "
+                    "WHERE source = ? AND item_id = 'article:stranded'",
+                    (cfm.WALLSTREETCN_SOURCE,),
+                ).fetchone()
+                review_state = conn.execute(
+                    "SELECT review_status, completed_at FROM market_reviews WHERE market_item_id = ?",
+                    (market_item_id,),
+                ).fetchone()
+                item_state = conn.execute(
+                    "SELECT processing_status FROM market_items WHERE id = ?",
+                    (market_item_id,),
+                ).fetchone()
+                recent_state = conn.execute(
+                    "SELECT processability_status FROM seen_items "
+                    "WHERE source = ? AND item_id = 'article:recent'",
+                    (cfm.WALLSTREETCN_SOURCE,),
+                ).fetchone()
+            assert seen_state == ("failed_terminal", "not_applicable")
+            assert review_state[0] == "failed_terminal"
+            assert review_state[1]
+            assert item_state == ("failed_terminal",)
+            assert recent_state == ("failed_retryable",)
+    finally:
+        cfm.DB_PATH = original_db
+
+
 def main() -> int:
     test_cls_sign_includes_empty_values_and_sorts_keys()
     test_parse_cls_time_accepts_seconds_and_milliseconds()
@@ -1068,6 +1173,7 @@ def main() -> int:
     test_admitted_item_reuses_normalized_item_and_processing_failure_retries()
     test_wallstreetcn_processability_retry_waits_for_source_rediscovery()
     test_wallstreetcn_stale_detail_failure_stops_retrying()
+    test_wallstreetcn_stranded_retryable_review_closes_with_expiry()
     test_wallstreetcn_stale_processing_retry_keeps_processing_but_skips_delivery()
     test_wallstreetcn_fresh_retry_and_new_old_item_can_deliver()
     test_short_english_keyword_requires_token_boundary()
