@@ -151,7 +151,7 @@ These sources are defined in `scripts/china_media_sources.py` and run through `s
 | `cls_telegraph_api` | CLS / telegraph | `https://api3.cls.cn/v1/roll/get_roll_list` | Public frontend endpoint with low-frequency polling. Star Market Daily items inside CLS telegraph are labeled as `科创板日报 / 财联社电报`. |
 | `star_market_daily_subject` | Star Market Daily / 科创板最新动态 | `https://www.cls.cn/subject/1777` | Public topic page. The monitor reads the page's public Next.js data for title, summary, stocks, subjects, timestamp, and article link. |
 | `jin10_rsshub_important` | Jin10 / important events | RSSHub route | Public RSSHub backup route for important events; it may be rate-limited or temporarily unavailable. |
-| `wallstreetcn_news` | WallstreetCN / 华尔街见闻 | Public `/news/global`, `/live`, and official monthly sitemaps | Peer general news-media source. Public list pages provide near-real-time ids; sitemaps provide baseline/catch-up. Public detail only; member content is not opened or used as full evidence. |
+| `wallstreetcn_news` | WallstreetCN / 华尔街见闻 | Public articles API (`api-one.wallstcn.com`), `/live`, and official monthly sitemaps | Peer general news-media source. The public articles API provides near-real-time ids; `/live` covers livenews and sitemaps provide baseline/catch-up. Public detail only; member content is not opened or used as full evidence. |
 
 Star Market Daily is useful for China hard-tech and STAR Market coverage, including semiconductors, AI, advanced manufacturing, materials, IPO/refinancing, and listed-company research notes. It is not pushed unconditionally: items still pass five-group range admission, the reviewed LLM degree decision, and delivery deduplication.
 

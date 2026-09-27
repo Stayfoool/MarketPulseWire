@@ -21,6 +21,8 @@ from http_utils import http_get
 
 SOURCE = "wallstreetcn_news"
 BASE_URL = "https://wallstreetcn.com"
+ARTICLES_API_URL = "https://api-one.wallstcn.com/apiv1/content/articles"
+ARTICLES_API_LIMIT = 30
 DEFAULT_CATEGORIES = ("global",)
 LAST_SURFACE_RESULTS: dict[str, dict[str, Any]] = {}
 PENDING_STATE: dict[str, Any] = {}
@@ -63,6 +65,11 @@ def canonical_url(value: str) -> str:
         return ""
     path = re.sub(r"/+", "/", parsed.path)
     return urllib.parse.urlunparse(("https", "wallstreetcn.com", path, "", "", ""))
+
+
+def _articles_api_url(category: str) -> str:
+    query = urllib.parse.urlencode({"channel": category, "limit": str(ARTICLES_API_LIMIT)})
+    return f"{ARTICLES_API_URL}?{query}"
 
 
 def _surface_and_id(url: str) -> tuple[str, str]:
@@ -142,6 +149,63 @@ def _fetch_list(url: str, surface: str) -> list[dict[str, Any]]:
     raise AssertionError("unreachable WallstreetCN list retry state")
 
 
+def parse_articles_api(json_text: str, *, surface: str, discovery_url: str) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(json_text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"WallstreetCN {surface} API JSON invalid") from exc
+    if not isinstance(payload, dict) or payload.get("code") != 20000:
+        raise ValueError(f"WallstreetCN {surface} API returned error payload: {payload!r}"[:300])
+    data = payload.get("data")
+    entries = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        raise ValueError(f"WallstreetCN {surface} API payload lacks items")
+    by_id: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        item_id = str(entry.get("id") or "").strip()
+        title = re.sub(r"\s+", " ", str(entry.get("title") or "")).strip()
+        if not item_id or not title:
+            continue
+        url = canonical_url(str(entry.get("uri") or "")) or f"{BASE_URL}/articles/{item_id}"
+        summary = re.sub(r"\s+", " ", str(entry.get("content_short") or "")).strip()
+        published_at = ""
+        display_time = str(entry.get("display_time") or "").strip()
+        if display_time.isdigit():
+            published_at = datetime.fromtimestamp(int(display_time), tz=timezone.utc).isoformat()
+        member = any(bool(entry.get(flag)) for flag in ("is_paid", "is_in_vip_privilege", "is_priced"))
+        by_id.setdefault(f"{surface}:{item_id}", {
+            "id": f"{surface}:{item_id}",
+            "url": url,
+            "title": title,
+            "summary": summary or title,
+            "content": "",
+            "published_at": published_at,
+            "source_module": "华尔街见闻",
+            "body_source": f"公开{surface} API",
+            "access_note": "华尔街见闻公开 API；不访问会员内容或绕过访问控制。",
+            "raw": {
+                "wallstreetcn_id": item_id,
+                "wallstreetcn_surface": surface,
+                "wallstreetcn_discovery_url": discovery_url,
+                "wallstreetcn_access_tier": "member" if member else "public",
+            },
+        })
+    if not by_id:
+        raise ValueError(f"WallstreetCN {surface} API contains no stable item rows")
+    return list(by_id.values())
+
+
+def _fetch_articles_api(url: str, surface: str) -> list[dict[str, Any]]:
+    response = http_get(url, headers={"Accept": "application/json"}, timeout=_timeout())
+    return parse_articles_api(
+        response.content.decode("utf-8", errors="replace"),
+        surface=surface,
+        discovery_url=url,
+    )
+
+
 def parse_sitemap(xml_text: str, *, surface: str, discovery_url: str) -> list[dict[str, Any]]:
     try:
         root = ET.fromstring(xml_text)
@@ -216,12 +280,19 @@ def recent_sitemap_items(items: list[dict[str, Any]], *, now: datetime) -> list[
 def collect_items(*, state: dict[str, Any] | None = None, force_reconcile: bool = False) -> list[dict[str, Any]]:
     PENDING_STATE.clear()
     state = dict(state or {})
-    targets = [(f"articles:{category}", f"{BASE_URL}/news/{category}", "article") for category in _categories()]
+    targets = [(f"articles:{category}", _articles_api_url(category), "article") for category in _categories()]
     targets.append(("livenews", f"{BASE_URL}/live", "livenews"))
     by_id: dict[str, dict[str, Any]] = {}
     results: dict[str, dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=min(4, len(targets))) as executor:
-        futures = {executor.submit(_fetch_list, url, surface): (name, url, surface) for name, url, surface in targets}
+        futures = {
+            executor.submit(_fetch_articles_api if surface == "article" else _fetch_list, url, surface): (
+                name,
+                url,
+                surface,
+            )
+            for name, url, surface in targets
+        }
         for future in as_completed(futures):
             name, url, surface = futures[future]
             try:

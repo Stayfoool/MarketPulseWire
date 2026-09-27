@@ -343,7 +343,7 @@ def build_profiles() -> list[SourceProfile]:
                 name=CHINA_MEDIA_LABELS.get(source_id, source_id),
                 source_type="公开资讯/快讯页面 + 官方 sitemap" if wallstreetcn else "公开 API/页面/RSSHub",
                 fetch_range=(
-                    "公开文章与快讯；分类页和 /live 近实时发现，官方 sitemap 补漏；不访问会员正文"
+                    "公开文章 API 与 /live 近实时发现，官方 sitemap 补漏；不访问会员正文"
                     if wallstreetcn
                     else "公开快讯、短新闻、专题列表；不绕过登录或付费墙"
                 ),
