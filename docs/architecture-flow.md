@@ -116,7 +116,11 @@ When the selected 千问 snapshot model reports insufficient balance, the same
 request is retried once against `qwen3.7-flash` on the same endpoint; when a
 qwen3.8 model's quota is exhausted, the request walks the ordered fallback
 chain Max → 2.4T A95B → 27B → Flash → Max 0902 starting after the selected
-model; other models have no fallback and fail closed. The Web workbench
+model; the official DeepSeek endpoint and 百炼 GLM 5.3 have no fallback and
+fail closed. When `LLM_PROVIDER=deepseek` points `LLM_BASE_URL` at a 百炼
+endpoint (百炼-hosted DeepSeek), an exhausted quota switches to the same
+qwen3.8 fallback chain starting from its head, using the separate 千问
+connection (`LLM_QWEN_API_KEY` with `LLM_QWEN_BASE_URL`). The Web workbench
 changes only this model selection and its private connection values. It does
 not select a different decision, review, storage, dedup or delivery path. A
 missing key for the selected model fails closed instead of using the other

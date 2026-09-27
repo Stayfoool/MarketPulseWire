@@ -319,7 +319,11 @@ qwen3.8 providers `qwen38_max`, `qwen38_2_4t_a95b`, `qwen38_27b`,
 `qwen38_flash` and `qwen38_max_0902` share the same private connection; when a
 selected qwen3.8 model's quota is exhausted, the request walks the ordered
 fallback chain Max → 2.4T A95B → 27B → Flash → Max 0902 starting after the
-selected model. The Web
+selected model. When `LLM_PROVIDER=deepseek` points `LLM_BASE_URL` at the 百炼
+endpoint (百炼-hosted DeepSeek), an exhausted quota switches to the same
+qwen3.8 fallback chain starting from its head, using the separate private
+`LLM_QWEN_API_KEY` / `LLM_QWEN_BASE_URL` connection; the official DeepSeek
+endpoint has no Bailian fallback. The Web
 workbench's `当前模型` control writes
 the selection atomically, restarts the long-running Sina flash service and
 leaves already-running one-shot collectors to finish with their starting

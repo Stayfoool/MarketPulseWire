@@ -425,6 +425,68 @@ def test_qwen38_providers_resolve_ordered_fallback_chain() -> None:
                 os.environ[name] = value
 
 
+def test_bailian_hosted_deepseek_falls_back_to_qwen38_chain() -> None:
+    names = (
+        "SURVEIL_DISABLE_LLM",
+        "LLM_PROVIDER",
+        "LLM_API_KEY",
+        "LLM_BASE_URL",
+        "LLM_MODEL",
+        "LLM_QWEN_API_KEY",
+        "LLM_QWEN_BASE_URL",
+    )
+    original = {name: os.environ.get(name) for name in names}
+    try:
+        os.environ.pop("SURVEIL_DISABLE_LLM", None)
+        os.environ["LLM_PROVIDER"] = "deepseek"
+        os.environ["LLM_API_KEY"] = "bailian-deepseek-key"
+        os.environ["LLM_BASE_URL"] = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        os.environ["LLM_MODEL"] = "deepseek-v4-pro-0813"
+        os.environ["LLM_QWEN_API_KEY"] = "qwen-key"
+        os.environ.pop("LLM_QWEN_BASE_URL", None)
+        assert llm_analysis.llm_config() == (
+            "bailian-deepseek-key",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "deepseek-v4-pro-0813",
+        )
+        # 百炼托管的 DeepSeek 额度用尽时，从 qwen3.8 回退链头部开始切换，
+        # 并使用单独的千问连接而不是 DeepSeek 自己的密钥。
+        assert llm_analysis.llm_fallback_configs() == [
+            (
+                "qwen-key",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                model,
+            )
+            for model in (
+                "qwen3.8-max",
+                "qwen3.8-2.4t-a95b",
+                "qwen3.8-27b",
+                "qwen3.8-flash",
+                "qwen3.8-max-0902",
+            )
+        ]
+
+        os.environ["LLM_QWEN_BASE_URL"] = "https://space.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+        assert [connection[1] for connection in llm_analysis.llm_fallback_configs()] == [
+            "https://space.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+        ] * 5
+
+        # 官方 DeepSeek 端点不回退百炼模型。
+        os.environ["LLM_BASE_URL"] = "https://api.deepseek.com"
+        assert llm_analysis.llm_fallback_configs() == []
+
+        # 缺少千问密钥时保持关闭式失败。
+        os.environ["LLM_BASE_URL"] = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        os.environ.pop("LLM_QWEN_API_KEY")
+        assert llm_analysis.llm_fallback_configs() == []
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def test_balance_insufficient_walks_qwen38_fallback_chain() -> None:
     original_config = llm_analysis.llm_config
     original_fallback = llm_analysis.llm_fallback_configs
@@ -588,6 +650,7 @@ def main() -> int:
     test_qwen_bailian_request_uses_supported_response_preferences()
     test_balance_insufficient_falls_back_to_qwen_flash_stable_model()
     test_qwen38_providers_resolve_ordered_fallback_chain()
+    test_bailian_hosted_deepseek_falls_back_to_qwen38_chain()
     test_balance_insufficient_walks_qwen38_fallback_chain()
     test_bailian_free_quota_exhausted_falls_back_along_chain()
     test_balance_insufficient_without_fallback_model_still_fails_closed()

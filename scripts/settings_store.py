@@ -54,6 +54,7 @@ SETTING_GROUPS: list[dict[str, Any]] = [
         "restart_hint": (
             "点击当前模型即可切换；新浪财经快讯常驻服务会立即重启，其他定时采集任务下一轮读取新模型。"
             "阿里云百炼 qwen3.8 系列额度用尽时，同一轮按 Max → 2.4T A95B → 27B → Flash → Max 0902 自动切换下一个；"
+            "百炼托管的 DeepSeek 额度用尽时，同一轮也从该链头部开始切换（需先配置阿里云百炼 API Key）；"
             "千问快照模型余额不足时，同一轮自动改用稳定版 qwen3.7-flash。"
         ),
         "fields": [

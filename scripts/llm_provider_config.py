@@ -146,16 +146,32 @@ def resolve_llm_connection(values: Mapping[str, str]) -> tuple[str, str, str] | 
     return api_key, base_url, model
 
 
+def _resolve_qwen_connection(values: Mapping[str, str]) -> tuple[str, str] | None:
+    """Resolve the shared 千问 connection used by every 百炼千问 / qwen3.8 model."""
+    api_key = str(values.get("LLM_QWEN_API_KEY") or "").strip()
+    if not api_key:
+        return None
+    return api_key, str(values.get("LLM_QWEN_BASE_URL") or "").strip() or QWEN_BAILIAN_BASE_URL
+
+
 def resolve_llm_fallback_connections(values: Mapping[str, str]) -> list[tuple[str, str, str]]:
     """Resolve the ordered 阿里云百炼 fallback models used when the current model reports no balance."""
     provider = canonical_llm_provider(values.get("LLM_PROVIDER", ""))
-    fallback_providers = QWEN_BAILIAN_FALLBACK_PROVIDERS.get(provider, ())
-    if not fallback_providers:
+    if provider in QWEN_BAILIAN_PROVIDER_MODELS:
+        fallback_providers = QWEN_BAILIAN_FALLBACK_PROVIDERS.get(provider, ())
+        connection = _resolve_qwen_connection(values)
+    elif provider == DEEPSEEK_PROVIDER and is_qwen_bailian_base_url(
+        str(values.get("LLM_BASE_URL") or "")
+    ):
+        # 百炼托管的 DeepSeek 额度用尽时，从 qwen3.8 回退链头部开始切换；
+        # 官方 DeepSeek 端点不回退百炼模型。
+        fallback_providers = tuple(chain_provider for chain_provider, _ in QWEN38_BAILIAN_CHAIN)
+        connection = _resolve_qwen_connection(values)
+    else:
         return []
-    connection = resolve_llm_connection(values)
-    if not connection:
+    if not fallback_providers or not connection:
         return []
-    api_key, base_url, _ = connection
+    api_key, base_url = connection
     return [
         (api_key, base_url, QWEN_BAILIAN_PROVIDER_MODELS[fallback_provider])
         for fallback_provider in fallback_providers
