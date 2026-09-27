@@ -14,6 +14,12 @@ from llm_provider_config import (
     GLM_BAILIAN_PROVIDER,
     QWEN_BAILIAN_BASE_URL,
     QWEN_BAILIAN_PROVIDER_MODELS,
+    QWEN38_27B_PROVIDER,
+    QWEN38_2_4T_A95B_PROVIDER,
+    QWEN38_BAILIAN_CHAIN,
+    QWEN38_FLASH_PROVIDER,
+    QWEN38_MAX_0902_PROVIDER,
+    QWEN38_MAX_PROVIDER,
     QWEN_FLASH_MODEL,
     QWEN_FLASH_PROVIDER,
     QWEN_FLASH_SNAPSHOT_MODEL,
@@ -47,7 +53,7 @@ SETTING_GROUPS: list[dict[str, Any]] = [
         "title": "大模型",
         "restart_hint": (
             "点击当前模型即可切换；新浪财经快讯常驻服务会立即重启，其他定时采集任务下一轮读取新模型。"
-            "阿里云百炼千问快照模型余额不足时，同一轮自动改用稳定版 qwen3.7-flash。"
+            "各百炼模型余额不足时的自动回退顺序见“当前模型”按钮下方的说明。"
         ),
         "fields": [
             SettingField("LLM_BASE_URL", "DeepSeek / 兼容模型 Base URL", "llm", placeholder="https://api.deepseek.com"),
@@ -168,6 +174,21 @@ SETTING_GROUPS: list[dict[str, Any]] = [
 
 FIELDS_BY_KEY = {field.key: field for group in SETTING_GROUPS for field in group["fields"]}
 
+QWEN38_MODEL_LABELS = {
+    QWEN38_MAX_PROVIDER: "阿里云百炼 Qwen3.8 Max",
+    QWEN38_2_4T_A95B_PROVIDER: "阿里云百炼 Qwen3.8 2.4T A95B",
+    QWEN38_27B_PROVIDER: "阿里云百炼 Qwen3.8 27B",
+    QWEN38_FLASH_PROVIDER: "阿里云百炼 Qwen3.8 Flash",
+    QWEN38_MAX_0902_PROVIDER: "阿里云百炼 Qwen3.8 Max（0902）",
+}
+
+QWEN38_FALLBACK_NOTE = (
+    "百炼 qwen3.8 余额回退顺序："
+    + " → ".join(model for _, model in QWEN38_BAILIAN_CHAIN)
+    + "。qwen3.8 模型额度用尽后从链中下一个继续；百炼托管的 DeepSeek 额度用尽后从链头开始；"
+    "千问快照模型余额不足时改用稳定版 qwen3.7-flash。"
+)
+
 
 def llm_model_selector(values: dict[str, str]) -> dict[str, Any]:
     current = selected_llm_provider(values)
@@ -177,6 +198,7 @@ def llm_model_selector(values: dict[str, str]) -> dict[str, Any]:
     )
     return {
         "current": current,
+        "fallback_note": QWEN38_FALLBACK_NOTE,
         "options": [
             {
                 "id": DEEPSEEK_PROVIDER,
@@ -215,6 +237,16 @@ def llm_model_selector(values: dict[str, str]) -> dict[str, Any]:
                 "model": QWEN_FLASH_MODEL,
                 "configured": bool(values.get("LLM_QWEN_API_KEY")),
             },
+            *[
+                {
+                    "id": provider,
+                    "label": QWEN38_MODEL_LABELS[provider],
+                    "base_url": values.get("LLM_QWEN_BASE_URL") or QWEN_BAILIAN_BASE_URL,
+                    "model": model,
+                    "configured": bool(values.get("LLM_QWEN_API_KEY")),
+                }
+                for provider, model in QWEN38_BAILIAN_CHAIN
+            ],
         ],
     }
 
@@ -351,8 +383,10 @@ def switch_llm_provider(
         DEEPSEEK_PROVIDER: {"LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL"},
         ZHIPU_GLM_PROVIDER: {"LLM_GLM_API_KEY"},
         GLM_BAILIAN_PROVIDER: {"LLM_QWEN_API_KEY", "LLM_QWEN_BASE_URL"},
-        QWEN_FLASH_SNAPSHOT_PROVIDER: {"LLM_QWEN_API_KEY", "LLM_QWEN_BASE_URL"},
-        QWEN_FLASH_PROVIDER: {"LLM_QWEN_API_KEY", "LLM_QWEN_BASE_URL"},
+        **{
+            provider: {"LLM_QWEN_API_KEY", "LLM_QWEN_BASE_URL"}
+            for provider in QWEN_BAILIAN_PROVIDER_MODELS
+        },
     }
     if target not in allowed_fields:
         raise ValueError("只允许切换 DeepSeek、智谱 GLM 5.3 Flash 或阿里云百炼模型")

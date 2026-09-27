@@ -249,7 +249,25 @@ def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> No
             "glm_bailian",
             "qwen_flash_snapshot",
             "qwen_flash",
+            "qwen38_max",
+            "qwen38_2_4t_a95b",
+            "qwen38_27b",
+            "qwen38_flash",
+            "qwen38_max_0902",
         ]
+        qwen38_max = next(option for option in selector["options"] if option["id"] == "qwen38_max")
+        assert qwen38_max["label"] == "阿里云百炼 Qwen3.8 Max"
+        assert qwen38_max["model"] == "qwen3.8-max"
+        assert qwen38_max["base_url"] == QWEN_BAILIAN_BASE_URL
+        assert qwen38_max["configured"] is False
+        qwen38_max_0902 = next(option for option in selector["options"] if option["id"] == "qwen38_max_0902")
+        assert qwen38_max_0902["model"] == "qwen3.8-max-0902"
+        assert qwen38_max_0902["configured"] is False
+        assert selector["fallback_note"] == (
+            "百炼 qwen3.8 余额回退顺序：qwen3.8-max → qwen3.8-2.4t-a95b → qwen3.8-27b"
+            " → qwen3.8-flash → qwen3.8-max-0902。qwen3.8 模型额度用尽后从链中下一个继续；"
+            "百炼托管的 DeepSeek 额度用尽后从链头开始；千问快照模型余额不足时改用稳定版 qwen3.7-flash。"
+        )
         glm_bailian = next(option for option in selector["options"] if option["id"] == "glm_bailian")
         assert glm_bailian["label"] == "阿里云百炼 GLM 5.3"
         assert glm_bailian["model"] == "glm-5.3"
@@ -370,6 +388,11 @@ def test_qwen_bailian_switch_requires_its_own_key_and_writes_default_base_url() 
         assert switched["changed_count"] == 1
         assert "LLM_PROVIDER=qwen_flash" in env_path.read_text(encoding="utf-8")
 
+        switched_qwen38 = switch_llm_provider("qwen38_max", path=env_path)
+        assert switched_qwen38["provider"] == "qwen38_max"
+        assert switched_qwen38["changed_count"] == 1
+        assert "LLM_PROVIDER=qwen38_max" in env_path.read_text(encoding="utf-8")
+
         switched_glm = switch_llm_provider("glm_bailian", path=env_path)
         assert switched_glm["provider"] == "glm_bailian"
         assert switched_glm["changed_count"] == 1
@@ -413,6 +436,9 @@ def test_settings_ui_exposes_current_model_switch() -> None:
     assert "阿里云百炼 GLM 5.3" in source
     assert "阿里云百炼 Qwen3.7 Flash（2026-07-15 快照）" in source
     assert "阿里云百炼 Qwen3.7 Flash（稳定版）" in source
+    assert "阿里云百炼 Qwen3.8 Max" in source
+    assert "阿里云百炼 Qwen3.8 Flash" in source
+    assert "fallback_note" in source
     assert "/api/llm-provider" in source
     assert "清除独立覆盖" not in source
     assert "clear_keys" not in source

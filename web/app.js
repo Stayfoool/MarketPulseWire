@@ -1285,6 +1285,7 @@ function llmModelSelectorHtml(selector) {
           </button>
         `).join('')}
       </div>
+      ${selector.fallback_note ? `<div class="hint">${escapeHtml(selector.fallback_note)}</div>` : ''}
     </div>
   `;
 }
@@ -1295,6 +1296,11 @@ const LLM_MODEL_FIELDS = {
   glm_bailian: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
   qwen_flash_snapshot: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
   qwen_flash: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
+  qwen38_max: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
+  qwen38_2_4t_a95b: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
+  qwen38_27b: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
+  qwen38_flash: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
+  qwen38_max_0902: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
 };
 
 const LLM_MODEL_LABELS = {
@@ -1303,6 +1309,11 @@ const LLM_MODEL_LABELS = {
   glm_bailian: '阿里云百炼 GLM 5.3',
   qwen_flash_snapshot: '阿里云百炼 Qwen3.7 Flash（2026-07-15 快照）',
   qwen_flash: '阿里云百炼 Qwen3.7 Flash（稳定版）',
+  qwen38_max: '阿里云百炼 Qwen3.8 Max',
+  qwen38_2_4t_a95b: '阿里云百炼 Qwen3.8 2.4T A95B',
+  qwen38_27b: '阿里云百炼 Qwen3.8 27B',
+  qwen38_flash: '阿里云百炼 Qwen3.8 Flash',
+  qwen38_max_0902: '阿里云百炼 Qwen3.8 Max（0902）',
 };
 
 async function switchLlmProvider(provider) {
