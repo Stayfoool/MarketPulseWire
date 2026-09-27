@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import wallstreetcn_monitor as monitor
@@ -251,6 +252,113 @@ def test_sitemap_preserves_news_title_and_publication_time() -> None:
     assert item["published_at"] == "2026-06-22T16:39:42+00:00"
 
 
+def _articles_api_payload() -> dict:
+    return {
+        "code": 20000,
+        "message": "OK",
+        "data": {
+            "items": [
+                {
+                    "id": 3777001,
+                    "uri": "https://wallstreetcn.com/articles/3777001",
+                    "title": "美银大幅修正美联储利率路径",
+                    "content_short": "美银证券修正此前利率预测。",
+                    "display_time": 1789000000,
+                    "is_paid": False,
+                    "is_in_vip_privilege": False,
+                    "is_priced": False,
+                },
+                {
+                    "id": 3777001,
+                    "uri": "https://wallstreetcn.com/articles/3777001",
+                    "title": "美银大幅修正美联储利率路径",
+                    "content_short": "重复入口",
+                    "display_time": 1789000000,
+                },
+                {
+                    "id": 3777002,
+                    "uri": "https://wallstreetcn.com/articles/3777002",
+                    "title": "会员文章",
+                    "content_short": "",
+                    "display_time": 1789000100,
+                    "is_in_vip_privilege": True,
+                    "is_priced": True,
+                },
+            ]
+        },
+    }
+
+
+def test_articles_api_url_uses_channel_and_limit() -> None:
+    assert monitor._articles_api_url("global") == (
+        "https://api-one.wallstcn.com/apiv1/content/articles?channel=global&limit=30"
+    )
+
+
+def test_articles_api_parsing_and_member_tier() -> None:
+    payload = json.dumps(_articles_api_payload())
+    articles = monitor.parse_articles_api(payload, surface="article", discovery_url=monitor.ARTICLES_API_URL)
+    assert [item["id"] for item in articles] == ["article:3777001", "article:3777002"]
+    public = articles[0]
+    assert public["url"] == "https://wallstreetcn.com/articles/3777001"
+    assert public["title"] == "美银大幅修正美联储利率路径"
+    assert public["summary"] == "美银证券修正此前利率预测。"
+    assert public["published_at"] == datetime.fromtimestamp(1789000000, tz=timezone.utc).isoformat()
+    member = articles[1]
+    assert member["raw"]["wallstreetcn_access_tier"] == "member"
+    assert member["summary"] == "会员文章"
+    assert monitor.enrich_item(member)["_skip_decision"] is True
+
+
+def test_articles_api_invalid_payloads_fail_visibly() -> None:
+    try:
+        monitor.parse_articles_api("{not-json", surface="article", discovery_url="x")
+    except ValueError as exc:
+        assert str(exc) == "WallstreetCN article API JSON invalid"
+    else:
+        raise AssertionError("invalid article API JSON must fail visibly")
+
+    error_payloads = (
+        {"code": 50004, "message": "参数不正确", "data": {}},
+        {"code": 20000, "message": "OK", "data": ""},
+        {"code": 20000, "message": "OK", "data": {"items": []}},
+        {"code": 20000, "message": "OK", "data": {"items": [{"id": 1, "title": ""}]}},
+    )
+    for payload in error_payloads:
+        try:
+            monitor.parse_articles_api(json.dumps(payload), surface="article", discovery_url="x")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"error payload must fail visibly: {payload}")
+
+
+def test_collect_items_uses_articles_api_for_article_surface() -> None:
+    original_get = monitor.http_get
+
+    class Response:
+        def __init__(self, content: bytes):
+            self.content = content
+
+    def fake_get(url, *_args, **_kwargs):
+        if "api-one.wallstcn.com" in url:
+            return Response(json.dumps(_articles_api_payload()).encode())
+        if url == "https://wallstreetcn.com/live":
+            return Response(LIVE_HTML.encode())
+        raise AssertionError(f"unexpected discovery URL: {url}")
+
+    try:
+        monitor.http_get = fake_get
+        rows = monitor.collect_items(state={"last_sitemap_reconcile_epoch": monitor.time.time()})
+    finally:
+        monitor.http_get = original_get
+    ids = {row["id"] for row in rows}
+    assert {"article:3777001", "article:3777002", "livenews:3134001"} <= ids
+    article_results = monitor.discovery_surface_results("article")
+    assert article_results[0]["ok"] is True
+    assert article_results[0]["url"] == monitor._articles_api_url("global")
+
+
 def test_source_profile_is_peer_news_media() -> None:
     profile = default_profile_map()["wallstreetcn_news"]
     assert profile["category"] == "news_media"
@@ -312,6 +420,10 @@ if __name__ == "__main__":
     test_list_fetch_retries_http_200_404_page()
     test_list_fetch_exhausts_http_200_404_retries()
     test_list_fetch_does_not_retry_other_parse_failures()
+    test_articles_api_url_uses_channel_and_limit()
+    test_articles_api_parsing_and_member_tier()
+    test_articles_api_invalid_payloads_fail_visibly()
+    test_collect_items_uses_articles_api_for_article_surface()
     test_sitemap_preserves_news_title_and_publication_time()
     test_source_profile_is_peer_news_media()
     test_discovery_health_excludes_sitemap_results()
