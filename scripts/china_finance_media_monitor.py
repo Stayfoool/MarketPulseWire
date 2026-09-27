@@ -45,7 +45,7 @@ from llm_analysis import llm_config
 from macro_policy import is_macro_event
 from market_flow import normalize_market_item, process_market_item
 from market_item import NormalizedMarketItem
-from market_store import processing_failure_status
+from market_store import expire_market_review, processing_failure_status
 from media_keyword_config import is_media_focus_item
 from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from rss_monitor import DB_PATH, fetch_article_body, parse_date, strip_tags
@@ -1092,6 +1092,10 @@ def retryable_seen_items(source: str) -> list[dict[str, Any]]:
                   AND processability_status IN ('pending', 'failed_retryable')
                 )
                 OR (
+                  processability_status IN ('pending', 'failed_retryable')
+                  AND first_seen_at < ?
+                )
+                OR (
                   processability_status IN ('not_required', 'succeeded', 'fallback')
                   AND admission_status = 'pending'
                 )
@@ -1099,7 +1103,12 @@ def retryable_seen_items(source: str) -> list[dict[str, Any]]:
               )
             ORDER BY first_seen_at ASC
             """,
-            (source, source, WALLSTREETCN_SOURCE),
+            (
+                source,
+                source,
+                WALLSTREETCN_SOURCE,
+                (datetime.now(timezone.utc) - WALLSTREETCN_RETRY_DELIVERY_MAX_AGE).isoformat(),
+            ),
         ).fetchall()
     return [
         {
@@ -1179,6 +1188,7 @@ def save_new_items(
                         processed_at=now,
                         lifecycle_updated_at=now,
                     )
+                    expire_market_review(conn, source, item_id, reason=reason)
                     continue
                 update_seen_item_lifecycle(
                     conn,
