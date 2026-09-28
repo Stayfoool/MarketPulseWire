@@ -18,9 +18,13 @@ import urllib.request
 from typing import Any
 
 from llm_analysis import (
+    LLMBalanceInsufficientError,
     apply_llm_response_preferences,
     chat_completions_url,
+    is_balance_insufficient,
     llm_config,
+    llm_fallback_configs,
+    log_llm_fallback,
     parse_json_object,
 )
 
@@ -115,6 +119,10 @@ def preview_timeout_seconds() -> int:
         return max(10, min(90, int(raw))) if raw else 45
     except ValueError:
         return 45
+
+
+def preview_retry_attempts() -> int:
+    return max(1, min(3, int(os.getenv("VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT", "1") or "1") + 1))
 
 
 def max_image_bytes() -> int:
@@ -387,6 +395,74 @@ def parse_preview_llm_result(result: dict[str, Any]) -> dict[str, Any]:
     return parse_json_object(raw)
 
 
+def _attempt_preview_llm(
+    payload: dict[str, Any],
+    *,
+    base_url: str,
+    api_key: str,
+    attempts: int,
+    failure_label: str,
+) -> tuple[dict[str, Any], str]:
+    """Send one preview request config with bounded retries.
+
+    余额不足错误不在此重试，向上抛出以便调用共享的百炼回退链。
+    """
+    model = str(payload.get("model") or "")
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        request_payload = dict(payload)
+        apply_preview_llm_response_preferences(request_payload, base_url=base_url, model=model)
+        try:
+            result = request_preview_llm(request_payload, base_url=base_url, api_key=api_key)
+            return parse_preview_llm_result(result), model
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            if is_balance_insufficient(detail, exc.code):
+                raise LLMBalanceInsufficientError(f"LLM 余额不足：{detail}") from exc
+            last_error = RuntimeError(f"HTTP {exc.code}: {detail[:500]}")
+        except (urllib.error.URLError, TimeoutError, RuntimeError, json.JSONDecodeError) as exc:
+            last_error = exc
+        if attempt < attempts - 1:
+            time.sleep(2 + attempt * 3)
+            continue
+        raise RuntimeError(f"{failure_label}：{last_error}") from last_error
+    raise RuntimeError(f"{failure_label}：{last_error}")
+
+
+def _call_preview_llm_with_balance_fallback(
+    payload: dict[str, Any],
+    *,
+    base_url: str,
+    api_key: str,
+    attempts: int,
+    failure_label: str,
+) -> tuple[dict[str, Any], str]:
+    """Mirror the shared LLM client's balance fallback: 当前模型额度用尽时，
+    按同一顺序切换 llm_fallback_configs() 返回的备用模型，每档只试一次。"""
+    try:
+        return _attempt_preview_llm(
+            payload,
+            base_url=base_url,
+            api_key=api_key,
+            attempts=attempts,
+            failure_label=failure_label,
+        )
+    except LLMBalanceInsufficientError:
+        for fallback_api_key, fallback_base_url, fallback_model in llm_fallback_configs():
+            log_llm_fallback(fallback_model)
+            try:
+                return _attempt_preview_llm(
+                    {**payload, "model": fallback_model},
+                    base_url=fallback_base_url,
+                    api_key=fallback_api_key,
+                    attempts=1,
+                    failure_label=failure_label,
+                )
+            except LLMBalanceInsufficientError:
+                continue
+        raise
+
+
 def call_preview_text_llm(item: dict[str, Any], preview: dict[str, Any], *, ocr_text: str = "") -> tuple[dict[str, Any], str]:
     if not env_bool("VALUE_DIRECTORY_PREVIEW_LLM_ENABLED", True):
         raise RuntimeError("VALUE_DIRECTORY_PREVIEW_LLM_ENABLED=0")
@@ -394,32 +470,22 @@ def call_preview_text_llm(item: dict[str, Any], preview: dict[str, Any], *, ocr_
     if not config:
         raise RuntimeError("LLM 未配置")
     api_key, base_url, model = config
-    prompt = preview_prompt(item, preview, ocr_text=ocr_text)
     payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": preview_prompt(item, preview, ocr_text=ocr_text)},
         ],
         "temperature": 0.1,
         "max_tokens": int(os.getenv("VALUE_DIRECTORY_PREVIEW_MAX_OUTPUT_TOKENS", "700") or "700"),
     }
-    apply_preview_llm_response_preferences(payload, base_url=base_url, model=model)
-    attempts = max(1, min(3, int(os.getenv("VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT", "1") or "1") + 1))
-    last_error: Exception | None = None
-    for attempt in range(attempts):
-        try:
-            return parse_preview_llm_result(request_preview_llm(payload, base_url=base_url, api_key=api_key)), model
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            last_error = RuntimeError(f"HTTP {exc.code}: {detail[:500]}")
-        except (urllib.error.URLError, TimeoutError, RuntimeError, json.JSONDecodeError) as exc:
-            last_error = exc
-        if attempt < attempts - 1:
-            time.sleep(2 + attempt * 3)
-            continue
-        raise RuntimeError(f"第一页 OCR 文本 LLM 提取失败：{last_error}") from last_error
-    raise RuntimeError(f"第一页 OCR 文本 LLM 提取失败：{last_error}")
+    return _call_preview_llm_with_balance_fallback(
+        payload,
+        base_url=base_url,
+        api_key=api_key,
+        attempts=preview_retry_attempts(),
+        failure_label="第一页 OCR 文本 LLM 提取失败",
+    )
 
 
 def call_preview_vision_llm(item: dict[str, Any], preview: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -435,7 +501,6 @@ def call_preview_vision_llm(item: dict[str, Any], preview: dict[str, Any]) -> tu
     if not image_url:
         raise RuntimeError("详情页没有可见第一页预览图")
     data_url, _content_type = download_preview_image(image_url)
-    prompt = preview_prompt(item, preview)
     payload = {
         "model": model,
         "messages": [
@@ -443,7 +508,7 @@ def call_preview_vision_llm(item: dict[str, Any], preview: dict[str, Any]) -> tu
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": preview_prompt(item, preview)},
                     {"type": "image_url", "image_url": {"url": data_url}},
                 ],
             },
@@ -451,22 +516,13 @@ def call_preview_vision_llm(item: dict[str, Any], preview: dict[str, Any]) -> tu
         "temperature": 0.1,
         "max_tokens": int(os.getenv("VALUE_DIRECTORY_PREVIEW_MAX_OUTPUT_TOKENS", "700") or "700"),
     }
-    apply_preview_llm_response_preferences(payload, base_url=base_url, model=model)
-    attempts = max(1, min(3, int(os.getenv("VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT", "1") or "1") + 1))
-    last_error: Exception | None = None
-    for attempt in range(attempts):
-        try:
-            return parse_preview_llm_result(request_preview_llm(payload, base_url=base_url, api_key=api_key)), model
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            last_error = RuntimeError(f"HTTP {exc.code}: {detail[:500]}")
-        except (urllib.error.URLError, TimeoutError, RuntimeError, json.JSONDecodeError) as exc:
-            last_error = exc
-        if attempt < attempts - 1:
-            time.sleep(2 + attempt * 3)
-            continue
-        raise RuntimeError(f"第一页视觉 LLM 提取失败：{last_error}") from last_error
-    raise RuntimeError(f"第一页预览 LLM 提取失败：{last_error}")
+    return _call_preview_llm_with_balance_fallback(
+        payload,
+        base_url=base_url,
+        api_key=api_key,
+        attempts=preview_retry_attempts(),
+        failure_label="第一页视觉 LLM 提取失败",
+    )
 
 
 def first_preview_image_url(preview: dict[str, Any]) -> str:

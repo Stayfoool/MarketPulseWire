@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import os
 import inspect
+import io
+import json
 import sqlite3
 import sys
 import types
@@ -805,6 +807,188 @@ def test_preview_llm_config_uses_only_common_llm_settings() -> None:
                 os.environ[name] = value
 
 
+def _free_quota_http_error() -> Exception:
+    return value_directory_preview.urllib.error.HTTPError(
+        "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+        403,
+        "Forbidden",
+        {},
+        io.BytesIO(
+            json.dumps(
+                {
+                    "error": {
+                        "message": 'Free quota exhausted. To continue accessing the model on a paid basis, please add funds or disable the "use free tier only" mode in the management console.',
+                        "code": "AllocationQuota.FreeTierOnly",
+                    }
+                }
+            ).encode("utf-8")
+        ),
+    )
+
+
+def test_preview_text_llm_falls_back_when_primary_free_quota_exhausted() -> None:
+    env_names = (
+        "LLM_PROVIDER",
+        "LLM_API_KEY",
+        "LLM_BASE_URL",
+        "LLM_MODEL",
+        "LLM_QWEN_API_KEY",
+        "LLM_QWEN_BASE_URL",
+        "SURVEIL_DISABLE_LLM",
+        "VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT",
+    )
+    original_env = {name: os.environ.get(name) for name in env_names}
+    original_fallback = value_directory_preview.llm_fallback_configs
+    original_request = value_directory_preview.request_preview_llm
+    requested: list[dict[str, object]] = []
+
+    def fake_request(payload, *, base_url, api_key):
+        requested.append(
+            {
+                "model": payload["model"],
+                "api_key": api_key,
+                "base_url": base_url,
+                "enable_thinking": payload.get("enable_thinking"),
+                "response_format": payload.get("response_format"),
+            }
+        )
+        if payload["model"] == "deepseek-v4-pro":
+            raise _free_quota_http_error()
+        return {
+            "choices": [
+                {"message": {"content": json.dumps({"core_content": "备用模型结论", "confidence": "high"}, ensure_ascii=False)}}
+            ]
+        }
+
+    try:
+        os.environ["LLM_PROVIDER"] = "deepseek"
+        os.environ["LLM_API_KEY"] = "primary-key"
+        os.environ["LLM_BASE_URL"] = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        os.environ["LLM_MODEL"] = "deepseek-v4-pro"
+        os.environ["LLM_QWEN_API_KEY"] = "qwen-key"
+        os.environ.pop("LLM_QWEN_BASE_URL", None)
+        os.environ.pop("SURVEIL_DISABLE_LLM", None)
+        os.environ["VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT"] = "0"
+        value_directory_preview.llm_fallback_configs = lambda: [
+            ("qwen-key", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen3.8-max")
+        ]
+        value_directory_preview.request_preview_llm = fake_request
+
+        parsed, model = value_directory_preview.call_preview_text_llm({}, {"state": "ok"})
+    finally:
+        for name, value in original_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        value_directory_preview.llm_fallback_configs = original_fallback
+        value_directory_preview.request_preview_llm = original_request
+
+    assert model == "qwen3.8-max"
+    assert parsed["core_content"] == "备用模型结论"
+    assert [row["model"] for row in requested] == ["deepseek-v4-pro", "qwen3.8-max"]
+    assert requested[1]["api_key"] == "qwen-key"
+    # 回退请求按百炼端点重新应用响应偏好，而不是沿用主模型的配置。
+    assert requested[1]["enable_thinking"] is False
+    assert requested[1]["response_format"] == {"type": "json_object"}
+
+
+def test_preview_text_llm_without_fallback_model_fails_closed() -> None:
+    env_names = (
+        "LLM_API_KEY",
+        "LLM_BASE_URL",
+        "LLM_MODEL",
+        "SURVEIL_DISABLE_LLM",
+        "VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT",
+    )
+    original_env = {name: os.environ.get(name) for name in env_names}
+    original_fallback = value_directory_preview.llm_fallback_configs
+    original_request = value_directory_preview.request_preview_llm
+
+    def fake_request(payload, *, base_url, api_key):
+        raise _free_quota_http_error()
+
+    try:
+        os.environ["LLM_API_KEY"] = "primary-key"
+        os.environ["LLM_BASE_URL"] = "https://provider.example/v1"
+        os.environ["LLM_MODEL"] = "deepseek-v4-pro"
+        os.environ.pop("SURVEIL_DISABLE_LLM", None)
+        os.environ["VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT"] = "0"
+        value_directory_preview.llm_fallback_configs = lambda: []
+        value_directory_preview.request_preview_llm = fake_request
+
+        try:
+            value_directory_preview.call_preview_text_llm({}, {"state": "ok"})
+        except value_directory_preview.LLMBalanceInsufficientError:
+            pass
+        else:
+            raise AssertionError("余额不足且无备用模型时必须关闭式失败")
+    finally:
+        for name, value in original_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        value_directory_preview.llm_fallback_configs = original_fallback
+        value_directory_preview.request_preview_llm = original_request
+
+
+def test_preview_text_llm_non_balance_http_error_keeps_primary_model() -> None:
+    env_names = (
+        "LLM_API_KEY",
+        "LLM_BASE_URL",
+        "LLM_MODEL",
+        "SURVEIL_DISABLE_LLM",
+        "VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT",
+    )
+    original_env = {name: os.environ.get(name) for name in env_names}
+    original_fallback = value_directory_preview.llm_fallback_configs
+    original_request = value_directory_preview.request_preview_llm
+    original_time = value_directory_preview.time
+    requested_models: list[str] = []
+
+    def fake_request(payload, *, base_url, api_key):
+        requested_models.append(payload["model"])
+        raise value_directory_preview.urllib.error.HTTPError(
+            "https://provider.example/v1/chat/completions",
+            500,
+            "Internal Server Error",
+            {},
+            io.BytesIO(b'{"error":{"message":"boom"}}'),
+        )
+
+    try:
+        os.environ["LLM_API_KEY"] = "primary-key"
+        os.environ["LLM_BASE_URL"] = "https://provider.example/v1"
+        os.environ["LLM_MODEL"] = "deepseek-v4-pro"
+        os.environ.pop("SURVEIL_DISABLE_LLM", None)
+        os.environ["VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT"] = "1"
+        value_directory_preview.llm_fallback_configs = lambda: [
+            ("qwen-key", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen3.8-max")
+        ]
+        value_directory_preview.request_preview_llm = fake_request
+        value_directory_preview.time = types.SimpleNamespace(sleep=lambda _seconds: None, monotonic=original_time.monotonic)
+
+        try:
+            value_directory_preview.call_preview_text_llm({}, {"state": "ok"})
+        except RuntimeError as exc:
+            assert "第一页 OCR 文本 LLM 提取失败" in str(exc)
+        else:
+            raise AssertionError("非余额类 HTTP 错误必须以失败结束")
+    finally:
+        for name, value in original_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        value_directory_preview.llm_fallback_configs = original_fallback
+        value_directory_preview.request_preview_llm = original_request
+        value_directory_preview.time = original_time
+
+    # 非余额类错误在主模型上重试，不切换备用模型。
+    assert requested_models == ["deepseek-v4-pro", "deepseek-v4-pro"]
+
+
 def test_preview_ocr_text_path_uses_text_llm_without_vision() -> None:
     item = {
         "id": "862591",
@@ -1469,6 +1653,9 @@ def main() -> int:
     test_preview_llm_policy_disables_deepseek_thinking()
     test_preview_llm_policy_forces_glm_supported_preferences()
     test_preview_llm_config_uses_only_common_llm_settings()
+    test_preview_text_llm_falls_back_when_primary_free_quota_exhausted()
+    test_preview_text_llm_without_fallback_model_fails_closed()
+    test_preview_text_llm_non_balance_http_error_keeps_primary_model()
     test_preview_ocr_text_path_uses_text_llm_without_vision()
     test_preview_ocr_failure_falls_back_without_blocking()
     test_recheck_uses_enriched_item_without_a_preliminary_decision_gate()
