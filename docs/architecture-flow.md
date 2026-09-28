@@ -143,6 +143,14 @@ instead of retried, and the current `failed_retryable` review is synchronized
 to `failed_terminal` in the same transaction; succeeded or already-terminal
 reviews are never touched.
 
+The value-directory sources use the same expiry semantics with one close pass
+per production run before preview selection: `expire_stale_retryable_items`
+terminally closes `seen_items` rows whose retry window has passed even when the
+report has already scrolled off the collected list pages, and closes the
+current `failed_retryable` review through the shared `expire_market_review` in
+the same transaction, so stranded retries cannot block strict production
+verification.
+
 After a valid decision, `market_interpreter.py` produces only a short
 `core_content` summary. It cannot add, promote or reduce an action. Delivery
 cards show `推送依据` from the persisted winning `DecisionResult` rule reasons,

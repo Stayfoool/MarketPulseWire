@@ -10,6 +10,7 @@ import json
 import sqlite3
 import sys
 import types
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -1295,8 +1296,10 @@ def test_run_finishes_browser_collection_before_source_processing() -> None:
     original_enabled = value_directory_monitor.source_profile_enabled
     original_states = value_directory_monitor.load_seen_item_states
     original_process = value_directory_monitor.process_collected_source
+    original_expire = value_directory_monitor.expire_stale_retryable_items
     try:
         value_directory_monitor.source_profile_enabled = lambda _source_id: True
+        value_directory_monitor.expire_stale_retryable_items = lambda source_id, **_kwargs: 0
         value_directory_monitor.load_seen_item_states = lambda source_id: {
             f"known-{source_id}": ("succeeded", "succeeded")
         }
@@ -1336,6 +1339,7 @@ def test_run_finishes_browser_collection_before_source_processing() -> None:
         value_directory_monitor.source_profile_enabled = original_enabled
         value_directory_monitor.load_seen_item_states = original_states
         value_directory_monitor.process_collected_source = original_process
+        value_directory_monitor.expire_stale_retryable_items = original_expire
 
     assert payload["ok"] is True
     assert events == [
@@ -1344,6 +1348,197 @@ def test_run_finishes_browser_collection_before_source_processing() -> None:
         "process:value_directory_ib_stocks",
         "process:value_directory_ib_industry_macro",
     ]
+
+
+def test_run_closes_stale_retries_before_preview_selection() -> None:
+    events: list[str] = []
+    original_collect = value_directory_monitor.collect_sources_with_previews
+    original_enabled = value_directory_monitor.source_profile_enabled
+    original_states = value_directory_monitor.load_seen_item_states
+    original_process = value_directory_monitor.process_collected_source
+    original_expire = value_directory_monitor.expire_stale_retryable_items
+    try:
+        value_directory_monitor.source_profile_enabled = lambda _source_id: True
+
+        def fake_expire(source_id, **_kwargs):
+            events.append(f"expire:{source_id}")
+            return 0
+
+        def fake_states(source_id):
+            events.append(f"states:{source_id}")
+            return {}
+
+        def fake_collect(source_ids, **_kwargs):
+            events.append("browser")
+            return types.SimpleNamespace(
+                entries_by_source={source_id: [] for source_id in source_ids},
+                source_errors={},
+                previews={},
+                preview_errors={},
+            )
+
+        def fake_process(source, _entries, **_kwargs):
+            events.append(f"process:{source.source_id}")
+            return {
+                "ok": True,
+                "mode": "production",
+                "sent_feishu": False,
+                "source": source.source_id,
+                "counts": {"raw_items": 0},
+                "errors": [],
+            }
+
+        value_directory_monitor.expire_stale_retryable_items = fake_expire
+        value_directory_monitor.load_seen_item_states = fake_states
+        value_directory_monitor.collect_sources_with_previews = fake_collect
+        value_directory_monitor.process_collected_source = fake_process
+        payload = value_directory_monitor.run(
+            limit=10,
+            notify_baseline=False,
+            source_ids=["value_directory_ib_stocks", "value_directory_ib_industry_macro"],
+        )
+    finally:
+        value_directory_monitor.collect_sources_with_previews = original_collect
+        value_directory_monitor.source_profile_enabled = original_enabled
+        value_directory_monitor.load_seen_item_states = original_states
+        value_directory_monitor.process_collected_source = original_process
+        value_directory_monitor.expire_stale_retryable_items = original_expire
+
+    assert payload["ok"] is True
+    # 过期关闭必须在读取 seen 状态与浏览器 preview 选取之前完成，
+    # 已关闭条目不再进入本轮 preview 采集与重试。
+    assert events == [
+        "expire:value_directory_ib_stocks",
+        "expire:value_directory_ib_industry_macro",
+        "states:value_directory_ib_stocks",
+        "states:value_directory_ib_industry_macro",
+        "browser",
+        "process:value_directory_ib_stocks",
+        "process:value_directory_ib_industry_macro",
+    ]
+
+
+def test_value_directory_stale_retryable_items_close_with_expiry() -> None:
+    source = source_config("value_directory_ib_stocks")
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "surveil.sqlite3"
+        init_db(db_path).close()
+        now = datetime.now(timezone.utc)
+        stranded_seen = (now - timedelta(days=3)).isoformat()
+        recent_seen = (now - timedelta(hours=2)).isoformat()
+        with sqlite3.connect(db_path) as conn:
+            for item_id, first_seen in (
+                ("887343", stranded_seen),
+                ("887344", recent_seen),
+                ("887345", stranded_seen),
+            ):
+                conn.execute(
+                    """
+                    INSERT INTO seen_items (
+                        source, item_id, url, title, summary, published_at, first_seen_at,
+                        collection_class, processability_status, processability_reason,
+                        admission_status, admission_reason, processing_status,
+                        processing_error, processed_at, lifecycle_updated_at
+                    ) VALUES (?, ?, ?, ?, '', '', ?, 'live', 'failed_retryable',
+                              'ProductionLLMDecisionError: model_unavailable',
+                              'pending', '', 'not_applicable', '', NULL, ?)
+                    """,
+                    (
+                        source.source_id,
+                        item_id,
+                        f"https://www.valuelist.cn/{item_id}.html",
+                        item_id,
+                        first_seen,
+                        first_seen,
+                    ),
+                )
+            stranded_item_id = conn.execute(
+                """
+                INSERT INTO market_items (
+                    source, source_item_id, dedupe_key, title, first_seen_at,
+                    content_hash, processing_status, created_at, updated_at
+                ) VALUES (?, '887343', 'value_directory_ib_stocks:887343', '搁浅研报', ?,
+                          'hash-887343', 'failed_retryable', ?, ?)
+                """,
+                (source.source_id, stranded_seen, now.isoformat(), now.isoformat()),
+            ).lastrowid
+            succeeded_item_id = conn.execute(
+                """
+                INSERT INTO market_items (
+                    source, source_item_id, dedupe_key, title, first_seen_at,
+                    content_hash, processing_status, created_at, updated_at
+                ) VALUES (?, '887345', 'value_directory_ib_stocks:887345', '已成功研报', ?,
+                          'hash-887345', 'succeeded', ?, ?)
+                """,
+                (source.source_id, stranded_seen, now.isoformat(), now.isoformat()),
+            ).lastrowid
+            conn.execute(
+                """
+                INSERT INTO market_reviews (
+                    market_item_id, task, run_key, is_current, review_status,
+                    admission_status, created_at
+                ) VALUES (?, 'production', 'run-887343', 1, 'failed_retryable', 'admitted', ?)
+                """,
+                (stranded_item_id, stranded_seen),
+            )
+            conn.execute(
+                """
+                INSERT INTO market_reviews (
+                    market_item_id, task, run_key, is_current, review_status,
+                    admission_status, created_at
+                ) VALUES (?, 'production', 'run-887345', 1, 'succeeded', 'admitted', ?)
+                """,
+                (succeeded_item_id, stranded_seen),
+            )
+
+        closed = value_directory_monitor.expire_stale_retryable_items(
+            source.source_id, db_path=db_path
+        )
+
+        assert closed == 2
+        states = value_directory_monitor.load_seen_item_states(source.source_id, db_path=db_path)
+        assert states["887344"] == ("failed_retryable", "not_applicable")
+        assert states["887343"] == ("failed_terminal", "not_applicable")
+        assert states["887345"] == ("failed_terminal", "not_applicable")
+        with sqlite3.connect(db_path) as conn:
+            stranded_seen_row = conn.execute(
+                """
+                SELECT processability_status, processability_reason, admission_status,
+                       processing_status
+                FROM seen_items WHERE source = ? AND item_id = '887343'
+                """,
+                (source.source_id,),
+            ).fetchone()
+            stranded_review = conn.execute(
+                "SELECT review_status, completed_at FROM market_reviews WHERE market_item_id = ?",
+                (stranded_item_id,),
+            ).fetchone()
+            stranded_item = conn.execute(
+                "SELECT processing_status, processing_error FROM market_items WHERE id = ?",
+                (stranded_item_id,),
+            ).fetchone()
+            succeeded_review = conn.execute(
+                "SELECT review_status, completed_at FROM market_reviews WHERE market_item_id = ?",
+                (succeeded_item_id,),
+            ).fetchone()
+            succeeded_item = conn.execute(
+                "SELECT processing_status FROM market_items WHERE id = ?",
+                (succeeded_item_id,),
+            ).fetchone()
+
+    assert stranded_seen_row[0] == "failed_terminal"
+    assert stranded_seen_row[1].startswith("value_directory_retry_expired_after_24h:")
+    assert stranded_seen_row[2] == "not_applicable"
+    assert stranded_seen_row[3] == "not_applicable"
+    assert stranded_review[0] == "failed_terminal"
+    assert stranded_review[1]
+    assert stranded_item == (
+        "failed_terminal",
+        "value_directory_retry_expired_after_24h: ProductionLLMDecisionError: model_unavailable",
+    )
+    # 已成功 review 与成功条目不受过期关闭影响。
+    assert succeeded_review == ("succeeded", None)
+    assert succeeded_item == ("succeeded",)
 
 
 def test_collected_preview_does_not_launch_another_browser() -> None:
@@ -1662,6 +1857,8 @@ def main() -> int:
     test_new_item_uses_market_flow_after_preview_enrichment()
     test_value_directory_monitor_does_not_own_store_dedup_or_delivery()
     test_run_finishes_browser_collection_before_source_processing()
+    test_run_closes_stale_retries_before_preview_selection()
+    test_value_directory_stale_retryable_items_close_with_expiry()
     test_collected_preview_does_not_launch_another_browser()
     test_production_preview_selector_limits_work_to_processable_entries()
     test_collect_production_automatically_retries_retryable_lifecycle()
