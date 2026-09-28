@@ -146,7 +146,9 @@ def expire_stale_retryable_items(
     参照 wallstreetcn 重试过期关闭机制：价值目录条目滚出列表页后不会再被
     re-review，重试窗口过期时在每轮采集前把仍停留在可重试状态的 seen_items
     生命周期终态化，并用共享 expire_market_review 同步关闭其 failed_retryable
-    当前 review；已成功或已终态的 review 不受影响。
+    当前 review；已成功或已终态的 review 不受影响。可重试判定同时覆盖
+    processability 与 processing 两个环节——决策环节失败的条目（881090 形态）
+    其 processability 已是 succeeded，只按 processing 终态关闭。
     """
     db_path = db_path or DB_PATH
     cutoff = (datetime.now(timezone.utc) - VALUE_DIRECTORY_RETRY_MAX_AGE).isoformat()
@@ -156,32 +158,46 @@ def expire_stale_retryable_items(
         try:
             rows = conn.execute(
                 """
-                SELECT item_id, processability_reason
+                SELECT item_id, processability_status, processing_status, processability_reason
                 FROM seen_items
                 WHERE source = ? AND collection_class = 'live'
-                  AND processability_status IN ('pending', 'failed_retryable')
                   AND first_seen_at < ?
+                  AND (
+                      processability_status IN ('pending', 'failed_retryable')
+                      OR processing_status IN ('pending', 'failed_retryable')
+                  )
                 """,
                 (source_id, cutoff),
             ).fetchall()
-            for item_id, prior_reason in rows:
+            for item_id, processability, processing, prior_reason in rows:
                 prior = str(prior_reason or "").strip()
                 reason = "value_directory_retry_expired_after_24h"
                 if prior:
                     reason = f"{reason}: {prior[:400]}"
-                update_seen_item_lifecycle(
-                    conn,
-                    source_id,
-                    str(item_id),
-                    processability_status="failed_terminal",
-                    processability_reason=reason,
-                    admission_status="not_applicable",
-                    admission_reason="",
-                    processing_status="not_applicable",
-                    processing_error="",
-                    processed_at=utc_now(),
-                    lifecycle_updated_at=utc_now(),
-                )
+                if str(processability) in RETRYABLE_LIFECYCLE_STATUSES:
+                    update_seen_item_lifecycle(
+                        conn,
+                        source_id,
+                        str(item_id),
+                        processability_status="failed_terminal",
+                        processability_reason=reason,
+                        admission_status="not_applicable",
+                        admission_reason="",
+                        processing_status="not_applicable",
+                        processing_error="",
+                        processed_at=utc_now(),
+                        lifecycle_updated_at=utc_now(),
+                    )
+                else:
+                    update_seen_item_lifecycle(
+                        conn,
+                        source_id,
+                        str(item_id),
+                        processing_status="failed_terminal",
+                        processing_error=reason,
+                        processed_at=utc_now(),
+                        lifecycle_updated_at=utc_now(),
+                    )
                 expire_market_review(conn, source_id, str(item_id), reason=reason)
             conn.execute("COMMIT")
         except Exception:

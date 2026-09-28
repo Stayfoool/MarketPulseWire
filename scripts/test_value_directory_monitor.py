@@ -1427,10 +1427,15 @@ def test_value_directory_stale_retryable_items_close_with_expiry() -> None:
         stranded_seen = (now - timedelta(days=3)).isoformat()
         recent_seen = (now - timedelta(hours=2)).isoformat()
         with sqlite3.connect(db_path) as conn:
-            for item_id, first_seen in (
-                ("887343", stranded_seen),
-                ("887344", recent_seen),
-                ("887345", stranded_seen),
+            # 887343：processability/processing 双环节可重试（完整关闭）；
+            # 887344：24h 窗口内，保持可重试；
+            # 887345：过期但当前 review 已成功（只关闭 seen，不触碰 review）；
+            # 887346：决策环节失败形态（processability=succeeded, processing=failed_retryable）。
+            for item_id, first_seen, processability, processing in (
+                ("887343", stranded_seen, "failed_retryable", "not_applicable"),
+                ("887344", recent_seen, "failed_retryable", "not_applicable"),
+                ("887345", stranded_seen, "failed_retryable", "not_applicable"),
+                ("887346", stranded_seen, "succeeded", "failed_retryable"),
             ):
                 conn.execute(
                     """
@@ -1439,9 +1444,9 @@ def test_value_directory_stale_retryable_items_close_with_expiry() -> None:
                         collection_class, processability_status, processability_reason,
                         admission_status, admission_reason, processing_status,
                         processing_error, processed_at, lifecycle_updated_at
-                    ) VALUES (?, ?, ?, ?, '', '', ?, 'live', 'failed_retryable',
+                    ) VALUES (?, ?, ?, ?, '', '', ?, 'live', ?,
                               'ProductionLLMDecisionError: model_unavailable',
-                              'pending', '', 'not_applicable', '', NULL, ?)
+                              'pending', '', ?, '', NULL, ?)
                     """,
                     (
                         source.source_id,
@@ -1449,6 +1454,8 @@ def test_value_directory_stale_retryable_items_close_with_expiry() -> None:
                         f"https://www.valuelist.cn/{item_id}.html",
                         item_id,
                         first_seen,
+                        processability,
+                        processing,
                         first_seen,
                     ),
                 )
@@ -1472,6 +1479,16 @@ def test_value_directory_stale_retryable_items_close_with_expiry() -> None:
                 """,
                 (source.source_id, stranded_seen, now.isoformat(), now.isoformat()),
             ).lastrowid
+            decision_failed_item_id = conn.execute(
+                """
+                INSERT INTO market_items (
+                    source, source_item_id, dedupe_key, title, first_seen_at,
+                    content_hash, processing_status, created_at, updated_at
+                ) VALUES (?, '887346', 'value_directory_ib_stocks:887346', '决策失败研报', ?,
+                          'hash-887346', 'failed_retryable', ?, ?)
+                """,
+                (source.source_id, stranded_seen, now.isoformat(), now.isoformat()),
+            ).lastrowid
             conn.execute(
                 """
                 INSERT INTO market_reviews (
@@ -1490,16 +1507,27 @@ def test_value_directory_stale_retryable_items_close_with_expiry() -> None:
                 """,
                 (succeeded_item_id, stranded_seen),
             )
+            conn.execute(
+                """
+                INSERT INTO market_reviews (
+                    market_item_id, task, run_key, is_current, review_status,
+                    admission_status, created_at
+                ) VALUES (?, 'production', 'run-887346', 1, 'failed_retryable', 'admitted', ?)
+                """,
+                (decision_failed_item_id, stranded_seen),
+            )
 
         closed = value_directory_monitor.expire_stale_retryable_items(
             source.source_id, db_path=db_path
         )
 
-        assert closed == 2
+        assert closed == 3
         states = value_directory_monitor.load_seen_item_states(source.source_id, db_path=db_path)
         assert states["887344"] == ("failed_retryable", "not_applicable")
         assert states["887343"] == ("failed_terminal", "not_applicable")
         assert states["887345"] == ("failed_terminal", "not_applicable")
+        # 决策环节失败形态：processability 保持 succeeded，processing 终态关闭。
+        assert states["887346"] == ("succeeded", "failed_terminal")
         with sqlite3.connect(db_path) as conn:
             stranded_seen_row = conn.execute(
                 """
@@ -1525,6 +1553,22 @@ def test_value_directory_stale_retryable_items_close_with_expiry() -> None:
                 "SELECT processing_status FROM market_items WHERE id = ?",
                 (succeeded_item_id,),
             ).fetchone()
+            decision_failed_seen_row = conn.execute(
+                """
+                SELECT processability_status, processability_reason, processing_status,
+                       processing_error
+                FROM seen_items WHERE source = ? AND item_id = '887346'
+                """,
+                (source.source_id,),
+            ).fetchone()
+            decision_failed_review = conn.execute(
+                "SELECT review_status, completed_at FROM market_reviews WHERE market_item_id = ?",
+                (decision_failed_item_id,),
+            ).fetchone()
+            decision_failed_item = conn.execute(
+                "SELECT processing_status FROM market_items WHERE id = ?",
+                (decision_failed_item_id,),
+            ).fetchone()
 
     assert stranded_seen_row[0] == "failed_terminal"
     assert stranded_seen_row[1].startswith("value_directory_retry_expired_after_24h:")
@@ -1539,6 +1583,13 @@ def test_value_directory_stale_retryable_items_close_with_expiry() -> None:
     # 已成功 review 与成功条目不受过期关闭影响。
     assert succeeded_review == ("succeeded", None)
     assert succeeded_item == ("succeeded",)
+    assert decision_failed_seen_row[0] == "succeeded"
+    assert decision_failed_seen_row[1] == "ProductionLLMDecisionError: model_unavailable"
+    assert decision_failed_seen_row[2] == "failed_terminal"
+    assert decision_failed_seen_row[3].startswith("value_directory_retry_expired_after_24h:")
+    assert decision_failed_review[0] == "failed_terminal"
+    assert decision_failed_review[1]
+    assert decision_failed_item == ("failed_terminal",)
 
 
 def test_collected_preview_does_not_launch_another_browser() -> None:
