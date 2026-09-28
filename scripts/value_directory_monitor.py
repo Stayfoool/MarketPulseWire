@@ -7,15 +7,15 @@ import argparse
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from db_utils import update_seen_item_lifecycle
+from db_utils import connect_sqlite, update_seen_item_lifecycle
 from collector_runtime import ProcessingBatchError, is_global_llm_failure, strict_processing_enabled
 from market_item import NormalizedMarketItem, raw_item_id
 from market_flow import normalize_market_item, process_market_item
-from market_store import processing_failure_status, source_item_review_snapshot
+from market_store import expire_market_review, processing_failure_status, source_item_review_snapshot
 from production_admission import admission_lifecycle_values, persist_production_admission_context, production_admission_context
 from rss_monitor import DB_PATH, connect_db, save_new_items_with_retry, source_has_seen
 from source_health import record_source_failure, record_source_success
@@ -39,6 +39,8 @@ ENV_PATH = ROOT / ".env"
 REPORT_DIR = ROOT / "reports"
 MONITOR = "value_directory"
 RETRYABLE_LIFECYCLE_STATUSES = {"pending", "failed_retryable"}
+# 参照 wallstreetcn 的 24 小时重试窗口：超过后不再重试，终态关闭。
+VALUE_DIRECTORY_RETRY_MAX_AGE = timedelta(hours=24)
 
 
 def utc_now() -> str:
@@ -133,6 +135,67 @@ def retryable_item_ids(source_id: str) -> set[str]:
         for item_id, statuses in load_seen_item_states(source_id).items()
         if RETRYABLE_LIFECYCLE_STATUSES.intersection(statuses)
     }
+
+
+def expire_stale_retryable_items(
+    source_id: str = SOURCE_ID,
+    db_path: Path | None = None,
+) -> int:
+    """Close retryable items whose 24-hour processing window has ended.
+
+    参照 wallstreetcn 重试过期关闭机制：价值目录条目滚出列表页后不会再被
+    re-review，重试窗口过期时在每轮采集前把仍停留在可重试状态的 seen_items
+    生命周期终态化，并用共享 expire_market_review 同步关闭其 failed_retryable
+    当前 review；已成功或已终态的 review 不受影响。
+    """
+    db_path = db_path or DB_PATH
+    cutoff = (datetime.now(timezone.utc) - VALUE_DIRECTORY_RETRY_MAX_AGE).isoformat()
+    conn = connect_sqlite(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            rows = conn.execute(
+                """
+                SELECT item_id, processability_reason
+                FROM seen_items
+                WHERE source = ? AND collection_class = 'live'
+                  AND processability_status IN ('pending', 'failed_retryable')
+                  AND first_seen_at < ?
+                """,
+                (source_id, cutoff),
+            ).fetchall()
+            for item_id, prior_reason in rows:
+                prior = str(prior_reason or "").strip()
+                reason = "value_directory_retry_expired_after_24h"
+                if prior:
+                    reason = f"{reason}: {prior[:400]}"
+                update_seen_item_lifecycle(
+                    conn,
+                    source_id,
+                    str(item_id),
+                    processability_status="failed_terminal",
+                    processability_reason=reason,
+                    admission_status="not_applicable",
+                    admission_reason="",
+                    processing_status="not_applicable",
+                    processing_error="",
+                    processed_at=utc_now(),
+                    lifecycle_updated_at=utc_now(),
+                )
+                expire_market_review(conn, source_id, str(item_id), reason=reason)
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.close()
+    if rows:
+        print(
+            f"{source_id}：重试窗口（24 小时）已过，终态关闭 {len(rows)} 条可重试条目"
+            "并同步关闭其 failed_retryable 当前 review。",
+            flush=True,
+        )
+    return len(rows)
 
 
 def production_preview_selector(
@@ -607,6 +670,8 @@ def run(
     collection = None
     collection_error: Exception | None = None
     if enabled_sources:
+        for source_id in enabled_sources:
+            expire_stale_retryable_items(source_id)
         try:
             states_by_source = {
                 source_id: load_seen_item_states(source_id) for source_id in enabled_sources
