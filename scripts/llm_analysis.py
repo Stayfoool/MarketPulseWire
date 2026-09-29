@@ -16,14 +16,43 @@ from typing import Any
 import httpx
 
 from llm_provider_config import (
+    QWEN_BAILIAN_THINKING_ONLY_MODELS,
     is_qwen_bailian_base_url,
     resolve_llm_connection,
     resolve_llm_fallback_connections,
 )
 
 
-class LLMBalanceInsufficientError(RuntimeError):
+class LLMRequestError(RuntimeError):
+    """Provider request failure carrying bounded diagnostic fields for the audit."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        http_status: int | None = None,
+        error_code: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+        self.error_code = error_code
+
+
+class LLMBalanceInsufficientError(LLMRequestError):
     """Raised when the model provider reports insufficient balance."""
+
+
+def provider_error_code(body: str) -> str:
+    """Extract a bounded provider error code from an OpenAI-compatible error body."""
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    error = parsed.get("error")
+    code = error.get("code") if isinstance(error, dict) else None
+    return str(code or "")[:200]
 
 
 _BALANCE_ERROR_MARKERS = (
@@ -262,7 +291,10 @@ def llm_response_preferences(
         preferences["reasoning_effort"] = "low"
     elif is_qwen_bailian_base_url(base_url):
         # 百炼 OpenAI 兼容模式用 enable_thinking 控制思考模式，不接受 thinking 对象。
-        preferences["enable_thinking"] = thinking == "enabled"
+        # 思考专用模型固定开启：qwen3.8-2.4t-a95b 传 enable_thinking=false 会被端点拒绝。
+        preferences["enable_thinking"] = (
+            model in QWEN_BAILIAN_THINKING_ONLY_MODELS or thinking == "enabled"
+        )
     elif (
         "deepseek" in base_url.lower()
         and thinking == "enabled"
@@ -379,21 +411,35 @@ def _chat_completion_once(
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
             if is_balance_insufficient(body, exc.code):
-                raise LLMBalanceInsufficientError(f"LLM 余额不足：{body}") from exc
+                raise LLMBalanceInsufficientError(
+                    f"LLM 余额不足：{body}",
+                    http_status=exc.code,
+                    error_code=provider_error_code(body),
+                ) from exc
             if 500 <= exc.code < 600 and attempt < attempts - 1:
-                last_error = RuntimeError(f"LLM 请求失败：HTTP {exc.code}\n{body}")
+                last_error = LLMRequestError(
+                    f"LLM 请求失败：HTTP {exc.code}\n{body}",
+                    http_status=exc.code,
+                    error_code=provider_error_code(body),
+                )
                 log_llm_retry(f"LLM 请求 HTTP {exc.code}，准备重试 {attempt + 2}/{attempts}")
                 time.sleep(retry_sleep_seconds(attempt))
                 continue
-            raise RuntimeError(f"LLM 请求失败：HTTP {exc.code}\n{body}") from exc
+            raise LLMRequestError(
+                f"LLM 请求失败：HTTP {exc.code}\n{body}",
+                http_status=exc.code,
+                error_code=provider_error_code(body),
+            ) from exc
         except (urllib.error.URLError, TimeoutError) as exc:
             last_error = exc
             if attempt < attempts - 1 and is_retryable_error(exc):
                 log_llm_retry(f"LLM 网络/超时错误：{exc}，准备重试 {attempt + 2}/{attempts}")
                 time.sleep(retry_sleep_seconds(attempt))
                 continue
-            raise RuntimeError(f"LLM 网络请求失败：{exc}") from exc
+            raise LLMRequestError(f"LLM 网络请求失败：{exc}") from exc
     else:
+        if isinstance(last_error, LLMRequestError):
+            raise last_error
         raise RuntimeError(f"LLM 网络请求失败：{last_error}")
 
     result = json.loads(body)
@@ -447,6 +493,8 @@ def call_chat_completion_raw_with_prompts(
             temperature_override=temperature_override,
         )
     except LLMBalanceInsufficientError:
+        # 回退链上任何一个备用模型的失败只跳过该模型；整条链耗尽后重新抛出
+        # 最初的余额不足错误，保持额度耗尽的失败语义。
         for fallback in llm_fallback_configs():
             log_llm_fallback(fallback[2])
             try:
@@ -461,6 +509,11 @@ def call_chat_completion_raw_with_prompts(
                     model_override=fallback[2],
                 )
             except LLMBalanceInsufficientError:
+                continue
+            except Exception as fallback_exc:  # noqa: BLE001 - skip to the next fallback model
+                log_llm_retry(
+                    f"备用模型 {fallback[2]} 请求失败：{fallback_exc}，准备尝试后续备用模型"
+                )
                 continue
         raise
 
@@ -533,15 +586,27 @@ def _chat_completion_once_hard_deadline(
                 except httpx.RequestError as exc:
                     last_error = exc
                     if attempt >= attempts - 1:
-                        raise RuntimeError(f"LLM 网络请求失败：{exc}") from exc
+                        raise LLMRequestError(f"LLM 网络请求失败：{exc}") from exc
                 else:
                     body = response.text
                     if is_balance_insufficient(body, response.status_code):
-                        raise LLMBalanceInsufficientError(f"LLM 余额不足：{body}")
+                        raise LLMBalanceInsufficientError(
+                            f"LLM 余额不足：{body}",
+                            http_status=response.status_code,
+                            error_code=provider_error_code(body),
+                        )
                     if 500 <= response.status_code < 600 and attempt < attempts - 1:
-                        last_error = RuntimeError(f"LLM 请求失败：HTTP {response.status_code}\n{body}")
+                        last_error = LLMRequestError(
+                            f"LLM 请求失败：HTTP {response.status_code}\n{body}",
+                            http_status=response.status_code,
+                            error_code=provider_error_code(body),
+                        )
                     elif response.is_error:
-                        raise RuntimeError(f"LLM 请求失败：HTTP {response.status_code}\n{body}")
+                        raise LLMRequestError(
+                            f"LLM 请求失败：HTTP {response.status_code}\n{body}",
+                            http_status=response.status_code,
+                            error_code=provider_error_code(body),
+                        )
                     else:
                         try:
                             parsed = response.json()
@@ -559,6 +624,8 @@ def _chat_completion_once_hard_deadline(
                         raise TimeoutError("LLM decision exceeded its total deadline") from last_error
                     log_llm_retry(f"LLM 网络/服务错误：{last_error}，准备重试 {attempt + 2}/{attempts}")
                     await asyncio.sleep(delay)
+        if isinstance(last_error, LLMRequestError):
+            raise last_error
         raise RuntimeError(f"LLM 网络请求失败：{last_error}")
 
     total_started_at = time.monotonic()
@@ -618,6 +685,8 @@ def call_chat_completion_raw_with_prompts_hard_deadline(
             temperature_override=temperature_override,
         )
     except LLMBalanceInsufficientError as exc:
+        # 回退链上任何一个备用模型的失败只跳过该模型；仅总时限耗尽时停止，
+        # 整条链耗尽后重新抛出最初的余额不足错误，保持额度耗尽的失败语义。
         for fallback in llm_fallback_configs():
             if time.monotonic() >= deadline_monotonic:
                 break
@@ -638,6 +707,11 @@ def call_chat_completion_raw_with_prompts_hard_deadline(
                 continue
             except TimeoutError:
                 raise exc
+            except Exception as fallback_exc:  # noqa: BLE001 - skip to the next fallback model
+                log_llm_retry(
+                    f"备用模型 {fallback[2]} 请求失败：{fallback_exc}，准备尝试后续备用模型"
+                )
+                continue
         raise
 
 

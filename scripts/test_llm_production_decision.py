@@ -191,6 +191,68 @@ def test_invalid_output_fails_closed_after_auditing() -> None:
         assert len(audit["model_audit"]["calls"]) == 2
 
 
+def test_request_failure_audit_records_status_and_error_code() -> None:
+    with TemporaryDirectory() as tmp:
+        def failing(_prompt):
+            raise llm_analysis.LLMRequestError(
+                "LLM 请求失败：HTTP 400\n{\"error\":{\"code\":\"invalid_parameter_error\"}}",
+                http_status=400,
+                error_code="invalid_parameter_error",
+            )
+
+        try:
+            decide_production_market_item(
+                item(),
+                admission=admission(),
+                portfolio=parse_portfolio_config([]),
+                market_item_id=3,
+                market_review_id=4,
+                audit_dir=Path(tmp),
+                model_caller=failing,
+            )
+        except ProductionLLMDecisionError as exc:
+            assert exc.status == "model_unavailable"
+            assert exc.reason == "request_failed"
+        else:
+            raise AssertionError("request failure must fail closed")
+        audit = json.loads(next(Path(tmp).glob("llm-decision-audit-*.json")).read_text(encoding="utf-8"))
+        call = audit["model_audit"]["calls"][0]
+        assert call["transport_error"] == "request_failed"
+        assert call["http_status"] == 400
+        assert call["error_code"] == "invalid_parameter_error"
+
+
+def test_balance_failure_audit_records_provider_diagnostics() -> None:
+    with TemporaryDirectory() as tmp:
+        def failing(_prompt):
+            raise llm_analysis.LLMBalanceInsufficientError(
+                "LLM 余额不足：{\"error\":{\"code\":\"AllocationQuota.FreeTierOnly\"}}",
+                http_status=403,
+                error_code="AllocationQuota.FreeTierOnly",
+            )
+
+        try:
+            decide_production_market_item(
+                item(),
+                admission=admission(),
+                portfolio=parse_portfolio_config([]),
+                market_item_id=5,
+                market_review_id=6,
+                audit_dir=Path(tmp),
+                model_caller=failing,
+            )
+        except ProductionLLMDecisionError as exc:
+            assert exc.status == "model_unavailable"
+            assert exc.reason == "balance_insufficient"
+        else:
+            raise AssertionError("balance failure must fail closed")
+        audit = json.loads(next(Path(tmp).glob("llm-decision-audit-*.json")).read_text(encoding="utf-8"))
+        call = audit["model_audit"]["calls"][0]
+        assert call["transport_error"] == "balance_insufficient"
+        assert call["http_status"] == 403
+        assert call["error_code"] == "AllocationQuota.FreeTierOnly"
+
+
 def test_model_unavailable_is_marked_as_global_failure() -> None:
     unavailable = ProductionLLMDecisionError(
         "LLM degree decision failed: model_unavailable: request_failed",
@@ -385,6 +447,8 @@ def main() -> int:
     test_valid_decisions_write_private_audits_and_keep_actions_authoritative()
     test_audit_source_item_id_matches_market_storage_fallback()
     test_invalid_output_fails_closed_after_auditing()
+    test_request_failure_audit_records_status_and_error_code()
+    test_balance_failure_audit_records_provider_diagnostics()
     test_hard_deadline_cancels_inflight_http_request()
     test_hard_deadline_glm_request_uses_official_model_contract()
     test_glm_production_audit_records_effective_request_preferences()

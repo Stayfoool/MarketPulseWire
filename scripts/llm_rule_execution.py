@@ -149,6 +149,8 @@ def _model_call_audit(
     response: ChatCompletionResponse | None = None,
     result: Any | None = None,
     transport_error: str = "",
+    http_status: int | None = None,
+    error_code: str = "",
     request_options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     validation = result.to_dict() if result is not None else {}
@@ -178,6 +180,16 @@ def _model_call_audit(
         ),
         "validation": validation,
         "transport_error": transport_error,
+        "http_status": http_status,
+        "error_code": error_code,
+    }
+
+
+def _transport_diagnostics(exc: BaseException) -> dict[str, Any]:
+    """Bounded provider diagnostics attached to structured LLM request errors."""
+    return {
+        "http_status": getattr(exc, "http_status", None),
+        "error_code": str(getattr(exc, "error_code", "") or ""),
     }
 
 
@@ -325,12 +337,13 @@ def execute_llm_rule_decision(
 
     try:
         response = call_model(prompt)
-    except LLMBalanceInsufficientError:
+    except LLMBalanceInsufficientError as exc:
         audit_calls.append(
             _model_call_audit(
                 prompt,
                 transport_error="balance_insufficient",
                 request_options=request_options,
+                **_transport_diagnostics(exc),
             )
         )
         evaluation = _failure_evaluation(
@@ -358,7 +371,12 @@ def execute_llm_rule_decision(
     except Exception as exc:  # noqa: BLE001 - caller receives a bounded failure result.
         category = "not_configured" if "未配置" in str(exc) else "request_failed"
         audit_calls.append(
-            _model_call_audit(prompt, transport_error=category, request_options=request_options)
+            _model_call_audit(
+                prompt,
+                transport_error=category,
+                request_options=request_options,
+                **_transport_diagnostics(exc),
+            )
         )
         evaluation = _failure_evaluation(
             admission,
@@ -405,6 +423,7 @@ def execute_llm_rule_decision(
                         repair_prompt,
                         transport_error=transport_error,
                         request_options=request_options,
+                        **_transport_diagnostics(exc),
                     )
                 )
         else:
