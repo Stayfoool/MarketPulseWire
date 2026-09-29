@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import os
 import json
+import time
 
 os.environ["SURVEIL_DISABLE_LLM"] = "1"
 
@@ -642,17 +643,289 @@ def test_balance_insufficient_without_fallback_model_still_fails_closed() -> Non
     assert requested_models == ["deepseek-chat"]
 
 
+def test_bailian_thinking_only_model_forces_enable_thinking() -> None:
+    names = ("LLM_THINKING_TYPE", "LLM_RESPONSE_FORMAT_JSON")
+    original = {name: os.environ.get(name) for name in names}
+    try:
+        os.environ.pop("LLM_THINKING_TYPE", None)
+        os.environ.pop("LLM_RESPONSE_FORMAT_JSON", None)
+        preferences = llm_analysis.llm_response_preferences(
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            model="qwen3.8-2.4t-a95b",
+        )
+        # qwen3.8-2.4t-a95b 仅支持思考模式，enable_thinking=false 会被端点 400 拒绝。
+        assert preferences["enable_thinking"] is True
+        assert preferences["response_format"] == {"type": "json_object"}
+        assert "thinking" not in preferences
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def test_provider_error_code_extracts_bounded_code() -> None:
+    body = json.dumps({"error": {"code": "invalid_parameter_error", "message": "boom"}})
+    assert llm_analysis.provider_error_code(body) == "invalid_parameter_error"
+    assert llm_analysis.provider_error_code(json.dumps({"error": {"code": "y" * 300}})) == "y" * 200
+    assert llm_analysis.provider_error_code("not-json") == ""
+    assert llm_analysis.provider_error_code('{"error": "oops"}') == ""
+    assert llm_analysis.provider_error_code("[1,2]") == ""
+
+
+def test_fallback_chain_skips_request_error_fallback_model() -> None:
+    original_config = llm_analysis.llm_config
+    original_fallback = llm_analysis.llm_fallback_configs
+    original_urlopen = llm_analysis.urllib.request.urlopen
+    original_retry_count = llm_analysis.retry_count
+    requested_models: list[str] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return b'{"id":"qwen38-skip","choices":[{"message":{"content":"{\\"ok\\":true}"}}]}'
+
+    def fake_urlopen(request, timeout):
+        payload = json.loads(request.data.decode("utf-8"))
+        requested_models.append(payload["model"])
+        if payload["model"] == "qwen3.8-max":
+            raise llm_analysis.urllib.error.HTTPError(
+                "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                400,
+                "Bad Request",
+                {},
+                io.BytesIO(
+                    json.dumps(
+                        {"error": {"code": "Arrearage", "message": "Insufficient balance."}}
+                    ).encode("utf-8")
+                ),
+            )
+        if payload["model"] == "qwen3.8-2.4t-a95b":
+            raise llm_analysis.urllib.error.HTTPError(
+                "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                400,
+                "Bad Request",
+                {},
+                io.BytesIO(
+                    json.dumps(
+                        {
+                            "error": {
+                                "message": "<400> InternalError.Algo.InvalidParameter: The value of the enable_thinking parameter is restricted to True.",
+                                "code": "invalid_parameter_error",
+                            }
+                        }
+                    ).encode("utf-8")
+                ),
+            )
+        return FakeResponse()
+
+    try:
+        llm_analysis.llm_config = lambda: (
+            "qwen-key",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.8-max",
+        )
+        llm_analysis.llm_fallback_configs = lambda: [
+            ("qwen-key", "https://dashscope.aliyuncs.com/compatible-mode/v1", model)
+            for model in ("qwen3.8-2.4t-a95b", "qwen3.8-27b", "qwen3.8-flash")
+        ]
+        llm_analysis.retry_count = lambda: 0
+        llm_analysis.urllib.request.urlopen = fake_urlopen
+        response = llm_analysis.call_chat_completion_raw_with_prompts("system", "user")
+    finally:
+        llm_analysis.llm_config = original_config
+        llm_analysis.llm_fallback_configs = original_fallback
+        llm_analysis.urllib.request.urlopen = original_urlopen
+        llm_analysis.retry_count = original_retry_count
+
+    # 备用模型的参数类错误只跳过该模型，链上后续有余额的模型继续被尝试。
+    assert requested_models == ["qwen3.8-max", "qwen3.8-2.4t-a95b", "qwen3.8-27b"]
+    assert response.model == "qwen3.8-27b"
+
+
+def test_fallback_chain_exhaustion_reraises_original_balance_error() -> None:
+    original_config = llm_analysis.llm_config
+    original_fallback = llm_analysis.llm_fallback_configs
+    original_urlopen = llm_analysis.urllib.request.urlopen
+    original_retry_count = llm_analysis.retry_count
+    requested_models: list[str] = []
+
+    def fake_urlopen(request, timeout):
+        payload = json.loads(request.data.decode("utf-8"))
+        requested_models.append(payload["model"])
+        if payload["model"] == "qwen3.8-max":
+            raise llm_analysis.urllib.error.HTTPError(
+                "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                403,
+                "Forbidden",
+                {},
+                io.BytesIO(
+                    json.dumps(
+                        {
+                            "error": {
+                                "message": "Free quota exhausted.",
+                                "code": "AllocationQuota.FreeTierOnly",
+                            }
+                        }
+                    ).encode("utf-8")
+                ),
+            )
+        raise llm_analysis.urllib.error.HTTPError(
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(
+                json.dumps(
+                    {
+                        "error": {
+                            "message": "InternalError.Algo.InvalidParameter.",
+                            "code": "invalid_parameter_error",
+                        }
+                    }
+                ).encode("utf-8")
+            ),
+        )
+
+    try:
+        llm_analysis.llm_config = lambda: (
+            "qwen-key",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.8-max",
+        )
+        llm_analysis.llm_fallback_configs = lambda: [
+            ("qwen-key", "https://dashscope.aliyuncs.com/compatible-mode/v1", model)
+            for model in ("qwen3.8-2.4t-a95b", "qwen3.8-27b")
+        ]
+        llm_analysis.retry_count = lambda: 0
+        llm_analysis.urllib.request.urlopen = fake_urlopen
+        try:
+            llm_analysis.call_chat_completion_raw_with_prompts("system", "user")
+        except llm_analysis.LLMBalanceInsufficientError as exc:
+            assert exc.http_status == 403
+            assert exc.error_code == "AllocationQuota.FreeTierOnly"
+        else:
+            raise AssertionError("chain exhaustion must re-raise the original balance error")
+    finally:
+        llm_analysis.llm_config = original_config
+        llm_analysis.llm_fallback_configs = original_fallback
+        llm_analysis.urllib.request.urlopen = original_urlopen
+        llm_analysis.retry_count = original_retry_count
+
+    assert requested_models == ["qwen3.8-max", "qwen3.8-2.4t-a95b", "qwen3.8-27b"]
+
+
+def test_hard_deadline_fallback_chain_skips_request_error_model() -> None:
+    original_config = llm_analysis.llm_config
+    original_fallback = llm_analysis.llm_fallback_configs
+    original_client = llm_analysis.httpx.AsyncClient
+    original_retries = llm_analysis.retry_count
+    requested_models: list[str] = []
+    model_bodies = {
+        "qwen3.8-max": (
+            403,
+            json.dumps(
+                {
+                    "error": {
+                        "message": "Free quota exhausted.",
+                        "code": "AllocationQuota.FreeTierOnly",
+                    }
+                }
+            ),
+        ),
+        "qwen3.8-2.4t-a95b": (
+            400,
+            json.dumps(
+                {
+                    "error": {
+                        "message": "InternalError.Algo.InvalidParameter: enable_thinking is restricted to True.",
+                        "code": "invalid_parameter_error",
+                    }
+                }
+            ),
+        ),
+        "qwen3.8-27b": (
+            200,
+            json.dumps({"id": "ok", "choices": [{"message": {"content": '{"ok":true}'}}]}),
+        ),
+    }
+
+    class FakeResponse:
+        def __init__(self, status_code, text):
+            self.status_code = status_code
+            self.text = text
+            self.is_error = status_code >= 400
+
+        def json(self):
+            return json.loads(self.text)
+
+    # production 调用形态是 client.post(url, json=payload, headers=headers)。
+    class FakeClient:
+        def __init__(self, **kwargs):
+            assert kwargs["timeout"] is None
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, _url, *, json=None, headers=None):
+            model = json["model"]
+            requested_models.append(model)
+            status_code, body = model_bodies[model]
+            return FakeResponse(status_code, body)
+
+    try:
+        llm_analysis.llm_config = lambda: (
+            "qwen-key",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.8-max",
+        )
+        llm_analysis.llm_fallback_configs = lambda: [
+            ("qwen-key", "https://dashscope.aliyuncs.com/compatible-mode/v1", model)
+            for model in ("qwen3.8-2.4t-a95b", "qwen3.8-27b")
+        ]
+        llm_analysis.httpx.AsyncClient = FakeClient
+        llm_analysis.retry_count = lambda: 0
+        response = llm_analysis.call_chat_completion_raw_with_prompts_hard_deadline(
+            "system",
+            "user",
+            deadline_monotonic=time.monotonic() + 30,
+        )
+    finally:
+        llm_analysis.llm_config = original_config
+        llm_analysis.llm_fallback_configs = original_fallback
+        llm_analysis.httpx.AsyncClient = original_client
+        llm_analysis.retry_count = original_retries
+
+    assert requested_models == ["qwen3.8-max", "qwen3.8-2.4t-a95b", "qwen3.8-27b"]
+    assert response.model == "qwen3.8-27b"
+
+
 def main() -> int:
     test_raw_chat_completion_returns_bounded_usage_metadata()
     test_glm_provider_uses_dedicated_fixed_connection_and_fails_closed_without_key()
     test_glm_request_forces_supported_response_preferences()
     test_qwen_bailian_provider_uses_dedicated_connection_and_fails_closed_without_key()
     test_qwen_bailian_request_uses_supported_response_preferences()
+    test_bailian_thinking_only_model_forces_enable_thinking()
+    test_provider_error_code_extracts_bounded_code()
     test_balance_insufficient_falls_back_to_qwen_flash_stable_model()
     test_qwen38_providers_resolve_ordered_fallback_chain()
     test_bailian_hosted_deepseek_falls_back_to_qwen38_chain()
     test_balance_insufficient_walks_qwen38_fallback_chain()
     test_bailian_free_quota_exhausted_falls_back_along_chain()
+    test_fallback_chain_skips_request_error_fallback_model()
+    test_fallback_chain_exhaustion_reraises_original_balance_error()
+    test_hard_deadline_fallback_chain_skips_request_error_model()
     test_balance_insufficient_without_fallback_model_still_fails_closed()
     if analyze_with_llm("AI ASIC demand lifts MLCC demand") is not None:
         raise AssertionError("LLM should be disabled during this test")
