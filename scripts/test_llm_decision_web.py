@@ -291,6 +291,45 @@ def test_retention_removes_raw_calls_but_keeps_web_projection() -> None:
         assert payload["model_audit"]["status"] == "expired"
 
 
+def test_jev_shadow_rows_and_summary_are_bounded() -> None:
+    from llm_decision_web import jev_shadow_summary, load_jev_shadow_rows
+
+    agree_row = {
+        "contract_version": "jev-shadow-comparison-v1",
+        "comparison_only": True,
+        "affects_current_decision": False,
+        "generated_at": "2026-09-30T01:00:00+00:00",
+        "market_item_id": 1,
+        "market_review_id": 1,
+        "source": "digitimes",
+        "source_item_id": "a1",
+        "production": {"action": "push", "model": "qwen3.7-flash-2026-07-15", "usage": {"prompt_tokens": 1000, "completion_tokens": 100}, "cost_cny": 0.00028},
+        "jev": {"status": "completed", "action": "push", "usage": {"prompt_tokens": 900}, "cost_cny": 0.00027,
+                "rule_choices": [{"rule_id": "r1", "action": "push", "probability": 0.9, "confidence": 0.8}]},
+        "comparison": {"item_agree": True, "action_pair": "push->push", "rule_agree": 1, "rule_total": 1, "missed_push": False, "extra_push": False},
+    }
+    error_row = {"contract_version": "jev-shadow-comparison-v1", "generated_at": "2026-09-30T02:00:00+00:00", "error": "boom"}
+    out_of_window = dict(agree_row, generated_at="2026-09-01T00:00:00+00:00", market_item_id=2, market_review_id=2)
+    with tempfile.TemporaryDirectory() as tmp:
+        directory = Path(tmp)
+        (directory / "jev-shadow-20260930.jsonl").write_text(
+            "\n".join(json.dumps(row, ensure_ascii=False) for row in (agree_row, error_row, out_of_window)) + "\n",
+            encoding="utf-8",
+        )
+        rows = load_jev_shadow_rows(directory, start_day="2026-09-30", end_day="2026-09-30")
+        assert len(rows) == 2
+        summary = jev_shadow_summary(rows)
+        assert summary["rows"] == 2 and summary["completed"] == 1 and summary["errors"] == 1
+        assert summary["item_agree"] == {"agree": 1, "total": 1, "rate": 1.0}
+        assert summary["action_pairs"] == {"push->push": 1}
+        assert summary["missed_push"] == 0
+        assert summary["rule_agree"]["rate"] == 1.0
+        assert summary["avg_jev_confidence"] == 0.8
+        assert summary["cost"]["production_cny"] == 0.00028
+        assert summary["cost"]["jev_cny"] == 0.00027
+
+
+
 def main() -> None:
     test_historical_uncertain_projection_is_bounded()
     test_current_action_projection_is_bounded()
@@ -299,6 +338,7 @@ def main() -> None:
     test_rows_show_terminal_insufficient_evidence_without_action()
     test_rows_ignore_retired_database_audits_with_reused_ids()
     test_retention_removes_raw_calls_but_keeps_web_projection()
+    test_jev_shadow_rows_and_summary_are_bounded()
     print("llm decision web checks passed")
 
 

@@ -38,10 +38,15 @@ from holdings_store import (
 from market_db import DEFAULT_DB_PATH
 from market_canonical_reader import canonical_market_rows
 from market_feedback import FEEDBACK_LABELS, feedback_projection_by_item, feedback_quality_payload
-from llm_decision_web import llm_decision_rows, llm_decision_summary
+from llm_decision_web import (
+    jev_shadow_summary,
+    llm_decision_rows,
+    llm_decision_summary,
+    load_jev_shadow_rows,
+)
 from current_rules_web import current_rules_payload
 from media_keyword_config import media_keyword_payload, save_media_keyword_config
-from settings_store import save_settings, settings_payload, switch_llm_provider
+from settings_store import save_settings, settings_payload, switch_decision_engine, switch_llm_provider
 from source_profiles import save_source_profile_config, source_profiles_payload
 
 
@@ -554,6 +559,15 @@ def fetch_llm_decision_rows(
             limit=limit,
         )
     return {"rows": rows, "summary": llm_decision_summary(rows)}
+
+
+def fetch_jev_shadow_summary(
+    start_day: str = "",
+    end_day: str = "",
+) -> dict[str, Any]:
+    """Bounded Jev shadow comparison statistics for the Web decision view."""
+    rows = load_jev_shadow_rows(start_day=start_day, end_day=end_day)
+    return {"rows": len(rows), "summary": jev_shadow_summary(rows)}
 
 
 def overview_payload(day: str = "") -> dict[str, Any]:
@@ -1423,6 +1437,21 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 return
             self.send_json({"ok": True, **current_rules_payload()})
             return
+        if parsed.path == "/api/jev-shadow":
+            if not self.require_auth():
+                return
+            try:
+                qs = parse_qs(parsed.query)
+                payload = fetch_jev_shadow_summary(
+                    start_day=(qs.get("from") or [""])[0],
+                    end_day=(qs.get("to") or [""])[0],
+                )
+                self.send_json({"ok": True, **payload})
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            except Exception as exc:  # noqa: BLE001
+                self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
         if parsed.path == "/api/health":
             if not self.require_auth():
                 return
@@ -1524,6 +1553,26 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 if not isinstance(values, dict):
                     raise HoldingsError("请求中的 values 必须是对象")
                 saved = switch_llm_provider(provider, values)
+                activation: dict[str, Any] = {"attempted": False, "ok": True}
+                if saved["changed_count"]:
+                    activation["attempted"] = True
+                    try:
+                        restart = service_action_payload("surveil-sina-flash.service", "restart")
+                        activation.update(
+                            {
+                                "ok": int(restart.get("returncode") or 0) == 0,
+                                "error": restart.get("stderr") or restart.get("stdout") or "",
+                            }
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        activation.update({"ok": False, "error": str(exc)})
+                saved["activation"] = activation
+                saved["ok"] = True
+                self.send_json(saved)
+                return
+            if parsed.path == "/api/decision-engine":
+                engine = str(payload.get("engine") or "").strip()
+                saved = switch_decision_engine(engine)
                 activation: dict[str, Any] = {"attempted": False, "ok": True}
                 if saved["changed_count"]:
                     activation["attempted"] = True

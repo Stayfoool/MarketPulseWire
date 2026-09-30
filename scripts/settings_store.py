@@ -68,6 +68,14 @@ SETTING_GROUPS: list[dict[str, Any]] = [
                 placeholder=QWEN_BAILIAN_BASE_URL,
                 help="默认北京地域 OpenAI 兼容端点；使用业务空间专属端点时填写完整地址。",
             ),
+            SettingField("LLM_JEV_API_KEY", "Jev 决策引擎 API Key", "llm", sensitive=True, help="Jev 类型化决策专用；留空表示保留现有密钥。"),
+            SettingField(
+                "LLM_JEV_BASE_URL",
+                "Jev Decisions Base URL",
+                "llm",
+                help="Jev 厂商 decisions 端点地址（不含路径）。",
+            ),
+            SettingField("LLM_JEV_MODEL", "Jev 模型", "llm", placeholder="jev-1.13", help="默认 jev-1.13；模型版本变更需重新跑影子对比。"),
             SettingField("LLM_TIMEOUT_SECONDS", "超时秒数", "llm", placeholder="90"),
             SettingField("LLM_RETRY_COUNT", "重试次数", "llm", placeholder="2"),
             SettingField("LLM_THINKING_TYPE", "默认 thinking", "llm", placeholder="disabled"),
@@ -189,6 +197,34 @@ QWEN38_FALLBACK_NOTE = (
     "千问快照模型余额不足时改用稳定版 qwen3.7-flash。"
 )
 
+DECISION_ENGINE_NOTE = (
+    "决策引擎只作用于程度决策环节：llm 为现有生成模型规则决策（含逐字证据校验）；"
+    "jev 为 Jev 类型化决策（每条规则 push/daily/archive 三选一，无证据和理由，按顶部选择直接生效）。"
+    "两个引擎共用同一份私有规则、准入和严格校验，失败均关闭式进入 failed_retryable。"
+    "影子对比由 LLM_JEV_SHADOW_ENABLED 控制，仅记录不影响生产决策。"
+)
+
+
+def decision_engine_selector(values: dict[str, str]) -> dict[str, Any]:
+    current = str(values.get("LLM_DECISION_ENGINE") or "").strip().lower() or "llm"
+    jev_configured = bool(values.get("LLM_JEV_API_KEY") and values.get("LLM_JEV_BASE_URL"))
+    return {
+        "current": current,
+        "note": DECISION_ENGINE_NOTE,
+        "options": [
+            {
+                "id": "llm",
+                "label": "生成模型决策（现有）",
+                "configured": True,
+            },
+            {
+                "id": "jev",
+                "label": "Jev 类型化决策",
+                "configured": jev_configured,
+            },
+        ],
+    }
+
 
 def llm_model_selector(values: dict[str, str]) -> dict[str, Any]:
     current = selected_llm_provider(values)
@@ -297,6 +333,7 @@ def settings_payload(path: Path = ENV_PATH) -> dict[str, Any]:
         }
         if group["id"] == "llm":
             item["model_selector"] = llm_model_selector(values)
+            item["decision_engine_selector"] = decision_engine_selector(values)
         groups.append(item)
     return {"groups": groups, "path": str(path)}
 
@@ -434,6 +471,43 @@ def switch_llm_provider(
         write_env_updates(updates, path=path)
     return {
         "provider": target,
+        "changed": changes,
+        "changed_count": len(changes),
+        "path": str(path),
+    }
+
+
+def switch_decision_engine(
+    engine: str,
+    *,
+    path: Path = ENV_PATH,
+) -> dict[str, Any]:
+    """Switch the production degree-decision engine between llm and jev."""
+    target = str(engine or "").strip().lower()
+    if target not in {"llm", "jev"}:
+        raise ValueError("决策引擎只允许 llm 或 jev")
+    current = parse_env_file(path)
+    if target == "jev":
+        missing = [key for key in ("LLM_JEV_API_KEY", "LLM_JEV_BASE_URL") if not current.get(key)]
+        if missing:
+            raise ValueError("请先配置完整的 Jev API Key 和 Decisions Base URL")
+    updates: dict[str, str] = {}
+    changes: list[dict[str, str]] = []
+    old_engine = str(current.get("LLM_DECISION_ENGINE") or "").strip().lower() or "llm"
+    if old_engine != target:
+        updates["LLM_DECISION_ENGINE"] = target
+        changes.append(
+            {
+                "key": "LLM_DECISION_ENGINE",
+                "sensitive": "0",
+                "old": old_engine,
+                "new": target,
+            }
+        )
+    if updates:
+        write_env_updates(updates, path=path)
+    return {
+        "engine": target,
         "changed": changes,
         "changed_count": len(changes),
         "path": str(path),

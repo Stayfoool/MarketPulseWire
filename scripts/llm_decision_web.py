@@ -119,6 +119,9 @@ def _assessment(row: Any, segments: dict[str, dict[str, str]]) -> dict[str, Any]
             "rule_id": _text(row.get("rule_id"), 120),
             "action": action,
         }
+        probability = row.get("probability")
+        if isinstance(probability, (int, float)) and not isinstance(probability, bool):
+            result["probability"] = round(float(probability), 4)
         if action != "archive":
             result["reason"] = _text(row.get("reason"), MAX_REASON_CHARS)
             result["evidence"] = _references(row.get("evidence_ids"), segments)
@@ -183,14 +186,19 @@ def _decision_projection(decision: dict[str, Any]) -> dict[str, Any]:
                 quote = _text(entry.get("quote"), MAX_QUOTE_CHARS)
                 if quote:
                     evidence.append({"evidence_id": _text(entry.get("evidence_id"), 40), "quote": quote})
-        assessments.append(
-            {
-                "rule_id": _text(hit.get("rule_id"), 120),
-                "action": _text(hit.get("decision_action"), 30),
-                "reason": _text(hit.get("reason"), MAX_REASON_CHARS),
-                "evidence": evidence,
-            }
-        )
+        assessment = {
+            "rule_id": _text(hit.get("rule_id"), 120),
+            "action": _text(hit.get("decision_action"), 30),
+            "reason": _text(hit.get("reason"), MAX_REASON_CHARS),
+            "evidence": evidence,
+        }
+        probability = hit.get("probability")
+        if isinstance(probability, (int, float)) and not isinstance(probability, bool):
+            assessment["probability"] = round(float(probability), 4)
+        confidence = hit.get("confidence")
+        if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+            assessment["confidence"] = round(float(confidence), 4)
+        assessments.append(assessment)
     return {
         "action": _text(decision.get("action"), 30),
         "reason": _text(decision.get("brief_reason") or decision.get("reason"), MAX_REASON_CHARS),
@@ -206,6 +214,8 @@ def build_web_projection(audit: dict[str, Any]) -> dict[str, Any]:
         "version": WEB_PROJECTION_VERSION,
         "evaluation_status": status,
         "failure_reason": _text(audit.get("failure_reason"), MAX_ERROR_CHARS),
+        "decision_engine": _text(audit.get("decision_engine"), 30) or "llm",
+        "shadow": bool(audit.get("shadow")),
         "decision": _decision_projection(decision) if decision else None,
         "calls": [],
     }
@@ -416,4 +426,111 @@ def llm_decision_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "uncertain_then_completed": recovered,
         "current_failed_retryable": failed_retryable,
         "current_insufficient_evidence": insufficient_evidence,
+    }
+
+
+DEFAULT_JEV_SHADOW_DIR = ROOT / "reports" / "jev-shadow"
+MAX_JEV_SHADOW_ROWS = 5000
+
+
+def load_jev_shadow_rows(
+    shadow_dir: Path = DEFAULT_JEV_SHADOW_DIR,
+    *,
+    start_day: str = "",
+    end_day: str = "",
+    limit: int = 2000,
+) -> list[dict[str, Any]]:
+    """Read bounded Jev shadow comparison rows (no article content, no raw model output)."""
+    if not shadow_dir.is_dir():
+        return []
+    start = str(start_day or "").strip()[:10]
+    end = str(end_day or "").strip()[:10]
+    rows: list[dict[str, Any]] = []
+    for path in sorted(shadow_dir.glob("jev-shadow-*.jsonl")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            day = str(row.get("generated_at") or "")[:10]
+            if start and day and day < start:
+                continue
+            if end and day and day > end:
+                continue
+            rows.append(row)
+    rows.sort(key=lambda item: str(item.get("generated_at") or ""))
+    return rows[: max(1, min(int(limit or 2000), MAX_JEV_SHADOW_ROWS))]
+
+
+def _rate(agree: int, total: int) -> float | None:
+    return round(agree / total, 4) if total else None
+
+
+def jev_shadow_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate Jev shadow comparison rows into bounded Web-facing statistics."""
+    completed = [
+        row
+        for row in rows
+        if isinstance(row.get("jev"), dict) and row["jev"].get("status") == "completed"
+    ]
+    comparisons = [row for row in rows if isinstance(row.get("comparison"), dict) and row["comparison"]]
+    action_pairs = Counter(
+        str(row["comparison"].get("action_pair") or "unknown") for row in comparisons
+    )
+    rule_agree = sum(int(row["comparison"].get("rule_agree") or 0) for row in comparisons)
+    rule_total = sum(int(row["comparison"].get("rule_total") or 0) for row in comparisons)
+    confidences = [
+        float(entry.get("confidence"))
+        for row in completed
+        for entry in (row.get("jev") or {}).get("rule_choices", [])
+        if isinstance(entry, dict)
+        and isinstance(entry.get("confidence"), (int, float))
+        and not isinstance(entry.get("confidence"), bool)
+    ]
+    production_costs = [
+        float(row["production"].get("cost_cny"))
+        for row in rows
+        if isinstance(row.get("production"), dict)
+        and row["production"].get("cost_cny") is not None
+    ]
+    jev_costs = [
+        float(row["jev"].get("cost_cny"))
+        for row in rows
+        if isinstance(row.get("jev"), dict) and row["jev"].get("cost_cny") is not None
+    ]
+    return {
+        "rows": len(rows),
+        "completed": len(completed),
+        "errors": len(rows) - len(completed),
+        "item_agree": {
+            "agree": sum(1 for row in comparisons if row["comparison"].get("item_agree")),
+            "total": len(comparisons),
+            "rate": _rate(
+                sum(1 for row in comparisons if row["comparison"].get("item_agree")),
+                len(comparisons),
+            ),
+        },
+        "action_pairs": dict(sorted(action_pairs.items())),
+        "rule_agree": {"agree": rule_agree, "total": rule_total, "rate": _rate(rule_agree, rule_total)},
+        "missed_push": sum(1 for row in comparisons if row["comparison"].get("missed_push")),
+        "extra_push": sum(1 for row in comparisons if row["comparison"].get("extra_push")),
+        "avg_jev_confidence": (
+            round(sum(confidences) / len(confidences), 4) if confidences else None
+        ),
+        "cost": {
+            "production_cny": round(sum(production_costs), 6) if production_costs else None,
+            "jev_cny": round(sum(jev_costs), 6) if jev_costs else None,
+            "production_priced_rows": len(production_costs),
+            "jev_priced_rows": len(jev_costs),
+        },
     }

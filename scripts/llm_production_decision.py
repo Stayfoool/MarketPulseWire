@@ -100,12 +100,14 @@ def _write_private_audit(
     audit_dir: Path,
     generated_at: str,
     application_revision: str,
+    contract_version: str = PRODUCTION_DECISION_CONTRACT_VERSION,
+    payload_extras: dict[str, Any] | None = None,
 ) -> Path:
     audit_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(audit_dir, 0o700)
     evaluation = execution.evaluation
     payload = {
-        "contract_version": PRODUCTION_DECISION_CONTRACT_VERSION,
+        "contract_version": contract_version,
         "generated_at": generated_at,
         "retention_days": 30,
         "market_item_id": market_item_id,
@@ -133,6 +135,8 @@ def _write_private_audit(
         "decision": execution.decision.to_dict() if execution.decision else None,
         "model_audit": evaluation.get("model_audit") or {},
     }
+    if payload_extras:
+        payload.update(payload_extras)
     payload["web_projection"] = build_web_projection(payload)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     path = audit_dir / (
@@ -198,11 +202,13 @@ def decide_production_market_item(
         {
             "production_authority": True,
             "production_decision_contract_version": PRODUCTION_DECISION_CONTRACT_VERSION,
+            "decision_engine": "llm",
             "application_revision": deployed_revision,
             "market_item_id": market_item_id,
             "market_review_id": market_review_id,
             "audit_recorded": True,
             "decision_elapsed_seconds": round(now_monotonic() - started_at, 6),
+            "usage": dict(execution.evaluation.get("usage") or {}),
         }
     )
     # The audit path is intentionally not stored in SQLite; the direct market ids
