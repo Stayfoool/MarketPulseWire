@@ -106,6 +106,15 @@
           </table>
         </div>
       </section>
+      <section class="panel">
+        <div class="section-title">
+          <h2>Jev 影子对比</h2>
+          <button onclick="loadJevShadow()">刷新</button>
+        </div>
+        <div class="hint">仅记录对比，不影响生产决策；启用 LLM_JEV_SHADOW_ENABLED=1 后随每条生产决策累计，条目明细见上方“模型尝试记录”中的 Jev 影子标记。</div>
+        <div id="jevShadowMetrics" class="metric-grid"></div>
+        <div id="jevShadowPairs"></div>
+      </section>
     </section>
 
     <section id="view-rules" class="view">

@@ -126,6 +126,34 @@ not select a different decision, review, storage, dedup or delivery path. A
 missing key for the selected model fails closed instead of using the other
 model's key.
 
+The decision layer supports two switchable engines behind
+`decision_engine.py` selected by `LLM_DECISION_ENGINE` (default `llm`).
+`llm` is the generative rule decision described above with the verbatim
+evidence contract. `jev` is the TypeSafe Jev typed decision engine
+(`scripts/llm_jev_decision.py`): the same private rules and admitted input
+are compiled into one decisions request with one `push`/`daily`/`archive`
+choice question per applicable rule over the shared source segments, the
+top choice of every answer becomes that rule's action directly (low
+confidence never gates the action), and no evidence or reason is produced
+or validated. Coverage, allowed actions, `push > daily > archive`
+aggregation, rule version and model version are validated by code with the
+same strictness as the generative engine; an unavailable model, invalid
+output, incomplete rule coverage or aggregation conflict fails closed into
+`failed_retryable` without deriving actions from probabilities. Jev is the
+one registered independent transport outside `llm_analysis.py`: the vendor
+exposes no OpenAI-compatible chat endpoint, so the engine calls its
+decisions HTTP API through the shared `http_utils` thread-isolated client
+(proxy, timeout and retry semantics) with the wire format isolated in the
+build/parse adapter pair; the private rules are sent to the Jev vendor by
+design. When `llm` is the active engine and `LLM_JEV_SHADOW_ENABLED=1`,
+the same Jev engine also runs best-effort next to the production decision,
+writing its own mode-0600 audit record plus a bounded daily JSONL
+comparison (actions, per-rule probabilities, token usage and cost for both
+engines) under `reports/jev-shadow/`; shadow failures and results never
+touch the production decision or review status. The Web workbench switches
+the engine and shows the shadow statistics; neither control changes
+admission, interpretation, storage, dedup or delivery paths.
+
 `DecisionResult.action` is the only push-eligibility authority. A model,
 validation or private-audit failure leaves no valid `DecisionResult`,
 interpretation, delivery or dedup reservation and marks the current review

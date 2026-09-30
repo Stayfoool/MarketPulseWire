@@ -306,15 +306,26 @@ def test_live_unified_collector_calls_cannot_omit_production_admission() -> None
             )
 
 
-def test_production_decision_boundary_is_llm_only() -> None:
+def test_production_decision_boundary_dispatches_engines() -> None:
     flow = (SCRIPTS / "market_flow.py").read_text(encoding="utf-8")
     engine = (SCRIPTS / "decision_engine.py").read_text(encoding="utf-8")
     production = (SCRIPTS / "llm_production_decision.py").read_text(encoding="utf-8")
+    jev = (SCRIPTS / "llm_jev_decision.py").read_text(encoding="utf-8")
     assert "from decision_engine import decide_market_item_with_llm" in flow
     assert flow.count("decide_market_item_with_llm(") == 1
     assert "def decide_market_item_with_llm(" in engine
     assert "def decide_market_item(" not in engine
     assert "from llm_production_decision import decide_production_market_item" in engine
+    assert "LLM_DECISION_ENGINE" in engine
+    assert "from llm_jev_decision import decide_production_market_item_with_jev" in engine
+    assert "from llm_jev_decision import run_jev_shadow_comparison" in engine
+    assert "DECISION_ENGINE_JEV" in engine
+    # Jev 是唯一登记在 llm_analysis 之外的决策传输路径，必须复用 http_utils。
+    assert "from http_utils import http_post_json" in jev
+    assert "urllib.request" not in jev
+    assert "import openai" not in jev
+    # 影子对比必须是无条件 best-effort，不得抛出影响生产决策。
+    assert "LLM_JEV_SHADOW_ENABLED" in jev
     assert "from llm_rule_execution import LLMRuleExecution, execute_llm_rule_decision" in production
     assert 'os.environ.get("LLM_THINKING_TYPE")' in production
     assert "RULE_COMPARISON_LLM_THINKING_TYPE" not in production
@@ -682,7 +693,7 @@ def main() -> int:
     test_active_runtime_has_no_legacy_result_table_reads_or_writes()
     test_unified_collectors_use_runtime_without_owning_delivery()
     test_live_unified_collector_calls_cannot_omit_production_admission()
-    test_production_decision_boundary_is_llm_only()
+    test_production_decision_boundary_dispatches_engines()
     test_market_information_contract_has_no_type_routing()
     test_decision_result_has_no_retired_derived_fields()
     test_production_collectors_have_no_shadow_path()

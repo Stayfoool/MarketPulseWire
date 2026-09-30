@@ -682,7 +682,7 @@ async function loadLlmDecisionsView() {
     showStatus(`来源下拉加载失败：${err.message}`, 'err');
     return;
   }
-  await loadLlmDecisions();
+  await Promise.all([loadLlmDecisions(), loadJevShadow()]);
 }
 
 async function loadOverview() {
@@ -816,11 +816,15 @@ function llmDecisionAssessmentHtml(assessment) {
   const referenceHtml = references.map(reference => `
     <div class="hint">${escapeHtml(reference.evidence_id || '')}${reference.field ? `（${escapeHtml(reference.field)}）` : ''}：${escapeHtml(reference.quote || '')}</div>
   `).join('');
+  const probability = assessment?.probability;
+  const probabilityHtml = (probability === 0 || probability)
+    ? `<span class="hint">概率 ${escapeHtml(String(probability))}</span>`
+    : '';
   return `
     <div class="llm-assessment">
-      <div><strong>${escapeHtml(assessment?.rule_id || '未记录规则')}</strong> ${resultBadge}</div>
-      ${isArchive ? '' : `<div class="summary-cell">${escapeHtml(assessment?.reason || '未记录理由')}</div>`}
-      ${isArchive ? '' : (referenceHtml || '<div class="hint">未记录证据或反证</div>')}
+      <div><strong>${escapeHtml(assessment?.rule_id || '未记录规则')}</strong> ${resultBadge} ${probabilityHtml}</div>
+      ${isArchive ? '' : `<div class="summary-cell">${escapeHtml(assessment?.reason || '')}</div>`}
+      ${isArchive ? '' : (referenceHtml || (probabilityHtml ? '' : '<div class="hint">未记录证据或反证</div>'))}
     </div>
   `;
 }
@@ -831,7 +835,7 @@ function llmDecisionAttemptHtml(attempt, index) {
   const errors = calls.flatMap(call => Array.isArray(call?.validation_errors) ? call.validation_errors : []);
   return `
     <div class="llm-attempt">
-      <div><strong>第 ${index + 1} 次模型尝试</strong> ${badge(llmDecisionStatusLabel(attempt?.evaluation_status || ''))} <span class="hint">${escapeHtml(formatTime(attempt?.generated_at || ''))}</span></div>
+      <div><strong>第 ${index + 1} 次模型尝试</strong>${attempt?.shadow ? ' <span class="hint">（Jev 影子）</span>' : (attempt?.decision_engine === 'jev' ? ' <span class="hint">（Jev）</span>' : '')} ${badge(llmDecisionStatusLabel(attempt?.evaluation_status || ''))} <span class="hint">${escapeHtml(formatTime(attempt?.generated_at || ''))}</span></div>
       ${attempt?.failure_reason ? `<div class="summary-cell">${escapeHtml(attempt.failure_reason)}</div>` : ''}
       ${assessments.map(llmDecisionAssessmentHtml).join('')}
       ${errors.map(error => `<div class="hint">校验：${escapeHtml(error)}</div>`).join('')}
@@ -1243,6 +1247,7 @@ async function loadSettings() {
         <h3>${escapeHtml(group.title || group.id || '')}</h3>
         <div class="hint">${escapeHtml(group.restart_hint || '')}</div>
         ${group.model_selector ? llmModelSelectorHtml(group.model_selector) : ''}
+        ${group.decision_engine_selector ? decisionEngineSelectorHtml(group.decision_engine_selector) : ''}
         ${(group.fields || []).map(field => `
           <div class="setting-field">
             <label>
@@ -1315,6 +1320,90 @@ const LLM_MODEL_LABELS = {
   qwen38_flash: '阿里云百炼 Qwen3.8 Flash',
   qwen38_max_0902: '阿里云百炼 Qwen3.8 Max（0902）',
 };
+
+function decisionEngineSelectorHtml(selector) {
+  const current = selector.current || 'llm';
+  return `
+    <div class="setting-field llm-model-field">
+      <label><span>决策引擎</span></label>
+      <div class="llm-model-switch" role="group" aria-label="决策引擎">
+        ${(selector.options || []).map(option => `
+          <button
+            type="button"
+            class="${option.id === current ? 'active' : ''}"
+            aria-pressed="${option.id === current ? 'true' : 'false'}"
+            onclick="switchDecisionEngine('${escapeHtml(option.id || '')}')"
+          >
+            <span>${escapeHtml(option.label || option.id || '')}</span>
+            <small>${escapeHtml(option.configured ? '已就绪' : '未配置')}</small>
+          </button>
+        `).join('')}
+      </div>
+      ${selector.note ? `<div class="hint">${escapeHtml(selector.note)}</div>` : ''}
+    </div>
+  `;
+}
+
+async function switchDecisionEngine(engine) {
+  const buttons = document.querySelectorAll('[aria-label="决策引擎"] button');
+  buttons.forEach(button => { button.disabled = true; });
+  showStatus('正在切换决策引擎...', 'busy');
+  try {
+    const data = await api('/api/decision-engine', {
+      method: 'POST',
+      body: JSON.stringify({engine})
+    });
+    await loadSettings();
+    const activation = data.activation || {};
+    const activationText = activation.attempted
+      ? (activation.ok
+          ? '新浪财经快讯常驻服务已重启；其他定时采集任务下一轮生效。'
+          : `决策引擎已保存；新浪财经快讯常驻服务重启未完成：${activation.error || '未知错误'}`)
+      : '决策引擎没有变化。';
+    showStatus(`决策引擎：${data.engine || engine}\n${activationText}`, activation.ok === false ? 'err' : 'ok');
+  } catch (err) {
+    showStatus(err.message, 'err');
+  } finally {
+    buttons.forEach(button => { button.disabled = false; });
+  }
+}
+
+async function loadJevShadow() {
+  const metrics = document.getElementById('jevShadowMetrics');
+  const pairs = document.getElementById('jevShadowPairs');
+  if (!metrics) return;
+  try {
+    const params = new URLSearchParams();
+    const startDate = document.getElementById('llmDecisionFromDate')?.value || '';
+    const endDate = document.getElementById('llmDecisionToDate')?.value || '';
+    if (startDate && endDate) {
+      params.set('from', startDate);
+      params.set('to', endDate);
+    }
+    const data = await api('/api/jev-shadow?' + params.toString());
+    const summary = data.summary || {};
+    const cost = summary.cost || {};
+    const itemAgree = summary.item_agree || {};
+    const ruleAgree = summary.rule_agree || {};
+    metrics.innerHTML = [
+      ['影子条目', `${summary.rows || 0}（完成 ${summary.completed || 0} / 失败 ${summary.errors || 0}）`],
+      ['条目级一致率', itemAgree.rate != null ? `${(itemAgree.rate * 100).toFixed(1)}%（${itemAgree.agree}/${itemAgree.total}）` : '—'],
+      ['规则级一致率', ruleAgree.rate != null ? `${(ruleAgree.rate * 100).toFixed(1)}%（${ruleAgree.agree}/${ruleAgree.total}）` : '—'],
+      ['漏 push', summary.missed_push || 0],
+      ['多 push', summary.extra_push || 0],
+      ['Jev 平均置信度', summary.avg_jev_confidence != null ? summary.avg_jev_confidence : '—'],
+      ['生产成本（元）', cost.production_cny != null ? cost.production_cny : '未定价'],
+      ['Jev 成本（元）', cost.jev_cny != null ? cost.jev_cny : '—']
+    ].map(item => `<section class="metric"><div class="label">${escapeHtml(item[0])}</div><div class="value">${escapeHtml(item[1])}</div></section>`).join('');
+    const pairEntries = Object.entries(summary.action_pairs || {});
+    pairs.innerHTML = pairEntries.length
+      ? `<div class="hint">action 变化分布：${pairEntries.map(([key, value]) => `${escapeHtml(key)}：${value}`).join('；')}</div>`
+      : '<div class="hint">暂无影子对比数据；启用 LLM_JEV_SHADOW_ENABLED=1 后随每条生产决策累计。</div>';
+  } catch (err) {
+    metrics.innerHTML = '';
+    if (pairs) pairs.innerHTML = `<div class="hint">影子对比数据加载失败：${escapeHtml(err.message)}</div>`;
+  }
+}
 
 async function switchLlmProvider(provider) {
   const keys = LLM_MODEL_FIELDS[provider] || LLM_MODEL_FIELDS.deepseek;

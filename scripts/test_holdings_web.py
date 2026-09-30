@@ -30,7 +30,7 @@ from holdings_web import (
 )
 from llm_provider_config import QWEN_BAILIAN_BASE_URL
 from market_db import init_db
-from settings_store import save_settings, settings_payload, switch_llm_provider
+from settings_store import save_settings, settings_payload, switch_decision_engine, switch_llm_provider
 from source_profiles import (
     default_profile_map,
     filter_enabled_named_sources,
@@ -1735,12 +1735,55 @@ def test_unit_display_metadata_includes_news_production_collector() -> None:
     assert "2 分钟" in meta["schedule"]
 
 
+def test_decision_engine_switch_requires_jev_connection_and_persists() -> None:
+    with TemporaryDirectory() as tmpdir:
+        env_path = Path(tmpdir) / ".env"
+        env_path.write_text("LLM_PROVIDER=qwen_flash_snapshot\n", encoding="utf-8")
+        try:
+            switch_decision_engine("jev", path=env_path)
+        except ValueError as exc:
+            assert "Jev" in str(exc)
+        else:
+            raise AssertionError("jev switch without connection must fail closed")
+
+        env_path.write_text(
+            "LLM_PROVIDER=qwen_flash_snapshot\n"
+            "LLM_JEV_API_KEY=jev-secret\n"
+            "LLM_JEV_BASE_URL=https://jev.example.test\n",
+            encoding="utf-8",
+        )
+        switched = switch_decision_engine("jev", path=env_path)
+        assert switched["engine"] == "jev"
+        assert switched["changed_count"] == 1
+        assert "LLM_DECISION_ENGINE=jev" in env_path.read_text(encoding="utf-8")
+
+        back = switch_decision_engine("llm", path=env_path)
+        assert back["engine"] == "llm"
+        assert "LLM_DECISION_ENGINE=llm" in env_path.read_text(encoding="utf-8")
+
+        try:
+            switch_decision_engine("bogus", path=env_path)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("unknown decision engine must fail closed")
+
+        payload = settings_payload(env_path)
+        llm_group = next(group for group in payload["groups"] if group["id"] == "llm")
+        selector = llm_group["decision_engine_selector"]
+        assert selector["current"] == "llm"
+        options = {option["id"]: option for option in selector["options"]}
+        assert options["llm"]["configured"] is True
+        assert options["jev"]["configured"] is True
+
+
 def main() -> int:
     test_settings_expose_switchable_llm_models_without_revealing_secrets()
     test_glm_switch_requires_its_own_key_and_accepts_first_switch_key()
     test_qwen_bailian_switch_requires_its_own_key_and_writes_default_base_url()
     test_llm_selector_labels_bailian_hosted_deepseek()
     test_settings_ui_exposes_current_model_switch()
+    test_decision_engine_switch_requires_jev_connection_and_persists()
     test_llm_provider_http_endpoint_switches_and_restarts_persistent_collector()
     test_page_uses_extracted_assets_and_bounded_placeholders()
     test_overview_separates_actions_from_review_statuses()
