@@ -1775,6 +1775,17 @@ def test_decision_engine_switch_requires_jev_connection_and_persists() -> None:
         options = {option["id"]: option for option in selector["options"]}
         assert options["llm"]["configured"] is True
         assert options["jev"]["configured"] is True
+        field_keys = {field["key"] for field in llm_group["fields"]}
+        assert {
+            "LLM_JEV_API_KEY",
+            "LLM_JEV_BASE_URL",
+            "LLM_JEV_MODEL",
+            "LLM_JEV_SHADOW_ENABLED",
+        } <= field_keys
+        shadow_field = next(
+            field for field in llm_group["fields"] if field["key"] == "LLM_JEV_SHADOW_ENABLED"
+        )
+        assert shadow_field["sensitive"] is False
 
 
 def main() -> int:

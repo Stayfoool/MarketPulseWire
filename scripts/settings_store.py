@@ -76,6 +76,13 @@ SETTING_GROUPS: list[dict[str, Any]] = [
                 help="Jev 厂商 decisions 端点地址（不含路径）。",
             ),
             SettingField("LLM_JEV_MODEL", "Jev 模型", "llm", placeholder="jev-1.13", help="默认 jev-1.13；模型版本变更需重新跑影子对比。"),
+            SettingField(
+                "LLM_JEV_SHADOW_ENABLED",
+                "Jev 影子对比",
+                "llm",
+                placeholder="1",
+                help="1：生成模型决策后同一轮运行 Jev 影子对比，只记录不影响生产决策；留空或 0 为关闭。",
+            ),
             SettingField("LLM_TIMEOUT_SECONDS", "超时秒数", "llm", placeholder="90"),
             SettingField("LLM_RETRY_COUNT", "重试次数", "llm", placeholder="2"),
             SettingField("LLM_THINKING_TYPE", "默认 thinking", "llm", placeholder="disabled"),
