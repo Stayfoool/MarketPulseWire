@@ -722,6 +722,26 @@ def test_web_projection_marks_shadow_attempts() -> None:
         assert "probability" in attempts_assessment
 
 
+def test_missing_choice_fails_closed() -> None:
+    """非 choice 答案（如 noul）或缺 choice 属无效输出，而非传输错误。"""
+    item = _item()
+    admission = _admission(item)
+    rules = _rules(admission, item)
+    execution = _execute(
+        item,
+        admission,
+        _fake_transport(
+            _answers_payload(
+                rules,
+                answers_map={rule.rule_id: {"type": "noul", "noul": 1.0} for rule in rules},
+            )
+        ),
+    )
+    assert execution.decision is None
+    assert execution.evaluation["evaluation_status"] == "invalid_output"
+    assert "action is missing" in execution.evaluation["failure_reason"]
+
+
 def main() -> int:
     test_push_choice_becomes_action_with_probability_and_no_evidence()
     test_daily_choice_and_all_archive_reason()
@@ -730,6 +750,7 @@ def main() -> int:
     test_missing_rule_assessment_fails_closed()
     test_unknown_rule_fails_closed()
     test_answers_wrong_shape_fails_closed()
+    test_missing_choice_fails_closed()
     test_action_not_allowed_for_daily_only_rule_fails_closed()
     test_invalid_probability_range_fails_closed()
     test_transport_timeout_maps_to_model_unavailable()

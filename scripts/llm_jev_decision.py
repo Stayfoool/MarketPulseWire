@@ -180,9 +180,10 @@ def parse_jev_response(payload: Any) -> list[dict[str, Any]]:
 
     Envelope problems (non-object payload, missing answers map, malformed
     entries) raise JevTransportError; content-level problems such as unknown
-    or missing rules are left to the validator so they fail as item-specific
-    output errors instead of transport failures. answers 是按 question id 的
-    map（官方契约），键即 rule_id。
+    or missing rules or a missing choice are left to the validator so they
+    fail as item-specific output errors instead of transport failures.
+    answers 是按 question id 的 map（官方契约），键即 rule_id；非 choice
+    类型答案（如 noul）没有 choice 字段，同样交由校验器按无效输出处理。
     """
     if not isinstance(payload, dict) or not isinstance(payload.get("answers"), dict):
         raise JevTransportError("invalid_response", "jev response must contain an answers map")
@@ -190,13 +191,10 @@ def parse_jev_response(payload: Any) -> list[dict[str, Any]]:
     for rule_id, raw in payload["answers"].items():
         if not isinstance(raw, dict):
             raise JevTransportError("invalid_response", f"answers[{rule_id}] must be an object")
-        choice = str(raw.get("choice") or "").strip()
-        if not choice:
-            raise JevTransportError("invalid_response", f"answers[{rule_id}] requires choice")
         entries.append(
             {
                 "rule_id": str(rule_id),
-                "action": choice,
+                "action": str(raw.get("choice") or "").strip(),
                 "probabilities": raw.get("probabilities"),
                 "confidence": raw.get("confidence"),
             }
@@ -363,6 +361,9 @@ def validate_jev_response(
         rule = rules_by_id.get(rule_id)
         if rule is None:
             structure_errors.append(f"{path}.rule_id is unknown or not applicable: {rule_id}")
+            continue
+        if not action:
+            structure_errors.append(f"{path}.action is missing")
             continue
         if action not in rule.allowed_actions:
             structure_errors.append(f"{path}.action is not allowed for {rule_id}: {action}")
