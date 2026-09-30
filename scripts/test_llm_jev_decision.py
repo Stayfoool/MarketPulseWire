@@ -111,24 +111,24 @@ def _answers_payload(
     action_by_rule: dict[str, str] | None = None,
     confidence=0.9,
     probabilities: dict[str, dict] | None = None,
-    extra_answers: list[dict] | None = None,
+    answers_map: dict | None = None,
     omit_rules: set[str] | None = None,
 ) -> dict:
-    answers = []
-    for rule in rules:
-        if omit_rules and rule.rule_id in omit_rules:
-            continue
-        action = (action_by_rule or {}).get(rule.rule_id, "archive")
-        answer: dict = {"id": rule.rule_id, "choice": action, "confidence": confidence}
-        if probabilities and rule.rule_id in probabilities:
-            answer["probabilities"] = probabilities[rule.rule_id]
-        answers.append(answer)
-    answers.extend(extra_answers or [])
+    """官方 System One 响应形态：answers 是按 question id（即 rule_id）的 map。"""
+    if answers_map is None:
+        answers_map = {}
+        for rule in rules:
+            if omit_rules and rule.rule_id in omit_rules:
+                continue
+            action = (action_by_rule or {}).get(rule.rule_id, "archive")
+            answer: dict = {"type": "choice", "choice": action, "confidence": confidence}
+            if probabilities and rule.rule_id in probabilities:
+                answer["probabilities"] = probabilities[rule.rule_id]
+            answers_map[rule.rule_id] = answer
     return {
-        "id": "resp-jev-1",
-        "model": "jev-1.13",
-        "answers": answers,
-        "usage": {"input_tokens": 1234},
+        "model": "jev-1.13.0",
+        "answers": answers_map,
+        "usage": {"input_tokens": 1234, "output_tokens": 65},
     }
 
 
@@ -180,6 +180,7 @@ def test_push_choice_becomes_action_with_probability_and_no_evidence() -> None:
     item = _item()
     admission = _admission(item)
     rules = _rules(admission, item)
+    rules_by_id = {rule.rule_id: rule for rule in rules}
     target = rules[0].rule_id
     transport = _fake_transport(
         _answers_payload(rules, action_by_rule={target: "push"}, probabilities={target: {"push": 0.91, "daily": 0.07, "archive": 0.02}})
@@ -194,12 +195,18 @@ def test_push_choice_becomes_action_with_probability_and_no_evidence() -> None:
     assert audit["execution_engine"] == JEV_ENGINE_VERSION
     assert audit["decision_engine"] == JEV_PROVIDER
     assert audit["prompt_version"] == "jev-rule-choice-v1"
-    # 请求必须携带 state(source_segments+rules) 和每条规则一个问题
+    # 请求必须符合官方 System One 契约：state 只带原文分段，questions 按 rule_id
+    # 的 map，choice 用 criteria 携带私有规则条件文本。
     captured = transport.captured["request"]
+    assert captured["model"] == "jev-latest"
+    assert captured["state"] == {"source_segments": captured["state"]["source_segments"]}
     assert captured["state"]["source_segments"]
-    assert captured["state"]["rules"]
-    assert len(captured["questions"]) == len(rules)
-    assert all(q["type"] == "choice" for q in captured["questions"])
+    assert set(captured["questions"]) == {rule.rule_id for rule in rules}
+    target_question = captured["questions"][target]
+    assert target_question["type"] == "choice"
+    assert set(target_question["criteria"]) == set(rules_by_id[target].allowed_actions)
+    assert target_question["criteria"]["push"] == rules_by_id[target].push
+    assert transport.captured["url"].endswith("/v1/systemone")
     assert transport.captured["api_key"] == "key-test"
 
 
@@ -288,7 +295,10 @@ def test_unknown_rule_fails_closed() -> None:
         item,
         admission,
         _fake_transport(
-            _answers_payload(rules, extra_answers=[{"id": "ghost_rule", "choice": "push"}])
+            _answers_payload(
+                rules,
+                answers_map={"ghost_rule": {"type": "choice", "choice": "push", "confidence": 0.9}},
+            )
         ),
     )
     assert execution.decision is None
@@ -296,24 +306,21 @@ def test_unknown_rule_fails_closed() -> None:
     assert "ghost_rule" in execution.evaluation["failure_reason"]
 
 
-def test_duplicate_rule_fails_closed() -> None:
+def test_answers_wrong_shape_fails_closed() -> None:
+    """官方 answers 为按 id 的 map；重复键在 map 形态下结构上不可能，错误形态须关闭式失败。"""
     item = _item()
     admission = _admission(item)
     rules = _rules(admission, item)
-    target = rules[0].rule_id
     execution = _execute(
         item,
         admission,
         _fake_transport(
-            _answers_payload(
-                rules,
-                extra_answers=[{"id": target, "choice": "archive", "confidence": 0.9}],
-            )
+            _answers_payload(rules, answers_map=[{"type": "choice", "choice": "push"}])
         ),
     )
     assert execution.decision is None
-    assert execution.evaluation["evaluation_status"] == "conflict"
-    assert "duplicate" in execution.evaluation["failure_reason"]
+    assert execution.evaluation["evaluation_status"] == "invalid_output"
+    assert "answers map" in execution.evaluation["failure_reason"]
 
 
 def test_action_not_allowed_for_daily_only_rule_fails_closed() -> None:
@@ -327,7 +334,11 @@ def test_action_not_allowed_for_daily_only_rule_fails_closed() -> None:
     )
     trade_rules = (RULES_BY_ID["trade_deescalation"], RULES_BY_ID["trade_escalation"])
     payload = _answers_payload(
-        trade_rules, action_by_rule={"trade_deescalation": "push"}
+        trade_rules,
+        answers_map={
+            "trade_deescalation": {"type": "choice", "choice": "push", "confidence": 0.9},
+            "trade_escalation": {"type": "choice", "choice": "archive", "confidence": 0.9},
+        },
     )
     with mock.patch("llm_jev_decision.applicable_rules", return_value=trade_rules):
         result = validate_jev_response(payload, item, fabricated, model="jev-1.13")
@@ -340,7 +351,7 @@ def test_invalid_probability_range_fails_closed() -> None:
     admission = _admission(item)
     rules = _rules(admission, item)
     payload = _answers_payload(rules)
-    payload["answers"][0]["confidence"] = 1.5
+    payload["answers"][rules[0].rule_id]["confidence"] = 1.5
     execution = _execute(item, admission, _fake_transport(payload))
     assert execution.decision is None
     assert execution.evaluation["evaluation_status"] == "invalid_output"
@@ -432,10 +443,11 @@ def test_prompt_injection_cannot_add_rules_or_change_coverage() -> None:
     )
     assert execution.decision is not None and execution.decision.action == "archive"
     audit_calls = execution.evaluation["model_audit"]["calls"]
-    assert audit_calls[0]["request"]["questions"] == [
-        {"id": rule.rule_id, "type": "choice", "options": list(rule.allowed_actions)}
-        for rule in rules
-    ]
+    questions = audit_calls[0]["request"]["questions"]
+    assert set(questions) == {rule.rule_id for rule in rules}
+    for rule in rules:
+        assert questions[rule.rule_id]["type"] == "choice"
+        assert set(questions[rule.rule_id]["criteria"]) == set(rule.allowed_actions)
 
 
 def test_production_decision_writes_private_audit_and_usage() -> None:
@@ -717,7 +729,7 @@ def main() -> int:
     test_low_confidence_top_choice_wins_without_gating()
     test_missing_rule_assessment_fails_closed()
     test_unknown_rule_fails_closed()
-    test_duplicate_rule_fails_closed()
+    test_answers_wrong_shape_fails_closed()
     test_action_not_allowed_for_daily_only_rule_fails_closed()
     test_invalid_probability_range_fails_closed()
     test_transport_timeout_maps_to_model_unavailable()

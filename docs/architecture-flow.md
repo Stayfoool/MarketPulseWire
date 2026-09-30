@@ -142,7 +142,9 @@ output, incomplete rule coverage or aggregation conflict fails closed into
 `failed_retryable` without deriving actions from probabilities. Jev is the
 one registered independent transport outside `llm_analysis.py`: the vendor
 exposes no OpenAI-compatible chat endpoint, so the engine calls its
-decisions HTTP API through the shared `http_utils` thread-isolated client
+System One decisions API (`POST {base}/v1/systemone`, questions and answers
+keyed per rule id, choice criteria carrying the private rule condition
+text) through the shared `http_utils` thread-isolated client
 (proxy, timeout and retry semantics) with the wire format isolated in the
 build/parse adapter pair; the private rules are sent to the Jev vendor by
 design. When `llm` is the active engine and `LLM_JEV_SHADOW_ENABLED=1`,

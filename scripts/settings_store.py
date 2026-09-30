@@ -75,7 +75,7 @@ SETTING_GROUPS: list[dict[str, Any]] = [
                 "llm",
                 help="Jev 厂商 decisions 端点地址（不含路径）。",
             ),
-            SettingField("LLM_JEV_MODEL", "Jev 模型", "llm", placeholder="jev-1.13", help="默认 jev-1.13；模型版本变更需重新跑影子对比。"),
+            SettingField("LLM_JEV_MODEL", "Jev 模型", "llm", placeholder="jev-latest", help="默认 jev-latest；实际执行版本以响应 model 字段记录进审计，模型变更需重新跑影子对比。"),
             SettingField(
                 "LLM_JEV_SHADOW_ENABLED",
                 "Jev 影子对比",
