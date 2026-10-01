@@ -1788,6 +1788,64 @@ def test_decision_engine_switch_requires_jev_connection_and_persists() -> None:
         assert shadow_field["sensitive"] is False
 
 
+def test_jev_shadow_summary_returns_details_with_article_metadata() -> None:
+    from holdings_web import connect_sqlite, fetch_jev_shadow_summary
+
+    with TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        db_path = root / "test.db"
+        init_db(db_path).close()
+        with connect_sqlite(db_path) as conn:
+            market_item_id = insert_unified_result(
+                conn,
+                source="digitimes",
+                item_id="shadow-1",
+                title="扩产新闻标题",
+                published_at="2026-09-30 00:30:00",
+                seen_at="2026-09-30 01:00:00",
+                summary="进入执行阶段",
+                action="push",
+            )
+
+        shadow_dir = root / "jev-shadow"
+        shadow_dir.mkdir()
+        row = {
+            "contract_version": "jev-shadow-comparison-v1",
+            "comparison_only": True,
+            "affects_current_decision": False,
+            "generated_at": "2026-09-30T01:05:00+00:00",
+            "market_item_id": market_item_id,
+            "market_review_id": 999,
+            "source": "digitimes",
+            "source_item_id": "shadow-1",
+            "production_rule_actions": {"rule_a": "push"},
+            "production": {"action": "push", "model": "qwen3.7-flash-2026-07-15", "cost_cny": 0.002},
+            "jev": {"status": "completed", "action": "archive", "cost_cny": 0.001,
+                    "rule_choices": [{"rule_id": "rule_a", "action": "archive", "probability": 0.7, "confidence": 0.6}]},
+            "comparison": {"item_agree": False, "action_pair": "push->archive", "rule_agree": 0,
+                           "rule_total": 1, "missed_push": True, "extra_push": False},
+        }
+        (shadow_dir / "jev-shadow-20260930.jsonl").write_text(
+            json.dumps(row, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+
+        payload = fetch_jev_shadow_summary(db_path=db_path, shadow_dir=shadow_dir)
+        assert payload["summary"]["missed_push"] == 1
+        assert len(payload["details"]) == 1
+        detail = payload["details"][0]
+        assert detail["title"] == "扩产新闻标题"
+        assert detail["market_item_id"] == market_item_id
+        assert detail["production_action"] == "push"
+        assert detail["jev_action"] == "archive"
+        assert detail["production_rule_actions"] == {"rule_a": "push"}
+
+        missed = fetch_jev_shadow_summary(kind="missed_push", db_path=db_path, shadow_dir=shadow_dir)
+        assert len(missed["details"]) == 1
+        extra = fetch_jev_shadow_summary(kind="extra_push", db_path=db_path, shadow_dir=shadow_dir)
+        assert extra["details"] == []
+
+
+
 def main() -> int:
     test_settings_expose_switchable_llm_models_without_revealing_secrets()
     test_glm_switch_requires_its_own_key_and_accepts_first_switch_key()
@@ -1795,6 +1853,7 @@ def main() -> int:
     test_llm_selector_labels_bailian_hosted_deepseek()
     test_settings_ui_exposes_current_model_switch()
     test_decision_engine_switch_requires_jev_connection_and_persists()
+    test_jev_shadow_summary_returns_details_with_article_metadata()
     test_llm_provider_http_endpoint_switches_and_restarts_persistent_collector()
     test_page_uses_extracted_assets_and_bounded_placeholders()
     test_overview_separates_actions_from_review_statuses()

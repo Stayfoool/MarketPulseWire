@@ -431,6 +431,8 @@ def llm_decision_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 DEFAULT_JEV_SHADOW_DIR = ROOT / "reports" / "jev-shadow"
 MAX_JEV_SHADOW_ROWS = 5000
+MAX_JEV_SHADOW_DETAIL_ROWS = 500
+MAX_JEV_SHADOW_RULE_ROWS = 24
 
 
 def load_jev_shadow_rows(
@@ -474,6 +476,103 @@ def load_jev_shadow_rows(
 
 def _rate(agree: int, total: int) -> float | None:
     return round(agree / total, 4) if total else None
+
+
+JEV_SHADOW_KINDS = {"", "missed_push", "extra_push", "mismatch"}
+
+
+def jev_shadow_details(
+    rows: list[dict[str, Any]],
+    *,
+    item_meta: dict[int, dict[str, Any]],
+    kind: str = "",
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Bounded per-item shadow detail; article bodies stay out, only DB metadata joins in."""
+    limit = max(1, min(int(limit or 200), MAX_JEV_SHADOW_DETAIL_ROWS))
+    wanted = str(kind or "").strip().lower()
+    if wanted not in JEV_SHADOW_KINDS:
+        wanted = ""
+    details: list[dict[str, Any]] = []
+    for row in rows:
+        if len(details) >= limit:
+            break
+        comparison = row.get("comparison") if isinstance(row.get("comparison"), dict) else {}
+        jev = row.get("jev") if isinstance(row.get("jev"), dict) else {}
+        production = row.get("production") if isinstance(row.get("production"), dict) else {}
+        if wanted:
+            flag = {
+                "missed_push": bool(comparison.get("missed_push")),
+                "extra_push": bool(comparison.get("extra_push")),
+                "mismatch": comparison.get("item_agree") is False,
+            }[wanted]
+            if not flag:
+                continue
+        item_id = int(row.get("market_item_id") or 0)
+        meta = item_meta.get(item_id, {}) if item_id else {}
+        raw_choices = jev.get("rule_choices") if isinstance(jev.get("rule_choices"), list) else []
+        rule_choices = []
+        for choice in raw_choices[:MAX_JEV_SHADOW_RULE_ROWS]:
+            if not isinstance(choice, dict):
+                continue
+            entry: dict[str, Any] = {
+                "rule_id": _text(choice.get("rule_id"), 120),
+                "action": _text(choice.get("action"), 30),
+            }
+            probability = choice.get("probability")
+            if isinstance(probability, (int, float)) and not isinstance(probability, bool):
+                entry["probability"] = round(float(probability), 4)
+            confidence = choice.get("confidence")
+            if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+                entry["confidence"] = round(float(confidence), 4)
+            rule_choices.append(entry)
+        raw_actions = (
+            row.get("production_rule_actions")
+            if isinstance(row.get("production_rule_actions"), dict)
+            else {}
+        )
+        production_rule_actions = {
+            _text(rule_id, 120): _text(action, 30)
+            for rule_id, action in list(raw_actions.items())[:MAX_JEV_SHADOW_RULE_ROWS]
+        }
+        production_cost = production.get("cost_cny")
+        jev_cost = jev.get("cost_cny")
+        details.append(
+            {
+                "generated_at": _text(row.get("generated_at"), 64),
+                "market_item_id": item_id,
+                "market_review_id": int(row.get("market_review_id") or 0),
+                "source": _text(row.get("source"), 120),
+                "source_item_id": _text(row.get("source_item_id"), 120),
+                "title": _text(meta.get("title"), 200),
+                "url": _text(meta.get("url"), 500),
+                "published_at": _text(meta.get("published_at"), 40),
+                "production_action": _text(production.get("action"), 30),
+                "production_model": _text(production.get("model"), 200),
+                "production_cost_cny": (
+                    round(float(production_cost), 6)
+                    if isinstance(production_cost, (int, float)) and not isinstance(production_cost, bool)
+                    else None
+                ),
+                "jev_status": _text(jev.get("status"), 40),
+                "jev_action": _text(jev.get("action"), 30),
+                "jev_cost_cny": (
+                    round(float(jev_cost), 6)
+                    if isinstance(jev_cost, (int, float)) and not isinstance(jev_cost, bool)
+                    else None
+                ),
+                "action_pair": _text(comparison.get("action_pair"), 60),
+                "item_agree": comparison.get("item_agree"),
+                "missed_push": bool(comparison.get("missed_push")),
+                "extra_push": bool(comparison.get("extra_push")),
+                "rule_agree": comparison.get("rule_agree"),
+                "rule_total": comparison.get("rule_total"),
+                "jev_rule_choices": rule_choices,
+                "production_rule_actions": production_rule_actions,
+                "error": _text(row.get("error"), MAX_ERROR_CHARS),
+            }
+        )
+    return details
 
 
 def jev_shadow_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:

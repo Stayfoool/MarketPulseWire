@@ -330,6 +330,62 @@ def test_jev_shadow_rows_and_summary_are_bounded() -> None:
 
 
 
+def test_jev_shadow_details_filters_and_metadata() -> None:
+    from llm_decision_web import jev_shadow_details
+
+    missed_row = {
+        "generated_at": "2026-09-30T01:00:00+00:00",
+        "market_item_id": 101,
+        "market_review_id": 11,
+        "source": "digitimes",
+        "source_item_id": "a-101",
+        "production_rule_actions": {"rule_a": "push", "rule_b": "archive"},
+        "production": {"action": "push", "model": "qwen3.7-flash-2026-07-15", "cost_cny": 0.002},
+        "jev": {"status": "completed", "action": "archive", "cost_cny": 0.001,
+                "rule_choices": [
+                    {"rule_id": "rule_a", "action": "archive", "probability": 0.7, "confidence": 0.6},
+                    {"rule_id": "rule_b", "action": "archive", "probability": 0.9, "confidence": 0.8},
+                ]},
+        "comparison": {"item_agree": False, "action_pair": "push->archive", "rule_agree": 1,
+                       "rule_total": 2, "missed_push": True, "extra_push": False},
+    }
+    agree_row = {
+        "generated_at": "2026-09-30T02:00:00+00:00",
+        "market_item_id": 102,
+        "market_review_id": 12,
+        "source": "rss",
+        "source_item_id": "b-102",
+        "production_rule_actions": {},
+        "production": {"action": "archive", "model": "m", "cost_cny": 0.0},
+        "jev": {"status": "completed", "action": "archive", "cost_cny": 0.0, "rule_choices": []},
+        "comparison": {"item_agree": True, "action_pair": "archive->archive", "rule_agree": 0,
+                       "rule_total": 0, "missed_push": False, "extra_push": False},
+    }
+    error_row = {"generated_at": "2026-09-30T03:00:00+00:00", "market_item_id": 103,
+                 "market_review_id": 13, "error": "boom"}
+    meta = {
+        101: {"id": 101, "title": "扩产新闻标题", "url": "https://example.test/101", "published_at": "2026-09-30T08:00:00"},
+        102: {"id": 102, "title": "普通新闻", "url": "https://example.test/102", "published_at": ""},
+    }
+    all_rows = jev_shadow_details([missed_row, agree_row, error_row], item_meta=meta)
+    assert [row["market_item_id"] for row in all_rows] == [101, 102, 103]
+    assert all_rows[0]["title"] == "扩产新闻标题"
+    assert all_rows[0]["url"] == "https://example.test/101"
+    assert all_rows[0]["production_action"] == "push"
+    assert all_rows[0]["production_rule_actions"] == {"rule_a": "push", "rule_b": "archive"}
+    assert len(all_rows[0]["jev_rule_choices"]) == 2
+    assert all_rows[0]["jev_rule_choices"][0]["probability"] == 0.7
+    assert all_rows[2]["error"] == "boom" and all_rows[2]["production_action"] == ""
+
+    assert [r["market_item_id"] for r in jev_shadow_details([missed_row, agree_row, error_row], item_meta=meta, kind="missed_push")] == [101]
+    assert [r["market_item_id"] for r in jev_shadow_details([missed_row, agree_row, error_row], item_meta=meta, kind="extra_push")] == []
+    assert [r["market_item_id"] for r in jev_shadow_details([missed_row, agree_row, error_row], item_meta=meta, kind="mismatch")] == [101]
+    limited = jev_shadow_details([missed_row, agree_row, error_row], item_meta=meta, limit=1)
+    assert len(limited) == 1
+    unknown = jev_shadow_details([missed_row], item_meta=meta, kind="bogus")
+    assert len(unknown) == 1
+
+
 def main() -> None:
     test_historical_uncertain_projection_is_bounded()
     test_current_action_projection_is_bounded()
@@ -339,6 +395,7 @@ def main() -> None:
     test_rows_ignore_retired_database_audits_with_reused_ids()
     test_retention_removes_raw_calls_but_keeps_web_projection()
     test_jev_shadow_rows_and_summary_are_bounded()
+    test_jev_shadow_details_filters_and_metadata()
     print("llm decision web checks passed")
 
 
