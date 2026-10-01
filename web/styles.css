@@ -191,3 +191,7 @@ tr.health-issue-row td:first-child { box-shadow: inset 3px 0 0 var(--danger); }
   .split { grid-template-columns: 1fr; }
   .settings-grid { grid-template-columns: 1fr; }
 }
+
+.jev-feedback-switch { display: inline-flex; gap: 4px; }
+.jev-feedback-switch button { padding: 3px 10px; font-size: 12px; line-height: 1.4; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--muted); cursor: pointer; }
+.jev-feedback-switch button.active { border-color: var(--accent); background: var(--accent); color: #fff; }
