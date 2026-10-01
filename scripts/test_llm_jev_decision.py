@@ -748,6 +748,78 @@ def test_missing_choice_fails_closed() -> None:
     assert "action is missing" in execution.evaluation["failure_reason"]
 
 
+def test_backfill_shadow_production_rules_from_audits() -> None:
+    from llm_jev_decision import backfill_jev_shadow_production_rules
+
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        audit_dir = root / "audits"
+        shadow_dir = root / "shadow"
+        audit_dir.mkdir()
+        shadow_dir.mkdir()
+
+        # 新式审计：decision.audit_json.rule_actions 完整
+        new_audit = {
+            "decision": {
+                "audit_json": {"rule_actions": {"rule_a": "push", "rule_b": "archive"}},
+                "rule_hits": [{"rule_id": "rule_a", "decision_action": "push"}],
+            }
+        }
+        (audit_dir / "llm-decision-audit-1-11-20261001-000000-aaaa.json").write_text(
+            json.dumps(new_audit), encoding="utf-8"
+        )
+        # 旧式审计：只有 model_audit 校验里的 rule_assessments
+        old_audit = {
+            "decision": {"rule_hits": [{"rule_id": "rule_c", "decision_action": "daily"}]},
+            "model_audit": {"calls": [
+                {"validation": {"rule_assessments": [
+                    {"rule_id": "rule_c", "selected_action": "daily"},
+                    {"rule_id": "rule_d", "selected_action": "archive"},
+                ]}},
+            ]},
+        }
+        (audit_dir / "llm-decision-audit-2-12-20261001-000000-bbbb.json").write_text(
+            json.dumps(old_audit), encoding="utf-8"
+        )
+
+        def _row(item, review, **extra):
+            row = {
+                "generated_at": "2026-09-30T01:00:00+00:00",
+                "market_item_id": item,
+                "market_review_id": review,
+                "production": {"action": "push"},
+                "jev": {"status": "completed", "action": "archive"},
+                "comparison": {},
+            }
+            row.update(extra)
+            return row
+
+        shadow_file = shadow_dir / "jev-shadow-20260930.jsonl"
+        shadow_file.write_text(
+            "\n".join(json.dumps(r, ensure_ascii=False) for r in (
+                _row(1, 11),                                    # 可回填（新式审计）
+                _row(2, 12),                                    # 可回填（旧式审计）
+                _row(1, 11, production_rule_actions={"x": "push"}),  # 已有字段，保留
+                _row(9, 99),                                    # 无审计，跳过
+            )) + "\n",
+            encoding="utf-8",
+        )
+        shadow_file.chmod(0o600)
+
+        stats = backfill_jev_shadow_production_rules(shadow_dir=shadow_dir, audit_dir=audit_dir)
+        assert stats["rows"] == 4 and stats["updated"] == 2 and stats["missing_audit"] == 1 and stats["files"] == 1
+        assert shadow_file.stat().st_mode & 0o777 == 0o600
+        rows = [json.loads(line) for line in shadow_file.read_text().splitlines() if line.strip()]
+        assert rows[0]["production_rule_actions"] == {"rule_a": "push", "rule_b": "archive"}
+        assert rows[1]["production_rule_actions"] == {"rule_c": "daily", "rule_d": "archive"}
+        assert rows[2]["production_rule_actions"] == {"x": "push"}
+        assert "production_rule_actions" not in rows[3]
+
+        # 幂等：再跑一次无变更
+        stats2 = backfill_jev_shadow_production_rules(shadow_dir=shadow_dir, audit_dir=audit_dir)
+        assert stats2["updated"] == 0 and stats2["files"] == 0
+
+
 def main() -> int:
     test_push_choice_becomes_action_with_probability_and_no_evidence()
     test_daily_choice_and_all_archive_reason()
@@ -757,6 +829,7 @@ def main() -> int:
     test_unknown_rule_fails_closed()
     test_answers_wrong_shape_fails_closed()
     test_missing_choice_fails_closed()
+    test_backfill_shadow_production_rules_from_audits()
     test_action_not_allowed_for_daily_only_rule_fails_closed()
     test_invalid_probability_range_fails_closed()
     test_transport_timeout_maps_to_model_unavailable()

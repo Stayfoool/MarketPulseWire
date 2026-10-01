@@ -933,6 +933,108 @@ def _shadow_row(
     }
 
 
+def _production_rule_actions_from_audit(row: Mapping[str, Any], audit_dir: Path) -> dict[str, str] | None:
+    """Recover the production per-rule actions of one shadow row from its private audit."""
+    try:
+        item_id = int(row.get("market_item_id") or 0)
+        review_id = int(row.get("market_review_id") or 0)
+    except (TypeError, ValueError):
+        return None
+    if item_id <= 0 or review_id <= 0:
+        return None
+    candidates = sorted(audit_dir.glob(f"llm-decision-audit-{item_id}-{review_id}-*.json"))
+    for path in reversed(candidates):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
+        audit_json = decision.get("audit_json") if isinstance(decision.get("audit_json"), dict) else {}
+        rule_actions = audit_json.get("rule_actions")
+        if isinstance(rule_actions, dict) and rule_actions:
+            return {str(k): str(v) for k, v in list(rule_actions.items())[:64]}
+        model_audit = payload.get("model_audit") if isinstance(payload.get("model_audit"), dict) else {}
+        calls = model_audit.get("calls") if isinstance(model_audit.get("calls"), list) else []
+        for call in reversed(calls):
+            validation = call.get("validation") if isinstance(call.get("validation"), dict) else {}
+            assessments = validation.get("rule_assessments")
+            if isinstance(assessments, list) and assessments:
+                result = {
+                    str(assessment.get("rule_id") or ""): str(assessment.get("selected_action") or "")
+                    for assessment in assessments[:64]
+                    if isinstance(assessment, dict) and assessment.get("rule_id")
+                }
+                if result:
+                    return result
+        hits = decision.get("rule_hits") if isinstance(decision.get("rule_hits"), list) else []
+        result = {
+            str(hit.get("rule_id") or ""): str(hit.get("decision_action") or "")
+            for hit in hits[:64]
+            if isinstance(hit, dict) and hit.get("rule_id")
+        }
+        if result:
+            return result
+    return None
+
+
+def backfill_jev_shadow_production_rules(
+    *,
+    shadow_dir: Path = SHADOW_DIR,
+    audit_dir: Path = DEFAULT_AUDIT_DIR,
+) -> dict[str, int]:
+    """One-time bounded backfill of historical shadow rows from their private audits.
+
+    历史影子行写于审计携带 rule_actions 之前；生产侧完整逐规则动作（含
+    archive 判定）可从同一 (market_item_id, market_review_id) 的私有审计
+    恢复。只重写派生的影子对比行，不修改审计文件；仅补缺失字段，已有
+    数据的行原样保留。
+    """
+    stats = {"rows": 0, "updated": 0, "missing_audit": 0, "files": 0}
+    for path in sorted(shadow_dir.glob("jev-shadow-*.jsonl")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        out_lines: list[str] = []
+        changed = False
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                out_lines.append(line)
+                continue
+            if not isinstance(row, dict):
+                out_lines.append(line)
+                continue
+            stats["rows"] += 1
+            if row.get("production_rule_actions"):
+                out_lines.append(line)
+                continue
+            rule_actions = _production_rule_actions_from_audit(row, audit_dir)
+            if rule_actions is None:
+                stats["missing_audit"] += 1
+                out_lines.append(line)
+                continue
+            row["production_rule_actions"] = rule_actions
+            stats["updated"] += 1
+            changed = True
+            out_lines.append(json.dumps(row, ensure_ascii=False, separators=(",", ":")))
+        if changed:
+            temporary = path.with_name(f".{path.name}.backfill.tmp")
+            temporary.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+            os.chmod(temporary, 0o600)
+            temporary.replace(path)
+            os.chmod(path, 0o600)
+            stats["files"] += 1
+    return stats
+
+
 def run_jev_shadow_comparison(
     *,
     item: NormalizedMarketItem,
