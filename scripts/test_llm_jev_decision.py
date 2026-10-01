@@ -172,6 +172,8 @@ def _production_decision(action: str = "push") -> DecisionResult:
             "decision_engine": "llm",
             "usage": {"prompt_tokens": 10000, "completion_tokens": 500},
             "decision_elapsed_seconds": 2.5,
+            # 生产审计现携带完整逐规则动作（含 archive 判定）
+            "rule_actions": {"industry_price_supply_change": action, "macro_surprise": "archive"},
         },
     )
 
@@ -543,7 +545,10 @@ def test_shadow_writes_row_and_audit_without_touching_production() -> None:
             assert row["affects_current_decision"] is False
             assert row["market_review_id"] == 44
             assert row["production"]["model"] == "qwen3.7-flash-2026-07-15"
-            assert row["production_rule_actions"] == {"industry_price_supply_change": "push"}
+            assert row["production_rule_actions"] == {
+                "industry_price_supply_change": "push",
+                "macro_surprise": "archive",
+            }
             assert row["production"]["cost_cny"] is not None
             assert row["jev"]["status"] == "completed"
             assert row["jev"]["cost_cny"] is not None

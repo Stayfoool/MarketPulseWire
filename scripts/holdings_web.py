@@ -40,10 +40,13 @@ from market_canonical_reader import canonical_market_rows
 from market_feedback import FEEDBACK_LABELS, feedback_projection_by_item, feedback_quality_payload
 from llm_decision_web import (
     DEFAULT_JEV_SHADOW_DIR,
+    append_jev_shadow_feedback,
     jev_shadow_details,
+    jev_shadow_feedback_summary,
     jev_shadow_summary,
     llm_decision_rows,
     llm_decision_summary,
+    load_jev_shadow_feedback,
     load_jev_shadow_rows,
 )
 from current_rules_web import current_rules_payload
@@ -588,8 +591,14 @@ def fetch_jev_shadow_summary(
                 item_ids,
             ):
                 item_meta[int(meta_row["id"])] = dict(meta_row)
-    details = jev_shadow_details(rows, item_meta=item_meta, kind=kind, limit=limit)
-    return {"rows": len(rows), "summary": jev_shadow_summary(rows), "details": details}
+    feedback = load_jev_shadow_feedback(shadow_dir or DEFAULT_JEV_SHADOW_DIR)
+    details = jev_shadow_details(rows, item_meta=item_meta, kind=kind, limit=limit, feedback=feedback)
+    return {
+        "rows": len(rows),
+        "summary": jev_shadow_summary(rows),
+        "feedback": jev_shadow_feedback_summary(feedback, rows),
+        "details": details,
+    }
 
 
 def overview_payload(day: str = "") -> dict[str, Any]:
@@ -1598,6 +1607,19 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 saved["activation"] = activation
                 saved["ok"] = True
                 self.send_json(saved)
+                return
+            if parsed.path == "/api/jev-shadow/feedback":
+                try:
+                    row = append_jev_shadow_feedback(
+                        market_item_id=int(payload.get("market_item_id") or 0),
+                        market_review_id=int(payload.get("market_review_id") or 0),
+                        winner=str(payload.get("winner") or "").strip(),
+                        note=str(payload.get("note") or ""),
+                    )
+                except (TypeError, ValueError) as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                    return
+                self.send_json({"ok": True, "feedback": row})
                 return
             if parsed.path == "/api/decision-engine":
                 engine = str(payload.get("engine") or "").strip()

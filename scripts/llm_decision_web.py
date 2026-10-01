@@ -11,7 +11,7 @@ import json
 import os
 import sqlite3
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -430,6 +430,9 @@ def llm_decision_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 DEFAULT_JEV_SHADOW_DIR = ROOT / "reports" / "jev-shadow"
+JEV_SHADOW_FEEDBACK_FILENAME = "jev-shadow-feedback.jsonl"
+JEV_SHADOW_FEEDBACK_WINNERS = ("production", "jev", "both_bad")
+MAX_JEV_SHADOW_NOTE_CHARS = 200
 MAX_JEV_SHADOW_ROWS = 5000
 MAX_JEV_SHADOW_DETAIL_ROWS = 500
 MAX_JEV_SHADOW_RULE_ROWS = 24
@@ -487,6 +490,7 @@ def jev_shadow_details(
     item_meta: dict[int, dict[str, Any]],
     kind: str = "",
     limit: int = 200,
+    feedback: dict[tuple[int, int], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Bounded per-item shadow detail; article bodies stay out, only DB metadata joins in."""
     limit = max(1, min(int(limit or 200), MAX_JEV_SHADOW_DETAIL_ROWS))
@@ -569,10 +573,121 @@ def jev_shadow_details(
                 "rule_total": comparison.get("rule_total"),
                 "jev_rule_choices": rule_choices,
                 "production_rule_actions": production_rule_actions,
+                "feedback": (feedback or {}).get((item_id, int(row.get("market_review_id") or 0))),
                 "error": _text(row.get("error"), MAX_ERROR_CHARS),
             }
         )
     return details
+
+
+def _feedback_key(market_item_id: Any, market_review_id: Any) -> tuple[int, int] | None:
+    try:
+        key = (int(market_item_id or 0), int(market_review_id or 0))
+    except (TypeError, ValueError):
+        return None
+    return key if key[0] > 0 and key[1] > 0 else None
+
+
+def load_jev_shadow_feedback(
+    shadow_dir: Path = DEFAULT_JEV_SHADOW_DIR,
+) -> dict[tuple[int, int], dict[str, Any]]:
+    """Latest user evaluation per shadow row; later entries override earlier ones."""
+    path = shadow_dir / JEV_SHADOW_FEEDBACK_FILENAME
+    if not path.is_file():
+        return {}
+    result: dict[tuple[int, int], dict[str, Any]] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict) or row.get("winner") not in JEV_SHADOW_FEEDBACK_WINNERS:
+            continue
+        key = _feedback_key(row.get("market_item_id"), row.get("market_review_id"))
+        if key is None:
+            continue
+        result[key] = {
+            "winner": str(row["winner"]),
+            "note": _text(row.get("note"), MAX_JEV_SHADOW_NOTE_CHARS),
+            "feedback_at": _text(row.get("feedback_at"), 64),
+        }
+    return result
+
+
+def append_jev_shadow_feedback(
+    *,
+    market_item_id: int,
+    market_review_id: int,
+    winner: str,
+    note: str = "",
+    shadow_dir: Path = DEFAULT_JEV_SHADOW_DIR,
+) -> dict[str, Any]:
+    """Append one bounded user evaluation; never rewrites earlier entries."""
+    if winner not in JEV_SHADOW_FEEDBACK_WINNERS:
+        raise ValueError(f"评估结论只允许：{'/'.join(JEV_SHADOW_FEEDBACK_WINNERS)}")
+    key = _feedback_key(market_item_id, market_review_id)
+    if key is None:
+        raise ValueError("缺少有效的 market_item_id / market_review_id")
+    row = {
+        "contract_version": "jev-shadow-feedback-v1",
+        "feedback_at": datetime.now(timezone.utc).isoformat(),
+        "market_item_id": key[0],
+        "market_review_id": key[1],
+        "winner": winner,
+        "note": " ".join(str(note or "").split())[:MAX_JEV_SHADOW_NOTE_CHARS],
+    }
+    shadow_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(shadow_dir, 0o700)
+    path = shadow_dir / JEV_SHADOW_FEEDBACK_FILENAME
+    if not path.exists():
+        path.write_text("", encoding="utf-8")
+        os.chmod(path, 0o600)
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+    os.chmod(path, 0o600)
+    return row
+
+
+def jev_shadow_feedback_summary(
+    feedback: dict[tuple[int, int], dict[str, Any]],
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate latest evaluations, split by the dangerous mismatch kinds."""
+    by_kind: dict[str, Counter] = {winner: Counter() for winner in JEV_SHADOW_FEEDBACK_WINNERS}
+    matched = 0
+    for row in rows:
+        key = _feedback_key(row.get("market_item_id"), row.get("market_review_id"))
+        entry = feedback.get(key) if key else None
+        if not entry:
+            continue
+        matched += 1
+        winner = str(entry.get("winner") or "")
+        comparison = row.get("comparison") if isinstance(row.get("comparison"), dict) else {}
+        by_kind[winner]["total"] += 1
+        if comparison.get("missed_push"):
+            by_kind[winner]["missed_push"] += 1
+        if comparison.get("extra_push"):
+            by_kind[winner]["extra_push"] += 1
+        if comparison.get("item_agree") is False:
+            by_kind[winner]["mismatch"] += 1
+    return {
+        "total": matched,
+        "by_winner": {winner: counts["total"] for winner, counts in by_kind.items()},
+        "by_kind": {
+            winner: {
+                "missed_push": counts["missed_push"],
+                "extra_push": counts["extra_push"],
+                "mismatch": counts["mismatch"],
+            }
+            for winner, counts in by_kind.items()
+        },
+    }
 
 
 def jev_shadow_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:

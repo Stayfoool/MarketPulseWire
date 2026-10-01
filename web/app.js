@@ -823,6 +823,7 @@ function llmDecisionAssessmentHtml(assessment) {
   return `
     <div class="llm-assessment">
       <div><strong>${escapeHtml(assessment?.rule_id || '未记录规则')}</strong> ${resultBadge} ${probabilityHtml}</div>
+
       ${isArchive ? '' : `<div class="summary-cell">${escapeHtml(assessment?.reason || '')}</div>`}
       ${isArchive ? '' : (referenceHtml || (probabilityHtml ? '' : '<div class="hint">未记录证据或反证</div>'))}
     </div>
@@ -1428,9 +1429,46 @@ function jevShadowDetailHtml(item) {
       <summary>两模型逐规则对比${costs.length ? `（${escapeHtml(costs.join(' / '))}）` : ''}</summary>
       <div class="llm-detail-group"><strong>生产模型（${escapeHtml(item.production_model || '未知')}）</strong>${prodHtml}</div>
       <div class="llm-detail-group"><strong>Jev（${escapeHtml(item.jev_status || '未知')}）</strong>${jevHtml}</div>
+      ${jevShadowFeedbackHtml(item)}
       ${item.error ? `<div class="hint">错误：${escapeHtml(item.error)}</div>` : ''}
     </details>
   `;
+}
+
+const JEV_FEEDBACK_LABELS = { production: '生产更好', jev: 'Jev 更好', both_bad: '都不好' };
+
+function jevShadowFeedbackHtml(item) {
+  const current = item.feedback ? item.feedback.winner : '';
+  const note = item.feedback?.note ? `（${escapeHtml(item.feedback.note)}）` : '';
+  const currentText = current ? `已评估：${escapeHtml(JEV_FEEDBACK_LABELS[current] || current)}${note}` : '未评估';
+  const buttons = Object.entries(JEV_FEEDBACK_LABELS).map(([key, label]) => `
+    <button
+      type="button"
+      class="${key === current ? 'active' : ''}"
+      onclick="submitJevShadowFeedback(${item.market_item_id}, ${item.market_review_id}, '${key}')"
+    >${escapeHtml(label)}</button>
+  `).join('');
+  return `
+    <div class="llm-detail-group">
+      <strong>你的评估</strong>
+      <div class="hint">${currentText}</div>
+      <div class="llm-model-switch" role="group" aria-label="影子评估">${buttons}</div>
+    </div>
+  `;
+}
+
+async function submitJevShadowFeedback(marketItemId, marketReviewId, winner) {
+  const note = prompt('评估备注（可选，直接确定留空）：') || '';
+  try {
+    await api('/api/jev-shadow/feedback', {
+      method: 'POST',
+      body: JSON.stringify({market_item_id: marketItemId, market_review_id: marketReviewId, winner, note})
+    });
+    showStatus(`已记录评估：${JEV_FEEDBACK_LABELS[winner] || winner}`, 'ok');
+    await loadJevShadow();
+  } catch (err) {
+    showStatus(err.message, 'err');
+  }
 }
 
 async function loadJevShadow(kind) {
@@ -1467,6 +1505,8 @@ async function loadJevShadow(kind) {
     const cost = summary.cost || {};
     const itemAgree = summary.item_agree || {};
     const ruleAgree = summary.rule_agree || {};
+    const feedbackSummary = data.feedback || {};
+    const byWinner = feedbackSummary.by_winner || {};
     metrics.innerHTML = [
       ['影子条目', `${summary.rows || 0}（完成 ${summary.completed || 0} / 失败 ${summary.errors || 0}）`],
       ['条目级一致率', itemAgree.rate != null ? `${(itemAgree.rate * 100).toFixed(1)}%（${itemAgree.agree}/${itemAgree.total}）` : '—'],
@@ -1475,7 +1515,8 @@ async function loadJevShadow(kind) {
       ['多 push', summary.extra_push || 0],
       ['Jev 平均置信度', summary.avg_jev_confidence != null ? summary.avg_jev_confidence : '—'],
       ['生产成本（元）', cost.production_cny != null ? cost.production_cny : '未定价'],
-      ['Jev 成本（元）', cost.jev_cny != null ? cost.jev_cny : '—']
+      ['Jev 成本（元）', cost.jev_cny != null ? cost.jev_cny : '—'],
+      ['用户评估', feedbackSummary.total ? `生产更好 ${byWinner.production || 0} · Jev 更好 ${byWinner.jev || 0} · 都不好 ${byWinner.both_bad || 0}` : '暂无']
     ].map(item => `<section class="metric"><div class="label">${escapeHtml(item[0])}</div><div class="value">${escapeHtml(item[1])}</div></section>`).join('');
     const pairEntries = Object.entries(summary.action_pairs || {});
     pairs.innerHTML = pairEntries.length
