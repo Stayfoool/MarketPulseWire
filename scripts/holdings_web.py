@@ -39,6 +39,8 @@ from market_db import DEFAULT_DB_PATH
 from market_canonical_reader import canonical_market_rows
 from market_feedback import FEEDBACK_LABELS, feedback_projection_by_item, feedback_quality_payload
 from llm_decision_web import (
+    DEFAULT_JEV_SHADOW_DIR,
+    jev_shadow_details,
     jev_shadow_summary,
     llm_decision_rows,
     llm_decision_summary,
@@ -564,10 +566,30 @@ def fetch_llm_decision_rows(
 def fetch_jev_shadow_summary(
     start_day: str = "",
     end_day: str = "",
+    kind: str = "",
+    limit: int = 200,
+    db_path: Path = DEFAULT_DB_PATH,
+    shadow_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Bounded Jev shadow comparison statistics for the Web decision view."""
-    rows = load_jev_shadow_rows(start_day=start_day, end_day=end_day)
-    return {"rows": len(rows), "summary": jev_shadow_summary(rows)}
+    """Bounded Jev shadow statistics plus per-item detail with article metadata."""
+    rows = load_jev_shadow_rows(
+        **({"start_day": start_day, "end_day": end_day} | ({"shadow_dir": shadow_dir} if shadow_dir else {}))
+    )
+    item_ids = sorted(
+        {int(row.get("market_item_id") or 0) for row in rows if row.get("market_item_id")}
+    )
+    item_meta: dict[int, dict[str, Any]] = {}
+    if item_ids:
+        placeholders = ",".join("?" for _ in item_ids)
+        with connect_sqlite(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            for meta_row in conn.execute(
+                f"SELECT id, title, url, published_at FROM market_items WHERE id IN ({placeholders})",
+                item_ids,
+            ):
+                item_meta[int(meta_row["id"])] = dict(meta_row)
+    details = jev_shadow_details(rows, item_meta=item_meta, kind=kind, limit=limit)
+    return {"rows": len(rows), "summary": jev_shadow_summary(rows), "details": details}
 
 
 def overview_payload(day: str = "") -> dict[str, Any]:
@@ -1442,9 +1464,16 @@ class HoldingsHandler(BaseHTTPRequestHandler):
                 return
             try:
                 qs = parse_qs(parsed.query)
+                limit_raw = (qs.get("limit") or ["200"])[0]
+                try:
+                    limit = int(limit_raw)
+                except ValueError:
+                    limit = 200
                 payload = fetch_jev_shadow_summary(
                     start_day=(qs.get("from") or [""])[0],
                     end_day=(qs.get("to") or [""])[0],
+                    kind=(qs.get("kind") or [""])[0],
+                    limit=limit,
                 )
                 self.send_json({"ok": True, **payload})
             except ValueError as exc:

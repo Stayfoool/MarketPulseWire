@@ -866,6 +866,7 @@ def _shadow_row(
         if isinstance(assessment, dict)
     ]
     comparison: dict[str, Any] = {}
+    production_rule_actions: dict[str, str] = {}
     if decision is not None:
         production_action = str(production_decision.action)
         jev_action = str(decision.action)
@@ -874,6 +875,7 @@ def _shadow_row(
             for hit in production_decision.rule_hits
             if isinstance(hit, dict)
         }
+        production_rule_actions = dict(sorted(production_rules.items()))
         jev_rules = {entry["rule_id"]: entry["action"] for entry in rule_choices}
         shared = sorted(set(production_rules) & set(jev_rules))
         rule_agree = sum(1 for rule_id in shared if production_rules[rule_id] == jev_rules[rule_id])
@@ -902,6 +904,7 @@ def _shadow_row(
             "usage": production_usage,
             "cost_cny": estimate_llm_cost_cny(production_model, production_usage),
         },
+        "production_rule_actions": production_rule_actions,
         "jev": {
             "status": str(execution.evaluation.get("evaluation_status") or ""),
             "failure_reason": str(execution.evaluation.get("failure_reason") or ""),

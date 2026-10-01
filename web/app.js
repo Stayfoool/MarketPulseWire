@@ -1368,10 +1368,90 @@ async function switchDecisionEngine(engine) {
   }
 }
 
-async function loadJevShadow() {
+let jevShadowKind = '';
+
+function jevShadowRelationLabel(item) {
+  if (item.missed_push) return '漏 push';
+  if (item.extra_push) return '多 push';
+  if (item.item_agree === true) return '一致';
+  if (item.item_agree === false) return '不一致';
+  return item.error ? '失败' : '无对比';
+}
+
+function jevShadowRowHtml(item) {
+  const safeUrl = safeExternalUrl(item.url);
+  const title = safeUrl
+    ? `<a href="${escapeHtml(safeUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title || '（面板库中无此条目标题）')}</a>`
+    : escapeHtml(item.title || (item.error ? '影子运行失败' : '（面板库中无此条目标题）'));
+  const production = item.production_action
+    ? `${badge(item.production_action)}<div class="hint">${escapeHtml(item.production_model || '')}</div>`
+    : '<span class="hint">—</span>';
+  const jev = item.jev_action
+    ? badge(item.jev_action)
+    : `<span class="hint">${escapeHtml(item.jev_status || '失败')}</span>`;
+  const relation = jevShadowRelationLabel(item);
+  return `
+    <tr>
+      <td>${escapeHtml(formatTime(item.generated_at || ''))}</td>
+      <td>${escapeHtml(item.source || '')}</td>
+      <td class="summary-cell"><div><strong>${title}</strong></div><div class="hint">${escapeHtml(item.source_item_id || '')}</div>${jevShadowDetailHtml(item)}</td>
+      <td>${production}</td>
+      <td>${jev}</td>
+      <td>${escapeHtml(relation)}<div class="hint">${escapeHtml(item.action_pair || '')}</div></td>
+    </tr>
+  `;
+}
+
+function jevShadowDetailHtml(item) {
+  const prodEntries = Object.entries(item.production_rule_actions || {});
+  const jevChoices = Array.isArray(item.jev_rule_choices) ? item.jev_rule_choices : [];
+  const costs = [];
+  if (item.production_cost_cny != null) costs.push(`生产 ${item.production_cost_cny} 元`);
+  if (item.jev_cost_cny != null) costs.push(`Jev ${item.jev_cost_cny} 元`);
+  const prodHtml = prodEntries.length
+    ? prodEntries.map(([ruleId, action]) => `
+        <div class="llm-assessment"><div><strong>${escapeHtml(ruleId)}</strong> ${badge(action)}</div></div>
+      `).join('')
+    : '<div class="hint">无逐规则记录</div>';
+  const jevHtml = jevChoices.length
+    ? jevChoices.map(choice => {
+        const probability = (choice.probability === 0 || choice.probability != null) ? `概率 ${choice.probability}` : '';
+        const confidence = (choice.confidence === 0 || choice.confidence != null) ? `置信 ${choice.confidence}` : '';
+        const meta = [probability, confidence].filter(Boolean).join('；');
+        return `
+        <div class="llm-assessment"><div><strong>${escapeHtml(choice.rule_id)}</strong> ${badge(choice.action)}${meta ? ` <span class="hint">${escapeHtml(meta)}</span>` : ''}</div></div>
+      `;
+      }).join('')
+    : '<div class="hint">无逐规则记录</div>';
+  return `
+    <details class="llm-decision-details">
+      <summary>两模型逐规则对比${costs.length ? `（${escapeHtml(costs.join(' / '))}）` : ''}</summary>
+      <div class="llm-detail-group"><strong>生产模型（${escapeHtml(item.production_model || '未知')}）</strong>${prodHtml}</div>
+      <div class="llm-detail-group"><strong>Jev（${escapeHtml(item.jev_status || '未知')}）</strong>${jevHtml}</div>
+      ${item.error ? `<div class="hint">错误：${escapeHtml(item.error)}</div>` : ''}
+    </details>
+  `;
+}
+
+async function loadJevShadow(kind) {
   const metrics = document.getElementById('jevShadowMetrics');
   const pairs = document.getElementById('jevShadowPairs');
+  const rowsBody = document.getElementById('jevShadowRows');
   if (!metrics) return;
+  if (kind !== undefined && kind !== null) jevShadowKind = kind;
+  const activeId = {
+    '': 'jevShadowKindAll',
+    missed_push: 'jevShadowKindMissed',
+    extra_push: 'jevShadowKindExtra',
+    mismatch: 'jevShadowKindMismatch',
+  }[jevShadowKind] || 'jevShadowKindAll';
+  ['jevShadowKindAll', 'jevShadowKindMissed', 'jevShadowKindExtra', 'jevShadowKindMismatch'].forEach(id => {
+    const button = document.getElementById(id);
+    if (button) {
+      button.classList.toggle('active', id === activeId);
+      button.setAttribute('aria-pressed', id === activeId ? 'true' : 'false');
+    }
+  });
   try {
     const params = new URLSearchParams();
     const startDate = document.getElementById('llmDecisionFromDate')?.value || '';
@@ -1380,6 +1460,8 @@ async function loadJevShadow() {
       params.set('from', startDate);
       params.set('to', endDate);
     }
+    if (jevShadowKind) params.set('kind', jevShadowKind);
+    params.set('limit', '200');
     const data = await api('/api/jev-shadow?' + params.toString());
     const summary = data.summary || {};
     const cost = summary.cost || {};
@@ -1399,9 +1481,15 @@ async function loadJevShadow() {
     pairs.innerHTML = pairEntries.length
       ? `<div class="hint">action 变化分布：${pairEntries.map(([key, value]) => `${escapeHtml(key)}：${value}`).join('；')}</div>`
       : '<div class="hint">暂无影子对比数据；启用 LLM_JEV_SHADOW_ENABLED=1 后随每条生产决策累计。</div>';
+    if (rowsBody) {
+      const details = Array.isArray(data.details) ? data.details : [];
+      rowsBody.innerHTML = details.map(jevShadowRowHtml).join('')
+        || `<tr><td colspan="6">${jevShadowKind === 'missed_push' ? '没有漏 push 记录。' : jevShadowKind === 'extra_push' ? '没有多 push 记录。' : jevShadowKind === 'mismatch' ? '没有不一致记录。' : '暂无影子明细。'}</td></tr>`;
+    }
   } catch (err) {
     metrics.innerHTML = '';
     if (pairs) pairs.innerHTML = `<div class="hint">影子对比数据加载失败：${escapeHtml(err.message)}</div>`;
+    if (rowsBody) rowsBody.innerHTML = '';
   }
 }
 

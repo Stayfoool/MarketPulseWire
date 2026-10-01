@@ -114,6 +114,27 @@
         <div class="hint">仅记录对比，不影响生产决策；启用 LLM_JEV_SHADOW_ENABLED=1 后随每条生产决策累计，条目明细见上方“模型尝试记录”中的 Jev 影子标记。</div>
         <div id="jevShadowMetrics" class="metric-grid"></div>
         <div id="jevShadowPairs"></div>
+        <div class="toolbar" style="margin-top:12px">
+          <button id="jevShadowKindAll" class="active" onclick="loadJevShadow('')">全部明细</button>
+          <button id="jevShadowKindMissed" onclick="loadJevShadow('missed_push')">漏 push</button>
+          <button id="jevShadowKindExtra" onclick="loadJevShadow('extra_push')">多 push</button>
+          <button id="jevShadowKindMismatch" onclick="loadJevShadow('mismatch')">不一致</button>
+        </div>
+        <div class="table-wrap">
+          <table class="market-information-table">
+            <thead>
+              <tr>
+                <th style="width:150px">判断时间</th>
+                <th style="width:150px">来源</th>
+                <th>信息</th>
+                <th style="width:170px">生产决策</th>
+                <th style="width:130px">Jev 决策</th>
+                <th style="width:150px">对比结果</th>
+              </tr>
+            </thead>
+            <tbody id="jevShadowRows"></tbody>
+          </table>
+        </div>
       </section>
     </section>
 

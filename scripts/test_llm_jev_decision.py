@@ -543,6 +543,7 @@ def test_shadow_writes_row_and_audit_without_touching_production() -> None:
             assert row["affects_current_decision"] is False
             assert row["market_review_id"] == 44
             assert row["production"]["model"] == "qwen3.7-flash-2026-07-15"
+            assert row["production_rule_actions"] == {"industry_price_supply_change": "push"}
             assert row["production"]["cost_cny"] is not None
             assert row["jev"]["status"] == "completed"
             assert row["jev"]["cost_cny"] is not None
