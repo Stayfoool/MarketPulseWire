@@ -198,6 +198,7 @@ def decide_production_market_item(
             reason=reason,
         )
     decision_audit = dict(execution.decision.audit_json)
+    rule_assessments = execution.evaluation.get("rule_assessments")
     decision_audit.update(
         {
             "production_authority": True,
@@ -211,6 +212,14 @@ def decide_production_market_item(
             "usage": dict(execution.evaluation.get("usage") or {}),
         }
     )
+    if isinstance(rule_assessments, list):
+        # 影子对比需要生产侧完整逐规则动作（含 archive 判定）；
+        # DecisionResult.rule_hits 只保留非 archive，archive 判定补记在审计里。
+        decision_audit["rule_actions"] = {
+            str(assessment.get("rule_id") or ""): str(assessment.get("selected_action") or "")
+            for assessment in rule_assessments[:64]
+            if isinstance(assessment, dict) and assessment.get("rule_id")
+        }
     # The audit path is intentionally not stored in SQLite; the direct market ids
     # in the mode-0600 file provide the lookup in both directions.
     _ = audit_path

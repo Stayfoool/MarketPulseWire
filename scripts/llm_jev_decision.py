@@ -784,6 +784,7 @@ def decide_production_market_item_with_jev(
             reason=reason,
         )
     decision_audit = dict(execution.decision.audit_json)
+    rule_assessments = execution.evaluation.get("rule_assessments")
     decision_audit.update(
         {
             "production_authority": True,
@@ -796,6 +797,12 @@ def decide_production_market_item_with_jev(
             "usage": dict(execution.evaluation.get("usage") or {}),
         }
     )
+    if isinstance(rule_assessments, list):
+        decision_audit["rule_actions"] = {
+            str(assessment.get("rule_id") or ""): str(assessment.get("selected_action") or "")
+            for assessment in rule_assessments[:64]
+            if isinstance(assessment, dict) and assessment.get("rule_id")
+        }
     _ = audit_path
     return replace(execution.decision, audit_json=decision_audit)
 
@@ -870,11 +877,18 @@ def _shadow_row(
     if decision is not None:
         production_action = str(production_decision.action)
         jev_action = str(decision.action)
+        # 优先取生产审计里的完整逐规则动作（含 archive 判定）；
+        # 旧审计无该字段时回退到 rule_hits（只有非 archive 判定）。
         production_rules = {
-            str(hit.get("rule_id") or ""): str(hit.get("decision_action") or "")
-            for hit in production_decision.rule_hits
-            if isinstance(hit, dict)
+            str(rule_id or ""): str(action or "")
+            for rule_id, action in (production_audit.get("rule_actions") or {}).items()
         }
+        if not production_rules:
+            production_rules = {
+                str(hit.get("rule_id") or ""): str(hit.get("decision_action") or "")
+                for hit in production_decision.rule_hits
+                if isinstance(hit, dict)
+            }
         production_rule_actions = dict(sorted(production_rules.items()))
         jev_rules = {entry["rule_id"]: entry["action"] for entry in rule_choices}
         shared = sorted(set(production_rules) & set(jev_rules))

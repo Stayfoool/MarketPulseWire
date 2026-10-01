@@ -386,6 +386,62 @@ def test_jev_shadow_details_filters_and_metadata() -> None:
     assert len(unknown) == 1
 
 
+def test_jev_shadow_feedback_roundtrip_and_summary() -> None:
+    from llm_decision_web import (
+        append_jev_shadow_feedback,
+        jev_shadow_details,
+        jev_shadow_feedback_summary,
+        load_jev_shadow_feedback,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        directory = Path(tmp)
+        row = {
+            "generated_at": "2026-09-30T01:00:00+00:00",
+            "market_item_id": 101,
+            "market_review_id": 11,
+            "source": "digitimes",
+            "source_item_id": "a-101",
+            "production": {"action": "push", "model": "m"},
+            "jev": {"status": "completed", "action": "archive"},
+            "comparison": {"item_agree": False, "action_pair": "push->archive",
+                           "rule_agree": 0, "rule_total": 0, "missed_push": True, "extra_push": False},
+        }
+        append_jev_shadow_feedback(
+            market_item_id=101, market_review_id=11, winner="jev", note="Jev 更保守",
+            shadow_dir=directory,
+        )
+        append_jev_shadow_feedback(
+            market_item_id=101, market_review_id=11, winner="production", note="",
+            shadow_dir=directory,
+        )
+        append_jev_shadow_feedback(
+            market_item_id=102, market_review_id=12, winner="both_bad", shadow_dir=directory,
+        )
+        feedback = load_jev_shadow_feedback(directory)
+        # 后一次评估整体覆盖前一次（含备注）
+        assert feedback[(101, 11)]["winner"] == "production"
+        assert feedback[(101, 11)]["note"] == ""
+        assert feedback[(102, 12)]["winner"] == "both_bad"
+        mode = (directory / "jev-shadow-feedback.jsonl").stat().st_mode & 0o777
+        assert mode == 0o600
+
+        summary = jev_shadow_feedback_summary(feedback, [row])
+        assert summary["total"] == 1
+        assert summary["by_winner"] == {"production": 1, "jev": 0, "both_bad": 0}
+        assert summary["by_kind"]["production"]["missed_push"] == 1
+
+        details = jev_shadow_details([row], item_meta={101: {"title": "t", "url": "", "published_at": ""}}, feedback=feedback)
+        assert details[0]["feedback"]["winner"] == "production"
+
+        try:
+            append_jev_shadow_feedback(market_item_id=101, market_review_id=11, winner="bogus", shadow_dir=directory)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("unknown winner must fail closed")
+
+
 def main() -> None:
     test_historical_uncertain_projection_is_bounded()
     test_current_action_projection_is_bounded()
@@ -396,6 +452,7 @@ def main() -> None:
     test_retention_removes_raw_calls_but_keeps_web_projection()
     test_jev_shadow_rows_and_summary_are_bounded()
     test_jev_shadow_details_filters_and_metadata()
+    test_jev_shadow_feedback_roundtrip_and_summary()
     print("llm decision web checks passed")
 
 
