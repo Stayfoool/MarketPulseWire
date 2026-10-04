@@ -246,11 +246,13 @@ def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> No
         assert [option["id"] for option in selector["options"]] == [
             "deepseek",
             "zhipu_glm",
-            "glm_bailian",
             "qwen_flash_snapshot",
             "qwen_flash",
-            "qwen38_max",
             "qwen38_2_4t_a95b",
+            "kimi_k3",
+            "glm_bailian",
+            "deepseek_v41_flash",
+            "qwen38_max",
             "qwen38_27b",
             "qwen38_flash",
             "qwen38_max_0902",
@@ -263,10 +265,20 @@ def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> No
         qwen38_max_0902 = next(option for option in selector["options"] if option["id"] == "qwen38_max_0902")
         assert qwen38_max_0902["model"] == "qwen3.8-max-0902"
         assert qwen38_max_0902["configured"] is False
+        kimi_k3 = next(option for option in selector["options"] if option["id"] == "kimi_k3")
+        assert kimi_k3["label"] == "阿里云百炼 Kimi K3"
+        assert kimi_k3["model"] == "kimi-k3"
+        assert kimi_k3["base_url"] == QWEN_BAILIAN_BASE_URL
+        assert kimi_k3["configured"] is False
+        deepseek_v41_flash = next(option for option in selector["options"] if option["id"] == "deepseek_v41_flash")
+        assert deepseek_v41_flash["label"] == "阿里云百炼 DeepSeek V4.1 Flash"
+        assert deepseek_v41_flash["model"] == "deepseek-v4.1-flash"
+        assert deepseek_v41_flash["configured"] is False
         assert selector["fallback_note"] == (
-            "百炼 qwen3.8 余额回退顺序：qwen3.8-max → qwen3.8-2.4t-a95b → qwen3.8-27b"
-            " → qwen3.8-flash → qwen3.8-max-0902。qwen3.8 模型额度用尽后从链中下一个继续；"
-            "百炼托管的 DeepSeek 额度用尽后从链头开始；千问快照模型余额不足时改用稳定版 qwen3.7-flash。"
+            "百炼免费额度余额回退顺序：qwen3.7-flash-2026-07-15 → qwen3.7-flash"
+            " → qwen3.8-2.4t-a95b → kimi-k3 → glm-5.3 → deepseek-v4.1-flash。"
+            "链上模型额度用尽后从下一个继续；免费额度已用完的旧 qwen3.8 模型和"
+            "百炼托管的 DeepSeek 额度用尽后从链头开始；官方 DeepSeek 和智谱 GLM 5.3 Flash 端点无回退。"
         )
         glm_bailian = next(option for option in selector["options"] if option["id"] == "glm_bailian")
         assert glm_bailian["label"] == "阿里云百炼 GLM 5.3"

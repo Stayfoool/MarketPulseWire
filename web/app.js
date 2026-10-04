@@ -1307,6 +1307,8 @@ const LLM_MODEL_FIELDS = {
   qwen38_27b: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
   qwen38_flash: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
   qwen38_max_0902: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
+  kimi_k3: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
+  deepseek_v41_flash: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
 };
 
 const LLM_MODEL_LABELS = {
@@ -1320,6 +1322,8 @@ const LLM_MODEL_LABELS = {
   qwen38_27b: '阿里云百炼 Qwen3.8 27B',
   qwen38_flash: '阿里云百炼 Qwen3.8 Flash',
   qwen38_max_0902: '阿里云百炼 Qwen3.8 Max（0902）',
+  kimi_k3: '阿里云百炼 Kimi K3',
+  deepseek_v41_flash: '阿里云百炼 DeepSeek V4.1 Flash',
 };
 
 function decisionEngineSelectorHtml(selector) {

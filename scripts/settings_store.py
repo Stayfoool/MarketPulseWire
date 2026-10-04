@@ -9,20 +9,20 @@ from pathlib import Path
 from typing import Any
 
 from llm_provider_config import (
+    BAILIAN_FALLBACK_CHAIN,
     DEEPSEEK_PROVIDER,
-    GLM_BAILIAN_MODEL,
+    DEEPSEEK_V41_FLASH_PROVIDER,
     GLM_BAILIAN_PROVIDER,
+    KIMI_K3_PROVIDER,
     QWEN_BAILIAN_BASE_URL,
     QWEN_BAILIAN_PROVIDER_MODELS,
     QWEN38_27B_PROVIDER,
     QWEN38_2_4T_A95B_PROVIDER,
-    QWEN38_BAILIAN_CHAIN,
     QWEN38_FLASH_PROVIDER,
     QWEN38_MAX_0902_PROVIDER,
     QWEN38_MAX_PROVIDER,
-    QWEN_FLASH_MODEL,
+    QWEN38_RETIRED_PROVIDERS,
     QWEN_FLASH_PROVIDER,
-    QWEN_FLASH_SNAPSHOT_MODEL,
     QWEN_FLASH_SNAPSHOT_PROVIDER,
     ZHIPU_GLM_BASE_URL,
     ZHIPU_GLM_MODEL,
@@ -189,19 +189,24 @@ SETTING_GROUPS: list[dict[str, Any]] = [
 
 FIELDS_BY_KEY = {field.key: field for group in SETTING_GROUPS for field in group["fields"]}
 
-QWEN38_MODEL_LABELS = {
-    QWEN38_MAX_PROVIDER: "阿里云百炼 Qwen3.8 Max",
+BAILIAN_MODEL_LABELS = {
+    QWEN_FLASH_SNAPSHOT_PROVIDER: "阿里云百炼 Qwen3.7 Flash（快照）",
+    QWEN_FLASH_PROVIDER: "阿里云百炼 Qwen3.7 Flash（稳定版）",
     QWEN38_2_4T_A95B_PROVIDER: "阿里云百炼 Qwen3.8 2.4T A95B",
+    KIMI_K3_PROVIDER: "阿里云百炼 Kimi K3",
+    GLM_BAILIAN_PROVIDER: "阿里云百炼 GLM 5.3",
+    DEEPSEEK_V41_FLASH_PROVIDER: "阿里云百炼 DeepSeek V4.1 Flash",
+    QWEN38_MAX_PROVIDER: "阿里云百炼 Qwen3.8 Max",
     QWEN38_27B_PROVIDER: "阿里云百炼 Qwen3.8 27B",
     QWEN38_FLASH_PROVIDER: "阿里云百炼 Qwen3.8 Flash",
     QWEN38_MAX_0902_PROVIDER: "阿里云百炼 Qwen3.8 Max（0902）",
 }
 
-QWEN38_FALLBACK_NOTE = (
-    "百炼 qwen3.8 余额回退顺序："
-    + " → ".join(model for _, model in QWEN38_BAILIAN_CHAIN)
-    + "。qwen3.8 模型额度用尽后从链中下一个继续；百炼托管的 DeepSeek 额度用尽后从链头开始；"
-    "千问快照模型余额不足时改用稳定版 qwen3.7-flash。"
+BAILIAN_FALLBACK_NOTE = (
+    "百炼免费额度余额回退顺序："
+    + " → ".join(model for _, model in BAILIAN_FALLBACK_CHAIN)
+    + "。链上模型额度用尽后从下一个继续；免费额度已用完的旧 qwen3.8 模型和"
+    "百炼托管的 DeepSeek 额度用尽后从链头开始；官方 DeepSeek 和智谱 GLM 5.3 Flash 端点无回退。"
 )
 
 DECISION_ENGINE_NOTE = (
@@ -239,9 +244,10 @@ def llm_model_selector(values: dict[str, str]) -> dict[str, Any]:
     deepseek_label = (
         "阿里云百炼 DeepSeek" if is_qwen_bailian_base_url(deepseek_base_url) else "DeepSeek"
     )
+    bailian_base_url = values.get("LLM_QWEN_BASE_URL") or QWEN_BAILIAN_BASE_URL
     return {
         "current": current,
-        "fallback_note": QWEN38_FALLBACK_NOTE,
+        "fallback_note": BAILIAN_FALLBACK_NOTE,
         "options": [
             {
                 "id": DEEPSEEK_PROVIDER,
@@ -259,36 +265,15 @@ def llm_model_selector(values: dict[str, str]) -> dict[str, Any]:
                 "model": ZHIPU_GLM_MODEL,
                 "configured": bool(values.get("LLM_GLM_API_KEY")),
             },
-            {
-                "id": GLM_BAILIAN_PROVIDER,
-                "label": "阿里云百炼 GLM 5.3",
-                "base_url": values.get("LLM_QWEN_BASE_URL") or QWEN_BAILIAN_BASE_URL,
-                "model": GLM_BAILIAN_MODEL,
-                "configured": bool(values.get("LLM_QWEN_API_KEY")),
-            },
-            {
-                "id": QWEN_FLASH_SNAPSHOT_PROVIDER,
-                "label": "阿里云百炼 Qwen3.7 Flash（快照）",
-                "base_url": values.get("LLM_QWEN_BASE_URL") or QWEN_BAILIAN_BASE_URL,
-                "model": QWEN_FLASH_SNAPSHOT_MODEL,
-                "configured": bool(values.get("LLM_QWEN_API_KEY")),
-            },
-            {
-                "id": QWEN_FLASH_PROVIDER,
-                "label": "阿里云百炼 Qwen3.7 Flash（稳定版）",
-                "base_url": values.get("LLM_QWEN_BASE_URL") or QWEN_BAILIAN_BASE_URL,
-                "model": QWEN_FLASH_MODEL,
-                "configured": bool(values.get("LLM_QWEN_API_KEY")),
-            },
             *[
                 {
                     "id": provider,
-                    "label": QWEN38_MODEL_LABELS[provider],
-                    "base_url": values.get("LLM_QWEN_BASE_URL") or QWEN_BAILIAN_BASE_URL,
+                    "label": BAILIAN_MODEL_LABELS[provider],
+                    "base_url": bailian_base_url,
                     "model": model,
                     "configured": bool(values.get("LLM_QWEN_API_KEY")),
                 }
-                for provider, model in QWEN38_BAILIAN_CHAIN
+                for provider, model in (*BAILIAN_FALLBACK_CHAIN, *QWEN38_RETIRED_PROVIDERS)
             ],
         ],
     }

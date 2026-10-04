@@ -23,13 +23,12 @@ QWEN_FLASH_SNAPSHOT_MODEL = "qwen3.7-flash-2026-07-15"
 QWEN_FLASH_MODEL = "qwen3.7-flash"
 
 # 百炼托管的智谱 GLM 5.3：与百炼千问模型共用 LLM_QWEN_API_KEY / LLM_QWEN_BASE_URL，
-# 但不参与千问快照模型的余额回退（回退仅限同品牌 qwen3.7-flash）。
+# 并作为百炼免费额度回退链的一档参与回退。
 GLM_BAILIAN_PROVIDER = "glm_bailian"
 GLM_BAILIAN_MODEL = "glm-5.3"
 _GLM_BAILIAN_ALIASES = {GLM_BAILIAN_PROVIDER, GLM_BAILIAN_MODEL}
 
-# 百炼千问 qwen3.8 系列：与 qwen3.7 快照模型共用 LLM_QWEN_API_KEY / LLM_QWEN_BASE_URL，
-# 按下列顺序组成余额回退链；当前模型额度用尽时同一轮切换到链上的下一个模型。
+# 百炼千问 qwen3.8 系列：与 qwen3.7 快照模型共用 LLM_QWEN_API_KEY / LLM_QWEN_BASE_URL。
 QWEN38_MAX_PROVIDER = "qwen38_max"
 QWEN38_MAX_MODEL = "qwen3.8-max"
 QWEN38_2_4T_A95B_PROVIDER = "qwen38_2_4t_a95b"
@@ -43,26 +42,41 @@ QWEN38_MAX_0902_MODEL = "qwen3.8-max-0902"
 # qwen3.8-2.4t-a95b 仅支持思考模式：百炼 OpenAI 兼容端点对它要求 enable_thinking=true，
 # 传 false 直接返回 HTTP 400 InternalError.Algo.InvalidParameter。
 QWEN_BAILIAN_THINKING_ONLY_MODELS = {QWEN38_2_4T_A95B_MODEL}
-QWEN38_BAILIAN_CHAIN = (
-    (QWEN38_MAX_PROVIDER, QWEN38_MAX_MODEL),
+
+# 百炼托管的 Kimi K3 与 DeepSeek V4.1 Flash：同样共用千问连接。
+KIMI_K3_PROVIDER = "kimi_k3"
+KIMI_K3_MODEL = "kimi-k3"
+DEEPSEEK_V41_FLASH_PROVIDER = "deepseek_v41_flash"
+DEEPSEEK_V41_FLASH_MODEL = "deepseek-v4.1-flash"
+
+# 百炼免费额度模型按下列顺序依次使用：当前模型额度用尽时，
+# 同一轮请求切换到链上的下一个模型。glm-5.3、kimi-k3、deepseek-v4.1-flash
+# 与千问模型共用 LLM_QWEN_API_KEY / LLM_QWEN_BASE_URL。
+BAILIAN_FALLBACK_CHAIN = (
+    (QWEN_FLASH_SNAPSHOT_PROVIDER, QWEN_FLASH_SNAPSHOT_MODEL),
+    (QWEN_FLASH_PROVIDER, QWEN_FLASH_MODEL),
     (QWEN38_2_4T_A95B_PROVIDER, QWEN38_2_4T_A95B_MODEL),
+    (KIMI_K3_PROVIDER, KIMI_K3_MODEL),
+    (GLM_BAILIAN_PROVIDER, GLM_BAILIAN_MODEL),
+    (DEEPSEEK_V41_FLASH_PROVIDER, DEEPSEEK_V41_FLASH_MODEL),
+)
+
+# 免费额度已用完的旧 qwen3.8 模型：不再进入回退链，仅保留解析，
+# 历史 LLM_PROVIDER 命中后额度报错时从链头开始回退。
+QWEN38_RETIRED_PROVIDERS = (
+    (QWEN38_MAX_PROVIDER, QWEN38_MAX_MODEL),
     (QWEN38_27B_PROVIDER, QWEN38_27B_MODEL),
     (QWEN38_FLASH_PROVIDER, QWEN38_FLASH_MODEL),
     (QWEN38_MAX_0902_PROVIDER, QWEN38_MAX_0902_MODEL),
 )
 
-# 千问快照模型余额不足时改用同一端点的稳定版模型；qwen3.8 系列按声明顺序回退。
 QWEN_BAILIAN_PROVIDER_MODELS = {
     QWEN_FLASH_SNAPSHOT_PROVIDER: QWEN_FLASH_SNAPSHOT_MODEL,
     QWEN_FLASH_PROVIDER: QWEN_FLASH_MODEL,
-    **{provider: model for provider, model in QWEN38_BAILIAN_CHAIN},
-}
-QWEN_BAILIAN_FALLBACK_PROVIDERS = {
-    QWEN_FLASH_SNAPSHOT_PROVIDER: (QWEN_FLASH_PROVIDER,),
-    **{
-        provider: tuple(next_provider for next_provider, _ in QWEN38_BAILIAN_CHAIN[index + 1 :])
-        for index, (provider, _) in enumerate(QWEN38_BAILIAN_CHAIN)
-    },
+    **{provider: model for provider, model in QWEN38_RETIRED_PROVIDERS},
+    QWEN38_2_4T_A95B_PROVIDER: QWEN38_2_4T_A95B_MODEL,
+    KIMI_K3_PROVIDER: KIMI_K3_MODEL,
+    DEEPSEEK_V41_FLASH_PROVIDER: DEEPSEEK_V41_FLASH_MODEL,
 }
 _QWEN_BAILIAN_MODEL_PROVIDERS = {model: provider for provider, model in QWEN_BAILIAN_PROVIDER_MODELS.items()}
 _QWEN_SNAPSHOT_ALIASES = {
@@ -160,22 +174,27 @@ def _resolve_qwen_connection(values: Mapping[str, str]) -> tuple[str, str] | Non
 def resolve_llm_fallback_connections(values: Mapping[str, str]) -> list[tuple[str, str, str]]:
     """Resolve the ordered 阿里云百炼 fallback models used when the current model reports no balance."""
     provider = canonical_llm_provider(values.get("LLM_PROVIDER", ""))
-    if provider in QWEN_BAILIAN_PROVIDER_MODELS:
-        fallback_providers = QWEN_BAILIAN_FALLBACK_PROVIDERS.get(provider, ())
-        connection = _resolve_qwen_connection(values)
-    elif provider == DEEPSEEK_PROVIDER and is_qwen_bailian_base_url(
-        str(values.get("LLM_BASE_URL") or "")
+    chain_providers = [chain_provider for chain_provider, _ in BAILIAN_FALLBACK_CHAIN]
+    if provider in chain_providers:
+        # 链上模型额度用尽后从自己的下一档继续。
+        fallback_providers = tuple(chain_providers[chain_providers.index(provider) + 1 :])
+    elif provider in QWEN_BAILIAN_PROVIDER_MODELS or (
+        provider == DEEPSEEK_PROVIDER
+        and is_qwen_bailian_base_url(str(values.get("LLM_BASE_URL") or ""))
     ):
-        # 百炼托管的 DeepSeek 额度用尽时，从 qwen3.8 回退链头部开始切换；
-        # 官方 DeepSeek 端点不回退百炼模型。
-        fallback_providers = tuple(chain_provider for chain_provider, _ in QWEN38_BAILIAN_CHAIN)
-        connection = _resolve_qwen_connection(values)
+        # 链外百炼模型（免费额度已用完的旧 qwen3.8 系列、百炼托管的 DeepSeek）
+        # 额度用尽后从链头开始切换；官方 DeepSeek 端点和智谱 GLM 不回退百炼模型。
+        fallback_providers = tuple(chain_providers)
     else:
         return []
-    if not fallback_providers or not connection:
+    if not fallback_providers:
+        return []
+    connection = _resolve_qwen_connection(values)
+    if not connection:
         return []
     api_key, base_url = connection
+    chain_models = dict(BAILIAN_FALLBACK_CHAIN)
     return [
-        (api_key, base_url, QWEN_BAILIAN_PROVIDER_MODELS[fallback_provider])
+        (api_key, base_url, chain_models[fallback_provider])
         for fallback_provider in fallback_providers
     ]
