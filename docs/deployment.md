@@ -302,26 +302,23 @@ variables. DeepSeek and existing compatible configurations use `LLM_BASE_URL`;
 `https://open.bigmodel.cn/api/paas/v4` endpoint and `glm-5.3-flash` with the
 separate private `LLM_GLM_API_KEY`. Its requests always use code-fixed
 `thinking=enabled`, `reasoning_effort=low` and JSON mode, independent of the
-DeepSeek thinking setting. `LLM_PROVIDER=glm_bailian` selects the
-百炼-hosted `glm-5.3` and shares the private `LLM_QWEN_API_KEY` /
-`LLM_QWEN_BASE_URL` connection with the 千问 models; it sends the same
-`enable_thinking=false` and JSON mode and has no balance fallback.
-`LLM_PROVIDER=qwen_flash_snapshot` (default model
-`qwen3.7-flash-2026-07-15`) and `LLM_PROVIDER=qwen_flash`
-(`qwen3.7-flash`) use the separate private `LLM_QWEN_API_KEY` and
-`LLM_QWEN_BASE_URL`, which defaults to the 百炼 OpenAI-compatible endpoint
+DeepSeek thinking setting. The remaining providers are 百炼-hosted and share
+the private `LLM_QWEN_API_KEY` / `LLM_QWEN_BASE_URL` connection, which
+defaults to the 百炼 OpenAI-compatible endpoint
 `https://dashscope.aliyuncs.com/compatible-mode/v1`; use the workspace-specific
 `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` URL
-when the API key belongs to a business space. 千问 requests send
-`enable_thinking=false` and JSON mode, and a 千问 snapshot request that reports
-insufficient balance is retried once against `qwen3.7-flash`. The 百炼
-qwen3.8 providers `qwen38_max`, `qwen38_2_4t_a95b`, `qwen38_27b`,
-`qwen38_flash` and `qwen38_max_0902` share the same private connection; when a
-selected qwen3.8 model's quota is exhausted, the request walks the ordered
-fallback chain Max → 2.4T A95B → 27B → Flash → Max 0902 starting after the
-selected model. When `LLM_PROVIDER=deepseek` points `LLM_BASE_URL` at the 百炼
-endpoint (百炼-hosted DeepSeek), an exhausted quota switches to the same
-qwen3.8 fallback chain starting from its head, using the separate private
+when the API key belongs to a business space. 百炼 requests send
+`enable_thinking=false` and JSON mode, except thinking-only
+`qwen38_2_4t_a95b`, which always sends `enable_thinking=true`. These providers
+form the ordered 百炼 free-quota balance fallback chain
+`qwen_flash_snapshot` (default model `qwen3.7-flash-2026-07-15`) →
+`qwen_flash` (`qwen3.7-flash`) → `qwen38_2_4t_a95b` (`qwen3.8-2.4t-a95b`) →
+`kimi_k3` (`kimi-k3`) → `glm_bailian` (`glm-5.3`) → `deepseek_v41_flash`
+(`deepseek-v4.1-flash`); when the selected model's quota is exhausted, the
+request walks the chain starting after it. The retired qwen3.8 providers
+(`qwen38_max`, `qwen38_27b`, `qwen38_flash`, `qwen38_max_0902`; free quota
+exhausted) and 百炼-hosted DeepSeek (`LLM_PROVIDER=deepseek` with a 百炼
+`LLM_BASE_URL`) enter the chain from its head, using the separate private
 `LLM_QWEN_API_KEY` / `LLM_QWEN_BASE_URL` connection; the official DeepSeek
 endpoint has no Bailian fallback. The Web
 workbench's `当前模型` control writes
