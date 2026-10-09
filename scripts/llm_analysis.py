@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 
 from llm_provider_config import (
+    BAILIAN_FIXED_TEMPERATURE_MODELS,
     QWEN_BAILIAN_THINKING_ONLY_MODELS,
     is_qwen_bailian_base_url,
     resolve_llm_connection,
@@ -322,6 +323,11 @@ def apply_llm_response_preferences(
             thinking_override=thinking_override,
         )
     )
+    # 只接受固定 temperature 的模型：统一改写已经写入 payload 的取值，
+    # 避免各调用方各自维护模型兼容表。
+    fixed_temperature = BAILIAN_FIXED_TEMPERATURE_MODELS.get(str(model or ""))
+    if fixed_temperature is not None and "temperature" in payload:
+        payload["temperature"] = fixed_temperature
 
 
 def retry_sleep_seconds(attempt: int) -> float:

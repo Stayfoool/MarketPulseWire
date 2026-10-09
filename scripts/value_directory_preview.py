@@ -79,6 +79,10 @@ USER_PROMPT = """请提取这份价值目录研报可见第一页预览中的关
 
 _PADDLE_OCR: Any | None = None
 
+# 大模型摘要失败时用第一页 OCR 原文兜底送入决策的截断长度。
+OCR_FALLBACK_TEXT_LIMIT = 4000
+OCR_FALLBACK_NOTE = "第一页 OCR 原文（未通过大模型摘要，可能含识别误差）"
+
 
 def env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name, "").strip().lower()
@@ -655,6 +659,18 @@ def extract_preview_facts(item: dict[str, Any], preview: dict[str, Any]) -> dict
         return fallback_facts(item, preview, exc, ocr=ocr)
 
 
+def ocr_fallback_text(facts: dict[str, Any]) -> str:
+    """第一页 OCR 原文兜底文本。
+
+    大模型摘要失败但 OCR 成功时返回原文，让决策层仍能基于第一页正文判断；
+    OCR 本身不可用时返回空，避免把空文本或过短噪声当成正文。
+    """
+    ocr = facts.get("ocr") or {}
+    if str(ocr.get("status") or "") != "ok":
+        return ""
+    return compact(ocr.get("text"), OCR_FALLBACK_TEXT_LIMIT)
+
+
 def preview_lines(facts: dict[str, Any]) -> list[str]:
     lines: list[str] = []
     status = str(facts.get("status") or "")
@@ -702,4 +718,12 @@ def apply_preview_to_item(item: dict[str, Any], preview: dict[str, Any], facts: 
         enriched["content"] = f"{enriched.get('title', '')}\n{details}".strip()
         enriched["full_text"] = enriched["content"]
         enriched["body_source"] = "价值目录详情页可见第一页预览"
+        return enriched
+    ocr_text = ocr_fallback_text(facts)
+    if ocr_text:
+        details = "\n".join(enriched["preview_lines"])
+        body = f"{enriched.get('title', '')}\n{details}\n{OCR_FALLBACK_NOTE}：{ocr_text}".strip()
+        enriched["content"] = body
+        enriched["full_text"] = body
+        enriched["body_source"] = OCR_FALLBACK_NOTE
     return enriched
