@@ -12,6 +12,7 @@ os.environ["SURVEIL_DISABLE_LLM"] = "1"
 
 import llm_analysis
 from llm_analysis import analyze_with_llm, format_llm_analysis, parse_json_object
+from llm_provider_config import BAILIAN_FIXED_TEMPERATURE_MODELS
 
 
 def test_raw_chat_completion_returns_bounded_usage_metadata() -> None:
@@ -733,6 +734,33 @@ def test_bailian_thinking_only_model_forces_enable_thinking() -> None:
                 os.environ[name] = value
 
 
+def test_bailian_fixed_temperature_models_normalize_temperature() -> None:
+    names = ("LLM_THINKING_TYPE", "LLM_RESPONSE_FORMAT_JSON")
+    original = {name: os.environ.get(name) for name in names}
+    try:
+        os.environ.pop("LLM_THINKING_TYPE", None)
+        os.environ.pop("LLM_RESPONSE_FORMAT_JSON", None)
+        base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        # kimi-k3 只接受固定 temperature：0.1 会被端点以 HTTP 400 拒绝。
+        payload = {"model": "kimi-k3", "temperature": 0.1}
+        llm_analysis.apply_llm_response_preferences(payload, base_url=base_url, model="kimi-k3")
+        assert payload["temperature"] == BAILIAN_FIXED_TEMPERATURE_MODELS["kimi-k3"]
+        # 其它模型保留调用方自己的取值。
+        other = {"model": "qwen3.8-max", "temperature": 0.1}
+        llm_analysis.apply_llm_response_preferences(other, base_url=base_url, model="qwen3.8-max")
+        assert other["temperature"] == 0.1
+        # payload 未带 temperature 时不新增字段。
+        bare: dict[str, object] = {"model": "kimi-k3"}
+        llm_analysis.apply_llm_response_preferences(bare, base_url=base_url, model="kimi-k3")
+        assert "temperature" not in bare
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def test_provider_error_code_extracts_bounded_code() -> None:
     body = json.dumps({"error": {"code": "invalid_parameter_error", "message": "boom"}})
     assert llm_analysis.provider_error_code(body) == "invalid_parameter_error"
@@ -986,6 +1014,7 @@ def main() -> int:
     test_glm_bailian_provider_uses_bailian_connection_and_chain_fallback()
     test_qwen_bailian_request_uses_supported_response_preferences()
     test_bailian_thinking_only_model_forces_enable_thinking()
+    test_bailian_fixed_temperature_models_normalize_temperature()
     test_provider_error_code_extracts_bounded_code()
     test_balance_insufficient_falls_back_to_qwen_flash_stable_model()
     test_retired_qwen38_providers_fall_back_from_chain_head()

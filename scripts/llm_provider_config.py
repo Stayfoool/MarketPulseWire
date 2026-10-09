@@ -49,6 +49,11 @@ KIMI_K3_MODEL = "kimi-k3"
 DEEPSEEK_V41_FLASH_PROVIDER = "deepseek_v41_flash"
 DEEPSEEK_V41_FLASH_MODEL = "deepseek-v4.1-flash"
 
+# 只接受固定 temperature 的模型：百炼 OpenAI 兼容端点对这些模型的其它取值直接返回
+# HTTP 400 InternalError.Algo.InvalidParameter（kimi-k3 传 temperature=0.1 会被拒绝，
+# 生产程度决策链路固定传 0 可正常返回），请求前统一归一化为该固定值。
+BAILIAN_FIXED_TEMPERATURE_MODELS = {KIMI_K3_MODEL: 0}
+
 # 百炼免费额度模型按下列顺序依次使用：当前模型额度用尽时，
 # 同一轮请求切换到链上的下一个模型。glm-5.3、kimi-k3、deepseek-v4.1-flash
 # 与千问模型共用 LLM_QWEN_API_KEY / LLM_QWEN_BASE_URL。

@@ -668,6 +668,104 @@ def test_preview_failure_is_recorded_without_fake_summary() -> None:
     assert "失败/不可用" in enriched["preview_lines"][0]
 
 
+def test_preview_summary_failure_falls_back_to_ocr_text() -> None:
+    item = {
+        "id": "888641",
+        "url": "https://www.valuelist.cn/888641.html",
+        "title": "摩根士丹利-美国联邦通信委员会关于光收发器的潜在规定更有可能针对3.2T规格-20261001【14页】",
+        "summary": "title only",
+        "raw": {},
+    }
+    preview = {"state": "ok", "previewImages": [{"src": "https://img.valuelist.cn/202610/vBF0XbSH.jpg"}]}
+    ocr = {
+        "engine": "paddleocr",
+        "status": "ok",
+        "text": "潜在的限制措施预计将在3.2T水平上生效，从而限制基于中国的收发器产品。",
+        "line_count": 50,
+        "avg_confidence": 0.95,
+    }
+    facts = fallback_facts(item, preview, RuntimeError("HTTP 400: temperature 不支持"), ocr=ocr)
+    enriched = apply_preview_to_item(item, preview, facts)
+
+    # 摘要失败的事实状态不变，但决策层改用第一页 OCR 原文，而不是只剩标题。
+    assert facts["status"] == "failed"
+    assert enriched["summary"] == "title only"
+    assert "3.2T水平上生效" in enriched["full_text"]
+    assert enriched["full_text"] == enriched["content"]
+    assert enriched["body_source"] == value_directory_preview.OCR_FALLBACK_NOTE
+    assert value_directory_preview.OCR_FALLBACK_NOTE in enriched["full_text"]
+
+
+def test_preview_failure_without_usable_ocr_keeps_title_only_body() -> None:
+    item = {
+        "id": "888642",
+        "title": "高盛-交易思路：做多中国人工智能价值链-20260626【1页】",
+        "summary": "title only",
+        "raw": {},
+    }
+    preview = {"state": "ok", "previewImages": [{"src": "https://img.valuelist.cn/888642.jpg"}]}
+    facts = fallback_facts(
+        item,
+        preview,
+        RuntimeError("vision unavailable"),
+        ocr={"engine": "paddleocr", "status": "too_short", "text": "很短"},
+    )
+    enriched = apply_preview_to_item(item, preview, facts)
+
+    assert enriched["summary"] == "title only"
+    assert "full_text" not in enriched
+    assert "content" not in enriched
+
+
+def test_preview_text_llm_normalizes_fixed_temperature_models() -> None:
+    env_names = (
+        "LLM_API_KEY",
+        "LLM_BASE_URL",
+        "LLM_MODEL",
+        "SURVEIL_DISABLE_LLM",
+        "VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT",
+    )
+    original_env = {name: os.environ.get(name) for name in env_names}
+    original_fallback = value_directory_preview.llm_fallback_configs
+    original_request = value_directory_preview.request_preview_llm
+    requested: list[dict[str, object]] = []
+
+    def fake_request(payload, *, base_url, api_key):
+        requested.append({"model": payload["model"], "temperature": payload.get("temperature")})
+        return {
+            "choices": [
+                {"message": {"content": json.dumps({"core_content": "结论"}, ensure_ascii=False)}}
+            ]
+        }
+
+    try:
+        os.environ["LLM_API_KEY"] = "primary-key"
+        os.environ["LLM_BASE_URL"] = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        os.environ.pop("SURVEIL_DISABLE_LLM", None)
+        os.environ["VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT"] = "0"
+        value_directory_preview.llm_fallback_configs = lambda: []
+        value_directory_preview.request_preview_llm = fake_request
+
+        os.environ["LLM_MODEL"] = "kimi-k3"
+        value_directory_preview.call_preview_text_llm({}, {"state": "ok"})
+        os.environ["LLM_MODEL"] = "qwen3.8-max"
+        value_directory_preview.call_preview_text_llm({}, {"state": "ok"})
+    finally:
+        for name, value in original_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        value_directory_preview.llm_fallback_configs = original_fallback
+        value_directory_preview.request_preview_llm = original_request
+
+    # kimi-k3 只接受固定 temperature，其它模型保留预览链路自己的取值。
+    assert requested[0]["model"] == "kimi-k3"
+    assert requested[0]["temperature"] == 0
+    assert requested[1]["model"] == "qwen3.8-max"
+    assert requested[1]["temperature"] == 0.1
+
+
 def test_paddleocr_result_flatten_supports_common_shapes() -> None:
     v2_result = [
         [
@@ -1894,6 +1992,9 @@ def main() -> int:
     test_dedupe_entries_keeps_first_valid_url()
     test_source_profile_registers_value_directory()
     test_preview_failure_is_recorded_without_fake_summary()
+    test_preview_summary_failure_falls_back_to_ocr_text()
+    test_preview_failure_without_usable_ocr_keeps_title_only_body()
+    test_preview_text_llm_normalizes_fixed_temperature_models()
     test_paddleocr_result_flatten_supports_common_shapes()
     test_paddleocr_instance_retries_unknown_argument_errors()
     test_preview_llm_policy_disables_deepseek_thinking()
