@@ -65,6 +65,15 @@ _BALANCE_ERROR_MARKERS = (
     # 阿里云百炼免费额度用尽：HTTP 403 AllocationQuota.FreeTierOnly。
     "free quota exhausted",
     "allocationquota.freetieronly",
+    # 火山方舟额度/欠费：安心体验模式免费额度用尽（429 SetLimitExceeded）、
+    # 账号欠费（403 AccountOverdueError / OperationDenied.ServiceOverdue）、
+    # 配额达上限（429 QuotaExceeded）。
+    "setlimitexceeded",
+    "accountoverdueerror",
+    "operationdenied.serviceoverdue",
+    "reached the set usage limit",
+    "已达到设置的模型用量上限",
+    "quotaexceeded",
 )
 
 
@@ -276,6 +285,9 @@ def thinking_type(base_url: str, model: str) -> str:
         return "disabled"
     if is_qwen_bailian_base_url(base_url):
         return "disabled"
+    if "volces.com" in base_url.lower():
+        # 火山方舟豆包 Seed 模型：默认关闭思考，保证 JSON 输出稳定。
+        return "disabled"
     return ""
 
 
@@ -364,11 +376,15 @@ def _chat_completion_once(
     max_tokens_override: int | None = None,
     temperature_override: float | None = None,
     model_override: str | None = None,
+    connection_override: tuple[str, str] | None = None,
 ) -> ChatCompletionResponse:
     config = llm_config()
     if not config:
         raise RuntimeError("LLM 未配置")
     api_key, base_url, model = config
+    if connection_override:
+        # 回退档可能使用不同供应商的独立连接（如火山方舟兜底档）。
+        api_key, base_url = connection_override
     if model_override:
         model = model_override
     payload = {
@@ -513,6 +529,7 @@ def call_chat_completion_raw_with_prompts(
                     max_tokens_override=max_tokens_override,
                     temperature_override=temperature_override,
                     model_override=fallback[2],
+                    connection_override=(fallback[0], fallback[1]),
                 )
             except LLMBalanceInsufficientError:
                 continue
@@ -535,12 +552,16 @@ def _chat_completion_once_hard_deadline(
     max_tokens_override: int | None = None,
     temperature_override: float | None = None,
     model_override: str | None = None,
+    connection_override: tuple[str, str] | None = None,
 ) -> ChatCompletionResponse:
     """Call the compatible chat API without exceeding one shared wall-clock deadline."""
     config = llm_config()
     if not config:
         raise RuntimeError("LLM 未配置")
     api_key, base_url, model = config
+    if connection_override:
+        # 回退档可能使用不同供应商的独立连接（如火山方舟兜底档）。
+        api_key, base_url = connection_override
     if model_override:
         model = model_override
     payload: dict[str, Any] = {
@@ -708,6 +729,7 @@ def call_chat_completion_raw_with_prompts_hard_deadline(
                     max_tokens_override=max_tokens_override,
                     temperature_override=temperature_override,
                     model_override=fallback[2],
+                    connection_override=(fallback[0], fallback[1]),
                 )
             except LLMBalanceInsufficientError:
                 continue
