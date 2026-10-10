@@ -492,9 +492,13 @@ def test_ark_providers_use_dedicated_connection_and_fails_closed_without_key() -
             "https://ark.cn-beijing.volces.com/api/v3",
             "doubao-seed-2-1-lite-260915",
         )
-        # 方舟链首模型额度用尽后切换到方舟链尾模型；百炼未配置时不参与。
-        assert llm_analysis.llm_fallback_configs() == [
-            ("ark-key", "https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-2-0-pro-260215"),
+        # 方舟链首模型额度用尽后按开通页顺序切换后续方舟模型；百炼未配置时不参与。
+        assert [connection[2] for connection in llm_analysis.llm_fallback_configs()] == [
+            "deepseek-v4-1-flash-260910",
+            "glm-5-3-flash-260828",
+            "deepseek-v4-pro-ga-260813",
+            "deepseek-v4-flash-ga-260731",
+            "doubao-seed-2-0-pro-260215",
         ]
 
         # 链尾模型额度用尽后没有后续备用模型，保持关闭式失败。
@@ -529,19 +533,27 @@ def test_bailian_chain_falls_back_to_ark_tail() -> None:
             "glm-5.3",
             "deepseek-v4.1-flash",
             "doubao-seed-2-1-lite-260915",
+            "deepseek-v4-1-flash-260910",
+            "glm-5-3-flash-260828",
+            "deepseek-v4-pro-ga-260813",
+            "deepseek-v4-flash-ga-260731",
             "doubao-seed-2-0-pro-260215",
         ]
         # 百炼档共用千问连接，方舟档使用独立的方舟连接。
         assert [connection[0] for connection in configs[:5]] == ["qwen-key"] * 5
-        assert [connection[0] for connection in configs[5:]] == ["ark-key"] * 2
+        assert [connection[0] for connection in configs[5:]] == ["ark-key"] * 6
         assert [connection[1] for connection in configs[5:]] == [
             "https://ark.cn-beijing.volces.com/api/v3"
-        ] * 2
+        ] * 6
 
-        # 链尾百炼模型额度用尽后继续走方舟两档。
+        # 链尾百炼模型额度用尽后继续走方舟各档。
         os.environ["LLM_PROVIDER"] = "deepseek_v41_flash"
         assert [connection[2] for connection in llm_analysis.llm_fallback_configs()] == [
             "doubao-seed-2-1-lite-260915",
+            "deepseek-v4-1-flash-260910",
+            "glm-5-3-flash-260828",
+            "deepseek-v4-pro-ga-260813",
+            "deepseek-v4-flash-ga-260731",
             "doubao-seed-2-0-pro-260215",
         ]
 
