@@ -498,12 +498,11 @@ def test_ark_providers_use_dedicated_connection_and_fails_closed_without_key() -
             "glm-5-3-flash-260828",
             "deepseek-v4-pro-ga-260813",
             "deepseek-v4-flash-ga-260731",
-            "doubao-seed-2-0-pro-260215",
         ]
 
         # 链尾模型额度用尽后没有后续备用模型，保持关闭式失败。
-        os.environ["LLM_PROVIDER"] = "doubao_seed_20_pro"
-        assert llm_analysis.llm_config()[2] == "doubao-seed-2-0-pro-260215"
+        os.environ["LLM_PROVIDER"] = "ark_deepseek_v4_flash"
+        assert llm_analysis.llm_config()[2] == "deepseek-v4-flash-ga-260731"
         assert llm_analysis.llm_fallback_configs() == []
 
         os.environ.pop("LLM_ARK_API_KEY")
@@ -537,14 +536,13 @@ def test_bailian_chain_falls_back_to_ark_tail() -> None:
             "glm-5-3-flash-260828",
             "deepseek-v4-pro-ga-260813",
             "deepseek-v4-flash-ga-260731",
-            "doubao-seed-2-0-pro-260215",
         ]
         # 百炼档共用千问连接，方舟档使用独立的方舟连接。
         assert [connection[0] for connection in configs[:5]] == ["qwen-key"] * 5
-        assert [connection[0] for connection in configs[5:]] == ["ark-key"] * 6
+        assert [connection[0] for connection in configs[5:]] == ["ark-key"] * 5
         assert [connection[1] for connection in configs[5:]] == [
             "https://ark.cn-beijing.volces.com/api/v3"
-        ] * 6
+        ] * 5
 
         # 链尾百炼模型额度用尽后继续走方舟各档。
         os.environ["LLM_PROVIDER"] = "deepseek_v41_flash"
@@ -554,7 +552,6 @@ def test_bailian_chain_falls_back_to_ark_tail() -> None:
             "glm-5-3-flash-260828",
             "deepseek-v4-pro-ga-260813",
             "deepseek-v4-flash-ga-260731",
-            "doubao-seed-2-0-pro-260215",
         ]
 
         # 未配置方舟 Key 时保持原有百炼链行为。

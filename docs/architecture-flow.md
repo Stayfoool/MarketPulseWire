@@ -114,15 +114,16 @@ they send `enable_thinking` plus JSON mode. These six models form the ordered
 百炼 free-quota balance fallback chain snapshot → stable → 2.4T A95B →
 kimi-k3 → glm-5.3 → deepseek-v4.1-flash: when the selected model reports
 insufficient balance, the same request walks the chain starting after it.
-The chain ends with six 火山方舟 fallback entries that use the separate
+The chain ends with five 火山方舟 fallback entries that use the separate
 `LLM_ARK_API_KEY` / `LLM_ARK_BASE_URL` connection (defaulting to
 `https://ark.cn-beijing.volces.com/api/v3`), in 开通管理 page order:
 `doubao_seed_21_lite` (`doubao-seed-2-1-lite-260915`),
 `ark_deepseek_v41_flash` (`deepseek-v4-1-flash-260910`),
 `ark_glm_53_flash` (`glm-5-3-flash-260828`),
-`ark_deepseek_v4_pro` (`deepseek-v4-pro-ga-260813`),
-`ark_deepseek_v4_flash` (`deepseek-v4-flash-ga-260731`) then
-`doubao_seed_20_pro` (`doubao-seed-2-0-pro-260215`). When the Ark API key is
+`ark_deepseek_v4_pro` (`deepseek-v4-pro-ga-260813`) then
+`ark_deepseek_v4_flash` (`deepseek-v4-flash-ga-260731`). The retired
+Doubao-Seed-2.0-pro snapshot (`doubao-seed-2-0-pro-260215`, marked 即将下线 and
+returning 404) is not part of the chain. When the Ark API key is
 not configured those entries fail closed and are skipped. Ark quota errors
 (`SetLimitExceeded`, `AccountOverdueError`, `OperationDenied.ServiceOverdue`,
 `QuotaExceeded`) are classified as insufficient balance so the chain keeps
