@@ -261,7 +261,6 @@ def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> No
             "ark_glm_53_flash",
             "ark_deepseek_v4_pro",
             "ark_deepseek_v4_flash",
-            "doubao_seed_20_pro",
         ]
         qwen38_max = next(option for option in selector["options"] if option["id"] == "qwen38_max")
         assert qwen38_max["label"] == "阿里云百炼 Qwen3.8 Max"
@@ -285,7 +284,7 @@ def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> No
             " → qwen3.8-2.4t-a95b → kimi-k3 → glm-5.3 → deepseek-v4.1-flash"
             " → doubao-seed-2-1-lite-260915 → deepseek-v4-1-flash-260910"
             " → glm-5-3-flash-260828 → deepseek-v4-pro-ga-260813"
-            " → deepseek-v4-flash-ga-260731 → doubao-seed-2-0-pro-260215。"
+            " → deepseek-v4-flash-ga-260731。"
             "链上模型额度用尽后从下一个继续；免费额度已用完的旧 qwen3.8 模型和"
             "百炼托管的 DeepSeek 额度用尽后从链头开始；官方 DeepSeek 和智谱 GLM 5.3 Flash 端点无回退；"
             "火山方舟各档共用独立的方舟 API Key，未配置时自动跳过整段方舟模型。"
@@ -470,13 +469,18 @@ def test_ark_switch_requires_its_own_key_and_writes_default_base_url() -> None:
         assert "LLM_ARK_API_KEY=ark-secret-key" in text
         assert f"LLM_ARK_BASE_URL={ARK_BASE_URL}" in text
 
-        switched = switch_llm_provider("doubao_seed_20_pro", path=env_path)
-        assert switched["provider"] == "doubao_seed_20_pro"
-        assert switched["changed_count"] == 1
+        switched = switch_llm_provider("doubao_seed_21_lite", path=env_path)
+        assert switched["provider"] == "doubao_seed_21_lite"
+        # 重复切换同一模型不产生任何变更。
+        assert switched["changed_count"] == 0
         assert "LLM_ARK_API_KEY=ark-secret-key" in env_path.read_text(encoding="utf-8")
 
+        switched_tail = switch_llm_provider("ark_deepseek_v4_flash", path=env_path)
+        assert switched_tail["provider"] == "ark_deepseek_v4_flash"
+        assert switched_tail["changed_count"] == 1
+
         try:
-            switch_llm_provider("doubao_seed_20_pro", {"LLM_QWEN_API_KEY": "other-key"}, path=env_path)
+            switch_llm_provider("ark_deepseek_v4_flash", {"LLM_QWEN_API_KEY": "other-key"}, path=env_path)
         except ValueError as exc:
             assert "当前模型切换不允许修改配置项" in str(exc)
         else:
