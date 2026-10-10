@@ -66,6 +66,28 @@ BAILIAN_FALLBACK_CHAIN = (
     (DEEPSEEK_V41_FLASH_PROVIDER, DEEPSEEK_V41_FLASH_MODEL),
 )
 
+# 火山方舟（Volcengine Ark）OpenAI 兼容端点，北京地域。豆包模型直接使用模型名调用。
+ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+DOUBAO_SEED_21_LITE_PROVIDER = "doubao_seed_21_lite"
+DOUBAO_SEED_21_LITE_MODEL = "doubao-seed-2-1-lite-260915"
+DOUBAO_SEED_20_PRO_PROVIDER = "doubao_seed_20_pro"
+DOUBAO_SEED_20_PRO_MODEL = "doubao-seed-2-0-pro-260215"
+
+_ARK_PROVIDER_MODELS = {
+    DOUBAO_SEED_21_LITE_PROVIDER: DOUBAO_SEED_21_LITE_MODEL,
+    DOUBAO_SEED_20_PRO_PROVIDER: DOUBAO_SEED_20_PRO_MODEL,
+}
+_ARK_MODEL_PROVIDERS = {model: provider for provider, model in _ARK_PROVIDER_MODELS.items()}
+
+# 火山方舟兜底链：百炼免费额度回退链整体用尽后，同一轮继续依次使用方舟豆包模型。
+# 方舟两档使用独立的 LLM_ARK_API_KEY / LLM_ARK_BASE_URL 连接；未配置方舟 API Key 时该档关闭式跳过。
+ARK_FALLBACK_CHAIN = (
+    (DOUBAO_SEED_21_LITE_PROVIDER, DOUBAO_SEED_21_LITE_MODEL),
+    (DOUBAO_SEED_20_PRO_PROVIDER, DOUBAO_SEED_20_PRO_MODEL),
+)
+
+LLM_FALLBACK_CHAIN = BAILIAN_FALLBACK_CHAIN + ARK_FALLBACK_CHAIN
+
 # 免费额度已用完的旧 qwen3.8 模型：不再进入回退链，仅保留解析，
 # 历史 LLM_PROVIDER 命中后额度报错时从链头开始回退。
 QWEN38_RETIRED_PROVIDERS = (
@@ -97,6 +119,10 @@ def is_qwen_bailian_base_url(base_url: str) -> bool:
     return "dashscope.aliyuncs.com" in lowered or "maas.aliyuncs.com" in lowered
 
 
+def is_ark_base_url(base_url: str) -> bool:
+    return "volces.com" in str(base_url or "").lower()
+
+
 def canonical_llm_provider(value: str) -> str:
     normalized = str(value or "").strip().lower()
     if normalized in _ZHIPU_ALIASES:
@@ -108,6 +134,11 @@ def canonical_llm_provider(value: str) -> str:
     if normalized in QWEN_BAILIAN_PROVIDER_MODELS:
         return normalized
     model_provider = _QWEN_BAILIAN_MODEL_PROVIDERS.get(normalized)
+    if model_provider:
+        return model_provider
+    if normalized in _ARK_PROVIDER_MODELS:
+        return normalized
+    model_provider = _ARK_MODEL_PROVIDERS.get(normalized)
     if model_provider:
         return model_provider
     if normalized in _QWEN_SNAPSHOT_ALIASES:
@@ -122,6 +153,7 @@ def selected_llm_provider(values: Mapping[str, str]) -> str:
         configured
         in {DEEPSEEK_PROVIDER, ZHIPU_GLM_PROVIDER, GLM_BAILIAN_PROVIDER}
         | set(QWEN_BAILIAN_PROVIDER_MODELS)
+        | set(_ARK_PROVIDER_MODELS)
     ):
         return configured
     base_url = str(values.get("LLM_BASE_URL") or "").lower()
@@ -134,6 +166,8 @@ def selected_llm_provider(values: Mapping[str, str]) -> str:
         if model == GLM_BAILIAN_MODEL:
             return GLM_BAILIAN_PROVIDER
         return _QWEN_BAILIAN_MODEL_PROVIDERS.get(model, QWEN_FLASH_SNAPSHOT_PROVIDER)
+    if is_ark_base_url(base_url):
+        return _ARK_MODEL_PROVIDERS.get(model, DOUBAO_SEED_21_LITE_PROVIDER)
     return configured
 
 
@@ -160,6 +194,13 @@ def resolve_llm_connection(values: Mapping[str, str]) -> tuple[str, str, str] | 
         base_url = str(values.get("LLM_QWEN_BASE_URL") or "").strip() or QWEN_BAILIAN_BASE_URL
         return api_key, base_url, QWEN_BAILIAN_PROVIDER_MODELS[provider]
 
+    if provider in _ARK_PROVIDER_MODELS:
+        api_key = str(values.get("LLM_ARK_API_KEY") or "").strip()
+        if not api_key:
+            return None
+        base_url = str(values.get("LLM_ARK_BASE_URL") or "").strip() or ARK_BASE_URL
+        return api_key, base_url, _ARK_PROVIDER_MODELS[provider]
+
     api_key = str(values.get("LLM_API_KEY") or "").strip()
     base_url = str(values.get("LLM_BASE_URL") or "").strip()
     model = str(values.get("LLM_MODEL") or "").strip()
@@ -177,9 +218,13 @@ def _resolve_qwen_connection(values: Mapping[str, str]) -> tuple[str, str] | Non
 
 
 def resolve_llm_fallback_connections(values: Mapping[str, str]) -> list[tuple[str, str, str]]:
-    """Resolve the ordered 阿里云百炼 fallback models used when the current model reports no balance."""
+    """Resolve the ordered fallback models used when the current model reports no balance.
+
+    百炼档共用千问连接，火山方舟档使用独立的方舟连接；某档连接未配置时
+    该档关闭式跳过，不影响其余档位继续参与回退。
+    """
     provider = canonical_llm_provider(values.get("LLM_PROVIDER", ""))
-    chain_providers = [chain_provider for chain_provider, _ in BAILIAN_FALLBACK_CHAIN]
+    chain_providers = [chain_provider for chain_provider, _ in LLM_FALLBACK_CHAIN]
     if provider in chain_providers:
         # 链上模型额度用尽后从自己的下一档继续。
         fallback_providers = tuple(chain_providers[chain_providers.index(provider) + 1 :])
@@ -188,18 +233,24 @@ def resolve_llm_fallback_connections(values: Mapping[str, str]) -> list[tuple[st
         and is_qwen_bailian_base_url(str(values.get("LLM_BASE_URL") or ""))
     ):
         # 链外百炼模型（免费额度已用完的旧 qwen3.8 系列、百炼托管的 DeepSeek）
-        # 额度用尽后从链头开始切换；官方 DeepSeek 端点和智谱 GLM 不回退百炼模型。
+        # 额度用尽后从链头开始切换；官方 DeepSeek 端点和智谱 GLM 不回退链上模型。
         fallback_providers = tuple(chain_providers)
     else:
         return []
     if not fallback_providers:
         return []
-    connection = _resolve_qwen_connection(values)
-    if not connection:
-        return []
-    api_key, base_url = connection
-    chain_models = dict(BAILIAN_FALLBACK_CHAIN)
-    return [
-        (api_key, base_url, chain_models[fallback_provider])
-        for fallback_provider in fallback_providers
-    ]
+    qwen_connection = _resolve_qwen_connection(values)
+    ark_api_key = str(values.get("LLM_ARK_API_KEY") or "").strip()
+    ark_base_url = str(values.get("LLM_ARK_BASE_URL") or "").strip() or ARK_BASE_URL
+    chain_models = dict(LLM_FALLBACK_CHAIN)
+    connections: list[tuple[str, str, str]] = []
+    for fallback_provider in fallback_providers:
+        if fallback_provider in _ARK_PROVIDER_MODELS:
+            if not ark_api_key:
+                continue
+            connections.append((ark_api_key, ark_base_url, chain_models[fallback_provider]))
+        elif qwen_connection:
+            connections.append(
+                (qwen_connection[0], qwen_connection[1], chain_models[fallback_provider])
+            )
+    return connections

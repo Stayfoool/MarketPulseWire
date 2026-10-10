@@ -28,7 +28,7 @@ from holdings_web import (
     unit_actions,
     unit_display_metadata,
 )
-from llm_provider_config import QWEN_BAILIAN_BASE_URL
+from llm_provider_config import ARK_BASE_URL, QWEN_BAILIAN_BASE_URL
 from market_db import init_db
 from settings_store import save_settings, settings_payload, switch_decision_engine, switch_llm_provider
 from source_profiles import (
@@ -256,6 +256,8 @@ def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> No
             "qwen38_27b",
             "qwen38_flash",
             "qwen38_max_0902",
+            "doubao_seed_21_lite",
+            "doubao_seed_20_pro",
         ]
         qwen38_max = next(option for option in selector["options"] if option["id"] == "qwen38_max")
         assert qwen38_max["label"] == "阿里云百炼 Qwen3.8 Max"
@@ -275,11 +277,19 @@ def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> No
         assert deepseek_v41_flash["model"] == "deepseek-v4.1-flash"
         assert deepseek_v41_flash["configured"] is False
         assert selector["fallback_note"] == (
-            "百炼免费额度余额回退顺序：qwen3.7-flash-2026-07-15 → qwen3.7-flash"
-            " → qwen3.8-2.4t-a95b → kimi-k3 → glm-5.3 → deepseek-v4.1-flash。"
+            "免费额度余额回退顺序：qwen3.7-flash-2026-07-15 → qwen3.7-flash"
+            " → qwen3.8-2.4t-a95b → kimi-k3 → glm-5.3 → deepseek-v4.1-flash"
+            " → doubao-seed-2-1-lite-260915 → doubao-seed-2-0-pro-260215。"
             "链上模型额度用尽后从下一个继续；免费额度已用完的旧 qwen3.8 模型和"
-            "百炼托管的 DeepSeek 额度用尽后从链头开始；官方 DeepSeek 和智谱 GLM 5.3 Flash 端点无回退。"
+            "百炼托管的 DeepSeek 额度用尽后从链头开始；官方 DeepSeek 和智谱 GLM 5.3 Flash 端点无回退；"
+            "火山方舟两档使用独立的方舟 API Key，未配置时自动跳过。"
         )
+        doubao_seed_21_lite = next(
+            option for option in selector["options"] if option["id"] == "doubao_seed_21_lite"
+        )
+        assert doubao_seed_21_lite["label"] == "火山方舟 Doubao Seed 2.1 Lite"
+        assert doubao_seed_21_lite["model"] == "doubao-seed-2-1-lite-260915"
+        assert doubao_seed_21_lite["configured"] is False
         glm_bailian = next(option for option in selector["options"] if option["id"] == "glm_bailian")
         assert glm_bailian["label"] == "阿里云百炼 GLM 5.3"
         assert glm_bailian["model"] == "glm-5.3"
@@ -418,6 +428,47 @@ def test_qwen_bailian_switch_requires_its_own_key_and_writes_default_base_url() 
             assert "当前模型切换不允许修改配置项" in str(exc)
         else:
             raise AssertionError("qwen selection must not accept another provider key")
+
+
+def test_ark_switch_requires_its_own_key_and_writes_default_base_url() -> None:
+    with TemporaryDirectory() as tmpdir:
+        env_path = Path(tmpdir) / ".env"
+        env_path.write_text(
+            "LLM_PROVIDER=deepseek\nLLM_API_KEY=deepseek-secret\n"
+            "LLM_BASE_URL=https://api.deepseek.com\nLLM_MODEL=deepseek-chat\n",
+            encoding="utf-8",
+        )
+        try:
+            switch_llm_provider("doubao_seed_21_lite", path=env_path)
+        except ValueError as exc:
+            assert "请先配置火山方舟 API Key" in str(exc)
+        else:
+            raise AssertionError("ark selection without its dedicated key must fail closed")
+        assert "LLM_PROVIDER=deepseek" in env_path.read_text(encoding="utf-8")
+
+        result = switch_llm_provider(
+            "doubao_seed_21_lite",
+            {"LLM_ARK_API_KEY": "ark-secret-key"},
+            path=env_path,
+        )
+        assert result["provider"] == "doubao_seed_21_lite"
+        assert result["changed_count"] == 3
+        text = env_path.read_text(encoding="utf-8")
+        assert "LLM_PROVIDER=doubao_seed_21_lite" in text
+        assert "LLM_ARK_API_KEY=ark-secret-key" in text
+        assert f"LLM_ARK_BASE_URL={ARK_BASE_URL}" in text
+
+        switched = switch_llm_provider("doubao_seed_20_pro", path=env_path)
+        assert switched["provider"] == "doubao_seed_20_pro"
+        assert switched["changed_count"] == 1
+        assert "LLM_ARK_API_KEY=ark-secret-key" in env_path.read_text(encoding="utf-8")
+
+        try:
+            switch_llm_provider("doubao_seed_20_pro", {"LLM_QWEN_API_KEY": "other-key"}, path=env_path)
+        except ValueError as exc:
+            assert "当前模型切换不允许修改配置项" in str(exc)
+        else:
+            raise AssertionError("ark selection must not accept another provider key")
 
 
 def test_llm_selector_labels_bailian_hosted_deepseek() -> None:
@@ -1862,6 +1913,7 @@ def main() -> int:
     test_settings_expose_switchable_llm_models_without_revealing_secrets()
     test_glm_switch_requires_its_own_key_and_accepts_first_switch_key()
     test_qwen_bailian_switch_requires_its_own_key_and_writes_default_base_url()
+    test_ark_switch_requires_its_own_key_and_writes_default_base_url()
     test_llm_selector_labels_bailian_hosted_deepseek()
     test_settings_ui_exposes_current_model_switch()
     test_decision_engine_switch_requires_jev_connection_and_persists()

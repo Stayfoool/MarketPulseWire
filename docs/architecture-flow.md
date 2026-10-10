@@ -97,14 +97,14 @@ validates the structure, evidence, rule version and `push > daily > archive`
 aggregation.
 
 `llm_analysis.py` is the single model transport for DeepSeek, Zhipu GLM 5.3
-Flash, 阿里云百炼千问 / qwen3.8 / Kimi K3 / GLM 5.3 / DeepSeek V4.1 Flash and
-existing OpenAI-compatible configurations.
+Flash, 阿里云百炼千问 / qwen3.8 / Kimi K3 / GLM 5.3 / DeepSeek V4.1 Flash,
+火山方舟豆包 and existing OpenAI-compatible configurations.
 `LLM_PROVIDER=deepseek` uses `LLM_API_KEY`, `LLM_BASE_URL` and `LLM_MODEL`;
 `LLM_PROVIDER=zhipu_glm` uses the separate `LLM_GLM_API_KEY` and the code-fixed
 official endpoint `https://open.bigmodel.cn/api/paas/v4` with
 `glm-5.3-flash`; the shared transport always applies `thinking=enabled`,
 `reasoning_effort=low` and JSON mode because this model does not support
-disabled thinking. The remaining providers are 百炼-hosted and share the
+disabled thinking. The remaining 百炼 providers share the
 千问 connection (`LLM_QWEN_API_KEY` with `LLM_QWEN_BASE_URL`, defaulting to
 the 百炼 OpenAI-compatible endpoint
 `https://dashscope.aliyuncs.com/compatible-mode/v1`): `qwen_flash_snapshot`
@@ -114,7 +114,16 @@ they send `enable_thinking` plus JSON mode. These six models form the ordered
 百炼 free-quota balance fallback chain snapshot → stable → 2.4T A95B →
 kimi-k3 → glm-5.3 → deepseek-v4.1-flash: when the selected model reports
 insufficient balance, the same request walks the chain starting after it.
-The retired qwen3.8 providers (`qwen38_max`, `qwen38_27b`, `qwen38_flash`,
+The chain ends with two 火山方舟 fallback entries that use the separate
+`LLM_ARK_API_KEY` / `LLM_ARK_BASE_URL` connection (defaulting to
+`https://ark.cn-beijing.volces.com/api/v3`): `doubao_seed_21_lite`
+(`doubao-seed-2-1-lite-260915`) then `doubao_seed_20_pro`
+(`doubao-seed-2-0-pro-260215`). When the Ark API key is not configured those
+entries fail closed and are skipped. Ark quota errors (`SetLimitExceeded`,
+`AccountOverdueError`, `OperationDenied.ServiceOverdue`, `QuotaExceeded`) are
+classified as insufficient balance so the chain keeps walking; Ark rate-limit
+errors are not. The retired qwen3.8 providers (`qwen38_max`, `qwen38_27b`,
+`qwen38_flash`,
 `qwen38_max_0902`; free quota exhausted) and 百炼-hosted DeepSeek
 (`LLM_PROVIDER=deepseek` with a 百炼 `LLM_BASE_URL`) enter the chain from its
 head; the official DeepSeek endpoint has no fallback and fails closed. The Web

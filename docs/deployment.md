@@ -315,7 +315,14 @@ form the ordered 百炼 free-quota balance fallback chain
 `qwen_flash` (`qwen3.7-flash`) → `qwen38_2_4t_a95b` (`qwen3.8-2.4t-a95b`) →
 `kimi_k3` (`kimi-k3`) → `glm_bailian` (`glm-5.3`) → `deepseek_v41_flash`
 (`deepseek-v4.1-flash`); when the selected model's quota is exhausted, the
-request walks the chain starting after it. The retired qwen3.8 providers
+request walks the chain starting after it. The chain ends with two 火山方舟
+entries using the separate private `LLM_ARK_API_KEY` / `LLM_ARK_BASE_URL`
+connection (defaulting to `https://ark.cn-beijing.volces.com/api/v3`):
+`doubao_seed_21_lite` (`doubao-seed-2-1-lite-260915`) then `doubao_seed_20_pro`
+(`doubao-seed-2-0-pro-260215`); Ark quota errors (`SetLimitExceeded`,
+`AccountOverdueError`, `OperationDenied.ServiceOverdue`, `QuotaExceeded`) count
+as insufficient balance, and missing Ark API key configuration skips those
+entries. The retired qwen3.8 providers
 (`qwen38_max`, `qwen38_27b`, `qwen38_flash`, `qwen38_max_0902`; free quota
 exhausted) and 百炼-hosted DeepSeek (`LLM_PROVIDER=deepseek` with a 百炼
 `LLM_BASE_URL`) enter the chain from its head, using the separate private

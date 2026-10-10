@@ -479,6 +479,218 @@ def test_kimi_and_deepseek_v41_flash_sit_at_bailian_chain_tail() -> None:
                 os.environ[name] = value
 
 
+def test_ark_providers_use_dedicated_connection_and_fails_closed_without_key() -> None:
+    names = ("SURVEIL_DISABLE_LLM", "LLM_PROVIDER", "LLM_ARK_API_KEY", "LLM_ARK_BASE_URL")
+    original = {name: os.environ.get(name) for name in names}
+    try:
+        os.environ.pop("SURVEIL_DISABLE_LLM", None)
+        os.environ["LLM_PROVIDER"] = "doubao_seed_21_lite"
+        os.environ["LLM_ARK_API_KEY"] = "ark-key"
+        os.environ.pop("LLM_ARK_BASE_URL", None)
+        assert llm_analysis.llm_config() == (
+            "ark-key",
+            "https://ark.cn-beijing.volces.com/api/v3",
+            "doubao-seed-2-1-lite-260915",
+        )
+        # 方舟链首模型额度用尽后切换到方舟链尾模型；百炼未配置时不参与。
+        assert llm_analysis.llm_fallback_configs() == [
+            ("ark-key", "https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-2-0-pro-260215"),
+        ]
+
+        # 链尾模型额度用尽后没有后续备用模型，保持关闭式失败。
+        os.environ["LLM_PROVIDER"] = "doubao_seed_20_pro"
+        assert llm_analysis.llm_config()[2] == "doubao-seed-2-0-pro-260215"
+        assert llm_analysis.llm_fallback_configs() == []
+
+        os.environ.pop("LLM_ARK_API_KEY")
+        assert llm_analysis.llm_config() is None
+        assert llm_analysis.llm_fallback_configs() == []
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def test_bailian_chain_falls_back_to_ark_tail() -> None:
+    names = ("SURVEIL_DISABLE_LLM", "LLM_PROVIDER", "LLM_QWEN_API_KEY", "LLM_ARK_API_KEY")
+    original = {name: os.environ.get(name) for name in names}
+    try:
+        os.environ.pop("SURVEIL_DISABLE_LLM", None)
+        os.environ["LLM_PROVIDER"] = "qwen_flash_snapshot"
+        os.environ["LLM_QWEN_API_KEY"] = "qwen-key"
+        os.environ["LLM_ARK_API_KEY"] = "ark-key"
+        configs = llm_analysis.llm_fallback_configs()
+        assert [connection[2] for connection in configs] == [
+            "qwen3.7-flash",
+            "qwen3.8-2.4t-a95b",
+            "kimi-k3",
+            "glm-5.3",
+            "deepseek-v4.1-flash",
+            "doubao-seed-2-1-lite-260915",
+            "doubao-seed-2-0-pro-260215",
+        ]
+        # 百炼档共用千问连接，方舟档使用独立的方舟连接。
+        assert [connection[0] for connection in configs[:5]] == ["qwen-key"] * 5
+        assert [connection[0] for connection in configs[5:]] == ["ark-key"] * 2
+        assert [connection[1] for connection in configs[5:]] == [
+            "https://ark.cn-beijing.volces.com/api/v3"
+        ] * 2
+
+        # 链尾百炼模型额度用尽后继续走方舟两档。
+        os.environ["LLM_PROVIDER"] = "deepseek_v41_flash"
+        assert [connection[2] for connection in llm_analysis.llm_fallback_configs()] == [
+            "doubao-seed-2-1-lite-260915",
+            "doubao-seed-2-0-pro-260215",
+        ]
+
+        # 未配置方舟 Key 时保持原有百炼链行为。
+        os.environ["LLM_PROVIDER"] = "qwen_flash_snapshot"
+        os.environ.pop("LLM_ARK_API_KEY")
+        assert [connection[2] for connection in llm_analysis.llm_fallback_configs()] == [
+            "qwen3.7-flash",
+            "qwen3.8-2.4t-a95b",
+            "kimi-k3",
+            "glm-5.3",
+            "deepseek-v4.1-flash",
+        ]
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def test_ark_quota_error_markers_trigger_balance_fallback() -> None:
+    # 方舟安心体验模式免费额度用尽：429 SetLimitExceeded。
+    assert llm_analysis.is_balance_insufficient(
+        json.dumps(
+            {
+                "error": {
+                    "code": "SetLimitExceeded",
+                    "message": "Your account has reached the set usage limit for the model, "
+                    "and the model service has been paused.",
+                }
+            }
+        ),
+        429,
+    )
+    # 方舟账号欠费：403 AccountOverdueError。
+    assert llm_analysis.is_balance_insufficient(
+        json.dumps(
+            {
+                "error": {
+                    "code": "AccountOverdueError",
+                    "message": "当前账号欠费。",
+                }
+            }
+        ),
+        403,
+    )
+    # 方舟限流不是额度耗尽，不触发回退。
+    assert not llm_analysis.is_balance_insufficient(
+        json.dumps(
+            {
+                "error": {
+                    "code": "RateLimitExceeded.EndpointTPMExceeded",
+                    "message": "TPM exceeded.",
+                }
+            }
+        ),
+        429,
+    )
+
+
+def test_bailian_exhaustion_walks_chain_into_ark_connection() -> None:
+    original_config = llm_analysis.llm_config
+    original_fallback = llm_analysis.llm_fallback_configs
+    original_urlopen = llm_analysis.urllib.request.urlopen
+    original_retry_count = llm_analysis.retry_count
+    requested: list[tuple[str, str, str]] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return b'{"id":"ark-fallback","choices":[{"message":{"content":"{\\"ok\\":true}"}}]}'
+
+    def fake_urlopen(request, timeout):
+        payload = json.loads(request.data.decode("utf-8"))
+        requested.append(
+            (
+                payload["model"],
+                request.full_url,
+                request.get_header("Authorization") or "",
+            )
+        )
+        if "dashscope.aliyuncs.com" in request.full_url:
+            raise llm_analysis.urllib.error.HTTPError(
+                request.full_url,
+                403,
+                "Forbidden",
+                {},
+                io.BytesIO(
+                    json.dumps(
+                        {"error": {"code": "AllocationQuota.FreeTierOnly", "message": "Free quota exhausted."}}
+                    ).encode("utf-8")
+                ),
+            )
+        return FakeResponse()
+
+    try:
+        llm_analysis.llm_config = lambda: (
+            "qwen-key",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.7-flash-2026-07-15",
+        )
+        llm_analysis.llm_fallback_configs = lambda: [
+            (
+                "qwen-key",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "qwen3.7-flash",
+            ),
+            (
+                "ark-key",
+                "https://ark.cn-beijing.volces.com/api/v3",
+                "doubao-seed-2-1-lite-260915",
+            ),
+        ]
+        llm_analysis.retry_count = lambda: 0
+        llm_analysis.urllib.request.urlopen = fake_urlopen
+        response = llm_analysis.call_chat_completion_raw_with_prompts("system", "user")
+    finally:
+        llm_analysis.llm_config = original_config
+        llm_analysis.llm_fallback_configs = original_fallback
+        llm_analysis.urllib.request.urlopen = original_urlopen
+        llm_analysis.retry_count = original_retry_count
+
+    # 百炼档与方舟档各自使用自己的端点和密钥。
+    assert requested == [
+        (
+            "qwen3.7-flash-2026-07-15",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            "Bearer qwen-key",
+        ),
+        (
+            "qwen3.7-flash",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            "Bearer qwen-key",
+        ),
+        (
+            "doubao-seed-2-1-lite-260915",
+            "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
+            "Bearer ark-key",
+        ),
+    ]
+    assert response.model == "doubao-seed-2-1-lite-260915"
+
+
 def test_bailian_hosted_deepseek_falls_back_to_bailian_chain() -> None:
     names = (
         "SURVEIL_DISABLE_LLM",
@@ -1019,6 +1231,10 @@ def main() -> int:
     test_balance_insufficient_falls_back_to_qwen_flash_stable_model()
     test_retired_qwen38_providers_fall_back_from_chain_head()
     test_kimi_and_deepseek_v41_flash_sit_at_bailian_chain_tail()
+    test_ark_providers_use_dedicated_connection_and_fails_closed_without_key()
+    test_bailian_chain_falls_back_to_ark_tail()
+    test_ark_quota_error_markers_trigger_balance_fallback()
+    test_bailian_exhaustion_walks_chain_into_ark_connection()
     test_bailian_hosted_deepseek_falls_back_to_bailian_chain()
     test_balance_insufficient_walks_qwen38_fallback_chain()
     test_bailian_free_quota_exhausted_falls_back_along_chain()
