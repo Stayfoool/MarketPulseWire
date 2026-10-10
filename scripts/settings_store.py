@@ -10,7 +10,11 @@ from typing import Any
 
 from llm_provider_config import (
     ARK_BASE_URL,
+    ARK_DEEPSEEK_V41_FLASH_PROVIDER,
+    ARK_DEEPSEEK_V4_FLASH_PROVIDER,
+    ARK_DEEPSEEK_V4_PRO_PROVIDER,
     ARK_FALLBACK_CHAIN,
+    ARK_GLM_53_FLASH_PROVIDER,
     BAILIAN_FALLBACK_CHAIN,
     DEEPSEEK_PROVIDER,
     DEEPSEEK_V41_FLASH_PROVIDER,
@@ -72,7 +76,7 @@ SETTING_GROUPS: list[dict[str, Any]] = [
                 placeholder=QWEN_BAILIAN_BASE_URL,
                 help="默认北京地域 OpenAI 兼容端点；使用业务空间专属端点时填写完整地址。",
             ),
-            SettingField("LLM_ARK_API_KEY", "火山方舟 API Key", "llm", sensitive=True, help="火山方舟豆包模型专用；留空表示保留现有密钥，未配置时回退链自动跳过火山方舟两档。"),
+            SettingField("LLM_ARK_API_KEY", "火山方舟 API Key", "llm", sensitive=True, help="火山方舟兜底模型共用；留空表示保留现有密钥，未配置时回退链自动跳过整段方舟模型。"),
             SettingField(
                 "LLM_ARK_BASE_URL",
                 "火山方舟 Base URL",
@@ -201,6 +205,16 @@ SETTING_GROUPS: list[dict[str, Any]] = [
 
 FIELDS_BY_KEY = {field.key: field for group in SETTING_GROUPS for field in group["fields"]}
 
+# 全部火山方舟兜底档：切换校验和独立连接配置共用。
+_ARK_SWITCH_PROVIDERS = {
+    DOUBAO_SEED_21_LITE_PROVIDER,
+    DOUBAO_SEED_20_PRO_PROVIDER,
+    ARK_DEEPSEEK_V41_FLASH_PROVIDER,
+    ARK_GLM_53_FLASH_PROVIDER,
+    ARK_DEEPSEEK_V4_PRO_PROVIDER,
+    ARK_DEEPSEEK_V4_FLASH_PROVIDER,
+}
+
 BAILIAN_MODEL_LABELS = {
     QWEN_FLASH_SNAPSHOT_PROVIDER: "阿里云百炼 Qwen3.7 Flash（快照）",
     QWEN_FLASH_PROVIDER: "阿里云百炼 Qwen3.7 Flash（稳定版）",
@@ -214,6 +228,10 @@ BAILIAN_MODEL_LABELS = {
     QWEN38_MAX_0902_PROVIDER: "阿里云百炼 Qwen3.8 Max（0902）",
     DOUBAO_SEED_21_LITE_PROVIDER: "火山方舟 Doubao Seed 2.1 Lite",
     DOUBAO_SEED_20_PRO_PROVIDER: "火山方舟 Doubao Seed 2.0 Pro",
+    ARK_DEEPSEEK_V41_FLASH_PROVIDER: "火山方舟 DeepSeek V4.1 Flash",
+    ARK_GLM_53_FLASH_PROVIDER: "火山方舟 GLM 5.3 Flash",
+    ARK_DEEPSEEK_V4_PRO_PROVIDER: "火山方舟 DeepSeek V4 Pro",
+    ARK_DEEPSEEK_V4_FLASH_PROVIDER: "火山方舟 DeepSeek V4 Flash",
 }
 
 FALLBACK_NOTE = (
@@ -221,7 +239,7 @@ FALLBACK_NOTE = (
     + " → ".join(model for _, model in (*BAILIAN_FALLBACK_CHAIN, *ARK_FALLBACK_CHAIN))
     + "。链上模型额度用尽后从下一个继续；免费额度已用完的旧 qwen3.8 模型和"
     "百炼托管的 DeepSeek 额度用尽后从链头开始；官方 DeepSeek 和智谱 GLM 5.3 Flash 端点无回退；"
-    "火山方舟两档使用独立的方舟 API Key，未配置时自动跳过。"
+    "火山方舟各档共用独立的方舟 API Key，未配置时自动跳过整段方舟模型。"
 )
 
 DECISION_ENGINE_NOTE = (
@@ -444,9 +462,13 @@ def switch_llm_provider(
         },
         DOUBAO_SEED_21_LITE_PROVIDER: {"LLM_ARK_API_KEY", "LLM_ARK_BASE_URL"},
         DOUBAO_SEED_20_PRO_PROVIDER: {"LLM_ARK_API_KEY", "LLM_ARK_BASE_URL"},
+        ARK_DEEPSEEK_V41_FLASH_PROVIDER: {"LLM_ARK_API_KEY", "LLM_ARK_BASE_URL"},
+        ARK_GLM_53_FLASH_PROVIDER: {"LLM_ARK_API_KEY", "LLM_ARK_BASE_URL"},
+        ARK_DEEPSEEK_V4_PRO_PROVIDER: {"LLM_ARK_API_KEY", "LLM_ARK_BASE_URL"},
+        ARK_DEEPSEEK_V4_FLASH_PROVIDER: {"LLM_ARK_API_KEY", "LLM_ARK_BASE_URL"},
     }
     if target not in allowed_fields:
-        raise ValueError("只允许切换 DeepSeek、智谱 GLM 5.3 Flash、阿里云百炼模型或火山方舟豆包模型")
+        raise ValueError("只允许切换 DeepSeek、智谱 GLM 5.3 Flash、阿里云百炼模型或火山方舟模型")
 
     supplied = raw_values or {}
     unknown = set(supplied) - allowed_fields[target]
@@ -475,7 +497,7 @@ def switch_llm_provider(
                     "new": QWEN_BAILIAN_BASE_URL,
                 }
             )
-    elif target in {DOUBAO_SEED_21_LITE_PROVIDER, DOUBAO_SEED_20_PRO_PROVIDER}:
+    elif target in _ARK_SWITCH_PROVIDERS:
         if not effective.get("LLM_ARK_API_KEY"):
             raise ValueError("请先配置火山方舟 API Key")
         if not effective.get("LLM_ARK_BASE_URL"):

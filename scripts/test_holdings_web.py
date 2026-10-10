@@ -257,6 +257,10 @@ def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> No
             "qwen38_flash",
             "qwen38_max_0902",
             "doubao_seed_21_lite",
+            "ark_deepseek_v41_flash",
+            "ark_glm_53_flash",
+            "ark_deepseek_v4_pro",
+            "ark_deepseek_v4_flash",
             "doubao_seed_20_pro",
         ]
         qwen38_max = next(option for option in selector["options"] if option["id"] == "qwen38_max")
@@ -279,10 +283,12 @@ def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> No
         assert selector["fallback_note"] == (
             "免费额度余额回退顺序：qwen3.7-flash-2026-07-15 → qwen3.7-flash"
             " → qwen3.8-2.4t-a95b → kimi-k3 → glm-5.3 → deepseek-v4.1-flash"
-            " → doubao-seed-2-1-lite-260915 → doubao-seed-2-0-pro-260215。"
+            " → doubao-seed-2-1-lite-260915 → deepseek-v4-1-flash-260910"
+            " → glm-5-3-flash-260828 → deepseek-v4-pro-ga-260813"
+            " → deepseek-v4-flash-ga-260731 → doubao-seed-2-0-pro-260215。"
             "链上模型额度用尽后从下一个继续；免费额度已用完的旧 qwen3.8 模型和"
             "百炼托管的 DeepSeek 额度用尽后从链头开始；官方 DeepSeek 和智谱 GLM 5.3 Flash 端点无回退；"
-            "火山方舟两档使用独立的方舟 API Key，未配置时自动跳过。"
+            "火山方舟各档共用独立的方舟 API Key，未配置时自动跳过整段方舟模型。"
         )
         doubao_seed_21_lite = next(
             option for option in selector["options"] if option["id"] == "doubao_seed_21_lite"
@@ -290,6 +296,12 @@ def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> No
         assert doubao_seed_21_lite["label"] == "火山方舟 Doubao Seed 2.1 Lite"
         assert doubao_seed_21_lite["model"] == "doubao-seed-2-1-lite-260915"
         assert doubao_seed_21_lite["configured"] is False
+        ark_deepseek_v41_flash = next(
+            option for option in selector["options"] if option["id"] == "ark_deepseek_v41_flash"
+        )
+        assert ark_deepseek_v41_flash["label"] == "火山方舟 DeepSeek V4.1 Flash"
+        assert ark_deepseek_v41_flash["model"] == "deepseek-v4-1-flash-260910"
+        assert ark_deepseek_v41_flash["configured"] is False
         glm_bailian = next(option for option in selector["options"] if option["id"] == "glm_bailian")
         assert glm_bailian["label"] == "阿里云百炼 GLM 5.3"
         assert glm_bailian["model"] == "glm-5.3"
