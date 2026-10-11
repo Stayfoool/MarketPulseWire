@@ -1032,6 +1032,83 @@ def test_preview_text_llm_without_fallback_model_fails_closed() -> None:
         value_directory_preview.request_preview_llm = original_request
 
 
+def test_preview_text_llm_fallback_request_error_skips_to_next_model() -> None:
+    env_names = (
+        "LLM_PROVIDER",
+        "LLM_QWEN_API_KEY",
+        "SURVEIL_DISABLE_LLM",
+        "VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT",
+    )
+    original_env = {name: os.environ.get(name) for name in env_names}
+    original_fallback = value_directory_preview.llm_fallback_configs
+    original_request = value_directory_preview.request_preview_llm
+    requested_models: list[str] = []
+
+    def fake_request(payload, *, base_url, api_key):
+        requested_models.append(payload["model"])
+        if payload["model"] == "glm-5.3":
+            # 百炼 glm-5.3 的 enable_thinking 参数错误是请求类错误：
+            # 只跳过该档，链上后续备用模型继续。
+            raise value_directory_preview.urllib.error.HTTPError(
+                "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+                400,
+                "Bad Request",
+                {},
+                io.BytesIO(
+                    json.dumps(
+                        {
+                            "error": {
+                                "message": "<400> InternalError.Algo.InvalidParameter: The value of the enable_thinking parameter is restricted to True.",
+                                "code": "invalid_parameter_error",
+                            }
+                        }
+                    ).encode("utf-8")
+                ),
+            )
+        if payload["model"] == "deepseek-v4.1-flash":
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {"core_content": "链尾结论", "confidence": "high"},
+                                ensure_ascii=False,
+                            )
+                        }
+                    }
+                ]
+            }
+        raise _free_quota_http_error()
+
+    try:
+        os.environ["LLM_PROVIDER"] = "qwen_flash_snapshot"
+        os.environ["LLM_QWEN_API_KEY"] = "qwen-key"
+        os.environ.pop("SURVEIL_DISABLE_LLM", None)
+        os.environ["VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT"] = "0"
+        value_directory_preview.llm_fallback_configs = lambda: [
+            ("qwen-key", "https://dashscope.aliyuncs.com/compatible-mode/v1", "glm-5.3"),
+            ("qwen-key", "https://dashscope.aliyuncs.com/compatible-mode/v1", "deepseek-v4.1-flash"),
+        ]
+        value_directory_preview.request_preview_llm = fake_request
+        parsed, model = value_directory_preview.call_preview_text_llm({}, {"state": "ok"})
+    finally:
+        for name, value in original_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        value_directory_preview.llm_fallback_configs = original_fallback
+        value_directory_preview.request_preview_llm = original_request
+
+    assert model == "deepseek-v4.1-flash"
+    assert parsed["core_content"] == "链尾结论"
+    assert requested_models == [
+        "qwen3.7-flash-2026-07-15",
+        "glm-5.3",
+        "deepseek-v4.1-flash",
+    ]
+
+
 def test_preview_text_llm_non_balance_http_error_keeps_primary_model() -> None:
     env_names = (
         "LLM_API_KEY",

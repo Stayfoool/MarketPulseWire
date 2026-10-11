@@ -281,7 +281,9 @@ def test_glm_bailian_request_uses_bailian_response_preferences() -> None:
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
             model="glm-5.3",
         )
-        assert preferences["enable_thinking"] is False
+        # 百炼 glm-5.3 与 qwen3.8-2.4t-a95b 一样仅支持思考模式：
+        # enable_thinking=false 会被端点 400 拒绝。
+        assert preferences["enable_thinking"] is True
         assert preferences["response_format"] == {"type": "json_object"}
         # 百炼端点不接受智谱官方的 thinking 对象 / reasoning_effort 参数。
         assert "thinking" not in preferences
@@ -939,14 +941,15 @@ def test_bailian_thinking_only_model_forces_enable_thinking() -> None:
     try:
         os.environ.pop("LLM_THINKING_TYPE", None)
         os.environ.pop("LLM_RESPONSE_FORMAT_JSON", None)
-        preferences = llm_analysis.llm_response_preferences(
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-            model="qwen3.8-2.4t-a95b",
-        )
-        # qwen3.8-2.4t-a95b 仅支持思考模式，enable_thinking=false 会被端点 400 拒绝。
-        assert preferences["enable_thinking"] is True
-        assert preferences["response_format"] == {"type": "json_object"}
-        assert "thinking" not in preferences
+        for model in ("qwen3.8-2.4t-a95b", "glm-5.3"):
+            preferences = llm_analysis.llm_response_preferences(
+                base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+                model=model,
+            )
+            # 仅思考模式模型传 enable_thinking=false 会被端点 400 拒绝。
+            assert preferences["enable_thinking"] is True
+            assert preferences["response_format"] == {"type": "json_object"}
+            assert "thinking" not in preferences
     finally:
         for name, value in original.items():
             if value is None:

@@ -39,9 +39,9 @@ QWEN38_FLASH_PROVIDER = "qwen38_flash"
 QWEN38_FLASH_MODEL = "qwen3.8-flash"
 QWEN38_MAX_0902_PROVIDER = "qwen38_max_0902"
 QWEN38_MAX_0902_MODEL = "qwen3.8-max-0902"
-# qwen3.8-2.4t-a95b 仅支持思考模式：百炼 OpenAI 兼容端点对它要求 enable_thinking=true，
-# 传 false 直接返回 HTTP 400 InternalError.Algo.InvalidParameter。
-QWEN_BAILIAN_THINKING_ONLY_MODELS = {QWEN38_2_4T_A95B_MODEL}
+# qwen3.8-2.4t-a95b 与百炼托管的 glm-5.3 仅支持思考模式：百炼 OpenAI 兼容端点对它们
+# 要求 enable_thinking=true，传 false 直接返回 HTTP 400 InternalError.Algo.InvalidParameter。
+QWEN_BAILIAN_THINKING_ONLY_MODELS = {QWEN38_2_4T_A95B_MODEL, GLM_BAILIAN_MODEL}
 
 # 百炼托管的 Kimi K3 与 DeepSeek V4.1 Flash：同样共用千问连接。
 KIMI_K3_PROVIDER = "kimi_k3"

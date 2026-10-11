@@ -309,7 +309,8 @@ defaults to the 百炼 OpenAI-compatible endpoint
 `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` URL
 when the API key belongs to a business space. 百炼 requests send
 `enable_thinking=false` and JSON mode, except thinking-only
-`qwen38_2_4t_a95b`, which always sends `enable_thinking=true`. These providers
+`qwen38_2_4t_a95b` and `glm_bailian` (`glm-5.3`), which always send
+`enable_thinking=true`. These providers
 form the ordered 百炼 free-quota balance fallback chain
 `qwen_flash_snapshot` (default model `qwen3.7-flash-2026-07-15`) →
 `qwen_flash` (`qwen3.7-flash`) → `qwen38_2_4t_a95b` (`qwen3.8-2.4t-a95b`) →
