@@ -108,9 +108,9 @@ disabled thinking. The remaining 百炼 providers share the
 千问 connection (`LLM_QWEN_API_KEY` with `LLM_QWEN_BASE_URL`, defaulting to
 the 百炼 OpenAI-compatible endpoint
 `https://dashscope.aliyuncs.com/compatible-mode/v1`): `qwen_flash_snapshot`
-(default), `qwen_flash`, `qwen38_2_4t_a95b` (thinking-only, always
-`enable_thinking=true`), `kimi_k3`, `glm_bailian` and `deepseek_v41_flash`;
-they send `enable_thinking` plus JSON mode. These six models form the ordered
+(default), `qwen_flash`, `qwen38_2_4t_a95b` and `glm_bailian` (both
+thinking-only, always `enable_thinking=true`), `kimi_k3` and
+`deepseek_v41_flash`; they send `enable_thinking` plus JSON mode. These six models form the ordered
 百炼 free-quota balance fallback chain snapshot → stable → 2.4T A95B →
 kimi-k3 → glm-5.3 → deepseek-v4.1-flash: when the selected model reports
 insufficient balance, the same request walks the chain starting after it.

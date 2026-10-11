@@ -25,6 +25,7 @@ from llm_analysis import (
     llm_config,
     llm_fallback_configs,
     log_llm_fallback,
+    log_llm_retry,
     parse_json_object,
 )
 
@@ -463,6 +464,9 @@ def _call_preview_llm_with_balance_fallback(
                     failure_label=failure_label,
                 )
             except LLMBalanceInsufficientError:
+                continue
+            except Exception as exc:  # noqa: BLE001 - 备用模型的请求类错误只跳过该档，链上后续模型继续
+                log_llm_retry(f"备用模型 {fallback_model} 请求失败：{exc}，准备尝试后续备用模型")
                 continue
         raise
 
