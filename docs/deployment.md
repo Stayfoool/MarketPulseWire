@@ -309,12 +309,11 @@ defaults to the 百炼 OpenAI-compatible endpoint
 `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` URL
 when the API key belongs to a business space. 百炼 requests send
 `enable_thinking=false` and JSON mode, except thinking-only
-`qwen38_2_4t_a95b` and `glm_bailian` (`glm-5.3`), which always send
-`enable_thinking=true`. These providers
+`qwen38_2_4t_a95b`, which always sends `enable_thinking=true`. These providers
 form the ordered 百炼 free-quota balance fallback chain
 `qwen_flash_snapshot` (default model `qwen3.7-flash-2026-07-15`) →
 `qwen_flash` (`qwen3.7-flash`) → `qwen38_2_4t_a95b` (`qwen3.8-2.4t-a95b`) →
-`kimi_k3` (`kimi-k3`) → `glm_bailian` (`glm-5.3`) → `deepseek_v41_flash`
+`kimi_k3` (`kimi-k3`) → `deepseek_v41_flash`
 (`deepseek-v4.1-flash`); when the selected model's quota is exhausted, the
 request walks the chain starting after it. The chain ends with five 火山方舟
 entries using the separate private `LLM_ARK_API_KEY` / `LLM_ARK_BASE_URL`
@@ -332,7 +331,10 @@ entries. The retired qwen3.8 providers
 exhausted) and 百炼-hosted DeepSeek (`LLM_PROVIDER=deepseek` with a 百炼
 `LLM_BASE_URL`) enter the chain from its head, using the separate private
 `LLM_QWEN_API_KEY` / `LLM_QWEN_BASE_URL` connection; the official DeepSeek
-endpoint has no Bailian fallback. The Web
+endpoint has no Bailian fallback. The 百炼-hosted `glm_bailian` (`glm-5.3`) is
+deactivated: its thinking-mode JSON output cannot pass the production
+validation reliably, so it is excluded from the chain and the Web model list,
+keeps resolving for historical selections and has no fallback. The Web
 workbench's `当前模型` control writes
 the selection atomically, restarts the long-running Sina flash service and
 leaves already-running one-shot collectors to finish with their starting
