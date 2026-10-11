@@ -108,11 +108,11 @@ disabled thinking. The remaining 百炼 providers share the
 千问 connection (`LLM_QWEN_API_KEY` with `LLM_QWEN_BASE_URL`, defaulting to
 the 百炼 OpenAI-compatible endpoint
 `https://dashscope.aliyuncs.com/compatible-mode/v1`): `qwen_flash_snapshot`
-(default), `qwen_flash`, `qwen38_2_4t_a95b` and `glm_bailian` (both
-thinking-only, always `enable_thinking=true`), `kimi_k3` and
-`deepseek_v41_flash`; they send `enable_thinking` plus JSON mode. These six models form the ordered
+(default), `qwen_flash`, `qwen38_2_4t_a95b` (thinking-only, always
+`enable_thinking=true`), `kimi_k3` and `deepseek_v41_flash`; they send
+`enable_thinking` plus JSON mode. These five models form the ordered
 百炼 free-quota balance fallback chain snapshot → stable → 2.4T A95B →
-kimi-k3 → glm-5.3 → deepseek-v4.1-flash: when the selected model reports
+kimi-k3 → deepseek-v4.1-flash: when the selected model reports
 insufficient balance, the same request walks the chain starting after it.
 The chain ends with five 火山方舟 fallback entries that use the separate
 `LLM_ARK_API_KEY` / `LLM_ARK_BASE_URL` connection (defaulting to
@@ -131,7 +131,11 @@ walking; Ark rate-limit errors are not. The retired qwen3.8 providers
 (`qwen38_max`, `qwen38_27b`, `qwen38_flash`,
 `qwen38_max_0902`; free quota exhausted) and 百炼-hosted DeepSeek
 (`LLM_PROVIDER=deepseek` with a 百炼 `LLM_BASE_URL`) enter the chain from its
-head; the official DeepSeek endpoint has no fallback and fails closed. The Web
+head; the official DeepSeek endpoint has no fallback and fails closed. The
+百炼-hosted `glm_bailian` (`glm-5.3`) is deactivated: its thinking-mode JSON
+output cannot pass the production validation reliably, so it is excluded from
+the chain and the Web model list, keeps resolving for historical selections,
+and has no fallback. The Web
 workbench changes only this model selection and its private connection values.
 It does not select a different decision, review, storage, dedup or delivery
 path. A missing key for the selected model fails closed instead of using the

@@ -1046,9 +1046,8 @@ def test_preview_text_llm_fallback_request_error_skips_to_next_model() -> None:
 
     def fake_request(payload, *, base_url, api_key):
         requested_models.append(payload["model"])
-        if payload["model"] == "glm-5.3":
-            # 百炼 glm-5.3 的 enable_thinking 参数错误是请求类错误：
-            # 只跳过该档，链上后续备用模型继续。
+        if payload["model"] == "qwen3.7-flash":
+            # 备用模型的参数类错误是请求类错误：只跳过该档，链上后续备用模型继续。
             raise value_directory_preview.urllib.error.HTTPError(
                 "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
                 400,
@@ -1058,7 +1057,7 @@ def test_preview_text_llm_fallback_request_error_skips_to_next_model() -> None:
                     json.dumps(
                         {
                             "error": {
-                                "message": "<400> InternalError.Algo.InvalidParameter: The value of the enable_thinking parameter is restricted to True.",
+                                "message": "<400> InternalError.Algo.InvalidParameter: bad parameter.",
                                 "code": "invalid_parameter_error",
                             }
                         }
@@ -1086,7 +1085,7 @@ def test_preview_text_llm_fallback_request_error_skips_to_next_model() -> None:
         os.environ.pop("SURVEIL_DISABLE_LLM", None)
         os.environ["VALUE_DIRECTORY_PREVIEW_LLM_RETRY_COUNT"] = "0"
         value_directory_preview.llm_fallback_configs = lambda: [
-            ("qwen-key", "https://dashscope.aliyuncs.com/compatible-mode/v1", "glm-5.3"),
+            ("qwen-key", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen3.7-flash"),
             ("qwen-key", "https://dashscope.aliyuncs.com/compatible-mode/v1", "deepseek-v4.1-flash"),
         ]
         value_directory_preview.request_preview_llm = fake_request
@@ -1104,7 +1103,7 @@ def test_preview_text_llm_fallback_request_error_skips_to_next_model() -> None:
     assert parsed["core_content"] == "链尾结论"
     assert requested_models == [
         "qwen3.7-flash-2026-07-15",
-        "glm-5.3",
+        "qwen3.7-flash",
         "deepseek-v4.1-flash",
     ]
 

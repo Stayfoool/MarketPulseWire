@@ -55,14 +55,15 @@ DEEPSEEK_V41_FLASH_MODEL = "deepseek-v4.1-flash"
 BAILIAN_FIXED_TEMPERATURE_MODELS = {KIMI_K3_MODEL: 0}
 
 # 百炼免费额度模型按下列顺序依次使用：当前模型额度用尽时，
-# 同一轮请求切换到链上的下一个模型。glm-5.3、kimi-k3、deepseek-v4.1-flash
+# 同一轮请求切换到链上的下一个模型。kimi-k3、deepseek-v4.1-flash
 # 与千问模型共用 LLM_QWEN_API_KEY / LLM_QWEN_BASE_URL。
+# 百炼托管的 glm-5.3 不进入回退链：其思考模式输出的 JSON 无法稳定通过
+# 生产严格校验（invalid_output 比例约一半），按运营决策停用。
 BAILIAN_FALLBACK_CHAIN = (
     (QWEN_FLASH_SNAPSHOT_PROVIDER, QWEN_FLASH_SNAPSHOT_MODEL),
     (QWEN_FLASH_PROVIDER, QWEN_FLASH_MODEL),
     (QWEN38_2_4T_A95B_PROVIDER, QWEN38_2_4T_A95B_MODEL),
     (KIMI_K3_PROVIDER, KIMI_K3_MODEL),
-    (GLM_BAILIAN_PROVIDER, GLM_BAILIAN_MODEL),
     (DEEPSEEK_V41_FLASH_PROVIDER, DEEPSEEK_V41_FLASH_MODEL),
 )
 
@@ -246,8 +247,9 @@ def resolve_llm_fallback_connections(values: Mapping[str, str]) -> list[tuple[st
         provider == DEEPSEEK_PROVIDER
         and is_qwen_bailian_base_url(str(values.get("LLM_BASE_URL") or ""))
     ):
-        # 链外百炼模型（免费额度已用完的旧 qwen3.8 系列、百炼托管的 DeepSeek）
-        # 额度用尽后从链头开始切换；官方 DeepSeek 端点和智谱 GLM 不回退链上模型。
+        # 链外百炼模型（免费额度已用完的旧 qwen3.8 系列、已停用的百炼 glm-5.3、
+        # 百炼托管的 DeepSeek）额度用尽后从链头开始切换；
+        # 官方 DeepSeek 端点和智谱 GLM 不回退链上模型。
         fallback_providers = tuple(chain_providers)
     else:
         return []

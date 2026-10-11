@@ -218,7 +218,6 @@ BAILIAN_MODEL_LABELS = {
     QWEN_FLASH_PROVIDER: "阿里云百炼 Qwen3.7 Flash（稳定版）",
     QWEN38_2_4T_A95B_PROVIDER: "阿里云百炼 Qwen3.8 2.4T A95B",
     KIMI_K3_PROVIDER: "阿里云百炼 Kimi K3",
-    GLM_BAILIAN_PROVIDER: "阿里云百炼 GLM 5.3",
     DEEPSEEK_V41_FLASH_PROVIDER: "阿里云百炼 DeepSeek V4.1 Flash",
     QWEN38_MAX_PROVIDER: "阿里云百炼 Qwen3.8 Max",
     QWEN38_27B_PROVIDER: "阿里云百炼 Qwen3.8 27B",
@@ -235,7 +234,8 @@ FALLBACK_NOTE = (
     "免费额度余额回退顺序："
     + " → ".join(model for _, model in (*BAILIAN_FALLBACK_CHAIN, *ARK_FALLBACK_CHAIN))
     + "。链上模型额度用尽后从下一个继续；免费额度已用完的旧 qwen3.8 模型和"
-    "百炼托管的 DeepSeek 额度用尽后从链头开始；官方 DeepSeek 和智谱 GLM 5.3 Flash 端点无回退；"
+    "百炼托管的 DeepSeek 额度用尽后从链头开始；已停用的百炼 glm-5.3、"
+    "官方 DeepSeek 和智谱 GLM 5.3 Flash 端点无回退；"
     "火山方舟各档共用独立的方舟 API Key，未配置时自动跳过整段方舟模型。"
 )
 

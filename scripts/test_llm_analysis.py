@@ -189,7 +189,6 @@ def test_qwen_bailian_provider_uses_dedicated_connection_and_fails_closed_withou
                 "qwen3.7-flash",
                 "qwen3.8-2.4t-a95b",
                 "kimi-k3",
-                "glm-5.3",
                 "deepseek-v4.1-flash",
             )
         ]
@@ -204,7 +203,6 @@ def test_qwen_bailian_provider_uses_dedicated_connection_and_fails_closed_withou
         assert [connection[2] for connection in llm_analysis.llm_fallback_configs()] == [
             "qwen3.8-2.4t-a95b",
             "kimi-k3",
-            "glm-5.3",
             "deepseek-v4.1-flash",
         ]
 
@@ -219,7 +217,7 @@ def test_qwen_bailian_provider_uses_dedicated_connection_and_fails_closed_withou
                 os.environ[name] = value
 
 
-def test_glm_bailian_provider_uses_bailian_connection_and_chain_fallback() -> None:
+def test_glm_bailian_provider_uses_bailian_connection_and_falls_back_from_chain_head() -> None:
     names = (
         "SURVEIL_DISABLE_LLM",
         "LLM_PROVIDER",
@@ -244,22 +242,14 @@ def test_glm_bailian_provider_uses_bailian_connection_and_chain_fallback() -> No
             "https://dashscope.aliyuncs.com/compatible-mode/v1",
             "glm-5.3",
         )
-        # 百炼 GLM 在免费额度回退链上，额度用尽后切换到链的下一档。
-        assert llm_analysis.llm_fallback_configs() == [
-            (
-                "bailian-key",
-                "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                "deepseek-v4.1-flash",
-            )
-        ]
+        # 百炼 GLM 已停用且不进入回退链：显式选中它时无任何备用模型，额度用尽后关闭式失败。
+        assert llm_analysis.llm_fallback_configs() == []
 
         os.environ["LLM_QWEN_BASE_URL"] = "https://space.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
         assert llm_analysis.llm_config()[1] == (
             "https://space.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
         )
-        assert [connection[1] for connection in llm_analysis.llm_fallback_configs()] == [
-            "https://space.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-        ]
+        assert llm_analysis.llm_fallback_configs() == []
 
         os.environ.pop("LLM_QWEN_API_KEY")
         assert llm_analysis.llm_config() is None
@@ -425,7 +415,6 @@ def test_retired_qwen38_providers_fall_back_from_chain_head() -> None:
             "qwen3.7-flash",
             "qwen3.8-2.4t-a95b",
             "kimi-k3",
-            "glm-5.3",
             "deepseek-v4.1-flash",
         ]
 
@@ -436,7 +425,6 @@ def test_retired_qwen38_providers_fall_back_from_chain_head() -> None:
             "qwen3.7-flash",
             "qwen3.8-2.4t-a95b",
             "kimi-k3",
-            "glm-5.3",
             "deepseek-v4.1-flash",
         ]
 
@@ -465,7 +453,6 @@ def test_kimi_and_deepseek_v41_flash_sit_at_bailian_chain_tail() -> None:
             "kimi-k3",
         )
         assert [connection[2] for connection in llm_analysis.llm_fallback_configs()] == [
-            "glm-5.3",
             "deepseek-v4.1-flash",
         ]
 
@@ -531,7 +518,6 @@ def test_bailian_chain_falls_back_to_ark_tail() -> None:
             "qwen3.7-flash",
             "qwen3.8-2.4t-a95b",
             "kimi-k3",
-            "glm-5.3",
             "deepseek-v4.1-flash",
             "doubao-seed-2-1-lite-260915",
             "deepseek-v4-1-flash-260910",
@@ -540,9 +526,9 @@ def test_bailian_chain_falls_back_to_ark_tail() -> None:
             "deepseek-v4-flash-ga-260731",
         ]
         # 百炼档共用千问连接，方舟档使用独立的方舟连接。
-        assert [connection[0] for connection in configs[:5]] == ["qwen-key"] * 5
-        assert [connection[0] for connection in configs[5:]] == ["ark-key"] * 5
-        assert [connection[1] for connection in configs[5:]] == [
+        assert [connection[0] for connection in configs[:4]] == ["qwen-key"] * 4
+        assert [connection[0] for connection in configs[4:]] == ["ark-key"] * 5
+        assert [connection[1] for connection in configs[4:]] == [
             "https://ark.cn-beijing.volces.com/api/v3"
         ] * 5
 
@@ -563,7 +549,6 @@ def test_bailian_chain_falls_back_to_ark_tail() -> None:
             "qwen3.7-flash",
             "qwen3.8-2.4t-a95b",
             "kimi-k3",
-            "glm-5.3",
             "deepseek-v4.1-flash",
         ]
     finally:
@@ -739,7 +724,6 @@ def test_bailian_hosted_deepseek_falls_back_to_bailian_chain() -> None:
                 "qwen3.7-flash",
                 "qwen3.8-2.4t-a95b",
                 "kimi-k3",
-                "glm-5.3",
                 "deepseek-v4.1-flash",
             )
         ]
@@ -747,7 +731,7 @@ def test_bailian_hosted_deepseek_falls_back_to_bailian_chain() -> None:
         os.environ["LLM_QWEN_BASE_URL"] = "https://space.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
         assert [connection[1] for connection in llm_analysis.llm_fallback_configs()] == [
             "https://space.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
-        ] * 6
+        ] * 5
 
         # 官方 DeepSeek 端点不回退百炼模型。
         os.environ["LLM_BASE_URL"] = "https://api.deepseek.com"
@@ -1235,7 +1219,7 @@ def main() -> int:
     test_glm_provider_uses_dedicated_fixed_connection_and_fails_closed_without_key()
     test_glm_request_forces_supported_response_preferences()
     test_qwen_bailian_provider_uses_dedicated_connection_and_fails_closed_without_key()
-    test_glm_bailian_provider_uses_bailian_connection_and_chain_fallback()
+    test_glm_bailian_provider_uses_bailian_connection_and_falls_back_from_chain_head()
     test_qwen_bailian_request_uses_supported_response_preferences()
     test_bailian_thinking_only_model_forces_enable_thinking()
     test_bailian_fixed_temperature_models_normalize_temperature()
