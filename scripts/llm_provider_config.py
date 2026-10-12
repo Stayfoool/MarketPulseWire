@@ -68,8 +68,9 @@ BAILIAN_FALLBACK_CHAIN = (
 )
 
 # 火山方舟（Volcengine Ark）OpenAI 兼容端点，北京地域。模型直接使用方舟 Model ID 调用。
-# Doubao-Seed-2.0-pro（doubao-seed-2-0-pro-260215）已被方舟标注即将下线且调用 404，
-# 不进入兜底链；当前在售旗舰 doubao-seed-2-1-pro-260915 需在控制台开通后才可加入。
+# Doubao-Seed 系列按运营决策停用：2.0-pro（doubao-seed-2-0-pro-260215）已被方舟标注
+# 即将下线且调用 404；2.1-lite 不进入兜底链；在售旗舰 doubao-seed-2-1-pro-260915
+# 也不加入。历史 LLM_PROVIDER 选择仍可解析，但不再获得回退流量。
 ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
 DOUBAO_SEED_21_LITE_PROVIDER = "doubao_seed_21_lite"
 DOUBAO_SEED_21_LITE_MODEL = "doubao-seed-2-1-lite-260915"
@@ -94,7 +95,6 @@ _ARK_MODEL_PROVIDERS = {model: provider for provider, model in _ARK_PROVIDER_MOD
 # 火山方舟兜底链：百炼免费额度回退链整体用尽后，同一轮按开通页顺序依次使用方舟模型。
 # 方舟各档共用独立的 LLM_ARK_API_KEY / LLM_ARK_BASE_URL 连接；未配置方舟 API Key 时该段关闭式跳过。
 ARK_FALLBACK_CHAIN = (
-    (DOUBAO_SEED_21_LITE_PROVIDER, DOUBAO_SEED_21_LITE_MODEL),
     (ARK_DEEPSEEK_V41_FLASH_PROVIDER, ARK_DEEPSEEK_V41_FLASH_MODEL),
     (ARK_GLM_53_FLASH_PROVIDER, ARK_GLM_53_FLASH_MODEL),
     (ARK_DEEPSEEK_V4_PRO_PROVIDER, ARK_DEEPSEEK_V4_PRO_MODEL),
