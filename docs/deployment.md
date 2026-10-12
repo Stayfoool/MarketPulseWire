@@ -315,15 +315,17 @@ form the ordered 百炼 free-quota balance fallback chain
 `qwen_flash` (`qwen3.7-flash`) → `qwen38_2_4t_a95b` (`qwen3.8-2.4t-a95b`) →
 `kimi_k3` (`kimi-k3`) → `deepseek_v41_flash`
 (`deepseek-v4.1-flash`); when the selected model's quota is exhausted, the
-request walks the chain starting after it. The chain ends with five 火山方舟
+request walks the chain starting after it. The chain ends with four 火山方舟
 entries using the separate private `LLM_ARK_API_KEY` / `LLM_ARK_BASE_URL`
 connection (defaulting to `https://ark.cn-beijing.volces.com/api/v3`), in
-开通管理 page order: `doubao_seed_21_lite` (`doubao-seed-2-1-lite-260915`),
-`ark_deepseek_v41_flash` (`deepseek-v4-1-flash-260910`), `ark_glm_53_flash`
-(`glm-5-3-flash-260828`), `ark_deepseek_v4_pro` (`deepseek-v4-pro-ga-260813`)
-then `ark_deepseek_v4_flash` (`deepseek-v4-flash-ga-260731`); the retired
-Doubao-Seed-2.0-pro snapshot (`doubao-seed-2-0-pro-260215`, 即将下线, 404) is
-excluded; Ark quota errors (`SetLimitExceeded`,
+开通管理 page order: `ark_deepseek_v41_flash` (`deepseek-v4-1-flash-260910`),
+`ark_glm_53_flash` (`glm-5-3-flash-260828`), `ark_deepseek_v4_pro`
+(`deepseek-v4-pro-ga-260813`) then `ark_deepseek_v4_flash`
+(`deepseek-v4-flash-ga-260731`); the 火山方舟 doubao-seed series is deactivated
+by operational decision (Doubao-Seed-2.0-pro `doubao-seed-2-0-pro-260215`,
+即将下线 and 404; Doubao-Seed-2.1-lite `doubao-seed-2-1-lite-260915`) and is
+excluded from the chain and the Web model list, keeps resolving for historical
+selections and has no fallback; Ark quota errors (`SetLimitExceeded`,
 `AccountOverdueError`, `OperationDenied.ServiceOverdue`, `QuotaExceeded`) count
 as insufficient balance, and missing Ark API key configuration skips those
 entries. The retired qwen3.8 providers

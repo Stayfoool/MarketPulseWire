@@ -473,6 +473,7 @@ def test_ark_providers_use_dedicated_connection_and_fails_closed_without_key() -
     original = {name: os.environ.get(name) for name in names}
     try:
         os.environ.pop("SURVEIL_DISABLE_LLM", None)
+        # 方舟 doubao-seed 系列已停用：历史选择仍用独立方舟连接解析，但不再获得回退流量。
         os.environ["LLM_PROVIDER"] = "doubao_seed_21_lite"
         os.environ["LLM_ARK_API_KEY"] = "ark-key"
         os.environ.pop("LLM_ARK_BASE_URL", None)
@@ -481,9 +482,12 @@ def test_ark_providers_use_dedicated_connection_and_fails_closed_without_key() -
             "https://ark.cn-beijing.volces.com/api/v3",
             "doubao-seed-2-1-lite-260915",
         )
+        assert llm_analysis.llm_fallback_configs() == []
+
         # 方舟链首模型额度用尽后按开通页顺序切换后续方舟模型；百炼未配置时不参与。
+        os.environ["LLM_PROVIDER"] = "ark_deepseek_v41_flash"
+        assert llm_analysis.llm_config()[2] == "deepseek-v4-1-flash-260910"
         assert [connection[2] for connection in llm_analysis.llm_fallback_configs()] == [
-            "deepseek-v4-1-flash-260910",
             "glm-5-3-flash-260828",
             "deepseek-v4-pro-ga-260813",
             "deepseek-v4-flash-ga-260731",
@@ -519,7 +523,6 @@ def test_bailian_chain_falls_back_to_ark_tail() -> None:
             "qwen3.8-2.4t-a95b",
             "kimi-k3",
             "deepseek-v4.1-flash",
-            "doubao-seed-2-1-lite-260915",
             "deepseek-v4-1-flash-260910",
             "glm-5-3-flash-260828",
             "deepseek-v4-pro-ga-260813",
@@ -527,15 +530,14 @@ def test_bailian_chain_falls_back_to_ark_tail() -> None:
         ]
         # 百炼档共用千问连接，方舟档使用独立的方舟连接。
         assert [connection[0] for connection in configs[:4]] == ["qwen-key"] * 4
-        assert [connection[0] for connection in configs[4:]] == ["ark-key"] * 5
+        assert [connection[0] for connection in configs[4:]] == ["ark-key"] * 4
         assert [connection[1] for connection in configs[4:]] == [
             "https://ark.cn-beijing.volces.com/api/v3"
-        ] * 5
+        ] * 4
 
         # 链尾百炼模型额度用尽后继续走方舟各档。
         os.environ["LLM_PROVIDER"] = "deepseek_v41_flash"
         assert [connection[2] for connection in llm_analysis.llm_fallback_configs()] == [
-            "doubao-seed-2-1-lite-260915",
             "deepseek-v4-1-flash-260910",
             "glm-5-3-flash-260828",
             "deepseek-v4-pro-ga-260813",
@@ -654,7 +656,7 @@ def test_bailian_exhaustion_walks_chain_into_ark_connection() -> None:
             (
                 "ark-key",
                 "https://ark.cn-beijing.volces.com/api/v3",
-                "doubao-seed-2-1-lite-260915",
+                "deepseek-v4-1-flash-260910",
             ),
         ]
         llm_analysis.retry_count = lambda: 0
@@ -679,12 +681,12 @@ def test_bailian_exhaustion_walks_chain_into_ark_connection() -> None:
             "Bearer qwen-key",
         ),
         (
-            "doubao-seed-2-1-lite-260915",
+            "deepseek-v4-1-flash-260910",
             "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
             "Bearer ark-key",
         ),
     ]
-    assert response.model == "doubao-seed-2-1-lite-260915"
+    assert response.model == "deepseek-v4-1-flash-260910"
 
 
 def test_bailian_hosted_deepseek_falls_back_to_bailian_chain() -> None:
