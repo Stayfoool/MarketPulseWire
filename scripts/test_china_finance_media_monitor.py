@@ -1160,6 +1160,112 @@ def test_wallstreetcn_stranded_retryable_review_closes_with_expiry() -> None:
         cfm.DB_PATH = original_db
 
 
+class _GlobalLLMError(RuntimeError):
+    """Provider-level failure shape consumed by ``is_global_llm_failure``."""
+
+    global_failure = True
+
+
+def _run_batch_with_failure(
+    failing_item_id: str,
+    error: BaseException,
+) -> tuple[list[tuple[str, str]], BaseException]:
+    """Run one batch over two sources where ``failing_item_id`` raises ``error``."""
+
+    original_db = cfm.DB_PATH
+    original_source_items = cfm.source_items
+    original_save = cfm.save_new_items_with_retry
+    original_retryable = cfm.retryable_seen_items
+    original_notify = cfm.notify_item
+    original_record_success = cfm.record_source_success
+    original_record_failure = cfm.record_source_failure
+    original_strict = os.environ.get("SURVEIL_STRICT_PROCESSING")
+    attempted: list[tuple[str, str]] = []
+    raised: BaseException | None = None
+    tmpdir = tempfile.TemporaryDirectory()
+    try:
+        use_test_database(Path(tmpdir.name) / "test.sqlite3")
+        os.environ["SURVEIL_STRICT_PROCESSING"] = "1"
+        cfm.source_items = lambda source, **_kwargs: [
+            {
+                "id": f"{source}-{index}",
+                "title": f"{source}-{index}",
+                "url": "",
+                "published_at": "",
+            }
+            for index in range(3)
+        ]
+        cfm.save_new_items_with_retry = lambda source, items, notify_baseline=False: list(items)
+        cfm.retryable_seen_items = lambda source: []
+        cfm.record_source_success = lambda conn, monitor, source: None
+        cfm.record_source_failure = lambda conn, monitor, source, exc: None
+
+        def fake_notify(source: str, item: dict) -> None:
+            attempted.append((source, str(item["id"])))
+            if item["id"] == failing_item_id:
+                raise error
+
+        cfm.notify_item = fake_notify
+        try:
+            cfm.run_once(["src-a", "src-b"], notify_baseline=False)
+        except Exception as exc:  # noqa: BLE001 - asserted by the caller
+            raised = exc
+    finally:
+        cfm.DB_PATH = original_db
+        tmpdir.cleanup()
+        cfm.source_items = original_source_items
+        cfm.save_new_items_with_retry = original_save
+        cfm.retryable_seen_items = original_retryable
+        cfm.notify_item = original_notify
+        cfm.record_source_success = original_record_success
+        cfm.record_source_failure = original_record_failure
+        if original_strict is None:
+            os.environ.pop("SURVEIL_STRICT_PROCESSING", None)
+        else:
+            os.environ["SURVEIL_STRICT_PROCESSING"] = original_strict
+    assert raised is not None, "strict processing must surface the batch failure"
+    return attempted, raised
+
+
+def test_global_llm_failure_stops_source_batch_without_aborting_other_sources() -> None:
+    """模型侧全局故障只停当前来源，其他来源照常处理完整批。"""
+
+    attempted, raised = _run_batch_with_failure(
+        "src-a-1",
+        _GlobalLLMError("LLM degree decision failed: model_unavailable"),
+    )
+    assert isinstance(raised, cfm.ProcessingBatchError)
+    assert raised.global_failure is True
+    assert raised.aborted_due_global_failure is True
+    assert raised.failed_items == 1
+    # 故障来源在本轮剩余条目停机，第三条不再尝试。
+    assert [item_id for source, item_id in attempted if source == "src-a"] == [
+        "src-a-0",
+        "src-a-1",
+    ]
+    # 其他来源不受全局故障影响，三条全部尝试。
+    assert [item_id for source, item_id in attempted if source == "src-b"] == [
+        "src-b-0",
+        "src-b-1",
+        "src-b-2",
+    ]
+
+
+def test_item_level_failure_keeps_processing_remaining_items() -> None:
+    """单条失败（非全局）要继续处理同批剩余条目。"""
+
+    attempted, raised = _run_batch_with_failure("src-a-1", RuntimeError("single item failure"))
+    assert isinstance(raised, cfm.ProcessingBatchError)
+    assert raised.global_failure is False
+    assert raised.aborted_due_global_failure is False
+    assert raised.failed_items == 1
+    assert [item_id for source, item_id in attempted if source == "src-a"] == [
+        "src-a-0",
+        "src-a-1",
+        "src-a-2",
+    ]
+
+
 def main() -> int:
     test_cls_sign_includes_empty_values_and_sorts_keys()
     test_parse_cls_time_accepts_seconds_and_milliseconds()
@@ -1191,6 +1297,8 @@ def main() -> int:
     test_sina_first_run_baseline_and_idempotency()
     test_sina_generic_title_uses_detail_body_for_focus()
     test_default_sources_include_star_market_daily()
+    test_global_llm_failure_stops_source_batch_without_aborting_other_sources()
+    test_item_level_failure_keeps_processing_remaining_items()
     print("china_finance_media_monitor helper tests OK")
     return 0
 
