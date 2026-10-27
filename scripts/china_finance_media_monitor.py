@@ -1478,6 +1478,7 @@ def run_once(sources: list[str], notify_baseline: bool = False) -> int:
         return 0
     total_new = 0
     processing_failed_items = 0
+    aborted_due_global_failure = False
     fetched: dict[str, list[dict[str, Any]]] = {}
     max_workers = min(len(sources), env_int("CHINA_MEDIA_FETCH_MAX_WORKERS", 3, minimum=1))
     source_states = {source: load_source_state(source) for source in sources}
@@ -1552,17 +1553,22 @@ def run_once(sources: list[str], notify_baseline: bool = False) -> int:
                     if source == WALLSTREETCN_SOURCE:
                         record_source_failure(conn, "wallstreetcn", "detail", exc)
                 print(f"{china_media_module(source)} 条目处理失败，已保留为可重试：{type(exc).__name__}: {exc}", flush=True)
-                if strict_processing_enabled() and is_global_llm_failure(exc):
-                    raise ProcessingBatchError(
-                        processing_failed_items,
-                        completed_items=total_new,
-                        global_failure=True,
-                    ) from exc
+                if is_global_llm_failure(exc):
+                    # 模型侧全局故障（如服务不可用）对同一来源的剩余条目同样成立，
+                    # 继续逐条尝试只会重复消耗每条决策预算，因此停止本来源本轮剩余
+                    # 条目：它们已保留可重试状态，等来源再次发现或 24 小时窗口关闭。
+                    # 不中断其他来源，也不提前抛出批次异常，退出码仍由末尾统一判定。
+                    aborted_due_global_failure = True
+                    break
         if source == WALLSTREETCN_SOURCE and not processing_failed:
             with connect_db() as conn:
                 record_source_success(conn, "wallstreetcn", "detail")
     if processing_failed_items and strict_processing_enabled():
-        raise ProcessingBatchError(processing_failed_items, completed_items=total_new)
+        raise ProcessingBatchError(
+            processing_failed_items,
+            completed_items=total_new,
+            global_failure=aborted_due_global_failure,
+        )
     return total_new
 
 
