@@ -12,7 +12,39 @@ OPENAI_COMPATIBLE_PROVIDER = "openai_compatible"
 ZHIPU_GLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 ZHIPU_GLM_MODEL = "glm-5.3-flash"
 
-_ZHIPU_ALIASES = {ZHIPU_GLM_PROVIDER, "zhipu", "glm", ZHIPU_GLM_MODEL}
+_ZHIPU_FLASH_ALIASES = {ZHIPU_GLM_PROVIDER, "zhipu", "glm", ZHIPU_GLM_MODEL}
+
+# 智谱官方资源包内的备用 Flash 模型：glm-5.3-flash 额度用尽后切换到同一资源包内的
+# glm-5.3-flashx，复用同一个 LLM_GLM_API_KEY / ZHIPU_GLM_BASE_URL 连接。
+ZHIPU_GLM_FLASHX_PROVIDER = "zhipu_glm_flashx"
+ZHIPU_GLM_FLASHX_MODEL = "glm-5.3-flashx"
+_ZHIPU_FLASHX_ALIASES = {ZHIPU_GLM_FLASHX_PROVIDER, ZHIPU_GLM_FLASHX_MODEL}
+
+# 智谱官方资源包内部回退链：glm-5.3-flash 额度用尽后从同一资源包内切换到下一个模型；
+# 链尾模型（glm-5.3-flashx）额度用尽后没有后续备用模型，保持关闭式失败。
+ZHIPU_GLM_FALLBACK_CHAIN = (
+    (ZHIPU_GLM_PROVIDER, ZHIPU_GLM_MODEL),
+    (ZHIPU_GLM_FLASHX_PROVIDER, ZHIPU_GLM_FLASHX_MODEL),
+)
+
+# ModelScope（魔搭）推理端点：OpenAI 兼容，托管 Qwen3.5 35B A3B（MoE，非思考模式）。
+# 使用独立的 LLM_MODELSCOPE_API_KEY，端点与模型由代码固定；额度耗尽时按
+# MODELSCOPE_FALLBACK_MODELS 回退到火山方舟 Doubao-Seed 2.0 免费额度两档。
+# 选择依据：魔搭上 GLM-5.3-Flash 思考不可关闭且超出网关 120s 限制；Qwen3.5-35B-A3B
+# 实测约 80 tok/s、17s 产出完整 JSON，满足决策链路 120s 总预算。
+MODELSCOPE_BASE_URL = "https://api-inference.modelscope.cn/v1"
+MODELSCOPE_QWEN35_PROVIDER = "modelscope_qwen35"
+MODELSCOPE_QWEN35_MODEL = "Qwen/Qwen3.5-35B-A3B"
+_MODELSCOPE_QWEN35_ALIASES = {
+    MODELSCOPE_QWEN35_PROVIDER,
+    "modelscope",
+    MODELSCOPE_QWEN35_MODEL,
+    MODELSCOPE_QWEN35_MODEL.lower(),
+}
+
+# 输出预算下限：Qwen3.5-35B-A3B 的完整简报 JSON 实测约 1200~1400 tokens，
+# 分析链路默认 1200 会截断，统一抬到 3000（只抬上限，模型提前结束不受影响）。
+MODEL_MIN_OUTPUT_TOKENS = {MODELSCOPE_QWEN35_MODEL: 3000}
 
 # 阿里云百炼（DashScope）OpenAI 兼容端点。北京地域默认端点不需要业务空间 ID；
 # 使用业务空间专属端点（*.cn-beijing.maas.aliyuncs.com）时在 Web 面板覆盖该地址。
@@ -83,6 +115,12 @@ ARK_DEEPSEEK_V4_PRO_MODEL = "deepseek-v4-pro-ga-260813"
 ARK_DEEPSEEK_V4_FLASH_PROVIDER = "ark_deepseek_v4_flash"
 ARK_DEEPSEEK_V4_FLASH_MODEL = "deepseek-v4-flash-ga-260731"
 
+# 火山方舟 Doubao-Seed 2.0 免费额度两档（各 50 万 tokens）。只作为 ModelScope 档的
+# 兜底模型：不进入 LLM_FALLBACK_CHAIN，也不作为 Web 面板可切换的主模型，因此既不改变
+# 既有百炼/方舟回退顺序，也保持“每天都优先 ModelScope”。
+ARK_DOUBAO_SEED_20_MINI_MODEL = "doubao-seed-2-0-mini-260428"
+ARK_DOUBAO_SEED_20_LITE_MODEL = "doubao-seed-2-0-lite-260428"
+
 _ARK_PROVIDER_MODELS = {
     DOUBAO_SEED_21_LITE_PROVIDER: DOUBAO_SEED_21_LITE_MODEL,
     ARK_DEEPSEEK_V41_FLASH_PROVIDER: ARK_DEEPSEEK_V41_FLASH_MODEL,
@@ -102,6 +140,15 @@ ARK_FALLBACK_CHAIN = (
 )
 
 LLM_FALLBACK_CHAIN = BAILIAN_FALLBACK_CHAIN + ARK_FALLBACK_CHAIN
+
+# ModelScope 档专属兜底顺序：仅在 ModelScope 报额度/欠费（LLMBalanceInsufficientError）
+# 时依次改用方舟 Doubao-Seed 2.0 的 mini 再到 lite。回退只发生在单次请求内部，下一个
+# 请求仍从 ModelScope 主模型开始，因此额度恢复后自动回到 ModelScope，不存在跨请求的
+# 供应商粘滞或状态切换。
+MODELSCOPE_FALLBACK_MODELS = (
+    ARK_DOUBAO_SEED_20_MINI_MODEL,
+    ARK_DOUBAO_SEED_20_LITE_MODEL,
+)
 
 # 免费额度已用完的旧 qwen3.8 模型：不再进入回退链，仅保留解析，
 # 历史 LLM_PROVIDER 命中后额度报错时从链头开始回退。
@@ -138,10 +185,18 @@ def is_ark_base_url(base_url: str) -> bool:
     return "volces.com" in str(base_url or "").lower()
 
 
+def is_modelscope_base_url(base_url: str) -> bool:
+    return "modelscope" in str(base_url or "").lower()
+
+
 def canonical_llm_provider(value: str) -> str:
     normalized = str(value or "").strip().lower()
-    if normalized in _ZHIPU_ALIASES:
+    if normalized in _ZHIPU_FLASHX_ALIASES:
+        return ZHIPU_GLM_FLASHX_PROVIDER
+    if normalized in _ZHIPU_FLASH_ALIASES:
         return ZHIPU_GLM_PROVIDER
+    if normalized in _MODELSCOPE_QWEN35_ALIASES:
+        return MODELSCOPE_QWEN35_PROVIDER
     if normalized == DEEPSEEK_PROVIDER:
         return DEEPSEEK_PROVIDER
     if normalized in _GLM_BAILIAN_ALIASES:
@@ -166,7 +221,13 @@ def selected_llm_provider(values: Mapping[str, str]) -> str:
     configured = canonical_llm_provider(values.get("LLM_PROVIDER", ""))
     if (
         configured
-        in {DEEPSEEK_PROVIDER, ZHIPU_GLM_PROVIDER, GLM_BAILIAN_PROVIDER}
+        in {
+            DEEPSEEK_PROVIDER,
+            ZHIPU_GLM_PROVIDER,
+            ZHIPU_GLM_FLASHX_PROVIDER,
+            MODELSCOPE_QWEN35_PROVIDER,
+            GLM_BAILIAN_PROVIDER,
+        }
         | set(QWEN_BAILIAN_PROVIDER_MODELS)
         | set(_ARK_PROVIDER_MODELS)
     ):
@@ -177,6 +238,10 @@ def selected_llm_provider(values: Mapping[str, str]) -> str:
         return DEEPSEEK_PROVIDER
     if "open.bigmodel.cn" in base_url and model == ZHIPU_GLM_MODEL:
         return ZHIPU_GLM_PROVIDER
+    if "open.bigmodel.cn" in base_url and model == ZHIPU_GLM_FLASHX_MODEL:
+        return ZHIPU_GLM_FLASHX_PROVIDER
+    if "modelscope.cn" in base_url and model == MODELSCOPE_QWEN35_MODEL.lower():
+        return MODELSCOPE_QWEN35_PROVIDER
     if is_qwen_bailian_base_url(base_url):
         if model == GLM_BAILIAN_MODEL:
             return GLM_BAILIAN_PROVIDER
@@ -194,6 +259,18 @@ def resolve_llm_connection(values: Mapping[str, str]) -> tuple[str, str, str] | 
         if not api_key:
             return None
         return api_key, ZHIPU_GLM_BASE_URL, ZHIPU_GLM_MODEL
+
+    if provider == ZHIPU_GLM_FLASHX_PROVIDER:
+        api_key = str(values.get("LLM_GLM_API_KEY") or "").strip()
+        if not api_key:
+            return None
+        return api_key, ZHIPU_GLM_BASE_URL, ZHIPU_GLM_FLASHX_MODEL
+
+    if provider == MODELSCOPE_QWEN35_PROVIDER:
+        api_key = str(values.get("LLM_MODELSCOPE_API_KEY") or "").strip()
+        if not api_key:
+            return None
+        return api_key, MODELSCOPE_BASE_URL, MODELSCOPE_QWEN35_MODEL
 
     if provider == GLM_BAILIAN_PROVIDER:
         api_key = str(values.get("LLM_QWEN_API_KEY") or "").strip()
@@ -239,6 +316,34 @@ def resolve_llm_fallback_connections(values: Mapping[str, str]) -> list[tuple[st
     该档关闭式跳过，不影响其余档位继续参与回退。
     """
     provider = canonical_llm_provider(values.get("LLM_PROVIDER", ""))
+    zhipu_providers = [chain_provider for chain_provider, _ in ZHIPU_GLM_FALLBACK_CHAIN]
+    if provider in zhipu_providers:
+        # 智谱官方资源包内部回退：同一资源包内模型额度用尽后切换到下一个模型，
+        # 复用同一个 LLM_GLM_API_KEY / ZHIPU_GLM_BASE_URL 连接。
+        api_key = str(values.get("LLM_GLM_API_KEY") or "").strip()
+        if not api_key:
+            return []
+        fallback_providers = tuple(zhipu_providers[zhipu_providers.index(provider) + 1 :])
+        if not fallback_providers:
+            return []
+        chain_models = dict(ZHIPU_GLM_FALLBACK_CHAIN)
+        return [
+            (api_key, ZHIPU_GLM_BASE_URL, chain_models[fallback_provider])
+            for fallback_provider in fallback_providers
+        ]
+    if provider == MODELSCOPE_QWEN35_PROVIDER:
+        # ModelScope 档专属兜底：主模型固定为 ModelScope Qwen3.5，额度/欠费报错时按
+        # MODELSCOPE_FALLBACK_MODELS 依次改用方舟 Doubao-Seed 2.0 免费额度两档，共用
+        # LLM_ARK_API_KEY / LLM_ARK_BASE_URL；主模型或方舟 Key 缺失时关闭式失败。
+        if not str(values.get("LLM_MODELSCOPE_API_KEY") or "").strip():
+            return []
+        ark_api_key = str(values.get("LLM_ARK_API_KEY") or "").strip()
+        if not ark_api_key:
+            return []
+        ark_base_url = str(values.get("LLM_ARK_BASE_URL") or "").strip() or ARK_BASE_URL
+        return [
+            (ark_api_key, ark_base_url, model) for model in MODELSCOPE_FALLBACK_MODELS
+        ]
     chain_providers = [chain_provider for chain_provider, _ in LLM_FALLBACK_CHAIN]
     if provider in chain_providers:
         # 链上模型额度用尽后从自己的下一档继续。
@@ -248,8 +353,9 @@ def resolve_llm_fallback_connections(values: Mapping[str, str]) -> list[tuple[st
         and is_qwen_bailian_base_url(str(values.get("LLM_BASE_URL") or ""))
     ):
         # 链外百炼模型（免费额度已用完的旧 qwen3.8 系列、已停用的百炼 glm-5.3、
-        # 百炼托管的 DeepSeek）额度用尽后从链头开始切换；
-        # 官方 DeepSeek 端点和智谱 GLM 不回退链上模型。
+        # 百炼托管的 DeepSeek）额度用尽后从链头开始切换；官方 DeepSeek 端点不回退链上模型。
+        # ModelScope 档走自己的方舟 Doubao-Seed 兜底，智谱官方资源包内模型
+        # （glm-5.3-flash → glm-5.3-flashx）已在函数顶部单独处理。
         fallback_providers = tuple(chain_providers)
     else:
         return []

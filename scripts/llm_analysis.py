@@ -17,7 +17,9 @@ import httpx
 
 from llm_provider_config import (
     BAILIAN_FIXED_TEMPERATURE_MODELS,
+    MODEL_MIN_OUTPUT_TOKENS,
     QWEN_BAILIAN_THINKING_ONLY_MODELS,
+    is_modelscope_base_url,
     is_qwen_bailian_base_url,
     resolve_llm_connection,
     resolve_llm_fallback_connections,
@@ -259,11 +261,18 @@ def max_output_tokens() -> int:
 
 
 def is_glm_53_flash(base_url: str, model: str) -> bool:
-    return "open.bigmodel.cn" in base_url.lower() and model.lower() == "glm-5.3-flash"
+    if "open.bigmodel.cn" not in base_url.lower():
+        return False
+    # 智谱官方资源包内的 glm-5.3-flash 与 glm-5.3-flashx 共用同一端点与请求契约
+    # （thinking=enabled、reasoning_effort=low、JSON mode）。
+    return model.lower() in {"glm-5.3-flash", "glm-5.3-flashx"}
 
 
 def json_response_format_enabled(base_url: str) -> bool:
     if "open.bigmodel.cn" in base_url.lower():
+        return True
+    if is_modelscope_base_url(base_url):
+        # 魔搭 OpenAI 兼容端点支持 response_format=json_object（实测不报错）。
         return True
     raw = os.getenv("LLM_RESPONSE_FORMAT_JSON", "").strip().lower()
     if raw:
@@ -282,6 +291,10 @@ def thinking_type(base_url: str, model: str) -> str:
     if "z.ai" in base_url.lower() and model.lower().startswith("glm-"):
         return "disabled"
     if "deepseek" in base_url.lower():
+        return "disabled"
+    if is_modelscope_base_url(base_url):
+        # 魔搭托管的 Qwen3.5 支持 enable_thinking=false 真正关闭思考（实测有效）；
+        # 默认关闭，避免思考占用输出预算并拖慢决策链路。
         return "disabled"
     if is_qwen_bailian_base_url(base_url):
         return "disabled"
@@ -302,6 +315,9 @@ def llm_response_preferences(
     if is_glm_53_flash(base_url, model):
         thinking = "enabled"
         preferences["reasoning_effort"] = "low"
+    elif is_modelscope_base_url(base_url):
+        # 魔搭用 Qwen 系的 enable_thinking 布尔开关（thinking 对象会被忽略）。
+        preferences["enable_thinking"] = thinking == "enabled"
     elif is_qwen_bailian_base_url(base_url):
         # 百炼 OpenAI 兼容模式用 enable_thinking 控制思考模式，不接受 thinking 对象。
         # 思考专用模型固定开启：qwen3.8-2.4t-a95b 传 enable_thinking=false 会被端点拒绝。
@@ -340,6 +356,10 @@ def apply_llm_response_preferences(
     fixed_temperature = BAILIAN_FIXED_TEMPERATURE_MODELS.get(str(model or ""))
     if fixed_temperature is not None and "temperature" in payload:
         payload["temperature"] = fixed_temperature
+    # 输出预算下限：部分模型输出较长 JSON，调用方给的偏小上限会截断，统一抬到下限。
+    min_output_tokens = MODEL_MIN_OUTPUT_TOKENS.get(str(model or ""))
+    if min_output_tokens and int(payload.get("max_tokens") or 0) < min_output_tokens:
+        payload["max_tokens"] = min_output_tokens
 
 
 def retry_sleep_seconds(attempt: int) -> float:

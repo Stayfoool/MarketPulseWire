@@ -143,6 +143,17 @@ It does not select a different decision, review, storage, dedup or delivery
 path. A missing key for the selected model fails closed instead of using the
 other model's key.
 
+The ModelScope provider (`modelscope_qwen35`, `Qwen/Qwen3.5-35B-A3B` on
+`https://api-inference.modelscope.cn/v1` through the dedicated
+`LLM_MODELSCOPE_API_KEY`) is the production decision model and is not part of
+the 百炼/方舟 chain above. When it reports insufficient balance, that same
+request walks `MODELSCOPE_FALLBACK_MODELS`: the 火山方舟 Doubao-Seed 2.0
+free-quota pair `doubao-seed-2-0-mini-260428` then `doubao-seed-2-0-lite-260428`
+over the shared `LLM_ARK_API_KEY` / `LLM_ARK_BASE_URL` connection. Every new
+request starts from ModelScope again, so this fallback is never a stateful
+provider switch and quota recovery needs no operator action; without an Ark key
+the pair is skipped and the balance error propagates as a closed failure.
+
 The decision layer supports two switchable engines behind
 `decision_engine.py` selected by `LLM_DECISION_ENGINE` (default `llm`).
 `llm` is the generative rule decision described above with the verbatim

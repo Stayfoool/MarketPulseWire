@@ -343,6 +343,17 @@ leaves already-running one-shot collectors to finish with their starting
 environment; later timer runs read the new selection. Source fetching continues
 to use `proxy.env`; no SOCKS dependency is required for model requests.
 
+The production decision model is the ModelScope provider
+(`LLM_PROVIDER=modelscope_qwen35`, `Qwen/Qwen3.5-35B-A3B` on
+`https://api-inference.modelscope.cn/v1`, private `LLM_MODELSCOPE_API_KEY`).
+It is the primary model of every request; only when it reports insufficient
+balance does that request fall back to the 火山方舟 Doubao-Seed 2.0 free-quota
+pair `doubao-seed-2-0-mini-260428` → `doubao-seed-2-0-lite-260428`
+(`MODELSCOPE_FALLBACK_MODELS`) over the private
+`LLM_ARK_API_KEY` / `LLM_ARK_BASE_URL` connection. Quota recovery needs no
+operator action, and without an Ark key the fallback is skipped and the balance
+error fails the run closed.
+
 Each production decision audit stores exact requests, raw responses, response
 metadata and validation details for all calls under
 `reports/llm-decision-audits`. The directory is mode `0700`, files are mode

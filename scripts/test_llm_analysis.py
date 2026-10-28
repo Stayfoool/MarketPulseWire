@@ -261,6 +261,162 @@ def test_glm_bailian_provider_uses_bailian_connection_and_falls_back_from_chain_
                 os.environ[name] = value
 
 
+def test_zhipu_glm_falls_back_to_flashx_within_package() -> None:
+    names = (
+        "SURVEIL_DISABLE_LLM",
+        "LLM_PROVIDER",
+        "LLM_API_KEY",
+        "LLM_BASE_URL",
+        "LLM_MODEL",
+        "LLM_GLM_API_KEY",
+    )
+    original = {name: os.environ.get(name) for name in names}
+    try:
+        os.environ.pop("SURVEIL_DISABLE_LLM", None)
+        os.environ["LLM_PROVIDER"] = "zhipu_glm"
+        os.environ["LLM_API_KEY"] = "deepseek-key-must-not-be-used"
+        os.environ["LLM_BASE_URL"] = "https://api.deepseek.com"
+        os.environ["LLM_MODEL"] = "deepseek-chat"
+        os.environ["LLM_GLM_API_KEY"] = "glm-key"
+        # 智谱官方资源包内部回退：glm-5.3-flash 额度用尽后切换到同一资源包内的
+        # glm-5.3-flashx，复用同一个 LLM_GLM_API_KEY / 官方端点连接。
+        assert llm_analysis.llm_config() == (
+            "glm-key",
+            "https://open.bigmodel.cn/api/paas/v4",
+            "glm-5.3-flash",
+        )
+        assert llm_analysis.llm_fallback_configs() == [
+            ("glm-key", "https://open.bigmodel.cn/api/paas/v4", "glm-5.3-flashx")
+        ]
+
+        # 链尾模型（glm-5.3-flashx）额度用尽后没有后续备用模型，关闭式失败。
+        os.environ["LLM_PROVIDER"] = "zhipu_glm_flashx"
+        assert llm_analysis.llm_config() == (
+            "glm-key",
+            "https://open.bigmodel.cn/api/paas/v4",
+            "glm-5.3-flashx",
+        )
+        assert llm_analysis.llm_fallback_configs() == []
+
+        # 缺少智谱 API Key 时，资源包内部回退也不应提供任何备用模型。
+        os.environ.pop("LLM_GLM_API_KEY")
+        assert llm_analysis.llm_config() is None
+        assert llm_analysis.llm_fallback_configs() == []
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def test_is_glm_53_flash_matches_flashx_model() -> None:
+    base_url = "https://open.bigmodel.cn/api/paas/v4"
+    assert llm_analysis.is_glm_53_flash(base_url, "glm-5.3-flash")
+    assert llm_analysis.is_glm_53_flash(base_url, "glm-5.3-flashx")
+    assert not llm_analysis.is_glm_53_flash(base_url, "glm-5.3")
+    # 非官方智谱端点上的同名模型不应被识别为官方 Flash 契约。
+    assert not llm_analysis.is_glm_53_flash(
+        "https://dashscope.aliyuncs.com/compatible-mode/v1", "glm-5.3-flashx"
+    )
+
+
+def test_modelscope_qwen35_provider_uses_dedicated_fixed_connection_and_ark_doubao_fallback() -> None:
+    names = (
+        "SURVEIL_DISABLE_LLM",
+        "LLM_PROVIDER",
+        "LLM_API_KEY",
+        "LLM_BASE_URL",
+        "LLM_MODEL",
+        "LLM_GLM_API_KEY",
+        "LLM_MODELSCOPE_API_KEY",
+        "LLM_ARK_API_KEY",
+        "LLM_ARK_BASE_URL",
+    )
+    original = {name: os.environ.get(name) for name in names}
+    try:
+        os.environ.pop("SURVEIL_DISABLE_LLM", None)
+        os.environ["LLM_PROVIDER"] = "modelscope_qwen35"
+        os.environ["LLM_API_KEY"] = "deepseek-key-must-not-be-used"
+        os.environ["LLM_BASE_URL"] = "https://api.deepseek.com"
+        os.environ["LLM_MODEL"] = "deepseek-chat"
+        os.environ["LLM_GLM_API_KEY"] = "zhipu-key-must-not-be-used"
+        os.environ["LLM_MODELSCOPE_API_KEY"] = "modelscope-key"
+        # ModelScope 端点与模型由代码固定，使用独立的 LLM_MODELSCOPE_API_KEY。
+        assert llm_analysis.llm_config() == (
+            "modelscope-key",
+            "https://api-inference.modelscope.cn/v1",
+            "Qwen/Qwen3.5-35B-A3B",
+        )
+        # 未配置方舟 Key 时无任何备用模型：额度用尽后关闭式失败。
+        os.environ.pop("LLM_ARK_API_KEY", None)
+        assert llm_analysis.llm_fallback_configs() == []
+
+        # 配置方舟 Key 后，ModelScope 额度用尽时按 mini → lite 顺序回退到方舟免费额度两档，
+        # 使用独立的方舟连接；主模型始终是 ModelScope，不在请求之间做供应商粘滞。
+        os.environ["LLM_ARK_API_KEY"] = "ark-key"
+        os.environ.pop("LLM_ARK_BASE_URL", None)
+        assert llm_analysis.llm_config() == (
+            "modelscope-key",
+            "https://api-inference.modelscope.cn/v1",
+            "Qwen/Qwen3.5-35B-A3B",
+        )
+        assert llm_analysis.llm_fallback_configs() == [
+            ("ark-key", "https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-2-0-mini-260428"),
+            ("ark-key", "https://ark.cn-beijing.volces.com/api/v3", "doubao-seed-2-0-lite-260428"),
+        ]
+
+        os.environ["LLM_ARK_BASE_URL"] = "https://ark-cn-beijing.bytedance.net/api/v3"
+        assert [config[1] for config in llm_analysis.llm_fallback_configs()] == [
+            "https://ark-cn-beijing.bytedance.net/api/v3",
+            "https://ark-cn-beijing.bytedance.net/api/v3",
+        ]
+
+        os.environ.pop("LLM_MODELSCOPE_API_KEY")
+        assert llm_analysis.llm_config() is None
+        assert llm_analysis.llm_fallback_configs() == []
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
+def test_modelscope_request_disables_thinking_and_enables_json_mode() -> None:
+    names = ("LLM_THINKING_TYPE", "LLM_RESPONSE_FORMAT_JSON")
+    original = {name: os.environ.get(name) for name in names}
+    try:
+        os.environ.pop("LLM_THINKING_TYPE", None)
+        os.environ.pop("LLM_RESPONSE_FORMAT_JSON", None)
+        base_url = "https://api-inference.modelscope.cn/v1"
+        model = "Qwen/Qwen3.5-35B-A3B"
+        preferences = llm_analysis.llm_response_preferences(base_url=base_url, model=model)
+        # 魔搭用 Qwen 系的 enable_thinking 布尔开关关闭思考，并支持 JSON 模式。
+        assert preferences["enable_thinking"] is False
+        assert preferences["response_format"] == {"type": "json_object"}
+        assert "thinking" not in preferences
+
+        payload = {"model": model, "max_tokens": 1200}
+        llm_analysis.apply_llm_response_preferences(payload, base_url=base_url, model=model)
+        # 简报 JSON 实测约 1200~1400 tokens，分析链路默认 1200 会被抬到 3000。
+        assert payload["max_tokens"] == 3000
+
+        other = {"model": "qwen3.7-flash", "max_tokens": 1200}
+        llm_analysis.apply_llm_response_preferences(
+            other,
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            model="qwen3.7-flash",
+        )
+        assert other["max_tokens"] == 1200
+    finally:
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def test_glm_bailian_request_uses_bailian_response_preferences() -> None:
     names = ("LLM_THINKING_TYPE", "LLM_RESPONSE_FORMAT_JSON")
     original = {name: os.environ.get(name) for name in names}
@@ -393,6 +549,78 @@ def test_balance_insufficient_falls_back_to_qwen_flash_stable_model() -> None:
 
     assert requested_models == ["qwen3.7-flash-2026-07-15", "qwen3.7-flash"]
     assert response.model == "qwen3.7-flash"
+
+
+def test_modelscope_balance_insufficient_falls_back_to_ark_doubao_mini() -> None:
+    names = (
+        "SURVEIL_DISABLE_LLM",
+        "LLM_PROVIDER",
+        "LLM_MODELSCOPE_API_KEY",
+        "LLM_ARK_API_KEY",
+        "LLM_ARK_BASE_URL",
+    )
+    original = {name: os.environ.get(name) for name in names}
+    original_urlopen = llm_analysis.urllib.request.urlopen
+    original_retry_count = llm_analysis.retry_count
+    seen: list[tuple[str, str, str]] = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self):
+            return b'{"id":"doubao-fallback","choices":[{"message":{"content":"{\\"ok\\":true}"}}]}'
+
+    def fake_urlopen(request, timeout):
+        payload = json.loads(request.data.decode("utf-8"))
+        authorization = request.headers.get("Authorization") or ""
+        seen.append((payload["model"], request.full_url, authorization))
+        if payload["model"] == "Qwen/Qwen3.5-35B-A3B":
+            raise llm_analysis.urllib.error.HTTPError(
+                "https://api-inference.modelscope.cn/v1/chat/completions",
+                402,
+                "Payment Required",
+                {},
+                io.BytesIO(
+                    json.dumps(
+                        {"error": {"code": "Arrearage", "message": "Insufficient balance."}}
+                    ).encode("utf-8")
+                ),
+            )
+        return FakeResponse()
+
+    try:
+        os.environ.pop("SURVEIL_DISABLE_LLM", None)
+        os.environ["LLM_PROVIDER"] = "modelscope_qwen35"
+        os.environ["LLM_MODELSCOPE_API_KEY"] = "modelscope-key"
+        os.environ["LLM_ARK_API_KEY"] = "ark-key"
+        os.environ.pop("LLM_ARK_BASE_URL", None)
+        llm_analysis.retry_count = lambda: 0
+        llm_analysis.urllib.request.urlopen = fake_urlopen
+        response = llm_analysis.call_chat_completion_raw_with_prompts("system", "user")
+    finally:
+        llm_analysis.urllib.request.urlopen = original_urlopen
+        llm_analysis.retry_count = original_retry_count
+        for name, value in original.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    # 主模型始终先被请求；额度不足后切换到方舟 Doubao-Seed 2.0 mini，并使用方舟连接与密钥。
+    assert [model for model, _, _ in seen] == [
+        "Qwen/Qwen3.5-35B-A3B",
+        "doubao-seed-2-0-mini-260428",
+    ]
+    assert seen[0][1].startswith("https://api-inference.modelscope.cn/v1/chat/completions")
+    assert seen[0][2] == "Bearer modelscope-key"
+    assert seen[1][1].startswith("https://ark.cn-beijing.volces.com/api/v3/chat/completions")
+    assert seen[1][2] == "Bearer ark-key"
+    assert response.model == "doubao-seed-2-0-mini-260428"
+    assert response.provider == "ark.cn-beijing.volces.com"
 
 
 def test_retired_qwen38_providers_fall_back_from_chain_head() -> None:
@@ -1222,6 +1450,11 @@ def main() -> int:
     test_glm_request_forces_supported_response_preferences()
     test_qwen_bailian_provider_uses_dedicated_connection_and_fails_closed_without_key()
     test_glm_bailian_provider_uses_bailian_connection_and_falls_back_from_chain_head()
+    test_zhipu_glm_falls_back_to_flashx_within_package()
+    test_is_glm_53_flash_matches_flashx_model()
+    test_modelscope_qwen35_provider_uses_dedicated_fixed_connection_and_ark_doubao_fallback()
+    test_modelscope_balance_insufficient_falls_back_to_ark_doubao_mini()
+    test_modelscope_request_disables_thinking_and_enables_json_mode()
     test_qwen_bailian_request_uses_supported_response_preferences()
     test_bailian_thinking_only_model_forces_enable_thinking()
     test_bailian_fixed_temperature_models_normalize_temperature()
