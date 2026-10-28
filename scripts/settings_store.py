@@ -21,6 +21,10 @@ from llm_provider_config import (
     DOUBAO_SEED_21_LITE_PROVIDER,
     GLM_BAILIAN_PROVIDER,
     KIMI_K3_PROVIDER,
+    MODELSCOPE_BASE_URL,
+    MODELSCOPE_FALLBACK_MODELS,
+    MODELSCOPE_QWEN35_MODEL,
+    MODELSCOPE_QWEN35_PROVIDER,
     QWEN_BAILIAN_BASE_URL,
     QWEN_BAILIAN_PROVIDER_MODELS,
     QWEN38_27B_PROVIDER,
@@ -32,6 +36,8 @@ from llm_provider_config import (
     QWEN_FLASH_PROVIDER,
     QWEN_FLASH_SNAPSHOT_PROVIDER,
     ZHIPU_GLM_BASE_URL,
+    ZHIPU_GLM_FLASHX_MODEL,
+    ZHIPU_GLM_FLASHX_PROVIDER,
     ZHIPU_GLM_MODEL,
     ZHIPU_GLM_PROVIDER,
     canonical_llm_provider,
@@ -67,6 +73,7 @@ SETTING_GROUPS: list[dict[str, Any]] = [
             SettingField("LLM_MODEL", "DeepSeek / 兼容模型名称", "llm", placeholder="deepseek-chat"),
             SettingField("LLM_API_KEY", "DeepSeek / 兼容模型 API Key", "llm", sensitive=True, help="留空表示保留现有密钥。"),
             SettingField("LLM_GLM_API_KEY", "智谱 GLM 5.3 Flash API Key", "llm", sensitive=True, help="单独保存；留空表示保留现有密钥。"),
+            SettingField("LLM_MODELSCOPE_API_KEY", "ModelScope API Key", "llm", sensitive=True, help="魔搭 GLM 5.3 Flash 单独使用；留空表示保留现有密钥。"),
             SettingField("LLM_QWEN_API_KEY", "阿里云百炼 API Key", "llm", sensitive=True, help="千问 / 百炼 GLM 共用；留空表示保留现有密钥。"),
             SettingField(
                 "LLM_QWEN_BASE_URL",
@@ -233,8 +240,12 @@ FALLBACK_NOTE = (
     "免费额度余额回退顺序："
     + " → ".join(model for _, model in (*BAILIAN_FALLBACK_CHAIN, *ARK_FALLBACK_CHAIN))
     + "。链上模型额度用尽后从下一个继续；免费额度已用完的旧 qwen3.8 模型和"
-    "百炼托管的 DeepSeek 额度用尽后从链头开始；已停用的百炼 glm-5.3 和"
-    "方舟 doubao-seed 系列、官方 DeepSeek 和智谱 GLM 5.3 Flash 端点无回退；"
+    "百炼托管的 DeepSeek 额度用尽后从链头开始；智谱官方资源包内 glm-5.3-flash"
+    "额度用尽后切换到同一资源包内的 glm-5.3-flashx（共用 LLM_GLM_API_KEY）；"
+    "已停用的百炼 glm-5.3 与方舟 doubao-seed 2.0-pro / 2.1-lite、官方 DeepSeek 无回退；"
+    "ModelScope 档额度用尽后回退到火山方舟 "
+    + " → ".join(MODELSCOPE_FALLBACK_MODELS)
+    + "（每次请求仍优先 ModelScope，额度恢复后自动回到 ModelScope）；"
     "火山方舟各档共用独立的方舟 API Key，未配置时自动跳过整段方舟模型。"
 )
 
@@ -294,6 +305,20 @@ def llm_model_selector(values: dict[str, str]) -> dict[str, Any]:
                 "base_url": ZHIPU_GLM_BASE_URL,
                 "model": ZHIPU_GLM_MODEL,
                 "configured": bool(values.get("LLM_GLM_API_KEY")),
+            },
+            {
+                "id": ZHIPU_GLM_FLASHX_PROVIDER,
+                "label": "智谱 GLM 5.3 FlashX（资源包备用）",
+                "base_url": ZHIPU_GLM_BASE_URL,
+                "model": ZHIPU_GLM_FLASHX_MODEL,
+                "configured": bool(values.get("LLM_GLM_API_KEY")),
+            },
+            {
+                "id": MODELSCOPE_QWEN35_PROVIDER,
+                "label": "ModelScope Qwen3.5 35B A3B",
+                "base_url": MODELSCOPE_BASE_URL,
+                "model": MODELSCOPE_QWEN35_MODEL,
+                "configured": bool(values.get("LLM_MODELSCOPE_API_KEY")),
             },
             *[
                 {
@@ -451,6 +476,8 @@ def switch_llm_provider(
     allowed_fields = {
         DEEPSEEK_PROVIDER: {"LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL"},
         ZHIPU_GLM_PROVIDER: {"LLM_GLM_API_KEY"},
+        ZHIPU_GLM_FLASHX_PROVIDER: {"LLM_GLM_API_KEY"},
+        MODELSCOPE_QWEN35_PROVIDER: {"LLM_MODELSCOPE_API_KEY"},
         GLM_BAILIAN_PROVIDER: {"LLM_QWEN_API_KEY", "LLM_QWEN_BASE_URL"},
         **{
             provider: {"LLM_QWEN_API_KEY", "LLM_QWEN_BASE_URL"}
@@ -477,8 +504,10 @@ def switch_llm_provider(
         missing = [key for key in ("LLM_API_KEY", "LLM_BASE_URL", "LLM_MODEL") if not effective.get(key)]
         if missing:
             raise ValueError("请先配置完整的 DeepSeek / 兼容模型 Base URL、模型名称和 API Key")
-    elif target == ZHIPU_GLM_PROVIDER and not effective.get("LLM_GLM_API_KEY"):
+    elif target in {ZHIPU_GLM_PROVIDER, ZHIPU_GLM_FLASHX_PROVIDER} and not effective.get("LLM_GLM_API_KEY"):
         raise ValueError("请先配置智谱 GLM 5.3 Flash API Key")
+    elif target == MODELSCOPE_QWEN35_PROVIDER and not effective.get("LLM_MODELSCOPE_API_KEY"):
+        raise ValueError("请先配置 ModelScope API Key")
     elif target in ({GLM_BAILIAN_PROVIDER} | set(QWEN_BAILIAN_PROVIDER_MODELS)):
         if not effective.get("LLM_QWEN_API_KEY"):
             raise ValueError("请先配置阿里云百炼 API Key")

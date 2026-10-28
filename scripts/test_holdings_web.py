@@ -246,6 +246,8 @@ def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> No
         assert [option["id"] for option in selector["options"]] == [
             "deepseek",
             "zhipu_glm",
+            "zhipu_glm_flashx",
+            "modelscope_qwen35",
             "qwen_flash_snapshot",
             "qwen_flash",
             "qwen38_2_4t_a95b",
@@ -283,8 +285,12 @@ def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> No
             " → deepseek-v4-1-flash-260910 → glm-5-3-flash-260828"
             " → deepseek-v4-pro-ga-260813 → deepseek-v4-flash-ga-260731。"
             "链上模型额度用尽后从下一个继续；免费额度已用完的旧 qwen3.8 模型和"
-            "百炼托管的 DeepSeek 额度用尽后从链头开始；已停用的百炼 glm-5.3 和"
-            "方舟 doubao-seed 系列、官方 DeepSeek 和智谱 GLM 5.3 Flash 端点无回退；"
+            "百炼托管的 DeepSeek 额度用尽后从链头开始；智谱官方资源包内 glm-5.3-flash"
+            "额度用尽后切换到同一资源包内的 glm-5.3-flashx（共用 LLM_GLM_API_KEY）；"
+            "已停用的百炼 glm-5.3 与方舟 doubao-seed 2.0-pro / 2.1-lite、官方 DeepSeek 无回退；"
+            "ModelScope 档额度用尽后回退到火山方舟 doubao-seed-2-0-mini-260428"
+            " → doubao-seed-2-0-lite-260428"
+            "（每次请求仍优先 ModelScope，额度恢复后自动回到 ModelScope）；"
             "火山方舟各档共用独立的方舟 API Key，未配置时自动跳过整段方舟模型。"
         )
         ark_deepseek_v41_flash = next(
@@ -310,6 +316,22 @@ def test_settings_expose_switchable_llm_models_without_revealing_secrets() -> No
             "base_url": "https://open.bigmodel.cn/api/paas/v4",
             "model": "glm-5.3-flash",
             "configured": True,
+        }
+        glm_flashx = next(option for option in selector["options"] if option["id"] == "zhipu_glm_flashx")
+        assert glm_flashx == {
+            "id": "zhipu_glm_flashx",
+            "label": "智谱 GLM 5.3 FlashX（资源包备用）",
+            "base_url": "https://open.bigmodel.cn/api/paas/v4",
+            "model": "glm-5.3-flashx",
+            "configured": True,
+        }
+        modelscope_qwen35 = next(option for option in selector["options"] if option["id"] == "modelscope_qwen35")
+        assert modelscope_qwen35 == {
+            "id": "modelscope_qwen35",
+            "label": "ModelScope Qwen3.5 35B A3B",
+            "base_url": "https://api-inference.modelscope.cn/v1",
+            "model": "Qwen/Qwen3.5-35B-A3B",
+            "configured": False,
         }
         assert "VALUE_DIRECTORY_PREVIEW_BASE_URL" not in fields
         assert "VALUE_DIRECTORY_PREVIEW_MODEL" not in fields
@@ -369,6 +391,60 @@ def test_glm_switch_requires_its_own_key_and_accepts_first_switch_key() -> None:
         assert result["changed_count"] == 2
         assert "LLM_PROVIDER=zhipu_glm" in env_path.read_text(encoding="utf-8")
         assert "LLM_GLM_API_KEY=new-glm-key" in env_path.read_text(encoding="utf-8")
+
+
+def test_glm_flashx_switch_requires_glm_key_and_sets_provider() -> None:
+    with TemporaryDirectory() as tmpdir:
+        env_path = Path(tmpdir) / ".env"
+        env_path.write_text(
+            "LLM_PROVIDER=deepseek\nLLM_API_KEY=deepseek-secret\n"
+            "LLM_BASE_URL=https://api.deepseek.com\nLLM_MODEL=deepseek-chat\n",
+            encoding="utf-8",
+        )
+        try:
+            switch_llm_provider("zhipu_glm_flashx", path=env_path)
+        except ValueError as exc:
+            assert "请先配置智谱 GLM 5.3 Flash API Key" in str(exc)
+        else:
+            raise AssertionError("GLM FlashX selection without the GLM key must fail closed")
+        assert "LLM_PROVIDER=deepseek" in env_path.read_text(encoding="utf-8")
+
+        result = switch_llm_provider(
+            "zhipu_glm_flashx",
+            {"LLM_GLM_API_KEY": "new-glm-key"},
+            path=env_path,
+        )
+        assert result["provider"] == "zhipu_glm_flashx"
+        assert result["changed_count"] == 2
+        assert "LLM_PROVIDER=zhipu_glm_flashx" in env_path.read_text(encoding="utf-8")
+        assert "LLM_GLM_API_KEY=new-glm-key" in env_path.read_text(encoding="utf-8")
+
+
+def test_modelscope_switch_requires_its_own_key_and_sets_provider() -> None:
+    with TemporaryDirectory() as tmpdir:
+        env_path = Path(tmpdir) / ".env"
+        env_path.write_text(
+            "LLM_PROVIDER=deepseek\nLLM_API_KEY=deepseek-secret\n"
+            "LLM_BASE_URL=https://api.deepseek.com\nLLM_MODEL=deepseek-chat\n",
+            encoding="utf-8",
+        )
+        try:
+            switch_llm_provider("modelscope_qwen35", path=env_path)
+        except ValueError as exc:
+            assert "请先配置 ModelScope API Key" in str(exc)
+        else:
+            raise AssertionError("ModelScope selection without its dedicated key must fail closed")
+        assert "LLM_PROVIDER=deepseek" in env_path.read_text(encoding="utf-8")
+
+        result = switch_llm_provider(
+            "modelscope_qwen35",
+            {"LLM_MODELSCOPE_API_KEY": "modelscope-secret"},
+            path=env_path,
+        )
+        assert result["provider"] == "modelscope_qwen35"
+        assert result["changed_count"] == 2
+        assert "LLM_PROVIDER=modelscope_qwen35" in env_path.read_text(encoding="utf-8")
+        assert "LLM_MODELSCOPE_API_KEY=modelscope-secret" in env_path.read_text(encoding="utf-8")
 
 
 def test_qwen_bailian_switch_requires_its_own_key_and_writes_default_base_url() -> None:
@@ -1918,6 +1994,8 @@ def test_jev_shadow_summary_returns_details_with_article_metadata() -> None:
 def main() -> int:
     test_settings_expose_switchable_llm_models_without_revealing_secrets()
     test_glm_switch_requires_its_own_key_and_accepts_first_switch_key()
+    test_glm_flashx_switch_requires_glm_key_and_sets_provider()
+    test_modelscope_switch_requires_its_own_key_and_sets_provider()
     test_qwen_bailian_switch_requires_its_own_key_and_writes_default_base_url()
     test_ark_switch_requires_its_own_key_and_writes_default_base_url()
     test_llm_selector_labels_bailian_hosted_deepseek()

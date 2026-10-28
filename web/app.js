@@ -1299,6 +1299,8 @@ function llmModelSelectorHtml(selector) {
 const LLM_MODEL_FIELDS = {
   deepseek: ['LLM_API_KEY', 'LLM_BASE_URL', 'LLM_MODEL'],
   zhipu_glm: ['LLM_GLM_API_KEY'],
+  zhipu_glm_flashx: ['LLM_GLM_API_KEY'],
+  modelscope_qwen35: ['LLM_MODELSCOPE_API_KEY'],
   glm_bailian: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
   qwen_flash_snapshot: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
   qwen_flash: ['LLM_QWEN_API_KEY', 'LLM_QWEN_BASE_URL'],
@@ -1314,6 +1316,8 @@ const LLM_MODEL_FIELDS = {
 const LLM_MODEL_LABELS = {
   deepseek: 'DeepSeek',
   zhipu_glm: '智谱 GLM 5.3 Flash',
+  zhipu_glm_flashx: '智谱 GLM 5.3 FlashX',
+  modelscope_qwen35: 'ModelScope Qwen3.5 35B A3B',
   glm_bailian: '阿里云百炼 GLM 5.3',
   qwen_flash_snapshot: '阿里云百炼 Qwen3.7 Flash（2026-07-15 快照）',
   qwen_flash: '阿里云百炼 Qwen3.7 Flash（稳定版）',
